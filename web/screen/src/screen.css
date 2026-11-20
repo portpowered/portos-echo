@@ -122,7 +122,10 @@ button:disabled {
 .screen-pack .home-tap {
     inset: 8px;
 }
-.screen-presentation:is([data-ui-state="ready"], [data-ui-state="connected"])
+.screen-presentation:is(
+        [data-ui-state="ready"],
+        [data-ui-state="connected"]
+    ):not(.screen-pack)
     + [role="status"] {
     position: fixed;
     top: 12px;
