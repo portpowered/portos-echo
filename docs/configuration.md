@@ -39,14 +39,14 @@ the quickstart. It rejects unsafe paths and migrates retained private state to t
 The base must validate first. If `[home]` is configured, `BridgeConfig::load_effective` then reads that home's
 optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leaves:
 
-- Voice and OpenAI: `voice.session_listen_enabled`, `voice.session_listen_seconds`,
+- Voice and OpenAI use `voice.session_listen_enabled`, `voice.session_listen_seconds`,
   `codex.voice`, `codex.web_search`, `codex.delegate_model` and `codex.delegate_effort`.
   An empty delegated model or effort selects the pinned app server's default.
-- Agent: `agent.daily_request_cap`, `agent.max_tool_calls`, `agent.task_deadline_seconds`
+- Agent settings include `agent.daily_request_cap`, `agent.max_tool_calls`, `agent.task_deadline_seconds`
   and the `notes` and `prompts` groups in `home.agent_tools`. An empty group list disables both groups.
-- Port OS: `mcp.scopes` and the `allow_tools` list under `[[mcp.server]]`, bound to the configured
+- Port OS permissions use `mcp.scopes` and the `allow_tools` list under `[[mcp.server]]`, bound to the configured
   Port OS server by its `name`. An empty tool list disables all Port OS tools.
-- Screen data: the root `screen_pack` selects installed packs.
+- The root `screen_pack` selects installed screen packs.
 
 Missing leaves retain base values. The Port OS server identity and URL are read-only in the panel.
 Unknown keys, bad types, unreadable/oversized files or invalid effective values reject the **whole overlay**;

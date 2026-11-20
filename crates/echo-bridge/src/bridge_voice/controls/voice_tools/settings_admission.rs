@@ -122,8 +122,13 @@ async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
     });
     save(client, url, &patch).await;
     let saved = get(client, url).await;
-    assert_eq!(saved["settings"]["codex"]["web_search"], "cached");
-    assert_eq!(saved["settings"]["codex"]["delegate_model"], "synthetic-runner");
+    assert_eq!(
+        (
+            &saved["settings"]["codex"]["web_search"],
+            &saved["settings"]["codex"]["delegate_model"]
+        ),
+        (&json!("cached"), &json!("synthetic-runner")),
+    );
     assert_eq!(saved["settings"]["agent"]["max_tool_calls"], 6);
     assert_eq!(saved["portos"]["server"]["requested_scopes"], json!(["endpoint:read"]));
     assert_eq!(

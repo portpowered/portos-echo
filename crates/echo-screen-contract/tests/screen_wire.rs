@@ -290,7 +290,9 @@ fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>
         "bridge_version":"synthetic","restart_pending":true,"warnings":[]
     }"#;
     let snapshot = serde_json::from_str::<SettingsSnapshotV2>(wire)?;
-    round_trip(&snapshot, wire)?;
+    let expected = serde_json::from_str::<serde_json::Value>(wire)?;
+    assert_eq!(serde_json::to_value(&snapshot)?, expected);
+    preserved(&snapshot)?;
     assert!(serde_json::from_str::<SettingsSnapshotV1>(wire).is_err());
     writeln!(std::io::stdout().lock(), "{}", serde_json::to_string(&snapshot)?)?;
     Ok(())
