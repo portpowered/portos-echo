@@ -31,6 +31,18 @@ fixed app-server pin exposes no native send receipt. Its handback must remain
 test may observe exact append identity and content only for its own run. Retained
 `submitted` or `failed` describes the local append boundary, never remote acknowledgement.
 
+The retained Muse owner now enriches its existing `session.delegation.created`
+row with the observed task event and writes one `delegation.resolved` row. The
+terminal outcome is `completed`, `failed`, `timed_out` or `cancelled`; fixed
+failure classes distinguish submission, task, worker and local append failures.
+`duration_ms` measures the owner's monotonic lifetime. Muse cannot observe the
+remote agent's individual tool calls, so its `tool_counts` is empty. Unknown
+thread and turn IDs are omitted. An observed prepared answer is included when
+payloads are enabled; it remains the same text passed to the local append.
+Normal abandonment joins cancellation and closes the trace lifetime; owner drop
+attempts a cancelled resolution without replacing the original runtime error.
+The retained Client and native lifecycle/tool observers remain in progress.
+
 ## Purpose and placement
 
 This page explains the running parts and follows a conversation across them. It describes main at

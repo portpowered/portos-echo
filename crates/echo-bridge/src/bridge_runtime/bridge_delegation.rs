@@ -2,6 +2,7 @@
 mod bridge_host;
 mod bridge_muse_host;
 mod bridge_muse_work;
+mod bridge_resolution;
 use super::bridge_budget::{Budget, Credentials};
 use super::journey::bridge_live::LivePort;
 use crate::bridge_mcp::{Grant, Token};
