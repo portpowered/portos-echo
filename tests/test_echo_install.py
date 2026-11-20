@@ -133,11 +133,16 @@ class Sandbox:
 
     def __exit__(self, *unused):
         # Only synthetic fixture children can be signalled by test teardown.
-        for name in ("child-pid", "holder-pid"):
+        for name in ("holder-pid", "child-pid"):
             path = self.root / name
             if path.exists():
                 try:
-                    os.kill(int(path.read_text()), signal.SIGKILL)
+                    pid = int(path.read_text())
+                    if name == "holder-pid" and os.getsid(pid) == pid:
+                        # Include the launcher's FIFO writer on failed/stubborn runs.
+                        os.killpg(pid, signal.SIGKILL)
+                    else:
+                        os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
         self.temp.cleanup()
@@ -356,6 +361,14 @@ def metadata_tool(base, name, args):
         # The private script and its inputs must be accessible before execution.
         for path in (base / "remote/echo-bridge/private").rglob("*"):
             require(owner(base, path).split(":")[0] == "9999", "nobody cannot access root-owned state")
+        from test_echo_install_lifecycle import prepared_run
+        prepared_run(base)
+        if (base / "synthetic-bridge").exists():
+            # Keep installed ARM bytes intact; substitute only the executable edge.
+            launcher = Path(args[3]).read_text()
+            binary = str(base / "remote/echo-bridge/bin/echo-bridge") + " --config "
+            require(launcher.count(binary) == 1, "unexpected executable boundary")
+            args = [*args[:3], "-c", launcher.replace(binary, str(base / "synthetic-bridge") + " --config ")]
         (base / "runas-user").write_text("nobody")
         os.execvpe(args[2], args[2:], dict(os.environ, FAKE_UID="9999"))
     path = Path(args[-1])
@@ -411,37 +424,8 @@ def remote_tool():
 
 
 def prepare_lifecycle(box, mode="ready"):
-    os.mkfifo(box.root / "ready")
-    (box.root / "remote/hassmic/boot.log").write_text("old client connected\n")
-    fixture = """import os, sys, signal, json
-from pathlib import Path
-base = Path(os.environ['FAKE_ROOT'])
-(base / 'child-pid').write_text(str(os.getpid()))
-(base / 'holder-pid').write_text(str(os.getppid()))
-(base / 'child-args').write_text(json.dumps(sys.argv[1:]))
-(base / 'child-session').write_text(str(os.getsid(0)))
-mode = (base / 'mode').read_text()
-log = base / 'remote/hassmic/boot.log'
-if mode in ('ready', 'hidden', 'deadline', 'stubborn'):
-    with log.open('a') as output: output.write('client connected / satellite: running\\n')
-elif mode == 'rotate':
-    log.rename(log.with_suffix('.old'))
-    log.write_text('client connected\\n')
-elif mode == 'truncate':
-    log.write_text('client connected\\n')
-with (base / 'ready').open('w') as ready: ready.write('ready')
-if mode != 'exit':
-    sys.stdin.buffer.read()
-    (base / 'eof').write_text('EOF')
-    if mode == 'stubborn': signal.pause()
-"""
-    box.files["bridge"].write_text("#!" + sys.executable + "\n" + fixture)
-    (box.root / "mode").write_text(mode)
-    for name in ("ps", "date", "sleep"):
-        wrapper = box.root / "remote-tools" / name
-        wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
-                           + shlex.quote(str(Path(__file__).resolve())) + " --tool " + name + ' "$@"\n')
-        wrapper.chmod(0o755)
+    from test_echo_install_lifecycle import configure_lifecycle
+    configure_lifecycle(box, mode)
     box.install()
 
 

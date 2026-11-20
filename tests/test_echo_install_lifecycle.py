@@ -3,6 +3,11 @@ import json
 import os
 import selectors
 import signal
+import shlex
+import shutil
+import stat
+import sys
+from pathlib import Path
 import subprocess
 from unittest.mock import patch
 
@@ -280,3 +285,82 @@ def nonroot_cases():
                 require(path.read_text() == "retained bytes" and outside.read_text() == "outside bytes", "migration escaped")
                 require(not (box.root / "remote/echo-bridge.lock").exists(), "migration leaked lock")
     print("NR install=PASS ownership=PASS migration=PASS launch=PASS status=PASS")
+
+
+def configure_lifecycle(box, mode="ready", bridge=None):
+    os.mkfifo(box.root / "ready")
+    (box.root / "remote/hassmic/boot.log").write_text("old client connected\n")
+    fixture = """import os, sys, signal, json
+from pathlib import Path
+base = Path(os.environ['FAKE_ROOT'])
+(base / 'child-pid').write_text(str(os.getpid()))
+(base / 'holder-pid').write_text(str(os.getppid()))
+(base / 'child-args').write_text(json.dumps(sys.argv[1:]))
+(base / 'child-session').write_text(str(os.getsid(0)))
+mode = (base / 'mode').read_text()
+log = base / 'remote/hassmic/boot.log'
+if mode in ('ready', 'hidden', 'deadline', 'stubborn'):
+    with log.open('a') as output: output.write('client connected / satellite: running\\n')
+elif mode == 'rotate':
+    log.rename(log.with_suffix('.old'))
+    log.write_text('client connected\\n')
+elif mode == 'truncate':
+    log.write_text('client connected\\n')
+with (base / 'ready').open('w') as ready: ready.write('ready')
+if mode != 'exit':
+    sys.stdin.buffer.read()
+    (base / 'eof').write_text('EOF')
+    if mode == 'stubborn': signal.pause()
+"""
+    bridge = bridge or box.files["bridge"]
+    bridge.write_text("#!" + sys.executable + "\n" + fixture)
+    (box.root / "mode").write_text(mode)
+    for name in ("ps", "date", "sleep"):
+        wrapper = box.root / "remote-tools" / name
+        wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
+                           + shlex.quote(str(Path(__file__).with_name("test_echo_install.py").resolve())) + " --tool " + name + ' "$@"\n')
+        wrapper.chmod(0o755)
+    bridge.chmod(0o755)
+
+
+
+def prepared_run(base):
+    """Observe real preparation before the launcher's atomic gate is consumed."""
+    run = base / "remote/echo-bridge/private/run"
+    for name, mode in (("", 0o700), ("control", 0o700), ("stdin", 0o600),
+                       ("deadline", 0o600), ("log-inode", 0o600), ("log-prefix", 0o600)):
+        path = run / name
+        require(owner(base, path) == "9999:9999", "run ownership differs before launch")
+        require(stat.S_IMODE(path.stat().st_mode) == mode, "run mode differs before launch")
+    require(run.is_dir() and (run / "control").is_dir(), "launch gate missing")
+    require(stat.S_ISFIFO((run / "stdin").stat().st_mode), "stdin is not a FIFO")
+    require(int((run / "deadline").read_text()) == int((base / "clock").read_text()) + 19,
+            "preparation deadline differs")
+    log = base / "remote/hassmic/boot.log"
+    require((run / "log-inode").read_text().strip() == str(log.stat().st_ino), "log inode not captured")
+    with log.open("rb") as source:
+        expected = subprocess.check_output([shutil.which("cksum")], stdin=source)
+    require((run / "log-prefix").read_bytes() == expected, "log prefix not captured")
+
+
+def release_started(box, starts=1):
+    calls = box.calls()
+    launches = [c for c in calls if "setsid " in " ".join(c)]
+    expected = ('setsid /data/local/hassmic/runas "nobody" "3990,inet" '
+                "/system/bin/sh '/data/local/echo-bridge/private/launch.sh'")
+    require(len(launches) == starts and all(expected in c[1] for c in launches), "launch argv/count differs")
+    require((box.root / "runas-user").read_text() == "nobody", "release identity differs")
+    require((box.root / "child-session").read_text() == (box.root / "holder-pid").read_text(),
+            "release launcher did not detach")
+    require(not (box.root / "eof").exists(), "release stdin closed before stop")
+    require(json.loads((box.root / "child-args").read_text()) ==
+            ["--config", str(box.device / "private/bridge.toml"),
+             "--trace", str(box.device / "private/bridge.trace")], "release child arguments differ")
+
+
+def release_stop(box):
+    box.run(["stop"])
+    require((box.root / "eof").read_text() == "EOF", "release stop did not close stdin")
+    require(not (box.device / "private/run").exists(), "release stop leaked state")
+    # A later start must prove its own held stdin rather than inherit this marker.
+    (box.root / "eof").unlink()
