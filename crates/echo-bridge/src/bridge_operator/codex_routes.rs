@@ -128,7 +128,10 @@ mod tests {
             restrictions(&mut config, mode);
             let mut expected = std::collections::BTreeMap::from([
                 ("features.skip_host_skill_discovery".to_owned(), "true".to_owned()),
-                ("features.code_mode.direct_only_tool_namespaces".into(), "[\"web\"]".into()),
+                (
+                    "features.code_mode.direct_only_tool_namespaces".into(),
+                    "[\"web\"]".into(),
+                ),
                 ("web_search".into(), format!("\"{}\"", mode.as_str())),
                 ("mcp_servers".into(), "{}".into()),
                 ("cli_auth_credentials_store".into(), "\"file\"".into()),
