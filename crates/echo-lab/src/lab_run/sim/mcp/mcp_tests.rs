@@ -154,21 +154,60 @@ async fn run_portos_journey(journey: Journey, fault: Option<HomeFault>) -> Resul
         session.link().await?;
         phase.set("grant approval");
         session.approve().await?;
+        if matches!(fault, Some(HomeFault::NoRoom | HomeFault::AmbiguousRoom)) {
+            // Withhold provider readiness by holding the Wyoming wake. An
+            // early dispatch used to enqueue work before the peer could play.
+            phase.set("delegation while media readiness is withheld");
+            let early = session.dispatch().await;
+            if early != Err("M5: home delegation requires provider media readiness".into()) {
+                return Err(format!("expected early delegation to be refused, got {early:?}"));
+            }
+        }
         phase.set("wake, delegation and playback");
         session.lights("Computer, turn off twin room lights").await
     })
     .await
     .unwrap_or_else(|_| Err("deadline expired".into()));
+    let result = result.map_err(|cause| {
+        format!(
+            "{fault:?} during {}: {cause}; {}",
+            phase.get(),
+            last_receipts(&mut session)
+        )
+    });
     let cleanup = session.close().await;
-    let observed = result
-        .map_err(|cause| format!("{fault:?} during {}: {cause}", phase.get()))
-        .map_err(|cause| match &cleanup {
-            Ok(()) => cause,
-            Err(cleanup) => format!("{cause}; cleanup: {cleanup}"),
-        })?;
+    let observed = result.map_err(|cause| match &cleanup {
+        Ok(()) => cause,
+        Err(cleanup) => format!("{cause}; cleanup: {cleanup}"),
+    })?;
     cleanup?;
     assert_eq!(session.released, ["bridge", "provider", "authorization", "host"]);
     Ok(observed)
+}
+
+fn last_receipts(session: &mut Session) -> String {
+    let trace = session.observe();
+    let played = session
+        .trace
+        .records
+        .iter()
+        .filter(|row| row["event"] == "reply.played")
+        .count();
+    let provider = session.live.as_ref().map(|live| live.observed.borrow());
+    let count = |key: &str| {
+        provider
+            .as_ref()
+            .and_then(|state| state[key].as_array())
+            .map_or(0, Vec::len)
+    };
+    let ready = provider.as_ref().is_some_and(|state| state["media_ready"] == true);
+    format!(
+        "clock_ms={}, media_ready={ready}, delegations={}, appends={}, transcripts={}, played={played}, trace={trace:?}",
+        session.elapsed_ms,
+        count("delegations"),
+        count("appends"),
+        count("transcripts"),
+    )
 }
 
 fn assert_closed(session: &Session) {
