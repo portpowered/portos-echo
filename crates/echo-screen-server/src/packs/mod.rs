@@ -11,6 +11,7 @@ pub(crate) mod view;
 mod worker;
 
 pub(crate) use worker::jobs;
+pub use worker::settings::PackSettings;
 pub(crate) use worker::{Downloads, start};
 
 #[derive(Default)]

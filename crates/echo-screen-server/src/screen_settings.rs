@@ -23,6 +23,8 @@ pub enum SettingsOperation {
     Snapshot,
     PackCatalog(crate::PackCatalog),
     PackSelection(crate::PackCatalog, String),
+    /// Settled fixed-home file read; the host rechecks its identity at commit.
+    PackRefresh(crate::PackCatalog, crate::PackSettings),
     Save(SettingsPatchV1),
     Prompt(PromptKind, PromptSaveV1),
 }
@@ -35,6 +37,7 @@ pub enum SettingsReply {
     Saved(SaveResultV1),
     /// Durable pack-only save, resolved against the same validated catalog.
     PackSaved(SaveResultV1, crate::PackCatalog, bool),
+    PackRefreshed(crate::PackCatalog, bool),
     Invalid(SettingsErrorV1),
     Persistence(SettingsErrorV1),
 }
@@ -42,7 +45,7 @@ pub enum SettingsReply {
 impl SettingsReply {
     fn into_response(self) -> Response {
         match self {
-            Self::Packs(value) => Json(value).into_response(),
+            Self::Packs(value) | Self::PackRefreshed(value, _) => Json(value).into_response(),
             Self::InvalidPackSelection => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(serde_json::json!({"version":1,"reason":"invalid_selection"})),
@@ -89,7 +92,7 @@ impl SettingsRequest {
         } else {
             let mut reply = transaction(self.operation);
             match &mut reply {
-                SettingsReply::PackSaved(_, catalog, true) => {
+                SettingsReply::PackSaved(_, catalog, true) | SettingsReply::PackRefreshed(catalog, true) => {
                     core.pack_reload(catalog.active());
                 }
                 SettingsReply::Packs(catalog) => {
@@ -130,6 +133,16 @@ impl SettingsDispatch {
     // retained browser credential. Commit still serializes revocation/shutdown.
     pub(crate) async fn installed(self, catalog: crate::PackCatalog) {
         let _ = self.dispatch(None, SettingsOperation::PackCatalog(catalog), true).await;
+    }
+
+    pub(crate) async fn refresh(self, catalog: crate::PackCatalog, settings: crate::PackSettings) -> bool {
+        let status = self
+            .dispatch(None, SettingsOperation::PackRefresh(catalog, settings), false)
+            .await
+            .status();
+        // A malformed settled file is observed once. Capacity/stale-read
+        // refusal retries on the next poll, without an unbounded queued task.
+        status.is_success() || status == StatusCode::UNPROCESSABLE_ENTITY
     }
 
     async fn dispatch(self, uri: Option<Uri>, operation: SettingsOperation, installed: bool) -> Response {

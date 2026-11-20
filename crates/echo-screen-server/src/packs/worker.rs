@@ -1,5 +1,6 @@
 pub(crate) mod jobs;
 mod notification;
+pub(crate) mod settings;
 use super::{Error, archive, download};
 use crate::screen_core::Core;
 use std::{
@@ -53,8 +54,13 @@ pub(crate) async fn start(
         drain,
         files,
     };
-    worker.configured(downloads.pins, results).await;
-    worker.interactive(requests).await;
+    tokio::join!(
+        async {
+            worker.configured(downloads.pins, results).await;
+            worker.interactive(requests).await;
+        },
+        worker.watch_settings(),
+    );
 }
 
 impl Worker {

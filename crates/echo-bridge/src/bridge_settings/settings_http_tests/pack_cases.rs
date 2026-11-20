@@ -328,6 +328,50 @@ async fn frame_barrier(fixture: &Fixture, events: &mut Events, seq: u64) {
     );
 }
 
+async fn external_settings(fixture: &Fixture, text: &str, calls: u32) {
+    fs::write(fixture.path("settings.toml"), text).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = fixture.snapshot().await;
+            assert!(!snapshot.restart_pending);
+            if snapshot.settings.agent.max_tool_calls == calls {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(fs::read_to_string(fixture.path("settings.toml")).unwrap(), text);
+}
+
+#[tokio::test]
+async fn t3_screen_pack_external_settings_hot_selection_no_echo_or_restart() {
+    let mut fixture = Fixture::open().await;
+    pack(&fixture, "template@1.0.0", "template", "1.0.0");
+    pack(&fixture, "local", "local", "1.0.0");
+    let _jobs = fixture.server.install_configured_packs(fixture.path(""), None, vec![]);
+    let mut events = Events::open(&fixture).await;
+    external_settings(&fixture, "screen_pack='local'\n[agent]\nmax_tool_calls=4\n", 4).await;
+    events.reload(1, json!("local")).await;
+    external_settings(&fixture, "screen_pack='local'\n[agent]\nmax_tool_calls=5\n", 5).await;
+    frame_barrier(&fixture, &mut events, 1).await;
+    external_settings(&fixture, "screen_pack=''\n[agent]\nmax_tool_calls=6\n", 6).await;
+    events.reload(2, Value::Null).await;
+    fs::remove_file(fixture.path("settings.toml")).unwrap();
+    events.reload(3, json!("template@1.0.0")).await;
+    assert_eq!(catalog(&fixture).await["revision"], 3);
+    // An HTTP selection followed by the watcher observing that same write
+    // still produces one publication; subsequent external adoption is a barrier.
+    assert_eq!(select(&fixture, "local").await.0, StatusCode::OK);
+    events.reload(4, json!("local")).await;
+    external_settings(&fixture, "screen_pack='local'\n[agent]\nmax_tool_calls=3\n", 3).await;
+    frame_barrier(&fixture, &mut events, 2).await;
+    assert_eq!(catalog(&fixture).await["revision"], 4);
+    drop(events);
+    fixture.close().await;
+}
+
 #[tokio::test]
 async fn t3_screen_pack_selection_reload_once_noop_alias_failure_and_reconnect() {
     let mut fixture = Fixture::open().await;
