@@ -48,6 +48,7 @@ pub(crate) fn router(
         .route("/settings/v1", get(settings_http::snapshot).post(settings_http::save))
         .route("/settings/v1/prompts/{kind}", post(settings_http::prompt))
         .route("/screen-packs/v1", get(crate::packs::view::snapshot))
+        .route("/screen-packs/v1/install", post(crate::packs::jobs::install))
         .route("/screen-packs/v1/selection", post(crate::packs::view::selection))
         .route("/screen-packs/v1/{pack}/{*file}", get(crate::packs::http::file))
         .layer(middleware::from_fn(headers))

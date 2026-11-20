@@ -10,12 +10,15 @@ mod tests;
 pub(crate) mod view;
 mod worker;
 
+pub(crate) use worker::jobs;
 pub(crate) use worker::{Downloads, start};
 
 #[derive(Default)]
 pub(crate) struct Files {
     pub root: std::sync::OnceLock<std::path::PathBuf>,
     pub busy: std::sync::Arc<tokio::sync::Mutex<()>>,
+    pub jobs: tokio::sync::Mutex<jobs::Jobs>,
+    pub requests: std::sync::OnceLock<tokio::sync::mpsc::Sender<jobs::Request>>,
 }
 
 const MIB: u64 = 1024 * 1024;

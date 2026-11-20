@@ -30,8 +30,9 @@ Its digest pins the archive bytes. A placeholder digest never bypasses verificat
 Parsing this configuration performs no downloads and does not open credential
 files or create a home. Running the bridge installs configured archives serially
 in the background. Each completion records `screen.pack_download` with a safe
-installed identity or fixed failure reason in the bridge trace. Settings-page
-download status and interactive installation are still pending in this lane.
+installed identity or fixed failure reason in the bridge trace. Configured and
+interactive downloads share one serial worker. The catalog exposes safe job
+status; the settings-page controls remain pending in this lane.
 
 The installer requires `codex.ca_file` and trusts only those PEM roots. It disables
 proxy use, retries and HTTP downgrade, permits at most three HTTPS redirects and
@@ -166,7 +167,28 @@ fields above, and a body of at most 65536 bytes. Revocation, cancellation and
 shutdown are checked again before the settings host commits a request. A missing
 pack root or settings host returns 503.
 
-This increment provides persistence and catalog resolution. The page renderer,
-interactive install/job status, file/settings watchers and named reload event
-are still pending. Until their owner is implemented, snapshots report revision 0
-and an empty jobs array; selecting data does not yet change the page's look.
+## Interactive installation
+
+`POST /screen-packs/v1/install?token=<pairing-token>` accepts an
+`application/json` object with exactly `version: 1`, `url` and `sha256`.
+The URL must be HTTPS without userinfo or fragment; the digest must contain
+exactly 64 hexadecimal digits. Invalid inputs return 422 with a fixed
+`invalid_url` or `invalid_sha256` reason, without creating a job. Authentication,
+Origin, body size and version checks match selection; admission rechecks
+revocation and shutdown before queueing work.
+
+A 202 response contains `{"version":1,"job":"1"}`. Poll the catalog's `jobs`
+array: each entry contains only `id`, `status` and `reason`. Status is `queued`,
+`downloading`, `installed` or `failed`; reason is null or a fixed category such
+as `checksum_mismatch`, `tls_failed` or `download_timeout`. Submitted URLs,
+digests and local paths never appear in job status. IDs increase within the
+server lifetime; history retains at most 32 entries, keeping unfinished work.
+At most four interactive jobs may be unfinished at once; saturation returns
+503 without creating a job. Configured pins run first on the same worker.
+Jobs are transient, with no automatic retry or selection write. A failed job
+keeps installed data and the current selection intact. Shutdown cancels active
+work, joins validation and discards queued requests.
+
+The page renderer, file/settings watchers and named reload event are still
+pending. Snapshots report revision 0; selecting data does not yet change the
+page's look.

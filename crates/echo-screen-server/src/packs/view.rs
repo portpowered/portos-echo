@@ -29,7 +29,7 @@ pub struct PackCatalog {
     revision: u64,
     active: Option<String>,
     installed: Vec<Installed>,
-    jobs: Vec<serde_json::Value>,
+    jobs: Vec<super::jobs::Job>,
     warning: Option<&'static str>,
 }
 
@@ -151,16 +151,18 @@ async fn read(state: &HttpState) -> Result<PackCatalog, StatusCode> {
         .try_lock_owned()
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let root = state.packs.root.get().cloned().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    tokio::task::spawn_blocking(move || {
+    let mut catalog = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         scan(&root)
     })
     .await
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    catalog.jobs = state.packs.jobs.lock().await.snapshot();
+    Ok(catalog)
 }
 
-async fn guard(state: &HttpState, uri: &Uri, headers: &HeaderMap) -> Result<(), StatusCode> {
+pub(super) async fn guard(state: &HttpState, uri: &Uri, headers: &HeaderMap) -> Result<(), StatusCode> {
     let core = state.core.lock().await;
     if !authorized(&core, uri) {
         return Err(StatusCode::UNAUTHORIZED);
@@ -202,30 +204,10 @@ pub(crate) async fn selection(State(state): State<HttpState>, request: Request) 
     if let Err(status) = guard(&state, request.uri(), request.headers()).await {
         return status.into_response();
     }
-    let json = request
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| {
-            v.split(';')
-                .next()
-                .is_some_and(|v| v.trim().eq_ignore_ascii_case("application/json"))
-        });
-    if !json {
-        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
-    }
     let uri = request.uri().clone();
-    let bytes = tokio::select! {
-        biased;
-        () = crate::cancelled(state.stop.clone()) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        () = crate::draining(state.drain.clone()) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-        result = to_bytes(request.into_body(), 65_536) => result,
-    };
-    let Ok(bytes) = bytes else {
-        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
-    };
-    let Ok(body) = serde_json::from_slice::<Selection>(&bytes) else {
-        return StatusCode::BAD_REQUEST.into_response();
+    let body: Selection = match input(&state, request).await {
+        Ok(body) => body,
+        Err(status) => return status.into_response(),
     };
     if body.version != 1 {
         return StatusCode::BAD_REQUEST.into_response();
@@ -240,6 +222,31 @@ pub(crate) async fn selection(State(state): State<HttpState>, request: Request) 
         .await
 }
 
+pub(super) async fn input<T: serde::de::DeserializeOwned>(
+    state: &HttpState,
+    request: Request,
+) -> Result<T, StatusCode> {
+    let json = request
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("application/json"))
+        });
+    if !json {
+        return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+    let bytes = tokio::select! {
+        biased;
+        () = crate::cancelled(state.stop.clone()) => return Err(StatusCode::SERVICE_UNAVAILABLE),
+        () = crate::draining(state.drain.clone()) => return Err(StatusCode::SERVICE_UNAVAILABLE),
+        result = to_bytes(request.into_body(), 65_536) => result,
+    }
+    .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
+    serde_json::from_slice(&bytes).map_err(|_| StatusCode::BAD_REQUEST)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

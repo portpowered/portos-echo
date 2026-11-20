@@ -72,12 +72,16 @@ impl ScreenServer {
         }
         self.downloads_started = true;
         let _ = self.pack_files.root.set(home.join("screens"));
+        let (requests, inbox) = mpsc::channel(4);
+        let _ = self.pack_files.requests.set(requests);
         self.tasks.push(tokio::spawn(packs::start(
             packs::Downloads { home, ca, pins },
             self.core.clone(),
             self.stop.subscribe(),
             self.drain.subscribe(),
             send,
+            self.pack_files.clone(),
+            inbox,
         )));
         receive
     }
