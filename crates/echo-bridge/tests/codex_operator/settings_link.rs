@@ -305,7 +305,29 @@ async fn unlink_paired_grant(journey: &mut PairedGrant<'_>) {
     assert_eq!((counts.links, counts.revokes), (1, 1));
 }
 
-pub(super) async fn replacement_grant(fixture: &Fixture, mock: &echo_lab::lab_mcp::Fixture) {
+pub(super) async fn replacement_grant(fixture: &Fixture, mock: &echo_lab::lab_mcp::Fixture, epoch: u64) {
+    tokio::select! {
+        biased;
+        () = follow_subprocess_clock(mock, epoch) => unreachable!("the fixture clock runs until the grant journey ends"),
+        () = replacement_journey(fixture, mock) => {}
+    }
+}
+
+async fn follow_subprocess_clock(mock: &echo_lab::lab_mcp::Fixture, mut epoch: u64) {
+    // The delivered process signs with wall time, while the mock's DPoP
+    // validator measures against its explicitly controlled clock.
+    let mut ticks = tokio::time::interval(Duration::from_millis(50));
+    loop {
+        ticks.tick().await;
+        let now = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+        if now > epoch {
+            mock.advance(now - epoch).unwrap();
+            epoch = now;
+        }
+    }
+}
+
+async fn replacement_journey(fixture: &Fixture, mock: &echo_lab::lab_mcp::Fixture) {
     let mut journey = PairedGrant {
         fixture,
         mock,
@@ -318,7 +340,6 @@ pub(super) async fn replacement_grant(fixture: &Fixture, mock: &echo_lab::lab_mc
     assert_eq!(status["server"]["requested_scopes"], json!(["endpoint:read"]));
     journey.begin(std::time::UNIX_EPOCH.elapsed().unwrap().as_secs()).await;
     mock.approve(echo_lab::lab_mcp::Approval::Approved).unwrap();
-    mock.advance(5).unwrap();
     let mut reads = tokio::time::interval(Duration::from_millis(50));
     loop {
         reads.tick().await;

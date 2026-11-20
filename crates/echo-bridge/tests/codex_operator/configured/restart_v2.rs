@@ -7,17 +7,16 @@ use echo_lab::lab_mcp::Fixture as MockPortos;
 async fn t3_settings_v2_restart_installs_overlay_and_links_with_saved_scopes() {
     let fixture = Fixture::new("chatgpt");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let mock = MockPortos::bind(std::time::UNIX_EPOCH.elapsed().unwrap().as_secs())
-        .await
-        .unwrap();
+    let epoch = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
+    let mock = MockPortos::bind(epoch).await.unwrap();
     let base = configure(&fixture, listener.local_addr().unwrap().port(), mock.base());
     let home = fixture.directory.path().join("agent-home");
     std::fs::create_dir(&home).unwrap();
     std::fs::write(home.join("settings.toml"), "[voice]\nsession_listen_seconds = 4\n").unwrap();
     let mut process = Process::spawn(&mut super::super::voice_entry::command(&fixture));
     let pid = process.child.id().unwrap();
-    let identity = restart::process_identity(pid);
     let mut old_satellite = restart::binary_ready(&listener, &mut process).await;
+    let identity = restart::process_identity(pid);
     let url = settings_runtime_url(&fixture, "/settings/v2");
     let client = reqwest::Client::new();
     let before = leaves(&snapshot(&client, &url).await);
@@ -50,7 +49,7 @@ async fn t3_settings_v2_restart_installs_overlay_and_links_with_saved_scopes() {
     overlay(&fixture, &home, &base);
     tokio::time::timeout(
         OBSERVATION_TIMEOUT,
-        super::super::settings_link::replacement_grant(&fixture, &mock),
+        super::super::settings_link::replacement_grant(&fixture, &mock, epoch),
     )
     .await
     .unwrap();
