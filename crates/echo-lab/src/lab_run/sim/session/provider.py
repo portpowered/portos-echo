@@ -29,7 +29,7 @@ release_goodbye = threading.Event()
 wake_read, wake_write = socket.socketpair()
 output_lock = threading.Lock()
 observed = {'calls': 0, 'sidebands': 0, 'external': 0, 'models': [], 'delegations': [], 'appends': [],
-            'model_requests': 0, 'time_wire': [], 'media_time_turns': []}
+            'model_requests': 0, 'time_wire': [], 'media_time_turns': [], 'media_time_transcripts': []}
 script = None
 TIME_RULE = ('Always answer time, date, and day-of-week questions directly '
              'from the call-start context and never hand them off.')
@@ -223,6 +223,8 @@ def answer_time(connection, question, media=False):
         send_delegation(connection, script.begin(0, question))
     else:
         frame(connection, {'type': 'output_transcript.added', 'item': {'text': answer}})
+        if media:
+            observed['media_time_transcripts'].append({'question_order': decision['order'], 'text': answer})
     emit(decision)
 
 

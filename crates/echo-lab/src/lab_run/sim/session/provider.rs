@@ -199,22 +199,36 @@ async fn conversation(
             observation(observed, &value)?;
             continue;
         }
-        match action {
-            Some(Control::Delegate(turn)) => process.send(&json!({"delegate":turn})).await?,
-            Some(Control::Transcripts(turn)) => process.send(&json!({"transcripts":turn})).await?,
-            Some(Control::Events(tag, events)) => process.send(&json!({"tag":tag,"events":events})).await?,
-            Some(Control::TimeQuestion(text)) => process.send(&json!({"time_question":text})).await?,
-            Some(Control::MediaQuestion(text)) => process.send(&json!({"media_question":text})).await?,
-            Some(Control::TimeQuestionOnAudio(text, armed)) => arm(&mut question, text, armed)?,
-            Some(Control::ReleaseGoodbye) => process.send(&json!({"release_goodbye":true})).await?,
-            Some(Control::Audio(indices)) => sequence.send(peer, indices).await?,
-            Some(Control::Quiesce(done)) => {
-                quiesced = true;
-                let _ = done.send(());
-            }
-            Some(Control::Close) | None => return Ok(()),
+        if !control(action, process, peer, &mut sequence, &mut question, &mut quiesced).await? {
+            return Ok(());
         }
     }
+}
+
+async fn control(
+    action: Option<Control>,
+    process: &mut Process,
+    peer: &mut LivePeer,
+    sequence: &mut Sequence,
+    question: &mut Option<&'static str>,
+    quiesced: &mut bool,
+) -> Result<bool, String> {
+    match action {
+        Some(Control::Delegate(turn)) => process.send(&json!({"delegate":turn})).await?,
+        Some(Control::Transcripts(turn)) => process.send(&json!({"transcripts":turn})).await?,
+        Some(Control::Events(tag, events)) => process.send(&json!({"tag":tag,"events":events})).await?,
+        Some(Control::TimeQuestion(text)) => process.send(&json!({"time_question":text})).await?,
+        Some(Control::MediaQuestion(text)) => process.send(&json!({"media_question":text})).await?,
+        Some(Control::TimeQuestionOnAudio(text, armed)) => arm(question, text, armed)?,
+        Some(Control::ReleaseGoodbye) => process.send(&json!({"release_goodbye":true})).await?,
+        Some(Control::Audio(indices)) => sequence.send(peer, indices).await?,
+        Some(Control::Quiesce(done)) => {
+            *quiesced = true;
+            let _ = done.send(());
+        }
+        Some(Control::Close) | None => return Ok(false),
+    }
+    Ok(true)
 }
 
 fn arm(question: &mut Option<&'static str>, text: &'static str, armed: oneshot::Sender<()>) -> Result<(), String> {

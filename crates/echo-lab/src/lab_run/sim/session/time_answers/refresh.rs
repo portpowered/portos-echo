@@ -87,6 +87,7 @@ pub(super) fn check(
 ) -> Result<(), String> {
     let wire = &snapshot["time_wire"];
     let decisions = &snapshot["media_time_turns"];
+    let transcripts = &snapshot["media_time_transcripts"];
     let bridge = |event, run: Option<&str>| {
         records
             .iter()
@@ -96,7 +97,7 @@ pub(super) fn check(
     let runs = ["run-1", "run-2"].map(|id| {
         json!({"id":id,"started":bridge("wyoming.run_started", Some(id)),"played":bridge("reply.played", Some(id))})
     });
-    let evidence = json!({"wire":wire,"decisions":decisions,
+    let evidence = json!({"wire":wire,"decisions":decisions,"assistant_transcripts":transcripts,
         "bridge_peer_created":bridge("call.peer_created", None),"bridge_realtime_start_sent":bridge("call.realtime_start_sent", None),
         "runs":runs,
     });
@@ -113,6 +114,7 @@ pub(super) fn check(
     ]}}]);
     if *wire != expected
         || decisions.as_array().map(Vec::len) != Some(2)
+        || *transcripts != json!([{"question_order":1,"text":"19:30"},{"question_order":3,"text":"19:37"}])
         || evidence["bridge_peer_created"] != 1
         || evidence["bridge_realtime_start_sent"] != 1
         || evidence["runs"] != json!([{"id":"run-1","started":1,"played":1},{"id":"run-2","started":1,"played":1}])

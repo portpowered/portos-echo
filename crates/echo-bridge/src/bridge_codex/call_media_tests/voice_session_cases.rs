@@ -215,6 +215,18 @@ async fn refreshed() {
     };
     let remote = wake_time::two_wakes(&mut server, &mut receive, &state);
     let mut work = Box::pin(async { tokio::join!(client, remote).0 });
+    settle_reused_wakes(work.as_mut(), &state, &audio, &completed, &observer).await;
+    drop(work);
+    assert!(io.begin_request("account/read", &json!({})).is_ok());
+}
+
+async fn settle_reused_wakes(
+    mut work: Pin<&mut impl Future<Output = Result<u64, Error>>>,
+    state: &State,
+    audio: &mpsc::Sender<PcmFrame>,
+    completed: &Mutex<Vec<crate::bridge_voice::Stats>>,
+    observer: &Observer,
+) {
     pump(work.as_mut()).await;
     assert_eq!(observer.commands().last(), Some(&Command::Stop));
     observer.finish(Ok(()));
@@ -223,7 +235,7 @@ async fn refreshed() {
     tokio::time::advance(Duration::from_secs(4)).await;
     crate::bridge_voice::TEST_WAKE_TIME.with(|clock| clock.set(wake_time::t0() + Duration::from_secs(420)));
     audio.send([123; 320]).await.unwrap(); // belongs to the prior, idle reply
-    wake(&observer);
+    wake(observer);
     pump(work.as_mut()).await;
     observer.finish(Ok(()));
     pump(work.as_mut()).await;
@@ -235,8 +247,7 @@ async fn refreshed() {
     assert_eq!(work.await, Ok(2));
     assert_eq!(state.closes.load(Ordering::SeqCst), 1);
     assert_eq!(*state.sent.lock().unwrap(), vec![[0; 320]; 2]);
-    assert_no_reply(&completed.lock().unwrap(), &observer);
-    assert!(io.begin_request("account/read", &json!({})).is_ok());
+    assert_no_reply(&completed.lock().unwrap(), observer);
 }
 
 fn reuse_notice(

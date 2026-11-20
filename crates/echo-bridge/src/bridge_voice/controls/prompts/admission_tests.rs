@@ -1,7 +1,7 @@
 //! T3: production admission/RPC, memory link/media, paused clock and real files.
 use super::super::{
     prompts,
-    voice_config::tests::{MemoryPeer, admission_options, retained_observer},
+    voice_config::tests::{MemoryPeer, ack_retained_context, admission_options, retained_observer},
 };
 use super::*;
 use crate::bridge_trace::Trace;
@@ -213,6 +213,9 @@ async fn replies(
     let stops = || observer.commands().iter().filter(|cmd| **cmd == Command::Stop).count();
     let initial = stops();
     for count in 1..=2 {
+        if count == 2 {
+            ack_retained_context(server, thread).await;
+        }
         started.notified().await;
         let event = serde_json::json!({"method":"thread/realtime/transcript/done","params":{"threadId":thread,"role":"assistant","text":"fixture reply"}});
         server

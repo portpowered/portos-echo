@@ -113,8 +113,23 @@ async fn failed(failure: Failure) {
     pump(work.as_mut()).await;
     assert_eq!(counts.get(), (1, 1));
     wake(&observer);
+    let result = wait_failure(work.as_mut(), &mut admitted, cancel, failure).await;
+    drop(work);
+    assert_eq!(result, Err(expected_error(failure)));
+    assert_eq!(counts.get(), (1, 1));
+    assert_eq!(*media.sent.lock().unwrap(), vec![[0; 320]]);
+    assert_eq!(media.closes.load(Ordering::SeqCst), 1);
+    assert_available_for_next_call(&mut io, &mut server).await;
+}
+
+async fn wait_failure(
+    mut work: Pin<&mut impl Future<Output = Result<u64, Error>>>,
+    admitted: &mut mpsc::UnboundedReceiver<()>,
+    cancel: tokio::sync::oneshot::Sender<()>,
+    failure: Failure,
+) -> Result<u64, Error> {
     // Keep the work driven even if refusal finishes immediately.
-    let result = tokio::select! {
+    tokio::select! {
         biased;
         result = &mut work => result,
         receipt = admitted.recv() => {
@@ -122,18 +137,31 @@ async fn failed(failure: Failure) {
             if matches!(failure, Failure::Cancelled) { cancel.send(()).unwrap(); }
             (&mut work).await
         }
-    };
-    drop(work);
-    let expected = match failure {
+    }
+}
+
+fn expected_error(failure: Failure) -> Error {
+    match failure {
         Failure::Refused | Failure::Realtime => Error::Unavailable,
         Failure::Deadline => Error::Deadline,
         Failure::Cancelled => Error::Control,
+    }
+}
+
+async fn assert_available_for_next_call(io: &mut Io, server: &mut Server) {
+    let client = async {
+        let mut call = crate::bridge_codex::Call::new(io);
+        assert_eq!(
+            call.start(&options(), vec![], "fixture-offer", deadline()).await,
+            Ok("fixture-answer".into())
+        );
+        assert_eq!(call.stop(deadline()).await, Ok(()));
     };
-    assert_eq!(result, Err(expected));
-    assert_eq!(counts.get(), (1, 1));
-    assert_eq!(*media.sent.lock().unwrap(), vec![[0; 320]]);
-    assert_eq!(media.closes.load(Ordering::SeqCst), 1);
-    assert!(io.begin_request("account/read", &json!({})).is_ok());
+    let remote = async {
+        start(server).await;
+        stop(server).await;
+    };
+    tokio::join!(client, remote);
 }
 
 fn count(counts: &std::cell::Cell<(usize, usize)>, notice: &SessionNotice) {
