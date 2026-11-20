@@ -138,8 +138,10 @@ value=\$(cat version)
 printf '%s\\n' \"\$value\""
 }
 release_restore_files() {
-  # Retain the verified snapshot until publication succeeds, allowing retries.
-  run_adb shell "touch '${device:?}/releases/pending'
+  # Select the verified restore target before changing any active files.
+  run_adb shell "umask 077
+printf '%s\\n' '$1' > '${device:?}/releases/transaction'
+mv -f '${device:?}/releases/transaction' '${device:?}/releases/pending'
 for name in bin apk scripts MANIFEST; do
   rm -rf '${device:?}/'\$name
   if test -e '${device:?}/releases/$1/'\$name; then

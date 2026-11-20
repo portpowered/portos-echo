@@ -6,13 +6,30 @@ import subprocess
 from test_echo_install import Sandbox, require, set_owner
 from test_echo_install_lifecycle import device_archive
 
-def public_bytes(box):
-    return {str(path.relative_to(box.device)): path.read_bytes()
+def payload_bytes(root):
+    return {str(path.relative_to(root)): path.read_bytes()
             for name in ("bin", "apk", "scripts", "MANIFEST")
-            for path in ([box.device / name] if (box.device / name).is_file()
-                         else (box.device / name).rglob("*")) if path.is_file()}
+            for path in ([root / name] if (root / name).is_file()
+                         else (root / name).rglob("*")) if path.is_file()}
+
+def require_release(box, current, previous):
+    observed = json.loads((box.device / "release.json").read_text())
+    expected = {"format": 1, "current": current, "previous": previous}
+    require(observed == expected, f"release metadata differs: expected {expected}, observed {observed}")
+
+def interrupt_pending_cleanup(box):
+    remove = box.root / "remote-tools/rm"
+    remove.write_text('''#!/bin/sh
+if [ "$#" = 2 ] && [ "$1" = -f ] &&
+  [ "$2" = "$FAKE_ROOT/remote/echo-bridge/releases/pending" ]; then
+  /usr/bin/rm -f "$0"
+  exit 73
+fi
+exec /usr/bin/rm "$@"
+''')
+    remove.chmod(0o755)
+
 def release_cases():
-    from test_echo_install_lifecycle import device_archive
     # Run both the actual bundle device entry and ordinary Linux operator CLI.
     with Sandbox() as box:
         stage, archive = device_archive(box, "valid")
@@ -30,9 +47,9 @@ def release_cases():
                                     capture_output=True, timeout=15)
             require(result.returncode == code, "unexpected install outcome: " + result.stderr.decode())
         install("0.1.0")
-        original = public_bytes(box)
+        original = payload_bytes(box.device)
         box.run(["rollback"], 1)
-        require(public_bytes(box) == original, "first rollback changed active release")
+        require(payload_bytes(box.device) == original, "first rollback changed active release")
         private = {"private/bridge.toml": "edited config", "home/notes.md": "retained notes"}
         for name, value in private.items():
             path = box.device / name
@@ -41,36 +58,48 @@ def release_cases():
         for name in ("bin/echo-bridge", "bin/codex-app-server", "bin/cacert.pem", "apk/echo-screen.apk", "MANIFEST"):
             (bundle / name).write_text("version B: " + name)
         install("0.2.0")
-        current = public_bytes(box)
+        current = payload_bytes(box.device)
         install("0.2.0")
-        require(public_bytes(box) == current, "same-version retry changed the active payload")
-        # Interrupt publication after the binaries are copied, then retry the same release.
-        (bundle / "apk").rename(stage / "saved-apk")
-        install("0.2.0", 1)
-        require((box.device / "releases/pending").read_text().strip() == "retry", "retry was not marked pending")
-        box.run(["status"], 1)
-        (stage / "saved-apk").rename(bundle / "apk")
-        install("0.2.0")
-        require(public_bytes(box) == current, "partial retry did not recover the active payload")
-        require(not any((box.device / "releases" / name).exists() for name in ("pending", "retry")),
-                "retry retained recovery state")
-        require(json.loads((box.device / "release.json").read_text()) ==
-                {"format": 1, "current": "0.2.0", "previous": "0.1.0"}, "release metadata differs")
+        require(payload_bytes(box.device) == current, "same-version retry changed the active payload")
+        pending = box.device / "releases/pending"
         previous = box.device / "releases/previous"
-        require({str(path.relative_to(previous)): path.read_bytes()
-                 for path in previous.rglob("*") if path.is_file() and path.name not in ("version", "SHA256SUMS")}
-                == original, "previous payload differs")
+        def interrupt_refresh():
+            # Interrupt publication after the binaries are copied.
+            (bundle / "apk").rename(stage / "saved-apk")
+            install("0.2.0", 1)
+            require(pending.read_text().strip() == "retry", "retry was not marked pending")
+            box.run(["status"], 1)
+            (stage / "saved-apk").rename(bundle / "apk")
+        interrupt_refresh()
+        install("0.2.0")
+        require(payload_bytes(box.device) == current, "partial retry did not recover the active payload")
+        retry = box.device / "releases/retry"
+        require(not pending.exists() and not retry.exists(), "retry retained recovery state")
+        require_release(box, "0.2.0", "0.1.0")
+        require(payload_bytes(previous) == original, "previous payload differs")
         require(not (previous / "private").exists() and not (previous / "home").exists(),
                 "snapshot contains private data")
+        interrupt_refresh()
+        interrupt_pending_cleanup(box)
+        result = box.run(["rollback"], 1)
+        require("rolled back" not in result.stdout, "interrupted rollback reported success")
+        require_release(box, "0.1.0", None)
+        require(payload_bytes(box.device) == original, "interrupted rollback published incorrect files")
+        rollback_target = pending.read_text().strip()
+        install("0.2.0")
+        require_release(box, "0.2.0", "0.1.0")
+        require(payload_bytes(box.device) == current, "resumed install published incorrect files")
+        require(payload_bytes(previous) == original, "resumed install lost the rollback payload")
+        require(rollback_target == "previous", "interrupted rollback retained the retry target")
+        require(not pending.exists() and not retry.exists(), "resumed install retained recovery state")
         saved = (previous / "bin/echo-bridge").read_bytes()
         (previous / "bin/echo-bridge").write_bytes(b"tampered")
         box.run(["rollback"], 1)
-        require(public_bytes(box) == current, "tampered rollback changed active files")
+        require(payload_bytes(box.device) == current, "tampered rollback changed active files")
         (previous / "bin/echo-bridge").write_bytes(saved)
         box.run(["rollback"])
-        require(public_bytes(box) == original, "rollback did not restore every public file")
-        require(json.loads((box.device / "release.json").read_text()) ==
-                {"format": 1, "current": "0.1.0", "previous": None}, "rollback version differs")
+        require(payload_bytes(box.device) == original, "rollback did not restore every public file")
+        require_release(box, "0.1.0", None)
         for name, value in private.items():
             require((box.device / name).read_text() == value, "rollback changed private/home bytes")
         box.run(["rollback"], 1)
@@ -80,7 +109,7 @@ def release_cases():
     for fault in ("push", "releases/metadata"):
         with Sandbox() as box:
             box.install()
-            original = public_bytes(box)
+            original = payload_bytes(box.device)
             box.files["bridge"].write_text("version B")
             (box.root / "fault").write_text(fault)
             box.install(code=1)
@@ -89,7 +118,7 @@ def release_cases():
             box.run(["status"], 1)
             box.run(["start"], 1)
             box.run(["rollback"])
-            require(public_bytes(box) == original, "failed update lost recoverable files")
+            require(payload_bytes(box.device) == original, "failed update lost recoverable files")
             box.files["bridge"].write_text("version C")
             box.install()
             require((box.device / "bin/echo-bridge").read_text() == "version C", "recovery did not install")
@@ -110,9 +139,9 @@ def release_cases():
                     else: os.mkfifo(target)
                 elif kind == "owner": set_owner(box.root, target, "9999:9999")
                 else: target.chmod(0o666)
-                original = public_bytes(box)
+                original = payload_bytes(box.device)
                 box.run(["rollback"], 1)
-                require(public_bytes(box) == original and outside.read_text() == "outside bytes",
+                require(payload_bytes(box.device) == original and outside.read_text() == "outside bytes",
                         "unsafe snapshot changed active or outside bytes")
                 require(not (box.root / "remote/echo-bridge.lock").exists(), "unsafe snapshot took lock")
-    print("echo-install releases: snapshot=PASS retry=PASS rollback=PASS partial=PASS retention=PASS")
+    print("echo-install releases: snapshot=PASS retry=PASS rollback=PASS interrupted_rollback=PASS partial=PASS retention=PASS")
