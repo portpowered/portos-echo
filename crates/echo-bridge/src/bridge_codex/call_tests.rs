@@ -71,7 +71,8 @@ pub(super) async fn start(server: &mut Server) -> Value {
         json!({
             "threadId":"thread-1","outputModality":"audio","transport":{"type":"webrtc","sdp":"fixture-offer"},
             "version":"v3","includeStartupContext":false,"clientManagedHandoffs":false,
-            "voice":"alloy","prompt":"Live prompt"
+            "voice":"alloy","prompt":"Live prompt",
+            "initialItems":[{"role":"developer","text":"Live prompt"}]
         })
     );
     // Real app servers can emit SDP before the request's reply.
@@ -103,12 +104,13 @@ pub(super) async fn admitted_start(server: &mut Server, began: std::time::System
     expected["baseInstructions"] = prompt.into();
     assert_eq!(params, expected);
     assert_eq!(request["method"], "thread/realtime/start");
+    let live = prompt.replacen("Client audio bridge", "Live prompt", 1);
     assert_eq!(
         request["params"],
         json!({
             "threadId":"thread-1","outputModality":"audio","transport":{"type":"webrtc","sdp":"fixture-offer"},
             "version":"v3","includeStartupContext":false,"clientManagedHandoffs":false,
-            "voice":"alloy","prompt":prompt.replacen("Client audio bridge", "Live prompt", 1)
+            "voice":"alloy","prompt":live,"initialItems":[{"role":"developer","text":live}]
         })
     );
     notification(
@@ -447,4 +449,16 @@ async fn call_stop_requires_matching_closed_and_bounds_missing_confirmation() {
         io.begin_request("account/read", &json!({})),
         Err(RpcError::Disconnected)
     );
+}
+
+#[test]
+fn live_history_carries_the_prompt_within_the_pinned_item_bound() {
+    assert_eq!(live_history(""), None);
+    assert_eq!(
+        live_history("Live prompt"),
+        Some(json!([{"role":"developer","text":"Live prompt"}]))
+    );
+    let bound = "p".repeat(32_768);
+    assert_eq!(live_history(&bound), Some(json!([{"role":"developer","text":bound}])));
+    assert_eq!(live_history(&"p".repeat(32_769)), None);
 }

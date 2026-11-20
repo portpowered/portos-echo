@@ -185,7 +185,8 @@ async fn setup_realtime(server: &mut Server) {
         json!({"threadId":"thread-1", "outputModality":"audio",
             "transport":{"type":"webrtc","sdp":"fixture-offer"}, "version":"v3",
             "includeStartupContext":false, "clientManagedHandoffs":false,
-            "voice":"alloy", "prompt":"Live prompt"})
+            "voice":"alloy", "prompt":"Live prompt",
+            "initialItems":[{"role":"developer","text":"Live prompt"}]})
     );
     notification(
         server,

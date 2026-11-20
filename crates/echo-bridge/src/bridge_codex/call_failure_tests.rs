@@ -27,7 +27,7 @@ async fn call_omitted_voice_uses_server_default_without_null_or_legacy_substitut
             json!({
                 "threadId":"thread-1", "outputModality":"audio", "transport":{"type":"webrtc","sdp":"fixture-offer"},
                 "version":"v3", "includeStartupContext":false, "clientManagedHandoffs":false,
-                "prompt":"Live prompt"
+                "prompt":"Live prompt", "initialItems":[{"role":"developer","text":"Live prompt"}]
             })
         );
         notification(

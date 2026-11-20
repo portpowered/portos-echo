@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 19
+last modified: 2026, november, 20
 status: active; measured facts, each with its date and source
 ---
 
@@ -176,6 +176,7 @@ repeated sessions.
 | Port OS pilot access token lifetime | 300 s, so a 30-minute run refreshes about six times | Port OS pilot runbook |
 | Muse gadget SDK: sending | `musegadget send-user-msg [--session-id <uuid>] [--wait <s>] "<text>"`. A new `--session-id` starts a side chat and reusing it keeps later messages there; with it, the answer comes only from that side chat. `--wait` is 1 to 600 s and prints the answer. Exit 3: no answer in time, or Muse was still answering (what arrived is printed). Exit 78: the trust store is unreadable. Other exit codes and the stdout format are not documented. One waiting request per chat at a time. No credentials of its own: it talks to the local service over `/run/musegadget/musegadget.sock` | upstream `facebookincubator/muse-gadget-sdk` `linux/README.md` and `linux/AGENTS.md` (Apache-2.0), read 2026-11-15 |
 | Muse gadget SDK: commands | One JSON file per command in `/etc/musegadget/commands.d/<name>.json` (`MUSEGADGET_COMMANDS_DIR` overrides). Names are lowercase words joined by dots; `system.`, `file.`, `device.` and `link.` are reserved. Fields: `description`, `exec` (argv, no shell), `required` and `optional` (each parameter `{type, description}`), `timeout_ms` (default 30000). The handler gets the parameters as one JSON object on stdin; a JSON object on stdout goes back to Muse; failure is a non-zero exit with the last stderr line as the reason; stdout and stderr are kept up to 96 KiB each. At most four commands run at once. New specs load only on `systemctl restart musegadget` | the same, read 2026-11-15 |
+| Live prompt on the ChatGPT call route | The pinned app server (`rust-v0.160.0`) puts `thread/realtime/start` `prompt` into `session.instructions` of the one `POST /backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas` body and sends no `session.update` on a v3 WebRTC sideband (`codex-api/src/endpoint/realtime_call.rs`, `realtime_websocket/methods.rs`). On the Echo the app-server log shows our prompt in the start request, yet the Live voice ignored two marker instructions placed in `prompts/voice.md` on fresh calls (a code word to repeat; a word to begin every reply with): 0 of 2 followed. Arithmetic was answered directly and the time question was handed off, consistent with a default prompt rather than ours. So `session.instructions` does not reach the Live model on this route; whether `session.initial_items` does is not measured yet | 2026-11-20, Echo at main `1e2e682a`, Ring speaker clips, `logs_2.sqlite` counts and booleans only |
 
 ## The hassmic wire
 
