@@ -116,11 +116,10 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
             clock.hidden = date.hidden = !idle;
             const heading = host.querySelector<HTMLElement>("h1");
             const details = host.querySelector<HTMLElement>(".details");
-            const controls = host.querySelector<HTMLElement>(".controls");
-            const status = heading && slot(heading, "status");
             if (heading) {
+                const status = slot(heading, "status");
                 heading.dataset.packSlot = "";
-                if (status && besideStage(status)) {
+                if (besideStage(status)) {
                     fitSideSlot(heading, status);
                     heading.style.lineHeight = "1.4";
                 }
@@ -132,27 +131,12 @@ export function applyLayout(host: HTMLElement, layout: Layout | undefined) {
                 const anchor = slot(details, state as NativeCardState);
                 details.dataset.packSlot = "";
                 // Native buttons stay with their prompt inside one scrollable card.
+                const controls = host.querySelector<HTMLElement>(".controls");
                 if (controls) details.append(controls);
                 if (besideStage(anchor)) {
                     fitSideSlot(details, anchor);
                     fitSideCard(details, controls);
                 }
-            } else if (
-                state === "ready" &&
-                heading &&
-                details &&
-                status &&
-                besideStage(status)
-            ) {
-                // Keep the Ready message and action in the same column as their heading.
-                slot(details, "status");
-                fitSideSlot(details, status);
-                delete heading.dataset.packSlot;
-                heading.style.position = "static";
-                heading.style.marginBottom = "12px";
-                details.prepend(heading);
-                if (controls) details.append(controls);
-                fitSideCard(details, controls);
             }
             observer.disconnect();
             observer.observe(host);
