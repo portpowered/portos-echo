@@ -170,7 +170,8 @@ async fn inspect(
             );
         }
     });
-    tokio::time::advance(Duration::from_secs(1)).await;
+    // Cross the timer wheel's millisecond rounding at the 1 s retry boundary.
+    tokio::time::advance(Duration::from_millis(1001)).await;
     event(
         path,
         if unauthorized {

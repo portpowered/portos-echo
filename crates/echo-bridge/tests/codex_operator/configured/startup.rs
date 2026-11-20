@@ -2,6 +2,8 @@
 use super::*;
 use std::time::Duration;
 
+// Explicit steps cross Tokio's millisecond timer-wheel rounding; the
+// production delay values remain asserted exactly in retry rows and unit tests.
 struct Clock(tokio::task::JoinHandle<()>);
 impl Clock {
     fn start() -> Self {
@@ -160,7 +162,7 @@ async fn startup_network_two_refusals_then_ready_without_relink_or_restart() {
     let rows = exercise("startup-network", async |fixture, path, observer| {
         waiting(path, 1).await;
         assert!(observer.commands().is_empty());
-        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::time::advance(Duration::from_millis(1001)).await;
         waiting(path, 2).await;
         assert!(observer.commands().is_empty());
         let port: u16 = std::fs::read_to_string(fixture.home.join("provider-port"))
@@ -170,7 +172,7 @@ async fn startup_network_two_refusals_then_ready_without_relink_or_restart() {
         let provider = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
             .await
             .unwrap();
-        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::time::advance(Duration::from_millis(2001)).await;
         let _accepted = provider.accept().await.unwrap();
         ready_health(path).await;
         assert_eq!(
@@ -203,7 +205,7 @@ async fn startup_network_timeout_retries_and_auth_transition_clears_waiting() {
                 if reject { "startup-unauthorized" } else { "chatgpt" },
             )
             .unwrap();
-            tokio::time::advance(Duration::from_secs(1)).await;
+            tokio::time::advance(Duration::from_millis(1001)).await;
             if reject {
                 relink(path).await;
             } else {
@@ -278,10 +280,10 @@ async fn startup_network_stalled_account_deadline_retries_to_ready() {
             tokio::task::yield_now().await;
         }
         assert!(observer.commands().is_empty());
-        tokio::time::advance(Duration::from_secs(30)).await;
+        tokio::time::advance(Duration::from_millis(30001)).await;
         waiting(path, 1).await;
         std::fs::write(fixture.home.join("mode"), "chatgpt").unwrap();
-        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::time::advance(Duration::from_millis(1001)).await;
         ready_health(path).await;
         drop(control);
     })

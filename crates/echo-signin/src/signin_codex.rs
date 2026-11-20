@@ -38,8 +38,8 @@ impl From<RpcError> for AccountError {
     fn from(error: RpcError) -> Self {
         match error {
             RpcError::Remote(_) => Self::Authorization,
-            RpcError::RemoteTransient(_) => Self::Transport,
             RpcError::Deadline => Self::Deadline,
+            // Includes the decoder's payload-free remote discovery failures.
             _ => Self::Transport,
         }
     }
