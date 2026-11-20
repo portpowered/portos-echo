@@ -103,6 +103,10 @@ for (const name of [
     "prompt_save_v1",
     "save_result_v1",
     "settings_error_v1",
+    "settings_snapshot_v2",
+    "settings_patch_v2",
+    "save_result_v2",
+    "settings_error_v2",
 ]) {
     const schema = JSON.parse(
         await readFile(new URL(`${name}.json`, root), "utf8"),
@@ -125,7 +129,7 @@ const settingsHash = createHash("sha256")
     .update(JSON.stringify(settingsSources))
     .digest("hex");
 const settingsOutput = await prettier.format(
-    `// Generated from schemas/screen/*_v1.json by tools/screen-schema.mjs.\n// Schema SHA-256: ${settingsHash}\n${Object.entries(
+    `// Generated from schemas/screen/*_v{1,2}.json by tools/screen-schema.mjs.\n// Schema SHA-256: ${settingsHash}\n${Object.entries(
         settingsModels,
     )
         .map(([key, value]) => `export type ${key} = ${type(value)};`)

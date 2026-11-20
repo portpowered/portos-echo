@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 #[path = "screen_settings.rs"]
 pub mod settings_v1;
 
+#[path = "screen_settings_v2.rs"]
+pub mod settings_v2;
+
 /// A complete screen presentation, serialized with a `snake_case` `state` tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "state", rename_all = "snake_case")]

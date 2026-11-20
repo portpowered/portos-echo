@@ -1,0 +1,34 @@
+name: Settings wire generation
+on:
+  push:
+    branches: [el-w5-screen-settings-panel-schema-witness]
+permissions:
+  contents: read
+jobs:
+  settings-wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: settings-wire
+      - name: Generate Rust and TypeScript settings schemas
+        run: |
+          UPDATE_SCHEMAS=1 cargo test --offline --locked -p echo-screen-contract --test screen_schema settings_v2_schema_snapshots
+          npm --prefix web/screen ci
+          npm --prefix web/screen run generate:schema
+      - uses: actions/upload-artifact@ea1659d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: settings-wire
+          path: |
+            schemas/screen/*_v2.json
+            web/screen/src/settings/model.ts
+          retention-days: 3
+      - name: Check the generated wire
+        run: |
+          cargo test --offline --locked -p echo-screen-contract --test screen_wire -- --nocapture
+          cargo test --offline --locked -p echo-screen-contract --test screen_schema
+          npm --prefix web/screen run check:schema

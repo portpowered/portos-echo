@@ -228,3 +228,38 @@ fn settings_v1_rejects_versions_extras_nulls_and_lossy_caps() {
         assert!(serde_json::from_str::<PromptSaveV1>(wire).is_err());
     }
 }
+
+#[test]
+fn settings_v2_sparse_wire_preserves_decimal_cap_and_refuses_other_shapes() -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::settings_v1::SettingsPatchV1;
+    use echo_screen_contract::settings_v2::SettingsPatchV2;
+
+    let wire = r#"{"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner"},"agent":{"daily_request_cap":"9223372036854775807","max_tool_calls":6},"portos":{"scopes":["endpoint:read"],"allow_tools":["endpoint_query"]}}}"#;
+    let patch = serde_json::from_str::<SettingsPatchV2>(wire)?;
+    assert!(patch.settings.valid_shape());
+    round_trip(&patch, wire)?;
+    assert!(serde_json::from_str::<SettingsPatchV1>(wire).is_err());
+    println!("{wire}");
+
+    for invalid in [
+        r#"{"version":1,"settings":{"agent":{"max_tool_calls":6}}}"#,
+        r#"{"version":2,"settings":{"codex":{"web_search":null}}}"#,
+        r#"{"version":2,"settings":{"portos":{"url":"synthetic"}}}"#,
+        r#"{"version":2,"settings":{"portos":{"scopes":["unknown"]}}}"#,
+        r#"{"version":2,"settings":{"portos":{"allow_tools":["unknown"]}}}"#,
+        r#"{"version":2,"settings":{"agent":{"max_tool_calls":6},"codex":{}}}"#,
+        r#"{"version":2,"settings":{"portos":{"scopes":[]}}}"#,
+        r#"{"version":2,"settings":{"portos":{"scopes":["endpoint:read","endpoint:read"]}}}"#,
+        r#"{"version":2,"settings":{"home":{"agent_tools":["notes","notes"]}}}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<SettingsPatchV2>(invalid).map_or(true, |value| !value.settings.valid_shape()),
+            "{invalid}"
+        );
+        println!("Refused {invalid}");
+    }
+    let clear = r#"{"version":2,"settings":{"codex":{"delegate_model":"","delegate_effort":""},"home":{"agent_tools":[]},"portos":{"allow_tools":[]}}}"#;
+    let patch = serde_json::from_str::<SettingsPatchV2>(clear)?;
+    assert!(patch.settings.valid_shape());
+    round_trip(&patch, clear)
+}
