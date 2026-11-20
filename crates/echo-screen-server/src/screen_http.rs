@@ -51,6 +51,7 @@ pub(crate) fn router(
             "/settings/v2",
             get(settings_http::snapshot_v2).patch(settings_http::save_v2),
         )
+        .route("/settings/v2/portos", post(settings_http::portos_v2))
         .route("/screen-packs/v1", get(crate::packs::view::snapshot))
         .route("/screen-packs/v1/install", post(crate::packs::jobs::install))
         .route("/screen-packs/v1/selection", post(crate::packs::view::selection))

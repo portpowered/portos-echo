@@ -12,6 +12,7 @@ import type { UiState } from "../model";
 import { packControls } from "./packs";
 import { loadSettings, saveSettingsV2 } from "./api-v2";
 import { openAIOptions, portosForm } from "./forms-v2";
+import { mountPortos } from "./portos";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
 const LINK_FROM_PC =
@@ -63,6 +64,7 @@ export function mountSettings(
     let pending: AbortController | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
+    let portos: ReturnType<typeof mountPortos> | undefined;
 
     function close() {
         panel.hidden = true;
@@ -73,6 +75,8 @@ export function mountSettings(
         gear.hidden = false;
         gear.setAttribute("aria-expanded", "false");
         pending?.abort();
+        portos?.stop();
+        portos = undefined;
         pending = undefined;
         clearTimeout(timeout);
         gear.focus();
@@ -165,7 +169,8 @@ export function mountSettings(
             );
     }
     function renderV2(data: SnapshotV2) {
-        const saveV2 = (patch: PatchV2) => {
+        const permissions = portosForm(data.portos, saveV2);
+        function saveV2(patch: PatchV2) {
             if (!Object.keys(patch).length) {
                 status.textContent = "No settings changed";
                 return;
@@ -197,6 +202,7 @@ export function mountSettings(
                             data.portos.server.requested_scopes.length,
                             ...patch.portos.scopes,
                         );
+                    if (patch.portos.scopes && pending) portos?.scopesSaved();
                     if (patch.portos.allow_tools)
                         data.portos.server.allow_tools.splice(
                             0,
@@ -208,10 +214,19 @@ export function mountSettings(
                     ? "Saved. The bridge will restart after the current reply finishes."
                     : "Saved. Changes apply to the next conversation.";
             }, "Saving�");
-        };
+        }
+        portos = mountPortos(
+            permissions.controls,
+            actions,
+            data.portos,
+            perform,
+            data.warnings.includes(
+                "Could not restart bridge; saved settings remain pending",
+            ),
+        );
         fields.append(
             settingsForm(data, saveV2, openAIOptions(data.settings)),
-            portosForm(data.portos, saveV2),
+            permissions.section,
         );
         renderShared(data);
         fields.append(element("p", "Version: " + data.bridge_version));
@@ -289,6 +304,7 @@ export function mountSettings(
         dispose() {
             disposed = true;
             pending?.abort();
+            portos?.stop();
             clearTimeout(timeout);
             gear.remove();
             panel.remove();

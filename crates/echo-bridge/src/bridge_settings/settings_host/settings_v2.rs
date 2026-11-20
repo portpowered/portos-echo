@@ -1,18 +1,56 @@
 //! V2 settings use the V1 store, prompt cache and restart receipt.
 use super::{SettingsError, SettingsHost};
+use crate::bridge_mcp::{
+    Grant,
+    bridge_operations::{Operation, StartError},
+};
 use crate::bridge_settings::portos_permissions::portos_server;
 use echo_config::{BridgeConfig, SettingsOptions, SettingsOverlay, SettingsServerTools, WebSearch};
 use echo_screen_contract::{
     settings_v1::LinkStatusV1,
     settings_v2::{
-        AgentValuesV2, CodexValuesV2, HomeSettingsV2, HomeToolGroupV2, LinkStatusV2, PortosOperationStateV2,
-        PortosScopeV2, PortosServerV2, PortosStatusV2, PortosToolV2, SaveResultV2, SettingsErrorV2, SettingsFieldsV2,
-        SettingsSnapshotV2, SettingsValuesV2, SettingsVersionV2, WebSearchV2,
+        AgentValuesV2, CodexValuesV2, HomeSettingsV2, HomeToolGroupV2, LinkStatusV2, PortosActionV2,
+        PortosOperationStartedV2, PortosOperationStateV2, PortosOperationV2, PortosScopeV2, PortosServerV2,
+        PortosStatusV2, PortosToolV2, SaveResultV2, SettingsErrorV2, SettingsFieldsV2, SettingsSnapshotV2,
+        SettingsValuesV2, SettingsVersionV2, WebSearchV2,
     },
 };
 use echo_screen_server::SettingsReply;
 
 impl SettingsHost {
+    pub(in crate::bridge_settings) fn portos_operation(
+        &self,
+        request: PortosOperationV2,
+        grant: Option<&Grant>,
+    ) -> SettingsReply {
+        let config = self.store.effective();
+        if portos_server(config).is_none() {
+            return SettingsReply::InvalidV2(operation_error("Port OS is unconfigured."));
+        }
+        let Some(grant) = grant else {
+            return SettingsReply::PortosUnavailable;
+        };
+        let (operation, action) = match request {
+            PortosOperationV2::Link { .. } => (Operation::Link, PortosActionV2::Link),
+            PortosOperationV2::Unlink { .. } => (Operation::Unlink, PortosActionV2::Unlink),
+        };
+        if operation == Operation::Link && config.mcp.scopes != self.launch_scopes {
+            return SettingsReply::PortosConflict(operation_error(
+                "Port OS linking is waiting for the bridge restart.",
+            ));
+        }
+        match grant.start_screen_operation(operation) {
+            Ok(()) => SettingsReply::PortosStarted(PortosOperationStartedV2 {
+                version: SettingsVersionV2,
+                operation: action,
+            }),
+            Err(StartError::Busy) => {
+                SettingsReply::PortosConflict(operation_error("A Port OS operation is already in progress."))
+            }
+            Err(StartError::Closed) => SettingsReply::PortosUnavailable,
+        }
+    }
+
     pub(super) fn save_v2(&mut self, fields: SettingsFieldsV2) -> Result<SettingsReply, SettingsError> {
         if !fields.valid_shape() {
             return Err(SettingsError::Prompt("settings: expected an editable field"));
@@ -115,6 +153,13 @@ impl SettingsHost {
             restart_pending: accepted.restart_pending,
             warnings: accepted.warnings,
         })
+    }
+}
+
+fn operation_error(message: &str) -> SettingsErrorV2 {
+    SettingsErrorV2 {
+        version: SettingsVersionV2,
+        message: message.into(),
     }
 }
 

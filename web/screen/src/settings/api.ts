@@ -151,7 +151,11 @@ export async function readResponse(
     version: 1 | 2,
 ): Promise<unknown> {
     if (response.status === 200) return response.json();
-    if (response.status === 422 || response.status === 500) {
+    if (
+        response.status === 422 ||
+        response.status === 500 ||
+        (version === 2 && response.status === 409)
+    ) {
         const error = record(await response.json());
         if (
             Object.keys(error).length === 2 &&

@@ -1,6 +1,9 @@
 use super::{Grant, bridge_presentation::RELINK};
 use echo_mcp_auth::AuthError;
-use echo_screen_contract::UiState;
+use echo_screen_contract::{
+    UiState,
+    settings_v2::{PortosChallengeV2, PortosOperationStateV2},
+};
 use serde_json::json;
 use std::sync::{Arc, atomic::Ordering};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
@@ -60,6 +63,82 @@ pub(crate) struct OperationReceipt {
 pub(crate) enum StartError {
     Busy,
     Closed,
+}
+
+#[derive(Default)]
+pub(super) enum ScreenOperation {
+    #[default]
+    Idle,
+    Pending {
+        operation: Operation,
+        receipt: OperationReceipt,
+        challenge: Option<PortosChallengeV2>,
+    },
+    Failed(PortosOperationStateV2),
+}
+
+impl Grant {
+    pub(crate) fn start_screen_operation(&self, operation: Operation) -> Result<(), StartError> {
+        let mut screen = self.screen_operation.lock().map_err(|_| StartError::Closed)?;
+        let receipt = self.operator.start(operation)?;
+        *screen = ScreenOperation::Pending {
+            operation,
+            receipt,
+            challenge: None,
+        };
+        Ok(())
+    }
+
+    pub(crate) fn screen_operation(&self) -> (PortosOperationStateV2, Option<PortosChallengeV2>) {
+        let Ok(mut screen) = self.screen_operation.lock() else {
+            return (PortosOperationStateV2::Failed, None);
+        };
+        screen.update(self.now());
+        match &*screen {
+            ScreenOperation::Idle => (PortosOperationStateV2::Idle, None),
+            ScreenOperation::Failed(state) => (*state, None),
+            ScreenOperation::Pending {
+                operation, challenge, ..
+            } => {
+                let state = if *operation == Operation::Unlink {
+                    PortosOperationStateV2::Unlinking
+                } else {
+                    PortosOperationStateV2::Linking
+                };
+                (state, challenge.clone())
+            }
+        }
+    }
+}
+
+impl ScreenOperation {
+    fn update(&mut self, now: u64) {
+        let Self::Pending { receipt, challenge, .. } = self else {
+            return;
+        };
+        if let Ok(UiState::LinkCode {
+            verification_uri,
+            user_code,
+            expires_at_unix,
+        }) = receipt.progress.try_recv()
+        {
+            *challenge = Some(PortosChallengeV2 {
+                verification_uri,
+                user_code,
+                expires_at_unix,
+            });
+        }
+        if challenge.as_ref().is_some_and(|code| now >= code.expires_at_unix) {
+            *challenge = None;
+        }
+        *self = match receipt.result.try_recv() {
+            Ok(Ok(_)) => Self::Idle,
+            Ok(Err(AuthError::Expired)) => Self::Failed(PortosOperationStateV2::Expired),
+            Ok(Err(AuthError::AccessDenied)) => Self::Failed(PortosOperationStateV2::Denied),
+            Err(oneshot::error::TryRecvError::Empty) => return,
+            _ => Self::Failed(PortosOperationStateV2::Failed),
+        };
+    }
 }
 
 impl Operator {

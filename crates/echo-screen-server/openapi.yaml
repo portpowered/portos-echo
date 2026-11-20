@@ -249,6 +249,37 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SettingsErrorV2' }
         '503': { description: Settings host absent, stopping or saturated; no queued retry }
+  /settings/v2/portos:
+    post:
+      security: [{ pairingToken: [] }]
+      description: Admit a single operation with the existing runtime grant owner. Read GET /settings/v2 for progress and completion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PortosOperationV2' }
+      responses:
+        '202':
+          description: Operation admitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PortosOperationStartedV2' }
+        '400': { description: Invalid request shape or missing unlink confirmation; no operation }
+        '401': { description: Invalid or revoked pairing token; empty body }
+        '403': { description: Supplied foreign Origin; empty body }
+        '409':
+          description: Owner busy or accepted scopes waiting for restart
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV2' }
+        '413': { description: JSON body exceeds 65536 bytes; no operation }
+        '415': { description: Content-Type is not application/json; no operation }
+        '422':
+          description: Port OS unconfigured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV2' }
+        '503': { description: Settings host or grant owner unavailable; no queued retry }
   /settings/v1/prompts/{kind}:
     post:
       security: [{ pairingToken: [] }]
@@ -451,6 +482,10 @@ components:
       $ref: ../../schemas/screen/save_result_v2.json
     SettingsErrorV2:
       $ref: ../../schemas/screen/settings_error_v2.json
+    PortosOperationV2:
+      $ref: ../../schemas/screen/portos_operation_v2.json
+    PortosOperationStartedV2:
+      $ref: ../../schemas/screen/portos_operation_started_v2.json
   responses:
     PackUnauthorized: { description: Missing, wrong, empty, duplicate or revoked token; empty body, no effect }
     PackForeignOrigin: { description: Supplied Origin differs from server origin; empty body, no effect }

@@ -29,7 +29,7 @@ async fn t3_settings_v2_live_narrowing() {
             release.send(()).unwrap();
         };
         let (((), completion), ()) = tokio::join!(
-            service.scope_with_grant(work, || LinkStatusV1::Linked, || grant.granted_scopes()),
+            service.scope_with_grant(work, || LinkStatusV1::Linked, || Some(grant.clone())),
             inspect
         );
         assert!(completion.restart_requested);

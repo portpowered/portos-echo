@@ -93,10 +93,6 @@ impl<'a> SettingsLink<'a> {
         Ok(())
     }
 
-    async fn scopes(&self) -> Option<Vec<String>> {
-        self.health.mcp_grant()?.granted_scopes().await
-    }
-
     fn status(&self) -> LinkStatusV1 {
         if self.portos {
             self.health
@@ -199,7 +195,7 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
         let (result, completion) = Box::pin(service.with_trace(settings_trace).scope_with_grant(
             work,
             || link.status(),
-            || link.scopes(),
+            || link.health.mcp_grant(),
         ))
         .await;
         (result, Some(completion))

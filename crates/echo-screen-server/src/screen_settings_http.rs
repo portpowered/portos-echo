@@ -8,7 +8,7 @@ use axum::{
 };
 use echo_screen_contract::{
     settings_v1::{PromptSaveV1, SettingsPatchV1},
-    settings_v2::SettingsPatchV2,
+    settings_v2::{PortosOperationV2, SettingsPatchV2},
 };
 
 async fn guard(state: &HttpState, uri: &Uri, headers: &HeaderMap) -> Result<(), StatusCode> {
@@ -62,6 +62,15 @@ pub(super) async fn save(State(state): State<HttpState>, request: Request) -> Re
 
 pub(super) async fn save_v2(State(state): State<HttpState>, request: Request) -> Response {
     submit(state, request, 65_536, decode_v2).await
+}
+
+pub(super) async fn portos_v2(State(state): State<HttpState>, request: Request) -> Response {
+    submit(state, request, 65_536, |bytes| {
+        serde_json::from_slice::<PortosOperationV2>(bytes)
+            .ok()
+            .map(SettingsOperation::PortosV2)
+    })
+    .await
 }
 
 pub(super) async fn prompt(State(state): State<HttpState>, Path(kind): Path<String>, request: Request) -> Response {
