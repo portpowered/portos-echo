@@ -78,6 +78,12 @@ fn invalid() -> std::io::Error {
 }
 
 impl Fixture {
+    /// The synthetic MCP definitions exposed to the native model fixture.
+    #[must_use]
+    pub fn home_catalog() -> Vec<Value> {
+        mcp_home::catalog()
+    }
+
     /// # Errors
     /// Returns a fixed local bind category without endpoint or credential data.
     pub async fn bind(epoch: u64) -> std::io::Result<Self> {

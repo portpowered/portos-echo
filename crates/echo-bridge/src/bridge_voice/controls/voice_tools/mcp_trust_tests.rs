@@ -106,7 +106,8 @@ async fn relink(owner: &bridge_mcp::Runtime) {
 }
 
 async fn health_response(health: &Health) -> Value {
-    reqwest::get(format!("http://127.0.0.1:{}/healthz", health.address.port()))
+    let origin = "http://127.0.0.1";
+    reqwest::get(format!("{origin}:{}/healthz", health.address.port()))
         .await
         .unwrap()
         .json()

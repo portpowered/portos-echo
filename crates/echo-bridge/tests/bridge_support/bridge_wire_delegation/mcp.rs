@@ -234,7 +234,10 @@ fn record(directory: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(directory.join("portos/grant.json")).unwrap()).unwrap()
 }
 fn linked_output(issuer: &str) -> String {
-    format!("Verification URL: {issuer}/approve\nUser code: TEST-CODE\nMCP linked\n")
+    format!("{}MCP linked\n", link_guidance(issuer))
+}
+fn link_guidance(issuer: &str) -> String {
+    format!("Verification URL: {issuer}/approve\nUser code: TEST-CODE\n")
 }
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 requires prebuilt echo-bridge"]
@@ -367,7 +370,12 @@ async fn mcp_link_denial_and_expiry_are_fixed_and_stop_polling() {
             session.prompt(&mock).await;
             tokio::time::advance(Duration::from_secs(5)).await;
             session.advance(5000).await;
-            completed(&link.await.unwrap(), 1, "", &format!("echo-bridge: {message}\n"));
+            completed(
+                &link.await.unwrap(),
+                1,
+                &link_guidance(&mock.base),
+                &format!("echo-bridge: {message}\n"),
+            );
             assert_eq!(
                 bridge_wire_screen::state(&mut session.screen).await,
                 json!({"state":"error","message":message,"relink":true})

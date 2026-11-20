@@ -125,13 +125,13 @@ fn provider_configuration(journey: Journey) -> Value {
         return json!({"mcp":true,"tools":[{"name":"test_echo",
             "description":tool["description"],"inputSchema":tool["inputSchema"]}]});
     }
-    let tools: Vec<_> = ["control", "endpoint_query", "group_query"]
+    let tools: Vec<_> = Fixture::home_catalog()
         .into_iter()
-        .map(|name| {
-            json!({
-                "name":name,"description":"Synthetic local home tool",
-                "inputSchema":{"type":"object","properties":{},"additionalProperties":false}
-            })
+        .filter(|tool| {
+            matches!(
+                tool["name"].as_str(),
+                Some("control" | "endpoint_query" | "group_query")
+            )
         })
         .collect();
     json!({"portos":if journey == Journey::Twin {"twin"} else {"readonly"},"tools":tools})

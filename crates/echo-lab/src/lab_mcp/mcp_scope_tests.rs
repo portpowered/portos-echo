@@ -241,7 +241,7 @@ async fn t3_portos_full_grant_resolves_and_controls_only_twin_room() {
     let found: Value = drive(
         h.request(
             "tools/call",
-            json!({"name":"group_query","arguments":{"query":"Twin room"}}),
+            json!({"name":"group_query","arguments":{"query":{"name":{"eq":"Twin room"},"role":{"eq":"ROOM"}}}}),
         )
         .await
         .json(),
@@ -259,7 +259,7 @@ async fn t3_portos_full_grant_resolves_and_controls_only_twin_room() {
     assert_eq!(
         h.fixture.home_snapshot().unwrap(),
         json!({"calls":[
-        {"name":"group_query","arguments":{"query":"Twin room"}},control()
+        {"name":"group_query","arguments":{"query":{"name":{"eq":"Twin room"},"role":{"eq":"ROOM"}}}},control()
     ],"lights_on":[false,false],"plug_on":true})
     );
     h.fixture.shutdown().await.unwrap();

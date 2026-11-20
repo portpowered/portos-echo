@@ -128,10 +128,7 @@ pub(super) async fn request(State(shared): State<Shared>, headers: HeaderMap, Js
         "initialize" => json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},
             "serverInfo":{"name":"portos-synthetic","version":"1.0"}}),
         "notifications/initialized" => return StatusCode::ACCEPTED.into_response(),
-        "tools/list" => json!({"tools":TOOLS.iter().map(|(name,_)| json!({
-            "name":name,"description":"Synthetic local home tool",
-            "inputSchema":{"type":"object","properties":{},"additionalProperties":false}
-        })).collect::<Vec<_>>()}),
+        "tools/list" => json!({"tools":catalog()}),
         "tools/call" if TOOLS.iter().any(|(tool, _)| *tool == name) => {
             let arguments = &body["params"]["arguments"];
             if name == "control" && state.home.fault == Some(super::HomeFault::ControlUnavailable) {
@@ -149,6 +146,32 @@ pub(super) async fn request(State(shared): State<Shared>, headers: HeaderMap, Js
         }
     };
     Json(json!({"jsonrpc":"2.0","id":body["id"],"result":result})).into_response()
+}
+
+pub(super) fn catalog() -> Vec<Value> {
+    TOOLS
+        .iter()
+        .map(|(name, _)| json!({"name":name,"description":"Synthetic local home tool","inputSchema":schema(name)}))
+        .collect()
+}
+
+fn schema(name: &str) -> Value {
+    let mut schema = json!({"type":"object","properties":{},"additionalProperties":false});
+    match name {
+        "group_query" | "endpoint_query" | "endpoint_show" => {
+            let predicate = json!({"type":"object","additionalProperties":false,"properties":{"eq":{"type":"string"}}});
+            schema["properties"]["query"] = json!({"type":"object","additionalProperties":false,
+                "properties":{"name":predicate,"role":predicate}});
+        }
+        "control" => {
+            schema["properties"] = json!({"id":{"type":"string"},"message":{"type":"string"},
+                "payload":{"type":"object","properties":{},"additionalProperties":false},
+                "idempotencyKey":{"type":"string"},"waitForResult":{"type":"boolean"}});
+            schema["required"] = json!(["id", "message", "payload"]);
+        }
+        _ => {}
+    }
+    schema
 }
 
 fn required_scope(method: &str, name: &str) -> Option<&'static str> {

@@ -76,7 +76,7 @@ impl<'a> M5<'a> {
             Step::Mcp(McpAction::Probe) => session.probe().await?,
             Step::SayText(text) => {
                 let observed = session.lights(text).await?;
-                artifacts.measurement(observed)?;
+                artifacts.event("portos.home_control", None, Some(&observed.to_string()))?;
             }
             Step::Speech(phrases) => session.expect_reply(phrases)?,
             Step::Ui(expected) => session.expect_screen(expected)?,
