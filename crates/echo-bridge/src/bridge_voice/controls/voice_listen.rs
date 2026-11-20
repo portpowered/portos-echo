@@ -132,7 +132,6 @@ async fn after_reply<L: EchoLink>(
 /// owes no delegated answer: the farewell already spoken is all of it.
 pub(super) async fn complete_turn(answered: bool, port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
     source.delegation.completed();
-    source.delegation.expect_answer(answered);
     let silent = !answered && !source.delegation.in_flight();
     if silent && source.session.ending() && source.delegation.released() {
         close_reply(port, source).await?;
@@ -321,7 +320,7 @@ async fn listening_step<E: LinkEvents>(
                     super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
                 }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
-                MediaEvent::Control(Event::TurnCompleted { answered, .. }) => source.dispatch_completed(answered),
+                MediaEvent::Control(Event::TurnCompleted { .. }) => source.dispatch_completed(),
                 MediaEvent::Control(Event::SpeechStopped) => source.user_speech = UserSpeech::Quiet,
                 // Continuous RTP and stale done frames cannot renew listening.
                 MediaEvent::Control(_) | MediaEvent::Audio(_) => (),

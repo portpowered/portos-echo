@@ -1,6 +1,9 @@
 //! One persistent run on the production bridge, pinned Codex helper and
 //! native host. Every turn is delegated; replies are real Opus media.
-use super::provider::{Control, Provider};
+use super::{
+    duplex::Satellite,
+    provider::{Control, Provider},
+};
 #[path = "recovery/recovery.rs"]
 mod recovery;
 use crate::lab_run::sim::{
@@ -11,7 +14,10 @@ use crate::lab_run::sim::{
     trace::Trace,
 };
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::{
+    fmt::Write as _,
+    path::{Path, PathBuf},
+};
 
 /// Eleven tone packets settle as ten 960-byte frames on the device.
 const REPLY_BYTES: usize = 9600;
@@ -22,6 +28,7 @@ const STALL_MS: u64 = 30_000;
 pub(super) struct World {
     host: Option<Process>,
     relay: Option<Relay>,
+    satellite: Option<Satellite>,
     provider: Option<Provider>,
     bridge: Option<Process>,
     private: Option<Root>,
@@ -54,6 +61,40 @@ impl World {
         }
         self.private = Some(Root::create(root.into())?);
         self.root = root.into();
+        self.recovery = journey == super::Journey::Recovery;
+        let address = self.start_device(python, journey).await?;
+        let provider = Provider::start(python, script).await?;
+        let mut command = tokio::process::Command::new(bridge);
+        crate::lab_run::sim::m3::configure(&mut command, root, address.port(), &provider.origin)?;
+        self.wait_for_long_answer = journey == super::Journey::Limits;
+        if let Some(max) = journey.max() {
+            configure_run(root, max, self.wait_for_long_answer)?;
+        }
+        self.provider = Some(provider);
+        self.bridge = Some(Process::start(&mut command)?);
+        self.bridge
+            .as_mut()
+            .ok_or("session: missing bridge")?
+            .expect("bridge.ready")
+            .await?;
+        if journey == super::Journey::LongWait {
+            self.control(json!({"action":"registered"})).await?;
+            self.reconnect().await?;
+        }
+        if self.recovery {
+            return Ok(());
+        }
+        self.control(json!({"action":"registered"})).await.map(|_| ())
+    }
+
+    async fn start_device(&mut self, python: &str, journey: super::Journey) -> Result<std::net::SocketAddr, String> {
+        if self.recovery {
+            let satellite = Satellite::bind().await?;
+            let address = satellite.address;
+            self.endpoints.push(address);
+            self.satellite = Some(satellite);
+            return Ok(address);
+        }
         self.host = Some(Process::start(process::host(python).arg("--finite"))?);
         let ready = self.host.as_mut().ok_or("session: missing host")?.expect("host.ready");
         let address = process::admit_host(
@@ -69,28 +110,10 @@ impl World {
             journey == super::Journey::LongWait,
         )
         .await?;
-        self.endpoints.push(relay.address);
-        let provider = Provider::start(python, script).await?;
-        let mut command = tokio::process::Command::new(bridge);
-        crate::lab_run::sim::m3::configure(&mut command, root, relay.address.port(), &provider.origin)?;
-        self.wait_for_long_answer = journey == super::Journey::Limits;
-        self.recovery = journey == super::Journey::Recovery;
-        if let Some(max) = journey.max() {
-            configure_run(root, max, self.wait_for_long_answer)?;
-        }
+        let address = relay.address;
+        self.endpoints.push(address);
         self.relay = Some(relay);
-        self.provider = Some(provider);
-        self.bridge = Some(Process::start(&mut command)?);
-        self.bridge
-            .as_mut()
-            .ok_or("session: missing bridge")?
-            .expect("bridge.ready")
-            .await?;
-        if journey == super::Journey::LongWait {
-            self.control(json!({"action":"registered"})).await?;
-            self.reconnect().await?;
-        }
-        self.control(json!({"action":"registered"})).await.map(|_| ())
+        Ok(address)
     }
 
     async fn control(&mut self, value: Value) -> Result<Value, String> {
@@ -116,7 +139,9 @@ impl World {
     pub async fn turn(&mut self) -> Result<(), String> {
         let index = self.turns;
         let pcm = crate::lab_run::sim::m3::fixture();
-        if index == 0 || self.recovery {
+        if let Some(satellite) = &self.satellite {
+            satellite.speak(true).await?;
+        } else if index == 0 {
             self.control(json!({"action":"finite","pcm":pcm})).await?;
         } else {
             let distinct: Vec<u8> = pcm.iter().map(|byte| !byte).collect();
@@ -133,7 +158,7 @@ impl World {
             self.settle(index, index).await?;
         }
         self.turns += 1;
-        let observation = self.relay()?.timing().session_observation();
+        let observation = self.timing()?.session_observation();
         self.wire.push(observation);
         Ok(())
     }
@@ -142,17 +167,25 @@ impl World {
         self.relay.as_ref().ok_or_else(|| "session: missing wire".into())
     }
 
+    fn timing(&self) -> Result<Timing, String> {
+        if let Some(satellite) = &self.satellite {
+            Ok(satellite.observed.borrow().clone())
+        } else {
+            self.relay().map(Relay::timing)
+        }
+    }
+
     async fn settle(&mut self, index: usize, replies: usize) -> Result<(), String> {
         let mut gates = Gates::new(index, replies);
         let mut started = self.epoch();
         loop {
+            let timing = self.timing()?;
             let provider = self.provider.as_mut().ok_or("session: missing provider")?;
             // RTP and transcript gates follow the media cadence; once the reply
             // is received only the bridge's own clock remains.
             if !gates.idle {
                 provider.tick().await?;
             }
-            let timing = self.relay.as_ref().ok_or("session: missing wire")?.timing();
             let admitted = index > 0 || (connected(&self.clock) && timing.endpoint_seen());
             let milliseconds = gates.advance(provider, &timing, admitted).await?;
             if self.wait_for_long_answer {
@@ -249,7 +282,7 @@ impl World {
             .provider
             .as_ref()
             .map(|provider| provider.observed.borrow().clone());
-        let timing = self.relay.as_ref().map(|relay| relay.timing().session_observation());
+        let timing = self.timing().map(|timing| timing.session_observation());
         let events: Vec<_> = self.trace.records.iter().map(|r| r["event"].clone()).collect();
         format!(
             "session {phase}: no outcome within {STALL_MS} sim ms; provider={observed:?} wire={timing:?} trace={events:?}"
@@ -306,6 +339,10 @@ impl World {
                 Err(error) => failures.push(error),
             }
         }
+        if let Some(mut satellite) = self.satellite.take() {
+            failures.extend(satellite.close().await.err());
+            self.wire.push(satellite.observed.borrow().session_observation());
+        }
         if let Some(provider) = self.provider.take() {
             self.models = provider.observed.borrow()["models"]
                 .as_array()
@@ -350,7 +387,6 @@ fn configure_run(root: &Path, max: u64, seed_v1: bool) -> Result<(), String> {
         std::fs::create_dir(&home).map_err(|_| "session: cannot create settings home")?;
         std::fs::write(home.join("settings.toml"), "[agent]\nmax_tool_calls = 4\n")
             .map_err(|_| "session: cannot seed V1 settings overlay")?;
-        use std::fmt::Write as _;
         write!(text, "\n[home]\ndir = '{}'\nagent_tools = false\n", home.display())
             .map_err(|_| "session: cannot configure settings home")?;
     }

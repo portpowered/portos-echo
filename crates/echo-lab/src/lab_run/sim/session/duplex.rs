@@ -11,7 +11,7 @@ use crate::lab_run::{
         trace::Trace,
     },
 };
-use satellite::Satellite;
+pub(super) use satellite::Satellite;
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},

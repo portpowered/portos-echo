@@ -390,7 +390,7 @@ pub(in crate::lab_run::sim) async fn collect_run_playout(
                 collect_observations(clock, &row)?;
                 return Ok(completed);
             }
-            _ => return Err("playout: unexpected bridge clock observation".into()),
+            event => return Err(format!("playout: unexpected bridge clock observation {event:?}")),
         }
     }
 }

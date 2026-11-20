@@ -135,10 +135,9 @@ impl Source {
 
     /// A dispatch that finished while listening gives its answer a fresh
     /// listen window, since the hold on idle ends with it.
-    pub fn dispatch_completed(&mut self, answered: bool) {
+    pub fn dispatch_completed(&mut self) {
         let waited = self.delegation.in_flight();
         self.delegation.completed();
-        self.delegation.expect_answer(answered);
         if waited && !self.delegation.in_flight() {
             self.renew_idle();
         }

@@ -7,8 +7,9 @@ pub(super) fn deadline(source: &Source, options: &Options, played: Option<Instan
         return (played, Error::Deadline);
     }
     if source.delegation.waiting() {
-        let active =
-            source.user_speech == UserSpeech::Active || (source.controller.speaking() && !source.delegation.held());
+        let active = source.user_speech == UserSpeech::Active
+            || source.mouth.voiced()
+            || (source.controller.speaking() && !source.delegation.held());
         return (source.run_ceiling.filter(|_| !active), Error::SessionCeiling);
     }
     (Some(options.response_deadline), Error::NoResponse)
@@ -52,9 +53,7 @@ pub struct Delegation {
 impl Delegation {
     pub fn started(&mut self) {
         self.turns += 1;
-        if self.answer == Answer::Delivered {
-            self.answer = Answer::None;
-        }
+        self.answer = Answer::Pending;
         if self.utterance == Utterance::Answer {
             self.utterance = Utterance::Filler;
         } else {
@@ -80,12 +79,6 @@ impl Delegation {
 
     pub fn waiting(&self) -> bool {
         self.in_flight() || self.held || self.answer == Answer::Pending
-    }
-
-    pub fn expect_answer(&mut self, answered: bool) {
-        if answered && self.answer == Answer::None {
-            self.answer = Answer::Pending;
-        }
     }
 
     /// The next reply starts clean but still owes each running turn its
@@ -148,7 +141,6 @@ mod tests {
         delegation.spoke();
         assert!(delegation.answered());
         delegation.completed();
-        delegation.expect_answer(true);
         assert!(!delegation.waiting());
     }
 
@@ -185,6 +177,12 @@ mod tests {
         source.spoke();
         assert_eq!(deadline(&source, &options, None).0, None);
         assert!(!source.delegation.answered());
+        let audible = [2000_i16.to_le_bytes(); 480].concat();
+        source.mouth.wrote(&audible, Instant::now());
+        assert_eq!(deadline(&source, &options, None).0, None);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(source.mouth.poll(Instant::now()), Some(true));
+        assert_eq!(source.mouth.poll(Instant::now()), Some(false));
         assert_eq!(
             deadline(&source, &options, None),
             (Some(ceiling), Error::SessionCeiling)
