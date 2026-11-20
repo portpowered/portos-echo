@@ -195,15 +195,9 @@ export function startPage(root: HTMLElement, href: string): () => void {
         urls = endpoints(href);
         stream = new EventSource(urls.events);
         if (document.querySelector('meta[name="echo-packs"][content="v1"]'))
-            packs = mountPacks(
-                content,
-                diagnostic,
-                urls.actions,
-                stream,
-                () => {
-                    if (presentation.current) render(presentation.current);
-                },
-            );
+            packs = mountPacks(content, urls.actions, stream, () => {
+                if (presentation.current) render(presentation.current);
+            });
         if (document.querySelector('meta[name="echo-settings"][content="v1"]'))
             settings = mountSettings(
                 root,
