@@ -281,7 +281,7 @@ fn t3_on_device_m5_late_receipt_rechecks_exact_counts() {
 
 #[test]
 fn t3_on_device_m5_stage_and_initial_launch_failures_preserve_installed_bytes() {
-    for mode in ["push", "chown", "chmod", "mode", "initial-launch"] {
+    for mode in ["push", "chown", "chmod", "mode", "owner", "initial-launch"] {
         let peer = Peer::new(mode);
         let output = peer.run();
         assert_eq!(output.status.code(), Some(1), "{mode}");
@@ -408,4 +408,9 @@ fn t3_on_device_m5_cancellation_before_stage_after_acquisition_and_during_start_
             );
         }
     }
+}
+
+#[test]
+fn t3_on_device_m5_failed_forward_release_still_cleans_owned_files_and_revokes_counts() {
+    failed_journey("forward");
 }

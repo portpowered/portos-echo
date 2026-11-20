@@ -35,6 +35,7 @@ pub(super) struct World {
     pub pushed: Vec<(String, String, String)>,
     pub grant: Vec<u8>,
     pub replacement_grant: Option<Vec<u8>>,
+    pub directory_identity: Option<String>,
     pub pem: Vec<u8>,
 }
 
@@ -65,7 +66,7 @@ impl World {
         } else if command.contains("wc -c") {
             return format!("{} log\n", self.log.len());
         } else if command.contains("stat -c %d:%i") {
-            return "1:2\n".into();
+            return self.directory_identity.clone().unwrap_or_else(|| "1:2\n".into());
         } else if command.contains("stat -c %a") && command.ends_with("/portos") {
             return "700\n".into();
         } else if command.contains("stat -c %a") {
@@ -418,4 +419,24 @@ fn t1_on_device_incomplete_acquisition_cannot_launch_and_release_consumes_author
         remote.check_owned().unwrap_err(),
         "device: bench acquisition incomplete"
     );
+}
+
+#[test]
+fn t1_on_device_malformed_directory_identity_retains_uncertain_residue_without_launch() {
+    for identity in ["", "1:2:3", "1:bad", "1:2;rm", ":2"] {
+        let root = tempfile::tempdir().unwrap();
+        let local = root.path().join("config");
+        std::fs::write(&local, "derived").unwrap();
+        let world = world();
+        world.borrow_mut().directory_identity = Some(identity.into());
+        let mut remote = remote(&world);
+        assert!(
+            remote
+                .stage(&local)
+                .unwrap_err()
+                .contains("invalid bench directory identity")
+        );
+        assert!(remote.release().unwrap_err().contains("uncertain"));
+        assert!(!world.borrow().ran("push") && !world.borrow().ran("rm -f") && !world.borrow().ran("setsid"));
+    }
 }

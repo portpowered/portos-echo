@@ -113,6 +113,8 @@ class World:
         if args[:2] == ["shell", "ps"]:
             return "PID NAME\n" + (f"{self.pid} echo-bridge\n" if self.alive else "")
         if args[0] == "forward":
+            if args[1] == "--remove" and self.mode == "forward":
+                raise ValueError("forward removal failed")
             return str(self.port) if args[1] == "tcp:0" else ""
         if args[0] == "push":
             data = Path(args[1]).read_bytes()
@@ -150,7 +152,7 @@ class World:
             return str(path.stat().st_dev) + ":" + str(path.stat().st_ino)
         elif "stat -c %u:%g:%a" in command:
             path = Path(command.split()[-1].replace("/data/local/echo-bridge/private", str(self.remote)))
-            return "9999:9999:" + ("644" if self.mode == "mode" else oct(path.stat().st_mode & 0o777)[2:])
+            return ("0:0:" if self.mode == "owner" else "9999:9999:") + ("644" if self.mode == "mode" else oct(path.stat().st_mode & 0o777)[2:])
         elif "stat -c %a" in command:
             return "700" if command.endswith("/portos") else "600"
         elif command.startswith("chown "):
