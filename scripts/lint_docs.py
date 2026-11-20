@@ -241,10 +241,15 @@ def accepted_config_keys(root):
     keys = set()
     for module in sorted(modules):
         path = directory / (module + ".rs")
-        source = path.read_text(encoding="utf-8")
-        extracted = decoder_keys(source, path.name)
+        try:
+            source = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            path = directory / module / "mod.rs"
+            source = path.read_text(encoding="utf-8")
+        name = path.relative_to(directory).as_posix()
+        extracted = decoder_keys(source, name)
         if module != "config_validate" and not extracted:
-            raise ValueError(f"config coverage: empty or unsupported decoder in {path.name}")
+            raise ValueError(f"config coverage: empty or unsupported decoder in {name}")
         keys.update(extracted)
     if not keys:
         raise ValueError("config coverage: empty accepted key inventory")
