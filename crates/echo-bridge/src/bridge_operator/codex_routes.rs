@@ -104,6 +104,7 @@ fn restrictions(config: &mut SupervisorConfig, web_search: echo_config::WebSearc
     }
     for (key, value) in [
         ("features.skip_host_skill_discovery", "true"),
+        ("code_mode.direct_only_tool_namespaces", "[\"web\"]"),
         ("web_search", &format!("\"{}\"", web_search.as_str())),
         ("mcp_servers", "{}"),
         ("cli_auth_credentials_store", "\"file\""),
@@ -127,6 +128,7 @@ mod tests {
             restrictions(&mut config, mode);
             let mut expected = std::collections::BTreeMap::from([
                 ("features.skip_host_skill_discovery".to_owned(), "true".to_owned()),
+                ("code_mode.direct_only_tool_namespaces".into(), "[\"web\"]".into()),
                 ("web_search".into(), format!("\"{}\"", mode.as_str())),
                 ("mcp_servers".into(), "{}".into()),
                 ("cli_auth_credentials_store".into(), "\"file\"".into()),

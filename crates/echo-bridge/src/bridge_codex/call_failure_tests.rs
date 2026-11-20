@@ -400,7 +400,8 @@ async fn call_profile_fields_are_independent_and_unset_request_is_unchanged() {
                         "features.shell_tool": false, "features.unified_exec": false,
                         "features.multi_agent": false, "features.multi_agent_v2": false, "agents.enabled": false,
                         "features.goals": false, "tools.experimental_request_user_input.enabled": false,
-                        "tools.update_plan.enabled": false, "web_search": web_search.as_str(), "mcp_servers": {}
+                        "tools.update_plan.enabled": false,
+                "code_mode.direct_only_tool_namespaces": ["web"], "web_search": web_search.as_str(), "mcp_servers": {}
                     }
                 });
                 if let Some(model) = model {
