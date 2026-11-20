@@ -183,23 +183,51 @@ class RunnerSkills(Delegation):
     expected = ({'body': 'Summarize the answer in one sentence.\n'},
                 {'error': 'skill_not_enabled'}, {'error': 'skill_not_enabled'}, {'error': 'invalid_arguments'})
 
-    def __init__(self, tools):
+    mcp_content = [{'type': 'text', 'text': 'MCP delivered brief.'}]
+
+    def __init__(self, tools, mcp):
         super().__init__(tools, False, model='gpt-6.1-sol', web_search='disabled', identity='runner-skills')
         self.prompt = 'Fixture delegation runner-skills. Check brief, unused, unlisted, and malformed arguments.'
         self.reply = 'Finished checking the enabled skill.'
+        self.mcp = mcp
+        self.mcp_calls = []
+        if mcp:
+            self.names = ('brief', 'malformed')
+            self.expected = (self.mcp_content, 'tool request refused')
+            self.prompt = 'Fixture delegation runner-skills. Try the configured MCP reader and malformed arguments.'
+            self.reply = 'Finished checking the MCP reader.'
+
+    def mcp_response(self, request):
+        assert self.mcp is not None and request['jsonrpc'] == '2.0'
+        method = request['method']
+        if method == 'notifications/initialized':
+            return 202, None
+        if method == 'initialize':
+            result = {'protocolVersion': '2025-03-26', 'capabilities': {'tools': {}},
+                      'serverInfo': {'name': 'skill-name-fixture', 'version': '1'}}
+        elif method == 'tools/list':
+            result = {'tools': [{**self.tools[0], 'name': self.mcp}]}
+        else:
+            assert method == 'tools/call'
+            self.mcp_calls.append(request['params'])
+            result = {'content': self.mcp_content}
+        return 200, {'jsonrpc': '2.0', 'id': request['id'], 'result': result}
 
     def respond(self, body):
         assert body['model'] == self.model
         expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
                      'parameters': deepcopy(tool['inputSchema']), 'strict': False} for tool in self.tools]
-        expected[0]['parameters']['properties']['seconds'].pop('minimum')
+        for tool in expected:
+            if tool['name'] == 'extend_session':
+                tool['parameters']['properties']['seconds'].pop('minimum')
         tools = self.check_tools(body, expected)
         outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
         index = len(self.models)
         assert index <= len(self.names) and len(outputs) == index, 'wrong skill output count'
         for name, item, result in zip(self.names, outputs, self.expected):
             assert item['call_id'] == f'skill-{name}', 'wrong skill call ID'
-            assert json.loads(item['output']) == result, 'wrong skill result: ' + json.dumps(item)
+            actual = item['output'] if isinstance(result, str) else json.loads(item['output'])
+            assert actual == result, 'wrong skill result: ' + json.dumps(item)
         self.outputs = outputs
         if index < len(self.names):
             name = self.names[index]
@@ -224,7 +252,7 @@ class RunnerSkills(Delegation):
         self.appends.append(self.identity)
 
     def snapshot(self):
-        return {**super().snapshot(), 'skill_outputs': self.outputs}
+        return {**super().snapshot(), 'skill_outputs': self.outputs, 'mcp_calls': self.mcp_calls}
 
 
 def model_identity(body):

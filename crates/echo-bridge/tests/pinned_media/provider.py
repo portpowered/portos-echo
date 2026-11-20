@@ -94,6 +94,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+        if self.path == '/skills-mcp' and isinstance(delegation, tools_provider.RunnerSkills):
+            code, reply = delegation.mcp_response(body)
+            self.respond(code, b'' if reply is None else json.dumps(reply).encode())
+            return
         if self.path == '/v1/responses' and delegation is not None:
             self.model_response(body)
             return
@@ -186,7 +190,7 @@ try:
                 emit({'initialized': identity})
         elif 'runner_skills' in command:
             assert delegation is None
-            delegation = tools_provider.RunnerSkills(command['runner_skills'])
+            delegation = tools_provider.RunnerSkills(command['runner_skills'], command.get('skills_mcp'))
             manual_cases[delegation.identity] = delegation
             emit({'initialized': delegation.identity})
         elif command == {'transcripts': True}:

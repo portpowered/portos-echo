@@ -13,7 +13,7 @@ const BODY: &str = "Summarize the answer in one sentence.\n";
 async fn t3_pinned_runner_skills_reads_selected_body_and_refuses_disabled_and_unknown() {
     tokio::time::timeout(
         Duration::from_secs(25),
-        Box::pin(configured_journey(Some("['brief']"), true)),
+        Box::pin(configured_journey(Some("['brief']"), true, None)),
     )
     .await
     .unwrap();
@@ -23,8 +23,20 @@ async fn t3_pinned_runner_skills_reads_selected_body_and_refuses_disabled_and_un
 async fn t3_pinned_runner_skills_empty_and_omitted_keep_the_default_thread() {
     tokio::time::timeout(Duration::from_secs(25), async {
         tokio::join!(
-            Box::pin(configured_journey(None, false)),
-            Box::pin(configured_journey(Some("[]"), false))
+            Box::pin(configured_journey(None, false, None)),
+            Box::pin(configured_journey(Some("[]"), false, None))
+        );
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn t3_pinned_runner_skills_disabled_preserves_mcp_name_and_alias() {
+    tokio::time::timeout(Duration::from_secs(25), async {
+        tokio::join!(
+            Box::pin(configured_journey(None, false, Some("read.skill"))),
+            Box::pin(configured_journey(Some("[]"), false, Some("read_skill")))
         );
     })
     .await
@@ -40,7 +52,7 @@ async fn t3_pinned_runner_skills_unknown_selection_exits_before_runtime() {
     configure_skills(root, wyoming.local_addr().unwrap().port(), Some("['unlisted']"));
     let output = tokio::time::timeout(
         Duration::from_secs(5),
-        launch(root, &format!("http://{}", provider.local_addr().unwrap())).wait_with_output(),
+        launch(root, &loopback_origin(provider.local_addr().unwrap().port())).wait_with_output(),
     )
     .await
     .unwrap()
@@ -64,19 +76,23 @@ async fn t3_pinned_runner_skills_unknown_selection_exits_before_runtime() {
     .unwrap();
 }
 
-async fn configured_journey(selection: Option<&str>, enabled: bool) {
+async fn configured_journey(selection: Option<&str>, enabled: bool, mcp: Option<&str>) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let config = configure_skills(root, listener.local_addr().unwrap().port(), selection);
     let (mut provider, mut control, mut observed) = start_provider();
     let ready = read_json(&mut observed).await;
-    let tools = declarations(enabled);
-    if enabled {
-        send_json(&mut control, json!({"runner_skills":tools})).await;
+    let origin = ready["origin"].as_str().unwrap();
+    let tools = declarations(enabled, mcp);
+    if let Some(name) = mcp {
+        configure_mcp(root, origin, name);
+    }
+    if enabled || mcp.is_some() {
+        send_json(&mut control, json!({"runner_skills":tools,"skills_mcp":mcp})).await;
         assert_eq!(read_json(&mut observed).await, json!({"initialized":"runner-skills"}));
     }
-    let mut bridge = launch(root, ready["origin"].as_str().unwrap());
+    let mut bridge = launch(root, origin);
     let (mut satellite, stdin, mut peer) = Box::pin(admit_journey(
         root,
         &listener,
@@ -86,7 +102,7 @@ async fn configured_journey(selection: Option<&str>, enabled: bool) {
         &mut observed,
     ))
     .await;
-    observe_journey(root, &tools, enabled, &mut peer, &mut control, &mut observed).await;
+    observe_journey(root, &tools, enabled, mcp, &mut peer, &mut control, &mut observed).await;
     drop(stdin);
     acknowledge_cut(&mut satellite).await;
     let output = bridge.wait_with_output().await.unwrap();
@@ -121,11 +137,12 @@ async fn observe_journey(
     root: &Path,
     tools: &[Value],
     enabled: bool,
+    mcp: Option<&str>,
     peer: &mut LivePeer,
     control: &mut tokio::process::ChildStdin,
     observed: &mut Output,
 ) {
-    if enabled {
+    if enabled || mcp.is_some() {
         send_json(control, json!({"transcripts":true})).await;
         assert_eq!(
             drive_peer(peer, read_json(observed)).await,
@@ -136,7 +153,10 @@ async fn observe_journey(
     let context = voice_context(&read_json(observed).await);
     let rows = read_rpc(root);
     check_thread(&rows[0], &context, tools, enabled);
-    if enabled {
+    if let Some(name) = mcp {
+        send_json(control, json!({"snapshot":"runner-skills"})).await;
+        check_mcp_results(&rows[1..], &read_json(observed).await, name);
+    } else if enabled {
         send_json(control, json!({"snapshot":"runner-skills"})).await;
         check_skill_results(&rows[1..], &read_json(observed).await);
     } else {
@@ -250,6 +270,20 @@ fn configure_skills(root: &Path, port: u16, selection: Option<&str>) -> CodexCon
     config
 }
 
+fn loopback_origin(port: u16) -> String {
+    const LOOPBACK: &str = "http://127.0.0.1";
+    format!("{LOOPBACK}:{port}")
+}
+
+fn configure_mcp(root: &Path, origin: &str, name: &str) {
+    let file = root.join("bridge.toml");
+    let mcp = format!(
+        "[[mcp.server]]\nname = 'fixture'\nurl = '{origin}/skills-mcp'\nauth = 'none'\nallow_tools = ['{name}']"
+    );
+    let config = fs::read_to_string(&file).unwrap().replace("[mcp]\nserver = []", &mcp);
+    fs::write(file, config).unwrap();
+}
+
 async fn connect_provider(control: &mut tokio::process::ChildStdin, observed: &mut Output) -> LivePeer {
     let offer = read_json(observed).await;
     let mut peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
@@ -282,7 +316,8 @@ fn voice_context(observed: &Value) -> String {
     let voice = observed["session"]["instructions"].as_str().unwrap();
     let expected = format!("Fixture voice.\n\n{}\n", echo_config::LIVE_SESSION_GUIDANCE);
     let context = voice.strip_prefix(&expected).unwrap();
-    assert!(context.starts_with("[Call-start context: ") && context.ends_with("UTC+00:00; local offset unavailable]"));
+    assert!(context.starts_with("[Call-start context: "));
+    assert!(context.ends_with("UTC+00:00; local offset unavailable]")); // lint-rules: allow-literal UTC calendar expectation, never an endpoint
     assert_eq!(context.lines().count(), 1);
     assert_eq!(
         observed,
@@ -294,7 +329,7 @@ fn voice_context(observed: &Value) -> String {
     context.into()
 }
 
-fn declarations(enabled: bool) -> Vec<Value> {
+fn declarations(enabled: bool, mcp: Option<&str>) -> Vec<Value> {
     let mut tools = vec![
         json!({"name":"extend_session","description":"Extend listening for this voice session within its configured bound.",
             "inputSchema":{"type":"object","properties":{"seconds":{"type":"integer","minimum":1}},"required":["seconds"],"additionalProperties":false}}),
@@ -304,6 +339,14 @@ fn declarations(enabled: bool) -> Vec<Value> {
     if enabled {
         tools.push(json!({"name":"read_skill","description":"Read the Markdown body of an enabled owner skill.",
             "inputSchema":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}}));
+    }
+    if mcp.is_some() {
+        tools.insert(
+            0,
+            json!({"name":"read_skill","description":"Fixture MCP reader.",
+            "inputSchema":{"type":"object","properties":{"name":{"type":"string"}},
+                "required":["name"],"additionalProperties":false}}),
+        );
     }
     tools
 }
@@ -332,6 +375,31 @@ fn check_thread(observed: &Value, context: &str, tools: &[Value], enabled: bool)
         })
     );
     writeln!(std::io::stderr(), "runner skills thread request: {observed}").unwrap();
+}
+
+fn check_mcp_results(rows: &[Value], provider: &Value, name: &str) {
+    assert_eq!(provider["external"], 0);
+    assert_eq!(provider["appends"], json!(["runner-skills"]));
+    assert_eq!(
+        provider["mcp_calls"],
+        json!([{"name":name,"arguments":{"name":"brief"}}])
+    );
+    assert_eq!(rows.len(), 2);
+    let result = json!([{"type":"text","text":"MCP delivered brief."}]).to_string();
+    for (index, (id, text, success)) in [
+        ("skill-brief", result.as_str(), true),
+        ("skill-malformed", "tool request refused", false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            rows[index]["result"],
+            json!({"contentItems":[{"type":"inputText","text":text}],"success":success})
+        );
+        assert_eq!(provider["skill_outputs"][index]["call_id"], id);
+        assert_eq!(provider["skill_outputs"][index]["output"], text);
+    }
 }
 
 fn check_skill_results(rows: &[Value], provider: &Value) {

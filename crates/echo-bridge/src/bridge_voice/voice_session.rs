@@ -16,6 +16,7 @@ use tokio::{
 type SessionRequests = (
     tokio::sync::mpsc::Receiver<crate::bridge_codex::SessionRequest>,
     tokio::sync::watch::Sender<Option<std::sync::Arc<()>>>,
+    bool,
 );
 
 #[derive(Clone, Copy)]
@@ -244,8 +245,8 @@ where
         validate(&options)?;
         let (host, catalog, config, budget) = tools;
         let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, config, budget)?;
-        if let Some((requests, run)) = requests {
-            session = session.with_session(requests, run);
+        if let Some((requests, run, skills_enabled)) = requests {
+            session = session.with_session(requests, run).with_skill_reader(skills_enabled);
         }
         let result = drive(device, &mut session, &mut options, cancelled, &mut observe).await;
         if matches!(result, Err(Error::Deadline | Error::NoResponse)) {

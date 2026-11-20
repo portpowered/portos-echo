@@ -96,6 +96,9 @@ Omit `skills` or set `skills = []` to disable the catalog and tool. An unknown s
 indexed key, such as `codex.skills[0]: unknown skill`, and exits with status 2. Remove the key before rolling
 back to an older bridge binary.
 
+The encoded catalog may use up to half of the Codex RPC frame (512 KiB). The rest is available for the
+runner prompt, settings, and tool declarations. An oversized selection reports `codex.skills` at startup.
+
 ## Voice agent access and what it may do
 
 The `chatgpt` voice path and the delegated Codex runner use the **same app-server ChatGPT sign-in**, kept in

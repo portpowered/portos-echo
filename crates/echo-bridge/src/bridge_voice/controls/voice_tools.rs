@@ -169,7 +169,7 @@ impl<H: ToolHost + Sync> ToolHost for Session<H> {
     async fn call_tool(&self, name: &str, args: Value, key: &str) -> Result<ToolResult, ToolError> {
         // Raw arguments never leave this host; only the parsed command does.
         let command = match name {
-            READ_SKILL => return Ok(self.skills.read(&args)),
+            READ_SKILL if self.skills.is_enabled() => return Ok(self.skills.read(&args)),
             EXTEND => match args.as_object().map(|object| (object.len(), object.get("seconds"))) {
                 Some((1, Some(seconds))) => seconds
                     .as_u64()
@@ -379,7 +379,10 @@ pub(super) fn session_catalog(specs: Vec<ToolSpec>, allowed: &[String]) -> Resul
 }
 
 fn local_catalog(specs: Vec<ToolSpec>, allowed: &[String], local: Vec<ToolSpec>) -> Result<Catalog, Error> {
-    let reserved = [NAMES.as_slice(), &[READ_SKILL]].concat();
+    let mut reserved = NAMES.to_vec();
+    if local.iter().any(|spec| spec.name == READ_SKILL) {
+        reserved.push(READ_SKILL);
+    }
     Catalog::with_local(specs, allowed, local, &reserved).map_err(|_| Error::Input)
 }
 
@@ -443,7 +446,7 @@ where
                 tools.config.clone(),
                 tools.budget.clone(),
             ),
-            Some((receiver, run)),
+            Some((receiver, run, tools.skills.is_enabled())),
             options.session,
             cancelled.as_mut(),
             &mut observe,

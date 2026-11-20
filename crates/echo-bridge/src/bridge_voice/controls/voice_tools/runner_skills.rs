@@ -4,24 +4,27 @@ use echo_agent_api::{ToolResult, ToolSpec};
 use echo_codex::{codex_protocol::ToolCall, codex_rpc::Limits};
 use echo_config::BridgeConfig;
 use serde_json::{Value, json};
-use std::{borrow::Cow, ffi::OsStr, fmt::Write as _, sync::Arc};
+use std::{borrow::Cow, ffi::OsStr, sync::Arc};
 
 pub(super) const READ_SKILL: &str = "read_skill";
+const CATALOG_HEADER: &str = "\n\nEnabled owner skills (use read_skill by name to load the body):";
 
-pub(crate) fn normalize_skill_arguments(call: &mut ToolCall, configured_session: bool) {
+pub(crate) fn normalize_skill_arguments(call: &mut ToolCall, skills_enabled: bool) {
     // The configured skill host owns its typed argument refusal. An empty
     // object reaches that validator without admitting any name.
-    if configured_session && call.tool == READ_SKILL && !call.arguments.is_object() {
+    if skills_enabled && call.tool == READ_SKILL && !call.arguments.is_object() {
         call.arguments = json!({});
     }
 }
 
 #[derive(Clone, Default)]
-pub struct RunnerSkills(Arc<[Skill]>);
+pub struct RunnerSkills {
+    skills: Arc<[Skill]>,
+    catalog: Arc<str>,
+}
 
 struct Skill {
     name: String,
-    description: String,
     body: String,
 }
 
@@ -34,32 +37,45 @@ impl RunnerSkills {
             return Ok(Self::default());
         }
         let home = config.home.as_ref().ok_or(Error::Input)?;
-        let root = files::root_named(&home.dir, "skills", false).map_err(|reason| skill_error(0, reason))?;
-        let skills = config
-            .codex
-            .skills
-            .iter()
-            .enumerate()
-            .map(|(index, name)| {
-                let root = root.as_ref().ok_or_else(|| skill_error(index, "unknown skill"))?;
-                Skill::load(root, name).map_err(|reason| skill_error(index, reason))
-            })
-            .collect::<Result<Arc<[_]>, _>>()?;
-        Ok(Self(skills))
+        let root = files::root_named(&home.dir, "skills", false)
+            .map_err(|reason| skill_error(0, reason))?
+            .ok_or_else(|| skill_error(0, "unknown skill"))?;
+        Self::load_catalog(&root, &config.codex.skills)
+    }
+
+    fn load_catalog(root: &impl rustix::fd::AsFd, names: &[String]) -> Result<Self, Error> {
+        let mut skills = Vec::new();
+        let mut catalog = String::from(CATALOG_HEADER);
+        let mut bytes = json!(CATALOG_HEADER).to_string().len();
+        for (index, name) in names.iter().enumerate() {
+            let (skill, description) = Skill::load(root, name).map_err(|reason| skill_error(index, reason))?;
+            let line = format!("\n- {name} — {description}");
+            // Count the actual JSON string bytes, less the line's own quotes.
+            bytes += json!(line).to_string().len() - 2;
+            if bytes > catalog_budget() {
+                return Err(Error::PromptConfig(
+                    "codex.skills: enabled catalog exceeds the Codex request budget".into(),
+                ));
+            }
+            catalog.push_str(&line);
+            skills.push(skill);
+        }
+        Ok(Self {
+            skills: skills.into(),
+            catalog: catalog.into(),
+        })
+    }
+
+    pub(super) fn is_enabled(&self) -> bool {
+        !self.skills.is_empty()
     }
 
     pub(in crate::bridge_voice) fn append_instructions(&self, prompt: &mut String) {
-        if self.0.is_empty() {
-            return;
-        }
-        prompt.push_str("\n\nEnabled owner skills (use read_skill by name to load the body):");
-        for skill in self.0.iter() {
-            let _ = write!(prompt, "\n- {} — {}", skill.name, skill.description);
-        }
+        prompt.push_str(&self.catalog);
     }
 
     pub(super) fn spec(&self) -> Option<ToolSpec> {
-        (!self.0.is_empty()).then(|| ToolSpec {
+        self.is_enabled().then(|| ToolSpec {
             name: READ_SKILL.into(),
             description: "Read the Markdown body of an enabled owner skill.".into(),
             input_schema: json!({"type":"object","properties":{"name":{"type":"string"}},
@@ -75,7 +91,7 @@ impl RunnerSkills {
             .and_then(Value::as_str)
             .ok_or("invalid_arguments")
             .and_then(|name| {
-                self.0
+                self.skills
                     .iter()
                     .find(|skill| skill.name == name)
                     .ok_or("skill_not_enabled")
@@ -91,7 +107,7 @@ impl RunnerSkills {
 }
 
 impl Skill {
-    fn load(root: &impl rustix::fd::AsFd, name: &str) -> Result<Self, &'static str> {
+    fn load(root: &impl rustix::fd::AsFd, name: &str) -> Result<(Self, String), &'static str> {
         let dir = files::directory(root, OsStr::new(name), false)?.ok_or("unknown skill")?;
         let limit = Limits::default().line_bytes;
         let bytes = files::read_limited(&dir, "SKILL.md", limit as u64).map_err(|reason| match reason {
@@ -109,12 +125,20 @@ impl Skill {
         if json!(json!({"body":body}).to_string()).to_string().len() + 1024 > limit {
             return Err("skill exceeds the Codex message limit");
         }
-        Ok(Self {
-            name: name.into(),
-            description: description.into_owned(),
-            body: body.into(),
-        })
+        Ok((
+            Self {
+                name: name.into(),
+                body: body.into(),
+            },
+            description.into_owned(),
+        ))
     }
+}
+
+fn catalog_budget() -> usize {
+    // Leave the rest of the thread/start frame for the runner prompt, settings,
+    // and tools discovered at runtime. The RPC encoder still checks the full frame.
+    Limits::default().line_bytes / 2
 }
 
 fn skill_error(index: usize, reason: &str) -> Error {
@@ -255,6 +279,47 @@ mod tests {
         assert_eq!(
             RunnerSkills::load(&config).err(),
             Some(Error::PromptConfig("codex.skills[1]: unknown skill".into()))
+        );
+    }
+
+    #[test]
+    fn runner_skills_rejects_catalog_above_the_encoded_request_budget() {
+        let home = tempfile::tempdir().unwrap();
+        let config = config(home.path(), &["first", "second"]);
+        let body = "Exact Markdown.  \n";
+        let baseline = format!("{CATALOG_HEADER}\n- first — A\n- second — B");
+        let room = catalog_budget() - json!(baseline).to_string().len();
+        let first_quotes = room / 4;
+        let second_quotes = room / 2 - first_quotes;
+        let first = format!("A{}", "\"".repeat(first_quotes));
+        let second = format!("B{}{}", "\"".repeat(second_quotes), "x".repeat(room % 2));
+        let write = |name: &str, description: &str| {
+            let directory = home.path().join("skills").join(name);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(
+                directory.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: {description}\n---\n{body}"),
+            )
+            .unwrap();
+        };
+        write("first", &first);
+        write("second", &second);
+        let admitted = RunnerSkills::load(&config).unwrap();
+        let mut projected = String::new();
+        admitted.append_instructions(&mut projected);
+        assert_eq!(
+            projected,
+            format!("{CATALOG_HEADER}\n- first — {first}\n- second — {second}")
+        );
+        assert_eq!(json!(projected).to_string().len(), catalog_budget());
+        assert_eq!(admitted.read(&json!({"name":"second"})).content, json!({"body":body}));
+
+        write("second", &(second + "x"));
+        assert_eq!(
+            RunnerSkills::load(&config).err(),
+            Some(Error::PromptConfig(
+                "codex.skills: enabled catalog exceeds the Codex request budget".into()
+            ))
         );
     }
 }
