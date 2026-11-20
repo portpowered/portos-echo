@@ -91,8 +91,9 @@ impl World {
         let config = std::fs::read_to_string(&path).map_err(|_| "m7: missing config")?;
         let (head, tail) = config.split_once("[[mcp.server]]").ok_or("m7: missing MCP section")?;
         let (_, tail) = tail.split_once("[screen]").ok_or("m7: missing screen section")?;
-        let config =
-            format!("{head}[mcp]\nserver = []\n[screen]{tail}").replace("[agent]", "[agent]\nbackend = 'muse'");
+        let config = format!("{head}[mcp]\nserver = []\n[screen]{tail}")
+            .replace("[agent]", "[agent]\nbackend = 'muse'")
+            .replace("[voice]", "[voice]\nsession_max_seconds = 10");
         std::fs::write(
             path,
             format!(

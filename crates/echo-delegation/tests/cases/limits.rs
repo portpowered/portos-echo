@@ -6,42 +6,30 @@ use crate::{config, sse};
 use echo_config::LiveMode;
 
 #[tokio::test]
-async fn d03_d04_d05_configured_call_boundaries() {
-    for (cap, requested, finish, expected) in [
-        (8, 9, false, "tool call limit reached"),
-        (8, 8, true, "eight complete"),
-        (1, 2, false, "tool call limit reached"),
-    ] {
-        let texts: Vec<_> = (0..requested).map(|i| format!("echo-{i}")).collect();
-        let mut replies: Vec<_> = texts
-            .iter()
-            .enumerate()
-            .map(|(i, t)| Reply::body(sse(&[function(i, t)])))
-            .collect();
-        if finish {
-            replies.push(Reply::body(sse(&[final_item(expected)])));
-        }
-        let model = Model::start(replies).await;
-        let mut cfg = config();
-        cfg.max_tool_calls = cap;
-        let (mut runner, spoof, sink) = setup(cfg, &model, LiveMode::ApiKey, true).await;
-        assert_eq!(
-            runner.run(event("d-cap"), "i".into()).await.unwrap(),
-            Some(commentary("d-cap", expected))
-        );
-        let count = usize::try_from(cap).unwrap();
-        assert_eq!(
-            spoof.snapshot().unwrap().calls,
-            calls(&texts[..count].iter().map(String::as_str).collect::<Vec<_>>())
-        );
-        trace(&sink, "d-cap", count);
-        record(&format!(
-            "D03/D04/D05 configured_cap={cap} requested={requested} executed={count} commentary={expected:?}"
-        ));
-        assert_eq!(model.finish().await.len(), requested + usize::from(finish));
-        drop(runner);
-        spoof.shutdown().await.unwrap();
-    }
+async fn delegated_runner_completes_all_twelve_calls() {
+    let texts: Vec<_> = (0..12).map(|i| format!("echo-{i}")).collect();
+    let mut replies: Vec<_> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, text)| Reply::body(sse(&[function(i, text)])))
+        .collect();
+    replies.push(Reply::body(sse(&[final_item("twelve complete")])));
+    let model = Model::start(replies).await;
+    let mut cfg = config();
+    cfg.max_tool_calls = 1;
+    let (mut runner, spoof, sink) = setup(cfg, &model, LiveMode::ApiKey, true).await;
+    assert_eq!(
+        runner.run(event("d-long"), "i".into()).await.unwrap(),
+        Some(commentary("d-long", "twelve complete"))
+    );
+    assert_eq!(
+        spoof.snapshot().unwrap().calls,
+        calls(&texts.iter().map(String::as_str).collect::<Vec<_>>())
+    );
+    trace(&sink, "d-long", 12);
+    assert_eq!(model.finish().await.len(), 13);
+    drop(runner);
+    spoof.shutdown().await.unwrap();
 }
 #[tokio::test]
 async fn d08_budget_is_reused() {

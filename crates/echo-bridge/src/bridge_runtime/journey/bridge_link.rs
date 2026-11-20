@@ -12,7 +12,7 @@ use echo_link::{
     LinkConnector, LinkEvents, MicrophoneRun,
     fake::{Command, FakeConnector, Observer},
 };
-use echo_live::AudioFrame;
+use echo_live::{AudioFrame, call::CallError};
 use std::io::Write;
 use std::{collections::VecDeque, future::Future, pin::Pin, task::Poll};
 
@@ -149,7 +149,15 @@ async fn bridge_link_wake_mic_paced_echo_acknowledgment_and_fresh_run() {
             &mut live,
             &mut trace_writer,
             "run-1",
-            (true, 200, 0, &screen, &mut host, &kill),
+            (
+                true,
+                200,
+                0,
+                &screen,
+                &mut host,
+                &kill,
+                Instant::now() + Duration::from_secs(600),
+            ),
         ));
         pending(journey.as_mut()).await;
         assert_eq!(frames(&observer).len() - base, 10);

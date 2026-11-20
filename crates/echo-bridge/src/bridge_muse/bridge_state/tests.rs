@@ -1,12 +1,11 @@
 use super::*;
 use serde_json::json;
-use std::time::Duration;
 
 fn id() -> TaskId {
     TaskId::new("task-1").unwrap()
 }
 fn session() -> Session {
-    Session::new(Instant::now() + Duration::from_secs(5))
+    Session::new()
 }
 fn failed(message: &str) -> TaskEvent {
     TaskEvent::Failed {
@@ -90,21 +89,6 @@ async fn muse_wrong_identity_or_shape_never_produces_success_or_provider_diagnos
         assert_eq!(session.event(&id(), wire), failed(UNAVAILABLE));
         assert!(session.terminal);
     }
-}
-
-#[tokio::test(start_paused = true)]
-async fn muse_original_deadline_wins_at_equality_even_over_matching_completion() {
-    let mut session = session();
-    tokio::time::advance(Duration::from_millis(4999)).await;
-    assert_eq!(session.before_poll(&id()), None);
-    tokio::time::advance(Duration::from_millis(1)).await;
-    assert_eq!(
-        session.event(&id(), br#"{"type":"completed","task_id":"task-1","summary":"late"}"#),
-        failed(DEADLINE)
-    );
-    assert!(session.terminal);
-    let mut expired = Session::new(Instant::now());
-    assert_eq!(expired.before_poll(&id()), Some(failed(DEADLINE)));
 }
 
 #[tokio::test(start_paused = true)]

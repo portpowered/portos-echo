@@ -237,6 +237,7 @@ async fn observe<L: EchoLink>(
     let mut sequence = 0_u64;
     loop {
         let run = conversation.wake(client, events, health, trace, &kill).await?;
+        let cutoff = bridge_timing::Wait::cutoff(options, Instant::now())?;
         sequence += 1;
         let id = format!("run-{sequence}");
         trace.record("wyoming.run_started", Some(&id), json!({}))?;
@@ -262,7 +263,7 @@ async fn observe<L: EchoLink>(
             factory,
             &mut conversation,
             trace,
-            (health, options, screen, &id, delegation, &kill),
+            (health, options, screen, &id, delegation, &kill, cutoff),
         )
         .await;
         if kill.sync(trace).await? {
@@ -300,9 +301,10 @@ async fn turn<L: EchoLink>(
         &str,
         &mut bridge_delegation::Host,
         &bridge_kill::Kill<'_>,
+        Instant,
     ),
 ) -> Result<Option<(u64, bool)>, Error> {
-    let (health, options, screen, id, delegation, kill) = context;
+    let (health, options, screen, id, delegation, kill, cutoff) = context;
     if !ensure_call(
         client,
         factory,
@@ -329,6 +331,7 @@ async fn turn<L: EchoLink>(
             screen,
             &mut *delegation,
             kill,
+            cutoff,
         ),
     )
     .await;

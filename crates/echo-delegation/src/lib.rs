@@ -75,7 +75,6 @@ impl<P: TokenProvider, S: TraceSink> ToolHost for TracingHost<P, S> {
 
 pub struct DelegationRunner<P, C, S> {
     backend: ResponsesBackend<TracingHost<P, S>, C>,
-    config: AgentConfig,
     sink: Arc<S>,
 }
 impl<P: TokenProvider + 'static, C: ModelCredential + Send + Sync + 'static, S: TraceSink + 'static>
@@ -97,17 +96,34 @@ impl<P: TokenProvider + 'static, C: ModelCredential + Send + Sync + 'static, S: 
             sink: sink.clone(),
         });
         let backend = match model_base {
-            Some(base) => ResponsesBackend::loopback(config.clone(), mode, host, credential, base)?,
-            None => ResponsesBackend::new(config.clone(), mode, host, credential)?,
+            Some(base) => ResponsesBackend::loopback(config, mode, host, credential, base)?,
+            None => ResponsesBackend::new(config, mode, host, credential)?,
         };
-        Ok(Self { backend, config, sink })
+        Ok(Self { backend, sink })
     }
     /// Returns prepared commentary; the host owns sending it to Live.
     /// Drive to terminal, or drop this runner when abandoning the future.
     /// # Errors
     /// Refuses responses-target execution, failed submission or missing terminal.
     pub async fn run(&mut self, event: LiveEvent, instructions: String) -> Result<Option<LiveEvent>, DelegationError> {
-        execute(&self.backend, &self.config, &*self.sink, event, instructions).await
+        self.run_until_cancelled(event, instructions, std::future::pending())
+            .await
+    }
+
+    /// Drive a bridge-owned task until it completes or the run cancels it.
+    /// Cancellation joins the backend worker before returning.
+    /// # Errors
+    /// Refuses unsupported targets, failed submission or missing terminal events.
+    pub async fn run_until_cancelled(
+        &mut self,
+        event: LiveEvent,
+        instructions: String,
+        cancelled: impl std::future::Future<Output = ()> + Send,
+    ) -> Result<Option<LiveEvent>, DelegationError> {
+        execute(&self.backend, &*self.sink, event, instructions, cancelled, |task| {
+            std::future::ready(self.backend.submit_for_run(task))
+        })
+        .await
     }
 }
 
@@ -121,7 +137,7 @@ pub enum DelegationError {
     MissingTerminal,
 }
 
-fn task(event: &LiveEvent, instructions: String, config: &AgentConfig) -> Result<Option<Task>, DelegationError> {
+fn task(event: &LiveEvent, instructions: String) -> Result<Option<Task>, DelegationError> {
     let LiveEvent::DelegationCreated { delegation, .. } = event else {
         return Ok(None);
     };
@@ -132,27 +148,42 @@ fn task(event: &LiveEvent, instructions: String, config: &AgentConfig) -> Result
         delegation_id: delegation.id.clone(),
         instructions,
         context: serde_json::to_value(event).map_err(|_| DelegationError::Submission)?,
-        deadline_seconds: config.task_deadline_seconds,
-        max_tool_calls: config.max_tool_calls,
+        // Required by Task; submit_for_run uses the owner's lifetime instead.
+        deadline_seconds: 0,
+        max_tool_calls: 0,
     }))
 }
 
-async fn execute(
+async fn execute<F: std::future::Future<Output = Result<echo_contracts::ids::TaskId, echo_agent_api::AgentError>>>(
     backend: &impl AgentBackend,
-    config: &AgentConfig,
     sink: &impl TraceSink,
     event: LiveEvent,
     instructions: String,
+    cancelled: impl std::future::Future<Output = ()>,
+    submit: impl FnOnce(Task) -> F,
 ) -> Result<Option<LiveEvent>, DelegationError> {
-    let Some(task) = task(&event, instructions, config)? else {
+    let Some(task) = task(&event, instructions)? else {
         return Ok(None);
     };
     let delegation_id = task.delegation_id.clone();
     sink.record(TraceEvent::DelegationCreated {
         delegation_id: delegation_id.clone(),
     });
-    let id = backend.submit(task).await.map_err(|_| DelegationError::Submission)?;
-    while let Some(event) = backend.next_event(&id).await {
+    tokio::pin!(cancelled);
+    let id = tokio::select! {
+        biased;
+        () = &mut cancelled => return Ok(None),
+        id = submit(task) => id.map_err(|_| DelegationError::Submission)?,
+    };
+    loop {
+        let event = tokio::select! {
+            biased;
+            () = &mut cancelled => {
+                backend.cancel(&id).await.map_err(|_| DelegationError::MissingTerminal)?;
+                return Ok(None);
+            }
+            event = backend.next_event(&id) => event.ok_or(DelegationError::MissingTerminal)?,
+        };
         if !matches!(event, TaskEvent::Progress { .. }) {
             sink.task_terminal(&event);
         }
@@ -170,7 +201,6 @@ async fn execute(
             extra: std::collections::BTreeMap::default(),
         }));
     }
-    Err(DelegationError::MissingTerminal)
 }
 
 #[cfg(test)]
@@ -188,27 +218,30 @@ mod delegation_tests {
             self.0.lock().unwrap().push(event);
         }
     }
-    fn config() -> AgentConfig {
-        AgentConfig {
-            model: Some("fixture-model".into()),
-            max_tool_calls: 2,
-            task_deadline_seconds: 7,
-            daily_request_cap: 3,
-        }
+    async fn execute(
+        backend: &impl AgentBackend,
+        sink: &impl TraceSink,
+        event: LiveEvent,
+        instructions: String,
+    ) -> Result<Option<LiveEvent>, DelegationError> {
+        super::execute(backend, sink, event, instructions, std::future::pending(), |task| {
+            backend.submit(task)
+        })
+        .await
     }
     fn event() -> LiveEvent {
         serde_json::from_value(json!({"type":"session.delegation.created","delegation":{"id":"d-unit","target":"client","opaque":{"x":[1,"雪"]}},"extra":true})).unwrap()
     }
     #[test]
-    fn mapping_preserves_entire_event_and_config() {
+    fn mapping_preserves_entire_event() {
         assert_eq!(
-            task(&event(), "instructions".into(), &config()).unwrap(),
+            task(&event(), "instructions".into()).unwrap(),
             Some(Task {
                 delegation_id: DelegationId::new("d-unit").unwrap(),
                 instructions: "instructions".into(),
                 context: serde_json::to_value(event()).unwrap(),
-                deadline_seconds: 7,
-                max_tool_calls: 2,
+                deadline_seconds: 0,
+                max_tool_calls: 0,
             })
         );
         assert_eq!(
@@ -226,14 +259,7 @@ mod delegation_tests {
         let mut input = serde_json::to_value(event()).unwrap();
         input["delegation"]["target"] = json!("responses");
         assert_eq!(
-            execute(
-                &backend,
-                &config(),
-                &sink,
-                serde_json::from_value(input).unwrap(),
-                String::new()
-            )
-            .await,
+            execute(&backend, &sink, serde_json::from_value(input).unwrap(), String::new()).await,
             Err(DelegationError::UnsupportedTarget)
         );
         for input in [
@@ -242,10 +268,7 @@ mod delegation_tests {
                 extra: std::collections::BTreeMap::default(),
             },
         ] {
-            assert_eq!(
-                execute(&backend, &config(), &sink, input, String::new()).await,
-                Ok(None)
-            );
+            assert_eq!(execute(&backend, &sink, input, String::new()).await, Ok(None));
         }
         assert_eq!(backend.calls(), vec![]);
         assert_eq!(*sink.0.lock().unwrap(), vec![]);
@@ -276,12 +299,12 @@ mod delegation_tests {
             });
             events.extend(terminal);
             let backend = FakeBackend::new(vec![BackendScript {
-                task: task(&event(), "i".into(), &config()).unwrap().unwrap(),
+                task: task(&event(), "i".into()).unwrap().unwrap(),
                 id: id.clone(),
                 events,
             }]);
             let sink = Sink::default();
-            let result = execute(&backend, &config(), &sink, event(), "i".into()).await;
+            let result = execute(&backend, &sink, event(), "i".into()).await;
             match expected {
                 Some(text) => {
                     assert_eq!(
@@ -299,14 +322,7 @@ mod delegation_tests {
             assert_eq!(sink.0.lock().unwrap()[0].name(), "session.delegation.created");
         }
         assert_eq!(
-            execute(
-                &FakeBackend::default(),
-                &config(),
-                &Sink::default(),
-                event(),
-                String::new()
-            )
-            .await,
+            execute(&FakeBackend::default(), &Sink::default(), event(), String::new()).await,
             Err(DelegationError::Submission)
         );
     }

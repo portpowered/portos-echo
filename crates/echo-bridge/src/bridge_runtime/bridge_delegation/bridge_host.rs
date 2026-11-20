@@ -4,6 +4,7 @@ use crate::bridge_runtime::journey::bridge_live::LivePort;
 use crate::{Error, bridge_input::Settings, bridge_mcp::Grant, bridge_trace::Trace};
 use echo_contracts::live::LiveEvent;
 use std::sync::Arc;
+use tokio::time::Instant;
 
 pub(in crate::bridge_runtime) enum Host {
     Client(Box<Client>),
@@ -28,7 +29,7 @@ impl Host {
 
     pub async fn new_call(&mut self) {
         match self {
-            Self::Client(client) => client.new_call(),
+            Self::Client(client) => client.new_call().await,
             Self::Muse(muse) => {
                 muse.abandon().await;
                 muse.new_call();
@@ -36,10 +37,10 @@ impl Host {
         }
     }
 
-    pub fn dispatch(&mut self, event: LiveEvent, run: &str, trace: &mut Trace) -> Result<bool, Error> {
+    pub fn dispatch(&mut self, event: LiveEvent, run: &str, trace: &mut Trace, cutoff: Instant) -> Result<bool, Error> {
         match self {
-            Self::Client(client) => client.dispatch(event, run, trace),
-            Self::Muse(muse) => muse.dispatch(&event, run, trace),
+            Self::Client(client) => client.dispatch(event, run, trace, cutoff),
+            Self::Muse(muse) => muse.dispatch(&event, run, trace, cutoff),
         }
     }
 
@@ -64,7 +65,7 @@ impl Host {
 
     pub async fn abandon(&mut self) -> bool {
         match self {
-            Self::Client(client) => client.abandon(),
+            Self::Client(client) => client.abandon().await,
             Self::Muse(muse) => muse.abandon().await,
         }
     }

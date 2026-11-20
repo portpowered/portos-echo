@@ -11,13 +11,12 @@ use echo_contracts::{
 };
 use serde_json::json;
 use std::{collections::HashSet, sync::Arc};
-use tokio::{sync::oneshot, task::JoinHandle};
+use tokio::{sync::oneshot, task::JoinHandle, time::Instant};
 
 type Output = Result<Option<bridge_muse_work::Prepared>, Error>;
 
 pub(in crate::bridge_runtime) struct Muse<B = crate::bridge_muse::Backend> {
     backend: Arc<B>,
-    config: AgentConfig,
     budget: Budget,
     utc_day: Arc<dyn Fn() -> u64 + Send + Sync>,
     seen: HashSet<String>,
@@ -33,7 +32,6 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
         Self {
             backend: Arc::new(backend),
             budget: Budget::new(config.daily_request_cap),
-            config,
             utc_day,
             seen: HashSet::new(),
             active: None,
@@ -48,7 +46,13 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
         self.seen.clear();
     }
 
-    pub fn dispatch(&mut self, event: &LiveEvent, run: &str, trace: &mut Trace) -> Result<bool, Error> {
+    pub fn dispatch(
+        &mut self,
+        event: &LiveEvent,
+        run: &str,
+        trace: &mut Trace,
+        cutoff: Instant,
+    ) -> Result<bool, Error> {
         let LiveEvent::DelegationCreated { delegation, .. } = event else {
             return Ok(false);
         };
@@ -71,20 +75,27 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
             )?;
             return Ok(false);
         }
+        let remaining = cutoff.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
         let task = Task {
             delegation_id: delegation.id.clone(),
             instructions: "Execute the delegated request and report its result.".into(),
             context: serde_json::to_value(event).map_err(|_| Error::Decode)?,
-            deadline_seconds: self.config.task_deadline_seconds,
-            max_tool_calls: self.config.max_tool_calls,
+            deadline_seconds: remaining
+                .as_secs()
+                .saturating_add(u64::from(remaining.subsec_nanos() > 0)),
+            // The Muse service requires this field but does not enforce a tool cap.
+            max_tool_calls: 8,
         };
         self.resolution = Some(Resolution::created(trace, run, &id, &task.context)?);
         self.active = Some((run.into(), task.delegation_id.clone()));
-        self.start(task, run, trace);
+        self.start(task, run, trace, cutoff);
         Ok(true)
     }
 
-    fn start(&mut self, task: Task, run: &str, trace: &Trace) {
+    fn start(&mut self, task: Task, run: &str, trace: &Trace, cutoff: Instant) {
         if self.budget.reserve((self.utc_day)()).is_err() {
             self.completed = Some(Ok(Some(bridge_muse_work::Prepared::new(
                 "daily request limit reached",
@@ -98,6 +109,9 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
         let trace = trace.clone();
         let run = run.to_owned();
         self.pending = Some(tokio::spawn(async move {
+            if Instant::now() >= cutoff {
+                return Ok(None);
+            }
             bridge_muse_work::execute(&*backend, task, &run, trace, receive).await
         }));
     }
@@ -148,8 +162,8 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        if let Some(pending) = self.pending.take() {
-            self.completed = Some(pending.await.map_err(|_| Error::Unavailable).and_then(|value| value));
+        if self.pending.is_some() {
+            self.ready().await;
         }
         if let Some(mut resolution) = self.resolution.take() {
             let (outcome, answer) = match self.completed.take() {

@@ -42,6 +42,11 @@ fn events(case: &str) -> Vec<TaskEvent> {
             retryable: true,
             message: "untrusted provider message".into(),
         }],
+        "remote_expiry" => vec![TaskEvent::Failed {
+            task_id: id(),
+            retryable: false,
+            message: DEADLINE.into(),
+        }],
         "malformed" => vec![TaskEvent::Completed {
             task_id: TaskId::new("foreign-task").unwrap(),
             summary: "foreign answer".into(),
@@ -52,14 +57,14 @@ fn events(case: &str) -> Vec<TaskEvent> {
 
 #[tokio::test(start_paused = true)]
 async fn delegation_trace_muse_task_outcomes_keep_exact_speech_and_one_local_handback() {
-    for case in ["completed", "failed", "rejected", "deadline", "malformed"] {
+    for case in ["completed", "failed", "rejected", "remote_expiry", "malformed"] {
         let mut fake = fake(events(case));
         fake.reject = case == "rejected";
         let state = fake.state.clone();
         let mut host = Muse::new(fake, config(), Arc::new(|| 7));
         let mut witness = Witness::new();
         let event = delegation("delegation-raw-7", "client");
-        assert!(host.dispatch(&event, "run-7", &mut witness.trace).unwrap());
+        assert!(host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap());
         host.ready().await;
         let mut live = Live::default();
         let result = host.service(&mut live, &mut witness.trace).await;
@@ -67,7 +72,7 @@ async fn delegation_trace_muse_task_outcomes_keep_exact_speech_and_one_local_han
             "completed" => ("completed", Some("synthetic result"), None),
             "failed" => ("failed", Some(UNAVAILABLE), Some("task_failed")),
             "rejected" => ("failed", Some(UNAVAILABLE), Some("submission_failed")),
-            "deadline" => ("timed_out", Some(DEADLINE), None),
+            "remote_expiry" => ("timed_out", Some(DEADLINE), None),
             _ => ("failed", None, Some("worker_failed")),
         };
         assert_eq!(
@@ -92,7 +97,7 @@ async fn delegation_trace_muse_task_outcomes_keep_exact_speech_and_one_local_han
             text,
         );
         assert_eq!(row.get("reason_class").and_then(Value::as_str), reason);
-        assert_eq!(row["duration_ms"], if case == "deadline" { 5000 } else { 0 });
+        assert_eq!(row["duration_ms"], 0);
         assert_eq!(
             rows(&witness, "session.delegation.created")[0]["task"],
             serde_json::to_value(event).unwrap()
@@ -119,8 +124,13 @@ async fn delegation_trace_muse_append_failure_preserves_error_and_prior_task_fai
         };
         let mut host = Muse::new(fake(vec![event]), config(), Arc::new(|| 7));
         let mut witness = Witness::new();
-        host.dispatch(&delegation("delegation-raw-7", "client"), "run-7", &mut witness.trace)
-            .unwrap();
+        host.dispatch(
+            &delegation("delegation-raw-7", "client"),
+            "run-7",
+            &mut witness.trace,
+            cutoff(),
+        )
+        .unwrap();
         host.ready().await;
         let mut live = Live(vec![], true);
         assert_eq!(host.service(&mut live, &mut witness.trace).await, Err(Error::Decode));
@@ -155,14 +165,14 @@ async fn delegation_trace_muse_abandon_drop_and_replacement_close_each_generatio
         let mut host = Muse::new(fake, agent, Arc::new(|| 7));
         let mut witness = Witness::new();
         let event = delegation("delegation-raw-7", "client");
-        host.dispatch(&event, "run-7", &mut witness.trace).unwrap();
+        host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap();
         state.polled.notified().await;
         tokio::time::advance(Duration::from_millis(17)).await;
         if explicit {
             assert!(host.abandon().await);
             assert!(!host.abandon().await);
             host.new_call();
-            host.dispatch(&event, "run-8", &mut witness.trace).unwrap();
+            host.dispatch(&event, "run-8", &mut witness.trace, cutoff()).unwrap();
             state.polled.notified().await;
             assert!(host.abandon().await);
             assert_eq!(*state.cancels.lock().unwrap(), vec![id(), id()]);
@@ -200,6 +210,7 @@ async fn delegation_trace_muse_payload_switch_redacts_task_and_answer_without_ch
             &serde_json::from_value(input.clone()).unwrap(),
             "run-7",
             &mut witness.trace,
+            cutoff(),
         )
         .unwrap();
         host.ready().await;

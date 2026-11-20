@@ -1,33 +1,65 @@
-//! Run budgets include the configured task window; control and cleanup stay short.
-use crate::bridge_input::Settings;
+//! The run owns delegated waiting. Keep response production and transport bounded.
+use crate::{Error, bridge_input::Settings};
 use std::time::Duration;
+use tokio::time::Instant;
 
 pub(super) const CONTROL: Duration = Duration::from_secs(5);
+const RESPONSE: Duration = Duration::from_secs(10);
 
-pub(super) const RESPONSE: Duration = Duration::from_secs(10);
-
-pub(super) fn task(settings: &Settings) -> Duration {
-    let agent = settings
-        .muse
-        .as_ref()
-        .map(|(agent, _)| agent)
-        .or_else(|| settings.delegation.as_ref().map(|(agent, _)| agent));
-    agent.map_or(Duration::ZERO, |agent| Duration::from_secs(agent.task_deadline_seconds))
+pub(super) struct Wait {
+    pub cutoff: Instant,
+    response: Instant,
+    pub delegated: bool,
+    media: bool,
 }
 
-pub(super) fn playback(settings: &Settings) -> Duration {
-    // The owner enforces production/cut/Played limits. This last-resort request
-    // ceiling covers every delegation the existing bounded call can admit.
-    RESPONSE
-        .saturating_add(task(settings).saturating_mul(super::bridge_delegation::MAX_DELEGATIONS))
-        .saturating_add(CONTROL * 3)
-}
+impl Wait {
+    pub fn cutoff(settings: &Settings, opened: Instant) -> Result<Instant, Error> {
+        let voice = settings
+            .config
+            .as_ref()
+            .map_or_else(echo_config::VoiceConfig::default, |config| config.voice);
+        opened
+            .checked_add(Duration::from_secs(u64::from(voice.session_max_seconds)))
+            .ok_or(Error::Deadline)
+    }
 
-/// Check the owner response budget without changing its deadline.
-pub(super) fn check_deadline(deadline: tokio::time::Instant) -> Result<(), crate::Error> {
-    if tokio::time::Instant::now() >= deadline {
-        Err(crate::Error::Deadline)
-    } else {
-        Ok(())
+    pub fn new(cutoff: Instant) -> Self {
+        Self {
+            cutoff,
+            response: Instant::now() + RESPONSE,
+            delegated: false,
+            media: false,
+        }
+    }
+
+    pub fn media_started(&mut self) {
+        if !self.media && self.delegated {
+            self.response = Instant::now() + RESPONSE;
+        }
+        self.media = true;
+    }
+
+    pub fn deadline(&self, user_speaking: bool, draining: bool) -> Result<Option<Instant>, Error> {
+        if draining || self.delegated && !self.media && user_speaking {
+            return Ok(None);
+        }
+        let waiting = self.delegated && !self.media;
+        let deadline = if waiting { self.cutoff } else { self.response };
+        if Instant::now() >= deadline {
+            return Err(if waiting {
+                Error::SessionCeiling
+            } else {
+                Error::Deadline
+            });
+        }
+        Ok(Some(deadline))
+    }
+
+    pub fn playback(&self) -> Duration {
+        // The transport is a backstop. The producer, cut and Played retain
+        // their phase bounds, with room for audio accepted near the cutoff.
+        let room = self.cutoff.saturating_duration_since(Instant::now());
+        RESPONSE + room + CONTROL * 3
     }
 }

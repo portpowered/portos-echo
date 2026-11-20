@@ -41,10 +41,15 @@ impl Events {
     pub(crate) async fn drive(
         &self,
         run: impl std::future::Future<Output = Result<String, &'static str>>,
-        deadline: tokio::time::Instant,
+        deadline: Option<tokio::time::Instant>,
     ) -> Result<String, &'static str> {
         tokio::pin!(run);
-        let timer = tokio::time::sleep_until(deadline);
+        let timer = async {
+            match deadline {
+                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::pin!(timer);
         std::future::poll_fn(|cx| {
             // Serialize each poll with cancellation: once terminal is committed,

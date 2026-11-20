@@ -5,6 +5,8 @@ use echo_bridge::{bridge_input, bridge_runtime};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::oneshot;
 
+#[path = "runtime/ceiling.rs"]
+mod ceiling;
 #[path = "runtime/emotion.rs"]
 mod emotion;
 #[path = "runtime/trace_checks.rs"]
@@ -33,21 +35,21 @@ impl Application {
         .await;
     }
 
-    async fn start(cap: u64, deadline: u64) -> Self {
-        let mut application = Self::idle(cap, deadline).await;
+    async fn start(cap: u64, ceiling: u32) -> Self {
+        let mut application = Self::idle(cap, ceiling).await;
         application.wake().await;
         application
     }
 
-    async fn idle(cap: u64, deadline: u64) -> Self {
-        Self::idle_with_emotion(cap, deadline, false).await
+    async fn idle(cap: u64, ceiling: u32) -> Self {
+        Self::idle_with_emotion(cap, ceiling, false).await
     }
 
-    async fn idle_with_emotion(cap: u64, deadline: u64, emotion: bool) -> Self {
-        Self::idle_options(cap, deadline, emotion, true).await
+    async fn idle_with_emotion(cap: u64, ceiling: u32, emotion: bool) -> Self {
+        Self::idle_options(cap, ceiling, emotion, true).await
     }
 
-    async fn idle_options(cap: u64, deadline: u64, emotion: bool, payloads: bool) -> Self {
+    async fn idle_options(cap: u64, ceiling: u32, emotion: bool, payloads: bool) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let model = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -69,7 +71,9 @@ impl Application {
         }
         let agent = &mut settings.delegation.as_mut().unwrap().0;
         agent.daily_request_cap = cap;
-        agent.task_deadline_seconds = deadline;
+        agent.task_deadline_seconds = 5;
+        agent.max_tool_calls = 1;
+        settings.config.as_mut().unwrap().voice.session_max_seconds = ceiling;
         let day = Arc::new(AtomicU64::new(17));
         let source = day.clone();
         let (stop, shutdown) = oneshot::channel();
@@ -204,41 +208,16 @@ fn settings(directory: &Path, live: &str, port: u16) -> bridge_input::Settings {
 }
 
 async fn respond(socket: &mut TcpStream, text: &str) -> std::io::Result<()> {
-    let body = sse(&json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]}));
+    respond_item(socket, &super::failures::answer(text)).await
+}
+
+async fn respond_item(socket: &mut TcpStream, item: &Value) -> std::io::Result<()> {
+    let body = sse(item);
     socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await
 }
 
 async fn assert_no_request(listener: &TcpListener) {
     assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(listener.poll_accept(cx).is_pending())).await);
-}
-
-#[tokio::test]
-#[ignore = "T3 controlled application and loopback peers"]
-async fn bridge_wire_runtime_deadline_stops_model_without_tool_or_replay() {
-    let mut app = Application::start(3, 60).await;
-    let mut stalled = app.request("deadline").await;
-    elapse(Duration::from_secs(59)).await;
-    assert!(app.live.commentary.try_recv().is_err());
-    assert!(!trace(&app.path()).iter().any(|e| e["event"] == "run.failed"));
-    elapse(Duration::from_secs(1)).await;
-    app.commentary("deadline", "task timed out").await;
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), stalled.read(&mut [0]))
-            .await
-            .unwrap()
-            .unwrap(),
-        0
-    );
-    assert_no_request(&app.model).await;
-    assert_eq!(
-        trace(&app.path())
-            .iter()
-            .filter(|e| e["event"] == "session.commentary.append")
-            .count(),
-        1
-    );
-    trace_checks::resolved(&app.path(), "deadline", "timed_out", "submitted");
-    app.finish().await;
 }
 
 #[tokio::test]
@@ -332,46 +311,6 @@ async fn elapse(duration: Duration) {
     }
     tokio::time::resume();
     active.abort();
-}
-
-#[tokio::test]
-#[ignore = "T3 controlled application and loopback peers"]
-async fn bridge_wire_runtime_long_delegation_plays_on_same_call_and_requires_played() {
-    let mut app = Application::start(3, 60).await;
-    elapse(Duration::from_secs(8)).await;
-    let mut model = app.request("slow").await;
-    elapse(Duration::from_secs(12)).await;
-    respond(&mut model, "slow result").await.unwrap();
-    app.commentary("slow", "slow result").await;
-    app.live.events.send("synthetic.more_audio".into()).await.unwrap();
-    let path = app.path();
-    bridge_short::receive_short(&mut app.satellite, &app.live, &path, 32).await;
-    bridge_short::send(&mut app.satellite, "played", json!({})).await;
-    bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
-    app.wait_event("reply.played").await;
-    let entries = trace(&app.path());
-    assert!(!entries.iter().any(|e| e["event"] == "run.failed"));
-    let edges: Vec<_> = entries
-        .iter()
-        .filter(|e| {
-            matches!(
-                e["event"].as_str(),
-                Some("session.commentary.append" | "reply.started" | "reply.played")
-            )
-        })
-        .map(|e| (e["event"].clone(), e["run_id"].clone()))
-        .collect();
-    assert_eq!(
-        edges,
-        vec![
-            (json!("session.commentary.append"), json!("run-1")),
-            (json!("reply.started"), json!("run-1")),
-            (json!("reply.played"), json!("run-1")),
-        ]
-    );
-    assert_eq!(app.live.calls.load(Ordering::SeqCst), 1);
-    assert_no_request(&app.model).await;
-    app.finish().await;
 }
 
 #[tokio::test]

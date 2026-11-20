@@ -170,7 +170,7 @@ pub(super) async fn failure(
     if lab
         || !matches!(
             error,
-            Error::Authorization | Error::Unavailable | Error::Deadline | Error::Decode
+            Error::Authorization | Error::Unavailable | Error::Deadline | Error::Decode | Error::SessionCeiling
         )
     {
         return Err(error);

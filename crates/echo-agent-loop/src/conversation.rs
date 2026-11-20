@@ -27,7 +27,7 @@ pub(crate) fn request(model: &str, history: &[Value], catalog: &[ToolSpec]) -> V
 pub(crate) async fn run<H: ToolHost, C: ModelCredential>(
     id: &TaskId,
     task: Task,
-    config: &AgentConfig,
+    (config, max_tool_calls): (&AgentConfig, Option<u32>),
     transport: &Transport,
     host: &H,
     credential: &C,
@@ -50,7 +50,7 @@ pub(crate) async fn run<H: ToolHost, C: ModelCredential>(
         }
         history.extend(items);
         for call in calls {
-            if seen.len() as u64 >= u64::from(task.max_tool_calls.min(config.max_tool_calls)) {
+            if max_tool_calls.is_some_and(|cap| seen.len() as u64 >= u64::from(cap)) {
                 return Err("tool call limit reached");
             }
             seen.insert(call.id.clone());
@@ -78,13 +78,13 @@ struct Call {
 }
 
 fn calls(items: &[Value], catalog: &[ToolSpec], seen: &HashSet<String>) -> Result<Vec<Call>, Failure> {
-    let mut ids = seen.clone();
+    let mut ids = HashSet::new();
     let mut calls = Vec::new();
     for item in items {
         match item["type"].as_str().ok_or(INVALID)? {
             "function_call" => {
                 let id = item["call_id"].as_str().filter(|id| !id.is_empty()).ok_or(INVALID)?;
-                if !ids.insert(id.into()) {
+                if seen.contains(id) || !ids.insert(id) {
                     return Err(INVALID);
                 }
                 let alias = item["name"].as_str().ok_or(INVALID)?;

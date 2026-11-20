@@ -13,6 +13,10 @@ struct Rig {
 
 impl Rig {
     async fn start() -> Self {
+        Self::start_with_clock(false).await
+    }
+
+    async fn start_with_clock(clock: bool) -> Self {
         let muse = Muse::start("subjectAltName=IP:127.0.0.1").await;
         let directory = tempfile::tempdir().unwrap();
         let mut host = Process::spawn(&mut host());
@@ -20,11 +24,11 @@ impl Rig {
         configure(directory.path(), port, &muse, "");
         let model = bridge_wire_delegation::Model::start(false, true).await;
         let live = bridge_peer::Live::bind_frames(0).await;
-        let mut bridge = Process::spawn(&mut bridge_wire_delegation::run_command(
-            directory.path(),
-            &live.url,
-            &model.origin,
-        ));
+        let mut command = bridge_wire_delegation::run_command(directory.path(), &live.url, &model.origin);
+        if clock {
+            command.arg("--sim-clock");
+        }
+        let mut bridge = Process::spawn(&mut command);
         assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
         assert_eq!(host.command("wake").await, "wake");
         let path = directory.path().join("trace");
@@ -140,27 +144,86 @@ async fn muse_unknown_and_duplicate_reports_cannot_complete_another_task() {
 
 #[tokio::test]
 #[ignore = "T3 requires pinned hassmic-host and prebuilt bridge/Muse binaries; Linux and openssl"]
-async fn muse_deadline_is_nonretryable_and_expired_report_cannot_speak() {
-    let mut rig = Rig::start().await;
-    rig.muse.set_time(159).await;
-    // A rejected report wakes the daemon's pending event consumer at this epoch.
-    rig.reject("unknown-before-deadline", "unknown task_id").await;
-    assert!(rig.live.commentary.try_recv().is_err());
+async fn muse_run_ceiling_cancels_and_next_wake_plays() {
+    let mut rig = Rig::start_with_clock(true).await;
+    let receipt = rig
+        .bridge
+        .command(r#"{"action":"advance_clock","milliseconds":600000}"#)
+        .await;
     assert_eq!(
-        trace(&rig.path())
-            .iter()
-            .filter(|e| e["event"] == "muse.terminal")
-            .count(),
-        0
+        serde_json::from_str::<Value>(&receipt).unwrap(),
+        json!({"event":"bridge.clock_advanced","milliseconds":600000})
     );
-    rig.muse.set_time(160).await;
-    rig.reply("Muse did not report a result in time", "failed").await;
-    rig.reject(&rig.id, "expired task_id").await;
-    evidence(&format!(
-        "muse deadline: task_id={} before=159 deadline=160 failed=1 retryable=false completed=0 late_exit=1 commentary=1 pcm_bytes=9600",
-        rig.id
-    ));
-    rig.close(1).await;
+    let failed = wait(&rig.path(), "run.failed").await;
+    assert_eq!(failed["reason"], "session waiting ceiling reached");
+    assert_eq!(failed["run_id"], "run-1");
+    rig.reject(&rig.id, "cancelled task_id").await;
+    check_resolution(&rig.path(), "cancelled", "unobserved", None, None);
+    let calls = rig.muse.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        &calls[1]["argv"].as_array().unwrap()[..5],
+        &calls[0]["argv"].as_array().unwrap()[..5]
+    );
+    assert_eq!(
+        calls[1]["argv"][5],
+        format!("Cancel task {}. Do not call echo.report.result for it.", rig.id)
+    );
+    assert!(rig.live.commentary.try_recv().is_err());
+    assert_eq!(rig.host.command("pcm").await, "0 0");
+    assert_eq!(rig.host.command("wake").await, "wake");
+    let path = rig.path();
+    let next = wait_run(&path, "mic.frames", "run-2").await;
+    assert_eq!(next["phase"], "first");
+    rig.live
+        .events
+        .send(bridge_wire_delegation::event("muse-d-2", "client"))
+        .await
+        .unwrap();
+    let progress = wait_run(&path, "muse.progress", "run-2").await;
+    let id = progress["task_id"].as_str().unwrap();
+    assert_ne!(id, rig.id);
+    rig.muse.report(id).await;
+    play_reply(
+        &mut rig.live,
+        &mut rig.bridge,
+        &mut rig.host,
+        &path,
+        ("muse-d-2", "Muse test job completed", "run-2"),
+    )
+    .await;
+    assert_eq!(
+        wait_run(&path, "session.commentary.append", "run-2").await["delegation_id"],
+        "muse-d-2"
+    );
+    assert_eq!(
+        trace(&path)
+            .iter()
+            .filter(|e| e["event"] == "session.commentary.append")
+            .count(),
+        1
+    );
+    assert_eq!(rig.muse.calls().len(), 3);
+    assert_eq!(rig.model.request_count(), 0);
+    rig.bridge.finish(0).await;
+    rig.host.finish(0).await;
+    rig.muse.stop().await;
+}
+
+async fn wait_run(path: &Path, event: &str, run: &str) -> Value {
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            if let Some(row) = trace(path)
+                .into_iter()
+                .find(|row| row["event"] == event && row["run_id"] == run)
+            {
+                return row;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("waiting for {event} in {run}: {:?}", trace(path)))
 }
 
 #[tokio::test]

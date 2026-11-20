@@ -37,7 +37,7 @@ async fn wait(path: &Path, event: &str) -> Value {
 #[tokio::test]
 #[ignore = "T3 requires pinned hassmic-host and prebuilt bridge/Muse binaries; Linux and openssl"]
 async fn muse_correlated_success() {
-    let muse = Muse::start("subjectAltName=IP:127.0.0.1").await;
+    let mut muse = Muse::start("subjectAltName=IP:127.0.0.1").await;
     let directory = tempfile::tempdir().unwrap();
     let mut host = Process::spawn(&mut host());
     let port = host.line().await.parse().unwrap();
@@ -65,6 +65,7 @@ async fn muse_correlated_success() {
     let calls = muse.calls();
     assert_eq!(calls.len(), 1);
     check_gadget(&calls[0], id);
+    muse.set_time(161).await;
     assert_eq!(muse.report(id).await, json!({"accepted":true,"task_id":id}));
     reply(&mut live, &mut bridge, &mut host, &path, "Muse test job completed").await;
     check_trace(&path, Some(id));
@@ -100,13 +101,23 @@ fn check_gadget(call: &Value, id: &str) {
 }
 
 async fn reply(live: &mut bridge_peer::Live, bridge: &mut Process, host: &mut Process, path: &Path, text: &str) {
+    play_reply(live, bridge, host, path, ("muse-d-1", text, "run-1")).await;
+}
+
+async fn play_reply(
+    live: &mut bridge_peer::Live,
+    bridge: &mut Process,
+    host: &mut Process,
+    path: &Path,
+    (delegation, text, run): (&str, &str, &str),
+) {
     let commentary = tokio::time::timeout(OBSERVATION_TIMEOUT, live.commentary.recv())
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&commentary).unwrap(),
-        json!({"type":"session.commentary.append","delegation_id":"muse-d-1","text":text})
+        json!({"type":"session.commentary.append","delegation_id":delegation,"text":text})
     );
     live.events.send("synthetic.muse_audio".into()).await.unwrap();
     wait(path, "reply.started").await;
@@ -116,7 +127,7 @@ async fn reply(live: &mut bridge_peer::Live, bridge: &mut Process, host: &mut Pr
         .unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
-        json!({"event":"bridge.run_completed","run_id":"run-1"})
+        json!({"event":"bridge.run_completed","run_id":run})
     );
     assert_eq!(host.command("pcm").await, "9600 0");
     assert!(live.commentary.try_recv().is_err());
