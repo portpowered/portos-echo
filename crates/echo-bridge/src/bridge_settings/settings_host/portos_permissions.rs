@@ -1,6 +1,6 @@
 //! Running Port OS effects may only lose authority until runtime replacement.
 use echo_config::{BridgeConfig, McpAuth, McpServer};
-use echo_screen_contract::settings_v2::PortosToolV2;
+use echo_screen_contract::settings_v2::{PortosScopeV2, PortosToolV2};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -54,7 +54,7 @@ impl PortosPermissions {
                 .into_iter()
                 .find(|tool| tool.as_str() == name)
                 .is_some_and(|tool| {
-                    tool.scope().is_none_or(|scope| {
+                    required_scope(tool).is_none_or(|scope| {
                         let scope = scope.as_str();
                         ceiling.scopes.iter().any(|configured| configured == scope)
                             && grant.iter().any(|granted| granted == scope)
@@ -69,4 +69,18 @@ pub(super) fn portos_server(config: &BridgeConfig) -> Option<&McpServer> {
         .server
         .first()
         .filter(|server| server.auth == McpAuth::PortosDeviceCode)
+}
+
+fn required_scope(tool: PortosToolV2) -> Option<PortosScopeV2> {
+    use PortosScopeV2 as Scope;
+    match tool {
+        PortosToolV2::Control => Some(Scope::MessageSend),
+        PortosToolV2::EndpointQuery | PortosToolV2::EndpointShow => Some(Scope::EndpointRead),
+        PortosToolV2::EndpointManage => Some(Scope::EndpointWrite),
+        PortosToolV2::GroupQuery => Some(Scope::GroupRead),
+        PortosToolV2::GroupManage => Some(Scope::GroupManage),
+        PortosToolV2::Guide => None,
+        PortosToolV2::SubscriptionList | PortosToolV2::SubscriptionInspect => Some(Scope::SubscriptionRead),
+        PortosToolV2::SubscriptionCancel | PortosToolV2::SubscriptionLabelEdit => Some(Scope::SubscriptionWrite),
+    }
 }

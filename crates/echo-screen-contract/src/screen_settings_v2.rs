@@ -43,17 +43,6 @@ pub enum WebSearchV2 {
     Disabled,
 }
 
-impl WebSearchV2 {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Live => "live",
-            Self::Cached => "cached",
-            Self::Disabled => "disabled",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum HomeToolGroupV2 {
     #[serde(rename = "notes")]
@@ -170,21 +159,6 @@ impl PortosToolV2 {
             Self::SubscriptionInspect => "subscription_inspect",
             Self::SubscriptionCancel => "subscription_cancel",
             Self::SubscriptionLabelEdit => "subscription_label_edit",
-        }
-    }
-
-    #[must_use]
-    pub const fn scope(self) -> Option<PortosScopeV2> {
-        use PortosScopeV2 as Scope;
-        match self {
-            Self::Control => Some(Scope::MessageSend),
-            Self::EndpointQuery | Self::EndpointShow => Some(Scope::EndpointRead),
-            Self::EndpointManage => Some(Scope::EndpointWrite),
-            Self::GroupQuery => Some(Scope::GroupRead),
-            Self::GroupManage => Some(Scope::GroupManage),
-            Self::Guide => None,
-            Self::SubscriptionList | Self::SubscriptionInspect => Some(Scope::SubscriptionRead),
-            Self::SubscriptionCancel | Self::SubscriptionLabelEdit => Some(Scope::SubscriptionWrite),
         }
     }
 }

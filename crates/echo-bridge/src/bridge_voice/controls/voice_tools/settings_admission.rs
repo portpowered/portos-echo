@@ -4,36 +4,14 @@ use echo_config::{EffectiveConfig, SettingsOverlay};
 use echo_screen_contract::settings_v1::{LinkStatusV1, PromptTextsV1};
 use reqwest::{Client, StatusCode};
 use std::fs;
+use std::io::Write as _;
 
 #[tokio::test(start_paused = true)]
 async fn t3_settings_v2_live_narrowing() {
     drive(async {
         let scopes = vec!["endpoint:read".into(), "message:send".into()];
         let mut peer = TlsPeer::start_with_catalog(false, scopes, true).await;
-        let root = peer.directory.path();
-        peer.config.home.as_mut().unwrap().dir = root.join("home");
-        peer.config.screen.listen = ([127, 0, 0, 1], 0).into();
-        let overlay =
-            SettingsOverlay::from_toml_str("screen_pack='template'\n[voice]\nsession_listen_seconds=20").unwrap();
-        let (service, send) = SettingsService::open(
-            EffectiveConfig {
-                base: peer.config.clone(),
-                config: peer.config.clone(),
-                overlay,
-                warning: None,
-            },
-            PromptTextsV1 {
-                voice: "synthetic voice".into(),
-                runner: "synthetic runner".into(),
-            },
-        )
-        .unwrap();
-        let mut screen = Screen::bind_with_settings(Some(&peer.config.screen), Some(send))
-            .await
-            .unwrap();
-        let mut trace = Trace::open(&root.join("trace"), "api_key").unwrap();
-        let mut tools = Tools::new(&peer.config, Arc::new(|| 0)).with_portos_permissions(Some(service.permissions()));
-        tools.open(&peer.config, &screen, &mut trace, None).await.unwrap();
+        let (service, mut screen, mut tools) = open_paired_portos(&mut peer).await;
         let owner = tools.runtime.as_ref().unwrap();
         relink(owner).await;
         relink(owner).await;
@@ -47,28 +25,7 @@ async fn t3_settings_v2_live_narrowing() {
             stopped.await.unwrap();
         };
         let inspect = async {
-            let host = tools.host.as_ref().unwrap();
-            assert_narrow_save(&client, &url, &peer.config).await;
-            assert_eq!(
-                host.call_tool("control", json!({}), "1:t1:u1:a").await,
-                Err(ToolError::Denied)
-            );
-            assert_eq!(
-                host.call_tool("endpoint_show", json!({}), "1:t1:u1:b").await,
-                Err(ToolError::Denied)
-            );
-            assert_wider_save(&client, &url).await;
-            assert_eq!(
-                host.call_tool("control", json!({}), "1:t1:u1:d").await,
-                Err(ToolError::Denied)
-            );
-            assert_eq!(
-                host.call_tool("endpoint_show", json!({}), "1:t1:u1:e").await,
-                Err(ToolError::Denied)
-            );
-            let result = host.call_tool("endpoint_query", json!({}), "1:t1:u1:c").await.unwrap();
-            assert_eq!(result.content, json!([{"type":"text","text":"synthetic-query-result"}]));
-            assert!(!result.is_error);
+            exercise_running_catalog(tools.host.as_ref().unwrap(), &client, &url, &peer.config).await;
             release.send(()).unwrap();
         };
         let (((), completion), ()) = tokio::join!(
@@ -76,32 +33,74 @@ async fn t3_settings_v2_live_narrowing() {
             inspect
         );
         assert!(completion.restart_requested);
+        assert_eq!(tools.catalog().await.unwrap().tools(), catalog.tools());
+        for name in ["control", "endpoint_show", "endpoint_query"] {
+            assert_eq!(catalog.resolve(name), Some(name));
+        }
+        assert_eq!(catalog.resolve("group_manage"), None);
         let original = serde_json::to_value(catalog.tools()).unwrap();
-        assert_eq!(
-            serde_json::to_value(tools.catalog().await.unwrap().tools()).unwrap(),
-            original
-        );
-        assert_eq!(
-            original
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|tool| {
-                    let name = tool["name"].as_str().unwrap();
-                    ["control", "endpoint_show", "endpoint_query"]
-                        .iter()
-                        .any(|id| name.ends_with(id))
-                })
-                .count(),
-            3
-        );
         tools.close().await;
         screen.close().await.unwrap();
         let counts = peer.finish().await;
         assert_eq!(counts, json!({"link":2,"token":2,"catalog":1,"query":1}));
-        println!("Unchanged catalog {original}; outbound calls {counts}; control=0 endpoint_show=0 endpoint_query=1");
+        writeln!(
+            std::io::stdout().lock(),
+            "Unchanged catalog {original}; outbound calls {counts}; control=0 endpoint_show=0 endpoint_query=1"
+        )
+        .unwrap();
     })
     .await;
+}
+
+async fn open_paired_portos(peer: &mut TlsPeer) -> (SettingsService, Screen, Tools) {
+    let root = peer.directory.path();
+    peer.config.home.as_mut().unwrap().dir = root.join("home");
+    peer.config.screen.listen = ([127, 0, 0, 1], 0).into();
+    let overlay = SettingsOverlay::from_toml_str("screen_pack='template'\n[voice]\nsession_listen_seconds=20").unwrap();
+    let (service, send) = SettingsService::open(
+        EffectiveConfig {
+            base: peer.config.clone(),
+            config: peer.config.clone(),
+            overlay,
+            warning: None,
+        },
+        PromptTextsV1 {
+            voice: "synthetic voice".into(),
+            runner: "synthetic runner".into(),
+        },
+    )
+    .unwrap();
+    let screen = Screen::bind_with_settings(Some(&peer.config.screen), Some(send))
+        .await
+        .unwrap();
+    let mut trace = Trace::open(&root.join("trace"), "api_key").unwrap();
+    let mut tools = Tools::new(&peer.config, Arc::new(|| 0)).with_portos_permissions(Some(service.permissions()));
+    tools.open(&peer.config, &screen, &mut trace, None).await.unwrap();
+    (service, screen, tools)
+}
+
+async fn exercise_running_catalog(host: &impl ToolHost, client: &Client, url: &str, config: &BridgeConfig) {
+    assert_narrow_save(client, url, config).await;
+    assert_eq!(
+        host.call_tool("control", json!({}), "1:t1:u1:a").await,
+        Err(ToolError::Denied)
+    );
+    assert_eq!(
+        host.call_tool("endpoint_show", json!({}), "1:t1:u1:b").await,
+        Err(ToolError::Denied)
+    );
+    assert_wider_save(client, url).await;
+    assert_eq!(
+        host.call_tool("control", json!({}), "1:t1:u1:d").await,
+        Err(ToolError::Denied)
+    );
+    assert_eq!(
+        host.call_tool("endpoint_show", json!({}), "1:t1:u1:e").await,
+        Err(ToolError::Denied)
+    );
+    let result = host.call_tool("endpoint_query", json!({}), "1:t1:u1:c").await.unwrap();
+    assert_eq!(result.content, json!([{"type":"text","text":"synthetic-query-result"}]));
+    assert!(!result.is_error);
 }
 
 async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
@@ -146,7 +145,12 @@ async fn assert_narrow_save(client: &Client, url: &str, config: &BridgeConfig) {
     assert_eq!(effective.mcp.scopes, ["endpoint:read"]);
     assert_eq!(effective.mcp.server[0].allow_tools, ["endpoint_query"]);
     assert_private(&overlay);
-    println!("Saved settings.toml (0600) {file}\nNarrow status {}", saved["portos"]);
+    writeln!(
+        std::io::stdout().lock(),
+        "Saved settings.toml (0600) {file}\nNarrow status {}",
+        saved["portos"]
+    )
+    .unwrap();
 }
 
 async fn assert_wider_save(client: &Client, url: &str) {
@@ -169,7 +173,7 @@ async fn assert_wider_save(client: &Client, url: &str) {
         wider["portos"]["server"]["granted_scopes"],
         json!(["endpoint:read", "message:send"])
     );
-    println!("Wider status {}", wider["portos"]);
+    writeln!(std::io::stdout().lock(), "Wider status {}", wider["portos"]).unwrap();
 }
 
 async fn get(client: &Client, url: &str) -> Value {

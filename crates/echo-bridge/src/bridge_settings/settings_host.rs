@@ -77,23 +77,7 @@ impl SettingsHost {
                 SettingsReply::Packs(catalog.with_selection(self.store.overlay.screen_pack())),
             ),
             SettingsOperation::PackRefresh(catalog, snapshot) => self.refresh_pack(catalog, &snapshot),
-            SettingsOperation::PackSelection(catalog, selection) => {
-                if !catalog.accepts(&selection) {
-                    return SettingsReply::InvalidPackSelection;
-                }
-                let catalog = catalog.with_selection(self.store.overlay.screen_pack());
-                let changed = catalog.selection_changes(&selection);
-                SettingsOverlay::from_toml_str(&format!("screen_pack='{selection}'"))
-                    .map_err(SettingsError::from)
-                    .and_then(|patch| self.persist(&patch))
-                    .map(|_| {
-                        SettingsReply::PackSaved(
-                            save_result(self.restart_pending),
-                            catalog.with_selection(Some(&selection)),
-                            changed,
-                        )
-                    })
-            }
+            SettingsOperation::PackSelection(catalog, selection) => self.select_pack(catalog, &selection),
             SettingsOperation::Snapshot => self.snapshot(link).map(SettingsReply::Snapshot),
             SettingsOperation::SnapshotV2 => {
                 return self
@@ -122,6 +106,25 @@ impl SettingsHost {
             }
         };
         result.unwrap_or_else(|error| error_reply(&error))
+    }
+
+    fn select_pack(
+        &mut self,
+        catalog: echo_screen_server::PackCatalog,
+        selection: &str,
+    ) -> Result<SettingsReply, SettingsError> {
+        if !catalog.accepts(selection) {
+            return Ok(SettingsReply::InvalidPackSelection);
+        }
+        let catalog = catalog.with_selection(self.store.overlay.screen_pack());
+        let changed = catalog.selection_changes(selection);
+        let patch = SettingsOverlay::from_toml_str(&format!("screen_pack='{selection}'"))?;
+        self.persist(&patch)?;
+        Ok(SettingsReply::PackSaved(
+            save_result(self.restart_pending),
+            catalog.with_selection(Some(selection)),
+            changed,
+        ))
     }
 
     fn refresh_pack(
@@ -172,7 +175,15 @@ impl SettingsHost {
     }
 
     fn persist(&mut self, patch: &SettingsOverlay) -> Result<bool, SettingsError> {
-        let saved = self.store.save(patch);
+        self.persist_with(patch, SettingsStore::save)
+    }
+
+    fn persist_with(
+        &mut self,
+        patch: &SettingsOverlay,
+        write: impl FnOnce(&mut SettingsStore, &SettingsOverlay) -> Result<bool, SettingsError>,
+    ) -> Result<bool, SettingsError> {
+        let saved = write(&mut self.store, patch);
         if matches!(saved, Err(SettingsError::Durability)) {
             self.permissions.fail_closed();
         } else if saved.is_ok() && patch.manages_portos() {
@@ -234,5 +245,76 @@ fn error_reply(error: &SettingsError) -> SettingsReply {
         SettingsReply::Persistence(error)
     } else {
         SettingsReply::Invalid(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge_settings::settings_atomic::Stage;
+    use echo_config::{AgentTools, HomeConfig, McpAuth, McpServer};
+    use std::io::Write as _;
+
+    #[test]
+    fn screen_settings_store_uncertain_portos_save_denies_pending_effects() {
+        let root = tempfile::tempdir().unwrap();
+        let mut base =
+            BridgeConfig::load(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bridge.echo.toml")).unwrap();
+        base.home = Some(HomeConfig {
+            dir: root.path().join("home"),
+            agent_tools: AgentTools::default(),
+        });
+        base.mcp.server[0] = McpServer {
+            name: "portos".into(),
+            url: "https://127.0.0.1/mcp".into(),
+            auth: McpAuth::PortosDeviceCode,
+            bearer_file: None,
+            allow_tools: vec!["control".into(), "endpoint_query".into()],
+        };
+        let mut host = SettingsHost::open(
+            base,
+            SettingsOverlay::default(),
+            PromptTextsV1 {
+                voice: "Synthetic voice".into(),
+                runner: "Synthetic runner".into(),
+            },
+            Vec::new(),
+        )
+        .unwrap();
+        let grant = ["endpoint:read".into(), "message:send".into()];
+        assert!(host.permissions().permits("endpoint_query", Some(&grant)));
+        let patch = SettingsOverlay::from_toml_str("[mcp]\nscopes=['endpoint:read']").unwrap();
+        let err = host
+            .persist_with(&patch, |store, patch| {
+                store.save_with(patch, |stage| {
+                    if stage == Stage::DirectorySync {
+                        Err(std::io::Error::other("injected sync failure"))
+                    } else {
+                        Ok(())
+                    }
+                })
+            })
+            .unwrap_err();
+        let SettingsReply::PersistenceV2(body) = error_reply_v2(&err) else {
+            panic!("expected V2 persistence reply");
+        };
+        assert_eq!(
+            body.message,
+            "File replaced but durability is uncertain; reload before saving again"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("home/settings.toml")).unwrap(),
+            "[mcp]\nscopes = [\"endpoint:read\"]\n"
+        );
+        assert!(!host.restart_pending);
+        assert!(host.permissions().managed());
+        assert!(!host.permissions().permits("endpoint_query", Some(&grant)));
+        assert!(!host.permissions().permits("control", Some(&grant)));
+        writeln!(
+            std::io::stdout().lock(),
+            "{}; control and endpoint_query denied",
+            body.message
+        )
+        .unwrap();
     }
 }

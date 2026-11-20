@@ -1,6 +1,7 @@
 //! T2: real public types and `serde_json` with no transport.
 use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use serde::{Serialize, de::DeserializeOwned};
+use std::io::Write as _;
 use std::{error::Error, fmt::Debug};
 
 fn round_trip<T>(value: &T, wire: &str) -> Result<(), Box<dyn Error>>
@@ -239,7 +240,7 @@ fn settings_v2_sparse_wire_preserves_decimal_cap_and_refuses_other_shapes() -> R
     assert!(patch.settings.valid_shape());
     round_trip(&patch, wire)?;
     assert!(serde_json::from_str::<SettingsPatchV1>(wire).is_err());
-    println!("{wire}");
+    writeln!(std::io::stdout().lock(), "{wire}").unwrap();
 
     for invalid in [
         r#"{"version":1,"settings":{"agent":{"max_tool_calls":6}}}"#,
@@ -256,7 +257,7 @@ fn settings_v2_sparse_wire_preserves_decimal_cap_and_refuses_other_shapes() -> R
             serde_json::from_str::<SettingsPatchV2>(invalid).map_or(true, |value| !value.settings.valid_shape()),
             "{invalid}"
         );
-        println!("Refused {invalid}");
+        writeln!(std::io::stdout().lock(), "Refused {invalid}").unwrap();
     }
     let clear = r#"{"version":2,"settings":{"codex":{"delegate_model":"","delegate_effort":""},"home":{"agent_tools":[]},"portos":{"allow_tools":[]}}}"#;
     let patch = serde_json::from_str::<SettingsPatchV2>(clear)?;

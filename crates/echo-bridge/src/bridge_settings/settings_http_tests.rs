@@ -5,6 +5,7 @@ use echo_contracts::secret::Secret;
 use echo_screen_contract::settings_v1::{LinkStatusV1, PromptTextsV1, SettingsSnapshotV1};
 use echo_screen_server::{ScreenServer, serve_with_settings, settings_channel};
 use reqwest::{Client, StatusCode};
+use std::io::Write as _;
 use std::{fs, time::Duration};
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -309,7 +310,11 @@ async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
         let response = request.send().await.unwrap();
         assert_eq!(response.status(), expected);
         assert!(response.bytes().await.unwrap().is_empty());
-        println!("Refused paired boundary request with {expected}");
+        writeln!(
+            std::io::stdout().lock(),
+            "Refused paired boundary request with {expected}"
+        )
+        .unwrap();
     }
     let response = fixture
         .client
@@ -324,7 +329,7 @@ async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
         body,
         json!({"version":2,"message":"agent.max_tool_calls: must be within 1..=32"})
     );
-    println!("Refused invalid config with {body}");
+    writeln!(std::io::stdout().lock(), "Refused invalid config with {body}").unwrap();
     assert!(!fixture.path("settings.toml").exists());
     assert!(!fixture.snapshot().await.restart_pending);
     fixture.close().await;
@@ -374,6 +379,11 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 6);
     assert_eq!(fs::read(base).unwrap(), original_base);
     owner_only(&path);
-    println!("Refused failed rename with {body}; subsequent accepted public snapshot {data}; base bytes identical");
+    writeln!(
+        std::io::stdout().lock(),
+        "Refused failed rename with {body}; accepted settings {}; base bytes identical",
+        data["settings"],
+    )
+    .unwrap();
     fixture.close().await;
 }

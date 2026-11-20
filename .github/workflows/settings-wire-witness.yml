@@ -46,7 +46,7 @@ jobs:
       - run: npm --prefix web/screen ci --offline=false
       - name: Exercise paired settings and live tool admission
         run: |
-          cargo nextest run --locked -p echo-bridge -p echo-screen-server -p echo-config -E 'test(screen_settings_store_) | test(t3_settings_) | package(echo-config)' --no-capture
+          cargo nextest run --locked --no-fail-fast -p echo-bridge -p echo-screen-server -p echo-config -E 'test(screen_settings_store_) | test(t3_settings_) | package(echo-config)' --no-capture
       - name: Check focus packages for lint regressions
         if: always()
         run: cargo clippy --offline --locked -p echo-config -p echo-screen-contract -p echo-screen-server -p echo-bridge --all-targets -- -D warnings

@@ -240,7 +240,7 @@ fn screen_settings_invalid_overlay_is_ignored_as_a_whole_with_safe_warning() {
         ),
         (
             b"[agent]\nmax_tool_calls=4\n[home]\ndir='SYNTHETIC_VALUE'".to_vec(),
-            "config: unknown field",
+            "home: unknown field",
         ),
         (vec![255], "settings.toml: expected UTF-8 overlay"),
         (vec![b' '; 65_537], "settings.toml: overlay exceeds 65536 bytes"),

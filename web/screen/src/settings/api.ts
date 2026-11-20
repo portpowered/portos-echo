@@ -153,7 +153,11 @@ export async function readResponse(
     if (response.status === 200) return response.json();
     if (response.status === 422 || response.status === 500) {
         const error = record(await response.json());
-        if (error.version === version && typeof error.message === "string")
+        if (
+            Object.keys(error).length === 2 &&
+            error.version === version &&
+            typeof error.message === "string"
+        )
             throw new Error(error.message);
     }
     if (response.status === 401 || response.status === 403)
