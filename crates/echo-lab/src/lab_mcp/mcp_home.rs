@@ -45,19 +45,19 @@ impl Home {
 
     fn call(&mut self, name: &str, args: &Value) -> Value {
         if self.calls.len() >= 128 {
-            return content(json!({"error":"capacity"}), true);
+            return content(&json!({"error":"capacity"}), true);
         }
         self.calls.push(json!({"name":name,"arguments":args}));
         match name {
             "group_query" => content(
-                json!({"groups":[{
+                &json!({"groups":[{
                     "id":ROOM,"name":"Twin room","messages":[MESSAGE],
                     "endpointIds":["synthetic/endpoints/twin-one","synthetic/endpoints/twin-two"]
                 }]}),
                 false,
             ),
             "endpoint_query" | "endpoint_show" => content(
-                json!({"endpoints":[
+                &json!({"endpoints":[
                     {"id":"synthetic/endpoints/twin-one","name":"Twin one","power":self.lights_on},
                     {"id":"synthetic/endpoints/twin-two","name":"Twin two","power":self.lights_on},
                     {"id":"synthetic/endpoints/unrelated-plug","name":"Unrelated plug","power":true}
@@ -66,13 +66,13 @@ impl Home {
             ),
             "control" if args["id"] == ROOM && args["message"] == MESSAGE && args["payload"] == json!({}) => {
                 self.lights_on = false;
-                content(json!({"status":"accepted"}), false)
+                content(&json!({"status":"accepted"}), false)
             }
             "guide" => content(
-                json!({"text":"Resolve the room, copy its ID and message, then control once."}),
+                &json!({"text":"Resolve the room, copy its ID and message, then control once."}),
                 false,
             ),
-            _ => content(json!({"error":"unsupported synthetic operation"}), true),
+            _ => content(&json!({"error":"unsupported synthetic operation"}), true),
         }
     }
 }
@@ -136,6 +136,6 @@ fn required_scope(method: &str, name: &str) -> Option<&'static str> {
     }
 }
 
-fn content(value: Value, failed: bool) -> Value {
+fn content(value: &Value, failed: bool) -> Value {
     json!({"content":[{"type":"text","text":value.to_string()}],"isError":failed})
 }
