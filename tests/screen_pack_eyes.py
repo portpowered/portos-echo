@@ -120,18 +120,32 @@ def layout_cases(pack):
     width, height = 9.6 * area['width'], 6 * area['height']
     w, h = width * stage['scale'] / 2, height * stage['scale'] / 2
     cx, cy = (stage['anchor']['x'] * width / 100, stage['anchor']['y'] * height / 100)
-    right, bottom = cx + w / 2, cy + h / 2
-    require(0 <= cx - w / 2 < right <= width and 0 <= cy - h / 2 < bottom <= height,
-            'stage leaves the safe area')
+    region = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
     require(w * h > 960 * 600 / 2, 'stage does not cover most of viewport')
     slots = layout['slots']
-    # Check the authored anchors. The paired browser checks actual rendered bounds.
-    for name in ('status', 'link_code', 'approval', 'error'):
-        require(right < width * slots[name]['x'] / 100 < width, f'{name} lacks a right-side lane')
-    for name in ('clock', 'date'):
-        require(bottom < height * slots[name]['y'] / 100 < height, f'{name} lacks space below the stage')
+
+    def slot_band(name, right, single_line):
+        slot = slots[name]
+        x, y = width * slot['x'] / 100, height * slot['y'] / 100
+        bottom = y + 28 * slot['font_scale'] * 1.4 if single_line else height - 12
+        return x, y, right, bottom
+
+    # Bound cards by the renderer's scrollable column, and reserve the entire
+    # remaining width for each single line of time, date and status text.
+    # Chromium independently verifies the actual lines and control rectangles.
+    status = slot_band('status', width - 12, True)
+    groups = [[region, status, slot_band('clock', width, True), slot_band('date', width, True)]]
+    groups.extend([region, status, slot_band(name, width - 12, False)]
+                  for name in ('link_code', 'approval', 'error'))
+    for group in groups:
+        for index, (left, top, right, bottom) in enumerate(group):
+            require(0 <= left < right <= width and 0 <= top < bottom <= height,
+                    'layout band leaves the safe area')
+            for x1, y1, x2, y2 in group[index + 1:]:
+                require(min(right, x2) <= max(left, x1) or min(bottom, y2) <= max(top, y1),
+                        'layout bands overlap')
     print(f'FACE 960x600: stage={stage["background"]} extent={w:g}x{h:g} '
-          f'right_lane={width - right:g}px bottom_lane={height - bottom:g}px')
+          'overlap_area=0 (manifest bands)')
 
 
 def eyes_cases(pack, decode):
