@@ -49,11 +49,12 @@ async fn journey(negative: bool) {
         },
     );
     let inspect = inspect(root, &mut provider, &observer, stop, negative);
-    let (result, ()) = Box::pin(async { tokio::join!(work, inspect) }).await;
+    let (result, refused) = Box::pin(async { tokio::join!(work, inspect) }).await;
     assert_eq!(result, Ok(()));
     assert_eq!(observer.commands().last(), Some(&LinkCommand::Close));
     check(root, &spoof, negative);
     released(&config);
+    provider.finish_call(&refused).await;
     provider.close().await;
     spoof.shutdown().await.unwrap();
 }
@@ -73,7 +74,13 @@ fn check(root: &Path, spoof: &echo_spoof_mcp::Spoof, negative: bool) {
     );
 }
 
-async fn inspect(root: &Path, provider: &mut Provider, observer: &Observer, stop: oneshot::Sender<()>, negative: bool) {
+async fn inspect(
+    root: &Path,
+    provider: &mut Provider,
+    observer: &Observer,
+    stop: oneshot::Sender<()>,
+    negative: bool,
+) -> Value {
     receipt(root, "bridge.ready").await;
     observer.wake("trace", vec![]);
     let offer = provider.read().await;
@@ -95,19 +102,21 @@ async fn inspect(root: &Path, provider: &mut Provider, observer: &Observer, stop
             }),
         )
         .await;
-        interrupted(root, provider).await;
+        let refused = interrupted(root, provider).await;
         append(provider, None).await;
         stop.send(()).unwrap();
         stopped(observer).await;
+        refused
     };
     tokio::pin!(cases);
-    loop {
+    let refused = loop {
         tokio::select! {
             () = step(&mut remote) => (),
-            () = &mut cases => break,
+            snapshot = &mut cases => break snapshot,
         }
-    }
+    };
     remote.close();
+    refused
 }
 
 async fn append(provider: &mut Provider, text: Option<&str>) {

@@ -18,7 +18,6 @@ struct Provider {
     input: tokio::process::ChildStdin,
     output: Lines,
     origin: String,
-    model_ingress: usize,
 }
 impl Provider {
     async fn start() -> Self {
@@ -36,13 +35,15 @@ impl Provider {
             input,
             output,
             origin: String::new(),
-            model_ingress: 0,
         };
         this.origin = this.read().await["origin"].as_str().unwrap().to_owned();
         this
     }
     async fn read(&mut self) -> Value {
-        serde_json::from_str(&self.output.next_line().await.unwrap().expect("provider EOF")).unwrap()
+        let value: Value =
+            serde_json::from_str(&self.output.next_line().await.unwrap().expect("provider EOF")).unwrap();
+        assert!(value.get("failure").is_none(), "provider rejected a receipt: {value}");
+        value
     }
     async fn send(&mut self, value: Value) {
         self.input.write_all(format!("{value}\n").as_bytes()).await.unwrap();
@@ -55,22 +56,19 @@ impl Provider {
             .map(|(i, t)| json!({"name":(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"][i]),"description":t["description"],"inputSchema":t["inputSchema"]})).collect();
         // The configured bridge appends its two session builtins after discovery.
         tools.extend(session_tools());
-        self.model_ingress = 0;
-        self.send(json!({"tools":tools,"negative":negative,"exhausted":exhausted,"manual":true,"identity":identity}))
+        self.send(json!({"tools":tools,"negative":negative,"exhausted":exhausted,"identity":identity}))
             .await;
         assert_eq!(self.read().await, json!({"initialized":identity}));
         self.send(json!({"transcripts":true})).await;
     }
-    async fn snapshot(&mut self) -> Value {
-        self.send(json!({"snapshot":true})).await;
-        loop {
-            let value = self.read().await;
-            if value == json!({"model_started":true}) {
-                self.model_ingress += 1;
-            } else {
-                return value;
-            }
-        }
+    async fn snapshot(&mut self, selection: Value) -> Value {
+        self.send(json!({"snapshot":selection})).await;
+        self.read().await
+    }
+
+    async fn finish_call(&mut self, refused: &Value) {
+        assert_eq!(self.read().await, json!({"sideband_closed":true}));
+        assert_eq!(&self.snapshot(json!("refused")).await, refused);
     }
 
     async fn close(mut self) {
@@ -149,9 +147,12 @@ fn rows(root: &Path, event: &str) -> Vec<Value> {
         .collect()
 }
 async fn receipt(root: &Path, event: &str) -> Value {
+    matching_receipt(root, event, |_| true).await
+}
+async fn matching_receipt(root: &Path, event: &str, matches: impl Fn(&Value) -> bool) -> Value {
     loop {
-        if let Some(row) = rows(root, event).last() {
-            return row.clone();
+        if let Some(row) = rows(root, event).into_iter().rfind(&matches) {
+            return row;
         }
         tokio::task::yield_now().await;
     }
@@ -211,7 +212,7 @@ async fn journey() {
         },
     );
     let inspect = inspect(root, &mut provider, &observer, &day, cancel);
-    let (result, ()) = Box::pin(async { tokio::join!(work, inspect) }).await;
+    let (result, refused) = Box::pin(async { tokio::join!(work, inspect) }).await;
     assert_eq!(result, Ok(()));
     assert_eq!(observer.commands().last(), Some(&LinkCommand::Close));
     assert_eq!(rows(root, "tools/call").len(), 2);
@@ -226,6 +227,7 @@ async fn journey() {
         [("test.echo", 1), ("test.echo", 2)]
     );
     released(&config);
+    provider.finish_call(&refused).await;
     provider.close().await;
     spoof.shutdown().await.unwrap();
 }
@@ -235,22 +237,23 @@ async fn inspect(
     observer: &Observer,
     day: &AtomicU64,
     cancel: oneshot::Sender<()>,
-) {
+) -> Value {
     receipt(root, "bridge.ready").await;
     observer.wake("daily cap", vec![]);
     let offer = provider.read().await;
     assert_eq!(offer["offer"], "fixture-offer");
     provider.send(json!({"answer":"fixture-answer"})).await;
 
-    success(provider, "admitted").await;
-    interrupted(root, provider).await;
+    success(root, provider, "admitted").await;
+    let refused = interrupted(root, provider).await;
     day.store(8, Ordering::SeqCst);
-    let snapshot = success(provider, "next-day").await;
+    let snapshot = success(root, provider, "next-day").await;
     assert_eq!(snapshot["calls"].as_array().unwrap().len(), 1);
     assert_eq!(snapshot["sidebands"], 1);
     assert_eq!(snapshot["external"], 0);
     cancel.send(()).unwrap();
     stopped(observer).await;
+    refused
 }
 
 fn session_tools() -> [Value; 2] {
@@ -265,10 +268,12 @@ fn session_tools() -> [Value; 2] {
     ]
 }
 
-async fn success(provider: &mut Provider, identity: &str) -> Value {
+async fn success(root: &Path, provider: &mut Provider, identity: &str) -> Value {
     provider.cycle(identity, false).await;
     assert_eq!(provider.read().await, json!({"append":identity}));
-    let snapshot = provider.snapshot().await;
+    let resolved = matching_receipt(root, "delegation.resolved", |row| row["delegation_id"] == identity).await;
+    assert_eq!(resolved["outcome"], "completed");
+    let snapshot = provider.snapshot(json!(identity)).await;
     assert_eq!(
         snapshot["models"],
         json!([
@@ -280,25 +285,31 @@ async fn success(provider: &mut Provider, identity: &str) -> Value {
     snapshot
 }
 
-async fn interrupted(root: &Path, provider: &mut Provider) {
+async fn interrupted(root: &Path, provider: &mut Provider) -> Value {
     provider.cycle("refused", true).await;
-    let interrupted = receipt(root, "turn.interrupted").await;
-    let snapshot = provider.snapshot().await;
-    // Do not turn a scheduling sample into a universal zero-work promise.
-    // The separate gated rust-v0.160.0 component asserts exactly one request
-    // before polling. Here every native ingress receipt must match the exact
-    // final request list, with no returned tool output or post-interrupt work.
+    let interrupted = tokio::select! {
+        row = receipt(root, "turn.interrupted") => row,
+        value = provider.read() => panic!("unexpected provider receipt before interrupt: {value}"),
+    };
+    correlated(root, &interrupted);
+    // The pin may start a request before the bridge observes the turn. Hold
+    // any response until the matching interrupt is acknowledged and complete.
+    provider.send(json!({"release_model":"refused"})).await;
+    let released = provider.read().await;
+    assert_eq!(released["released"], "refused");
+    let ingress = released["ingress"].as_array().unwrap();
+    assert!(ingress.is_empty() || ingress == &[json!("refused")]);
     let expected = vec![
         json!({"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion","extend_session","end_session"],"outputs":0});
-        provider.model_ingress
+        ingress.len()
     ];
+    let snapshot = provider.snapshot(json!("refused")).await;
     assert_eq!(snapshot["models"], json!(expected));
-    assert_eq!(provider.snapshot().await, snapshot);
     assert_eq!(snapshot["appends"], json!([]));
     assert_eq!(snapshot["delegations"], json!(["refused"]));
     assert_eq!(snapshot["external"], 0);
     assert_eq!(rows(root, "tools/call").len(), 1);
-    correlated(root, &interrupted);
+    snapshot
 }
 
 fn correlated(root: &Path, completed: &Value) {
@@ -329,6 +340,11 @@ fn correlated(root: &Path, completed: &Value) {
     );
     assert_eq!(rows(root, "tools/call")[0]["thread_id"], completed["thread_id"]);
     assert_ne!(rows(root, "tools/call")[0]["turn_id"], completed["turn_id"]);
+    let refused = rows(root, "delegation.resolved").pop().unwrap();
+    assert_eq!(refused["delegation_id"], "refused");
+    assert_eq!(refused["outcome"], "interrupted");
+    assert_eq!(refused["thread_id"], completed["thread_id"]);
+    assert_eq!(refused["turn_id"], completed["turn_id"]);
 }
 
 #[tokio::test]
@@ -374,7 +390,7 @@ async fn refused() {
     assert_eq!(result, Ok(()));
     assert_eq!(rows(root, "bridge.error"), Vec::<Value>::new());
     assert_eq!(
-        provider.snapshot().await,
+        provider.snapshot(json!(true)).await,
         json!({"calls":[],"sidebands":0,"external":0})
     );
     assert_eq!(spoof.snapshot().unwrap(), echo_spoof_mcp::Snapshot::default());

@@ -17,7 +17,7 @@ transcript_count = 0
 observed = {'calls': [], 'sidebands': 0, 'external': 0}
 output_lock = threading.Lock()
 delegation = None
-manual = False
+manual_cases = {}
 
 
 def emit(value):
@@ -29,6 +29,22 @@ def frame(connection, value):
     data = json.dumps(value).encode()
     header = bytes([129, len(data)]) if len(data) < 126 else bytes([129, 126]) + struct.pack('!H', len(data))
     connection.sendall(header + data)
+
+
+def observe_append(connection, value):
+    identity = value['delegation_item_id']
+    case = manual_cases.get(identity) if manual_cases else delegation
+    try:
+        assert case is not None, 'append for unknown delegation'
+        with case.lock:
+            case.append(value)
+    except AssertionError as error:
+        emit({'failure': str(error), 'delegation': identity})
+        return
+    if manual_cases:
+        emit({'append': identity})
+    else:
+        connection.transcripts(case.reply)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -51,18 +67,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
         observed['external'] += 1
         self.respond(403, b'{}')
 
+    def model_response(self, body):
+        identity = delegation.identity
+        try:
+            case = delegation
+            if manual_cases:
+                identity = tools_provider.model_identity(body)
+                case = manual_cases.get(identity)
+                assert case is not None, 'model request for unknown delegation'
+            data = case.accept_model(body)
+            if case.release is not None:
+                assert case.release.wait(timeout=20), 'interrupted model release deadline'
+            elif case.exhausted:
+                emit({'model_started': True})
+        except AssertionError as error:
+            emit({'failure': str(error), 'delegation': identity})
+            self.respond(400, b'{"error":{"message":"fixture contract mismatch"}}')
+            return
+        try:
+            self.respond(200, data, 'text/event-stream')
+        except OSError:
+            # The interrupted pin can close its HTTP stream before release.
+            if case.release is None:
+                raise
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
         if self.path == '/v1/responses' and delegation is not None:
-            try:
-                data = delegation.respond(body)
-                if delegation.exhausted:
-                    emit({'model_started': True})
-                self.respond(200, data, 'text/event-stream')
-            except AssertionError as error:
-                delegation.failure = str(error)
-                emit({'failure': delegation.failure})
-                self.respond(400, b'{"error":{"message":"fixture contract mismatch"}}')
+            self.model_response(body)
             return
         if self.path == '/token':
             assert body['grant_type'] == 'refresh_token'
@@ -108,11 +140,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if opcode == 1 and delegation is not None:
                         value = json.loads(data)
                         if value.get('type') == 'delegation.context.append':
-                            delegation.append(value)
-                            if manual:
-                                emit({'append': value['delegation_item_id']})
-                            else:
-                                self.transcripts(delegation.reply)
+                            observe_append(self, value)
                 if transcript_input in readable:
                     assert transcript_input.recv(1) == b't'
                     if delegation is None:
@@ -122,6 +150,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     transcript_count += 1
         except (OSError, EOFError):
             pass
+        finally:
+            if manual_cases:
+                emit({'sideband_closed': True})
         self.close_connection = True
 
     def transcripts(self, reply):
@@ -141,23 +172,34 @@ try:
         if 'answer' in command:
             answers.put(command['answer'])
         elif 'tools' in command:
-            assert delegation is None or manual
+            identity = command.get('identity')
+            assert delegation is None or (identity and identity not in manual_cases)
             history = [] if delegation is None else delegation.history + delegation.outputs
-            manual = command.get('manual', False)
-            delegation = tools_provider.Delegation(command['tools'], command['negative'], command.get('exhausted', False), command.get('model', 'gpt-5.4'), command.get('web_search', 'live'))
-            if manual:
-                delegation.identity = command['identity']
-                delegation.call_id = command['identity'] + '-tool'
-                delegation.history = history
-                emit({'initialized': command['identity']})
+            delegation = tools_provider.Delegation(
+                command['tools'], command['negative'], command.get('exhausted', False),
+                command.get('model', 'gpt-5.4'), command.get('web_search', 'live'), identity, history)
+            if identity:
+                manual_cases[identity] = delegation
+                emit({'initialized': identity})
         elif command == {'transcripts': True}:
             transcript_output.sendall(b't')
         elif command == {'transcript_count': True}:
             emit({'transcripts': transcript_count})
         elif command == {'append_receipts': True}:
             emit({'append_receipts': delegation.append_receipts})
-        elif command == {'snapshot': True}:
-            emit(observed if delegation is None else {**observed, **delegation.snapshot()})
+        elif 'release_model' in command:
+            identity = command['release_model']
+            case = manual_cases[identity]
+            case.release_model()
+            emit({'released': identity, 'ingress': case.ingress})
+        elif 'snapshot' in command:
+            selection = command['snapshot']
+            case = delegation if selection is True else manual_cases[selection]
+            if case is None:
+                emit(observed)
+            else:
+                with case.lock:
+                    emit({**observed, **case.snapshot()})
         else:
             raise AssertionError('unknown fixture command')
 finally:

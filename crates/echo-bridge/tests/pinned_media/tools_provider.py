@@ -3,6 +3,7 @@ import json
 import struct
 import re
 import sys
+import threading
 from copy import deepcopy
 
 
@@ -32,7 +33,8 @@ def read_frame(connection):
 
 
 class Delegation:
-    def __init__(self, tools, negative, exhausted=False, model="gpt-5.4", web_search="live"):
+    def __init__(self, tools, negative, exhausted=False, model="gpt-5.4", web_search="live",
+                 identity=None, history=()):
         self.tools = tools
         self.web_search = web_search
         self.model = model
@@ -44,18 +46,36 @@ class Delegation:
         self.delegations = []
         self.appends = []
         self.append_receipts = []
-        self.failure = None
-        self.identity = 'delegation-local'
-        self.history = []
+        self.identity = identity or 'delegation-local'
+        self.history = list(history)
         self.outputs = []
-        self.call_id = 'tool-local'
+        self.call_id = identity + '-tool' if identity else 'tool-local'
+        self.prompt = 'Call test_echo with text delegated echo and report the result.'
+        self.release = threading.Event() if identity and exhausted else None
+        self.ingress = []
+        self.lock = threading.Lock()
+        if identity:
+            self.prompt = f'Fixture delegation {identity}. {self.prompt}'
 
     def begin(self):
         assert not self.delegations, 'duplicate delegation'
         self.delegations.append(self.identity)
         return {'type': 'delegation.created', 'item': {
             'type': 'delegation', 'target': 'client', 'id': self.identity,
-            'content': [{'type': 'input_text', 'text': 'Call test_echo with text delegated echo and report the result.'}]}}
+            'content': [{'type': 'input_text', 'text': self.prompt}]}}
+
+    def accept_model(self, body):
+        with self.lock:
+            if self.release is not None:
+                assert not self.release.is_set(), 'model ingress after interrupted turn'
+                assert not self.ingress, 'repeated model ingress for interrupted turn'
+                self.ingress.append(self.identity)
+            return self.respond(body)
+
+    def release_model(self):
+        with self.lock:
+            assert self.release is not None and not self.release.is_set(), 'unexpected model release'
+            self.release.set()
 
     def respond(self, body):
         expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
@@ -155,14 +175,27 @@ class Delegation:
     def append(self, value):
         if self.exhausted:
             raise AssertionError('interrupted turn appended a false result')
+        assert not self.appends, 'duplicate append'
         assert len(self.models) == 2, 'append before verified output'
         assert value['delegation_item_id'] == self.identity, 'wrong delegation correlation'
         assert value['content'] == [{'type': 'input_text', 'text': self.reply}], 'wrong appended result'
         self.append_receipts.append(deepcopy(value))
         self.appends.append(value['delegation_item_id'])
-        assert len(self.appends) == 1, 'duplicate append'
 
     def snapshot(self):
         if self.native:
             print(json.dumps({'models': self.models, 'correlated_appends': self.appends}), file=sys.stderr, flush=True)
         return {'delegations': self.delegations, 'models': self.models, 'appends': self.appends}
+
+
+def model_identity(body):
+    # The pin includes earlier turns in Responses input. The latest marked
+    # delegation owns this request, even if the fixture has started another one.
+    for item in reversed(body['input']):
+        if item.get('role') != 'user':
+            continue
+        for content in reversed(item['content']):
+            match = re.search(r'<input>Fixture delegation ([a-z-]+)\.', content.get('text', ''))
+            if match:
+                return match[1]
+    raise AssertionError('missing fixture delegation in Responses input')
