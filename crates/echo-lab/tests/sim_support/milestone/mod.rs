@@ -86,6 +86,7 @@ fn case(path: &std::path::Path, name: &str) -> Value {
         states.extend([
             json!({"state":"connected"}),
             json!({"state":"speaking"}),
+            json!({"state":"connected"}),
             json!({"state":"ready","message":"Echo Live ready"}),
             json!({"state":"ready","message":"Echo Live ready"}),
         ]);

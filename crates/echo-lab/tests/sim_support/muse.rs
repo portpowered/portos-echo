@@ -147,6 +147,7 @@ fn check_audio(case: &Value) {
             json!("listening"),
             json!("connected"),
             json!("speaking"),
+            json!("connected"),
             json!("ready")
         ])
     );

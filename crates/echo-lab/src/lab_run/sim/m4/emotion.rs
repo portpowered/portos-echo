@@ -22,6 +22,7 @@ pub fn sequence() -> Vec<Value> {
         state(),
         json!({"state":"thinking"}),
         json!({"state":"speaking"}),
+        json!({"state":"connected"}),
         json!({"state":"ready","message":"Echo Live ready"}),
     ]
 }

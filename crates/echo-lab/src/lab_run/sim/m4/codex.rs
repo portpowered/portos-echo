@@ -212,6 +212,7 @@ impl Case {
                     .map_err(|_| "m6: reply gate closed")?;
             }
             let speaking = observe(&mut screen, states, "speaking").await?;
+            observe(&mut screen, states, "connected").await?;
             observe(&mut screen, states, "ready").await?;
             Ok::<_, String>(speaking)
         };

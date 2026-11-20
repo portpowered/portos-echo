@@ -152,7 +152,7 @@ fn audio(pcm: &[Value]) -> Result<Value, String> {
 
 fn check(pcm: &[Value], states: &[Value]) -> Result<Value, String> {
     let mut report = audio(pcm)?;
-    let expected = ["ready", "listening", "connected", "speaking", "ready"];
+    let expected = ["ready", "listening", "connected", "speaking", "connected", "ready"];
     let actual: Vec<_> = states.iter().map(|row| row["state"]["state"].as_str()).collect();
     if actual != expected.map(Some) {
         return Err(format!("mouth: expected {expected:?}, observed {actual:?}"));
@@ -191,6 +191,7 @@ fn fixture() -> (Vec<Value>, Vec<Value>) {
         ("listening", 0),
         ("connected", 0),
         ("speaking", 200),
+        ("connected", 400),
         ("ready", 400),
     ]
     .map(|(state, epoch)| json!({"epoch_ms":epoch,"state":{"state":state}}))
@@ -207,6 +208,7 @@ fn mouth_oracle_accepts_only_exact_audible_pcm_and_bounded_state_offsets() {
     let mut at_limit = states.clone();
     at_limit[3]["epoch_ms"] = json!(220);
     at_limit[4]["epoch_ms"] = json!(420);
+    at_limit[5]["epoch_ms"] = json!(420);
     assert_eq!(check(&pcm, &at_limit).unwrap()["end_offset_ms"], 220);
     for (index, time) in [(3, 199), (3, 221), (4, 399), (4, 421)] {
         let mut wrong = states.clone();

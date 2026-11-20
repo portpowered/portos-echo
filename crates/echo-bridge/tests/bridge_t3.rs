@@ -314,6 +314,10 @@ async fn bridge_wire_journey_pinned_host_delegation_screen_and_played() {
     );
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"connected"})
+    );
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
         json!({"state":"ready","message":"Echo Live ready"})
     );
     assert_eq!(host.command("pcm").await, "30720 0");

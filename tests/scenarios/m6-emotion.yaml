@@ -20,6 +20,7 @@ steps:
         - {state: emotion, name: happy, frame_ms: 80, frames: ["(^_^)", "(^o^)"]}
         - {state: thinking}
         - {state: speaking}
+        - {state: connected}
         - {state: ready, message: "Echo Live ready"}
   - expect_speech_contains: ["happy", "face"]
 budgets: {}

@@ -123,6 +123,7 @@ async fn bridge_wire_screen_activity_auth_and_eof_cleanup() {
         serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
         json!({"event":"bridge.run_completed","run_id":"run-1"})
     );
+    assert_eq!(state(&mut events).await, json!({"state":"connected"}));
     assert_eq!(
         state(&mut events).await,
         json!({"state":"ready","message":"Echo Live ready"})

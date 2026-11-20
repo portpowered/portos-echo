@@ -108,6 +108,10 @@ async fn m6_repeated_delegation_executes_once_and_cancelled_animation_cannot_ove
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"connected"})
+    );
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
         json!({"state":"ready","message":"Echo Live ready"})
     );
     assert_no_request(&app.model).await;
