@@ -84,6 +84,7 @@ pub(super) async fn guide(
     deadline: Instant,
     now_unix: u64,
     mut present: impl FnMut(&super::Prompt) -> Result<()>,
+    cancelled: &crate::Cancellation,
 ) -> Result<()> {
     let started = Instant::now();
     let forwards = connection.forward().await?;
@@ -92,7 +93,7 @@ pub(super) async fn guide(
             AccountCommand::EnsureSignin | AccountCommand::Signin => super::Provider::Chatgpt,
             AccountCommand::Link => super::Provider::Portos,
         };
-        let pending = connection.account(command);
+        let pending = cancelled.until(connection.account(command));
         let prompts = observe(
             connection,
             &forwards,

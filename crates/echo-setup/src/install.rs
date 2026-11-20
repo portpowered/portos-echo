@@ -51,24 +51,31 @@ enum Input {
     Offline(OfflineBundle),
 }
 
-/// Integrity is established before even running `adb devices`.
+/// Retain lifecycle mutation ownership on cancellation, then drain setup/stage resources.
 /// # Errors
-/// Returns fixed integrity, prerequisite or device-operation categories.
+/// Fixed install/setup errors, with cleanup failures taking priority.
 pub async fn install(
     options: &Options,
     mut present: impl FnMut(&crate::setup::Prompt) -> Result<()>,
     mut ask_wake: impl FnMut() -> Result<()>,
+    cancelled: &crate::Cancellation,
 ) -> Result<String> {
+    cancelled.until(async { Ok(()) }).await?;
     let input = if let Some(directory) = &options.from_dir {
         Input::Offline(integrity::offline(directory)?)
     } else {
-        Input::Remote(crate::release::fetch(&options.release_base, &options.version).await?)
+        Input::Remote(
+            cancelled
+                .until(crate::release::fetch(&options.release_base, &options.version))
+                .await?,
+        )
     };
     if let Some(config) = &options.config
         && !config.is_file()
     {
         return Err(Failure("config_unreadable"));
     }
+    cancelled.until(async { Ok(()) }).await?;
     let scratch = Scratch::create()?;
     let adapter = scratch.0.join("adapter.sh");
     fs::write(&adapter, ADAPTER).map_err(|_| Failure("temporary_files_failed"))?;
@@ -90,7 +97,7 @@ pub async fn install(
     .await?;
     let result = async {
         let version = stage_install(&adb, &scratch, &stage, &adapter, &input, options).await?;
-        guide_installed(&adb, &stage, &version, options, &mut present, &mut ask_wake).await?;
+        guide_installed(&adb, &stage, &version, options, &mut present, &mut ask_wake, cancelled).await?;
         Ok(version)
     }
     .await;
@@ -111,7 +118,9 @@ async fn guide_installed(
     options: &Options,
     present: impl FnMut(&crate::setup::Prompt) -> Result<()>,
     ask_wake: impl FnMut() -> Result<()>,
+    cancelled: &crate::Cancellation,
 ) -> Result<()> {
+    cancelled.until(async { Ok(()) }).await?;
     let deadline = tokio::time::Instant::now()
         .checked_add(std::time::Duration::from_secs(options.timeout_seconds))
         .ok_or(Failure("setup_timeout"))?;
@@ -122,7 +131,7 @@ async fn guide_installed(
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| Failure("setup_clock_invalid"))?
         .as_secs();
-    connection.guide(now, present, ask_wake).await
+    connection.guide_cancellable(now, present, ask_wake, cancelled).await
 }
 
 async fn stage_install(

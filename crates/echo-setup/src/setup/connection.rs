@@ -99,9 +99,16 @@ impl InstalledConnection {
         now_unix: u64,
         present: impl FnMut(&super::Prompt) -> Result<()>,
     ) -> Result<()> {
-        super::account::guide(self, command, self.deadline, now_unix, present)
-            .await
-            .map_err(|error| command.context(error))
+        super::account::guide(
+            self,
+            command,
+            self.deadline,
+            now_unix,
+            present,
+            &crate::Cancellation::default(),
+        )
+        .await
+        .map_err(|error| command.context(error))
     }
 
     pub(super) async fn recover_account(&self) -> Result<()> {

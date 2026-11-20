@@ -32,36 +32,56 @@ impl InstalledConnection {
     pub async fn guide(
         &self,
         now_unix: u64,
+        present: impl FnMut(&Prompt) -> Result<()>,
+        ask_wake: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        self.guide_cancellable(now_unix, present, ask_wake, &crate::Cancellation::default())
+            .await
+    }
+
+    /// Orderly cancellation settles account ownership and awaits forward cleanup.
+    /// # Errors
+    /// Fixed setup or cleanup categories; cleanup refusal takes priority.
+    pub async fn guide_cancellable(
+        &self,
+        now_unix: u64,
         mut present: impl FnMut(&Prompt) -> Result<()>,
         mut ask_wake: impl FnMut() -> Result<()>,
+        cancelled: &crate::Cancellation,
     ) -> Result<()> {
         let started = tokio::time::Instant::now();
-        self.authenticate(AccountCommand::EnsureSignin, now_unix, &mut present)
+        self.authenticate(AccountCommand::EnsureSignin, now_unix, &mut present, cancelled)
             .await?;
-        if self.runtime().await?.relink_required {
+        if self.runtime(cancelled).await?.relink_required {
             let now = now_unix.saturating_add(started.elapsed().as_secs());
-            self.authenticate(AccountCommand::Signin, now, &mut present).await?;
-            if self.runtime().await?.relink_required {
+            self.authenticate(AccountCommand::Signin, now, &mut present, cancelled)
+                .await?;
+            if self.runtime(cancelled).await?.relink_required {
                 return Err(Failure("setup_relink_required"));
             }
         }
         let forwards = self.forward().await?;
-        let required = async {
-            let pairing = self.pairing().await?;
-            forwards.link_required(&pairing, self.deadline).await
-        }
-        .await;
+        let required = cancelled
+            .until(async {
+                let pairing = self.pairing().await?;
+                forwards.link_required(&pairing, self.deadline).await
+            })
+            .await;
         let required = forwards.close().await.and(required)?;
         if required {
             let now = now_unix.saturating_add(started.elapsed().as_secs());
-            self.guide_account(AccountCommand::Link, now, &mut present).await?;
+            account::guide(self, AccountCommand::Link, self.deadline, now, &mut present, cancelled)
+                .await
+                .map_err(|error| AccountCommand::Link.context(error))?;
         }
-        if !self.runtime().await?.runtime_ready() {
+        if !self.runtime(cancelled).await?.runtime_ready() {
             return Err(Failure("setup_relink_required"));
         }
-        let wake = WakeConfirmation::selected(self.adb.clone(), self.deadline).await?;
+        let wake = cancelled
+            .until(WakeConfirmation::selected(self.adb.clone(), self.deadline))
+            .await?;
         ask_wake()?;
-        wake.wait().await?;
+        cancelled.until(wake.wait()).await?;
         Ok(())
     }
 
@@ -70,10 +90,12 @@ impl InstalledConnection {
         command: AccountCommand,
         now_unix: u64,
         present: &mut impl FnMut(&Prompt) -> Result<()>,
+        cancelled: &crate::Cancellation,
     ) -> Result<()> {
         // An earlier dropped account owner must be settled explicitly. Do not
         // bypass it with a new lifecycle operation or a replacement connection.
         self.recover_account().await?;
+        cancelled.until(async { Ok(()) }).await?;
         wake::bounded(self.deadline, async {
             let (success, output) = self.adb.script("stop").await?;
             if !success || output != "echo-install: stopped\n" {
@@ -82,25 +104,29 @@ impl InstalledConnection {
             Ok(())
         })
         .await?;
-        self.guide_account(command, now_unix, present).await?;
+        account::guide(self, command, self.deadline, now_unix, present, cancelled)
+            .await
+            .map_err(|error| command.context(error))?;
+        cancelled.until(async { Ok(()) }).await?;
         self.start().await
     }
 
-    async fn runtime(&self) -> Result<Health> {
+    async fn runtime(&self, cancelled: &crate::Cancellation) -> Result<Health> {
         let forwards = self.forward().await?;
-        let result = wake::bounded(self.deadline, async {
-            loop {
-                let observed = forwards.health(self.deadline).await?;
-                if observed.kill_switch {
-                    return Err(Failure("setup_kill_switch"));
+        let result = cancelled
+            .until(wake::bounded(self.deadline, async {
+                loop {
+                    let observed = forwards.health(self.deadline).await?;
+                    if observed.kill_switch {
+                        return Err(Failure("setup_kill_switch"));
+                    }
+                    if observed.runtime_ready() || observed.relink_required {
+                        return Ok(observed);
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
-                if observed.runtime_ready() || observed.relink_required {
-                    return Ok(observed);
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await;
+            }))
+            .await;
         // Even deadline expiry must drain this invocation's allocations before
         // its terminal result; never remove unrelated forwards or raw logs.
         forwards.close().await.and(result)

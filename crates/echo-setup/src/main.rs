@@ -19,9 +19,17 @@ async fn run() -> i32 {
         let _ = writeln!(io::stdout(), "echo-setup {}", cli::VERSION);
         return 0;
     }
+    let cancelled = echo_setup::Cancellation::default();
+    let signal = cancelled.clone();
+    let interrupt = matches!(options.command.as_str(), "install" | "update").then(|| {
+        tokio::spawn(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            signal.cancel();
+        })
+    });
     let result: Result<serde_json::Value> = match options.command.as_str() {
         "install" | "update" => echo_setup::install::install(
-            &options, |prompt| present(&options, prompt), || instruct(&options),
+            &options, |prompt| present(&options, prompt), || instruct(&options), &cancelled,
         ).await.map(|version| {
             serde_json::json!({"type":"result", "command":options.command, "ok":true, "version":version, "setup":"complete"})
         }),
@@ -29,6 +37,9 @@ async fn run() -> i32 {
         "doctor" => Ok(echo_setup::doctor::execute(&options).await),
         _ => Err(Failure("command_not_implemented")),
     };
+    if let Some(interrupt) = interrupt {
+        interrupt.abort();
+    }
     let event = match &result {
         Ok(event) => event.clone(),
         Err(error) => {
@@ -149,6 +160,7 @@ fn fix(error: &str) -> &'static str {
         "unsafe_process_user" => {
             "The running bridge identity is unsafe. Run status and doctor before retrying; no process was signalled."
         }
+        "setup_cancelled" => "Setup cancelled. Installed files remain. Run install again to resume setup.",
         "setup_timeout" => "Setup timed out. Run install again to resume setup.",
         "setup_chatgpt_timeout" | "setup_chatgpt_code_expired" => {
             "ChatGPT sign-in did not complete before its deadline. Installed files remain. Run install again for a fresh ChatGPT code."

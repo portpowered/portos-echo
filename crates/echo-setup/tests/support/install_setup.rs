@@ -1,6 +1,10 @@
 //! Isolated native CLI fixture. Real loopback HTTP, no internet or device tools.
 use super::*;
 
+#[cfg(unix)]
+#[path = "cancel.rs"]
+mod cancel;
+
 type CliLines = tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>;
 
 pub struct Service {

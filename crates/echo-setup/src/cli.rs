@@ -14,6 +14,8 @@ Default release matches this executable; never latest. Versions omit leading v.
 Downloads require HTTPS; explicit http://127.0.0.1:PORT mirrors are for local tests.
 Exit 0: completed; 1: prerequisite/integrity/device failure; 2: usage; 3: setup timeout.
 Expired provider codes also exit 3. Run install again to resume with a fresh code.
+Ctrl+C cancels setup with exit 1 after bounded cleanup; run install again to resume.
+Stdin is not consumed; closed stdin is supported for bootstrap/script invocation.
 Device identifiers, credentials and dependency logs are never printed.
 Install/update confirm the running nobody identity and requested version after start.
 Rollback confirms the running nobody identity after the shell restores and starts.

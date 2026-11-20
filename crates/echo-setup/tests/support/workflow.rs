@@ -370,3 +370,66 @@ async fn t3_unconfigured_or_invalid_link_state_refuses_grant_mutation_and_drains
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn t3_orderly_cancellation_settles_account_before_draining_forwards() -> Result {
+    for stop_failure in [false, true] {
+        let fixture = Fixture::new()?;
+        let connection = fixture.connection(deadline()).await?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let screen = prepare(&fixture, listener.local_addr()?.port())?;
+        let barrier = fixture.listener("account-barrier")?;
+        let cancelled = echo_setup::Cancellation::default();
+        let mut guided =
+            Box::pin(connection.guide_cancellable(100, |_| Ok(()), || Err(Failure("unexpected_wake")), &cancelled));
+        let child = tokio::select! {
+            result = &mut guided => return Err(format!("early result: {result:?}").into()),
+            socket = ready(&barrier) => socket?,
+        };
+        if stop_failure {
+            fs::write(fixture.0.join("stop-reply"), "SYNTHETIC-ACCOUNT")?;
+        }
+        cancelled.cancel();
+        assert_eq!(
+            guided.await,
+            Err(Failure(if stop_failure {
+                "setup_account_unsettled"
+            } else {
+                "setup_cancelled"
+            }))
+        );
+        drop((child, screen, listener));
+        assert_eq!(operations(&fixture)?, ["stop", "ensure-signin", "stop"]);
+        no_forwards(&fixture)?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn t3_orderly_wake_cancellation_does_not_accept_complete_evidence_or_restart() -> Result {
+    let fixture = Fixture::new()?;
+    let connection = fixture.connection(deadline()).await?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let screen = prepare(&fixture, listener.local_addr()?.port())?;
+    let server = tokio::spawn(health_server(listener, screen, vec![(false, false); 2]));
+    let cancelled = echo_setup::Cancellation::default();
+    let result = connection
+        .guide_cancellable(
+            100,
+            |_| Ok(()),
+            || {
+                cancelled.cancel();
+                Ok(())
+            },
+            &cancelled,
+        )
+        .await;
+    assert_eq!(result, Err(Failure("setup_cancelled")));
+    server.await??;
+    assert_eq!(
+        operations(&fixture)?,
+        ["stop", "ensure-signin", "start", "status", "link", "confirm-cursor"]
+    );
+    no_forwards(&fixture)?;
+    Ok(())
+}
