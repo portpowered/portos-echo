@@ -126,12 +126,17 @@ pub(super) fn prepare(mut settings: Settings) -> Result<Configured, Error> {
         return Err(Error::Input);
     }
     let config = settings.config.take().ok_or(Error::Input)?;
+    if settings
+        .startup
+        .as_ref()
+        .is_some_and(|startup| startup.config != config)
+    {
+        return Err(Error::Input);
+    }
+    let configured = Configured::admit(config, settings.trace, settings.health, settings.runner_skills)?;
     let configured = match settings.startup.take() {
-        Some(startup) if startup.config != config => return Err(Error::Input),
-        Some(startup) => Configured::from_effective(*startup, settings.trace, settings.health)?,
-        None => {
-            Configured::new(config, settings.trace, settings.health)?.with_settings_warning(settings.settings_warning)
-        }
+        Some(startup) => configured.with_effective(startup),
+        None => configured.with_settings_warning(settings.settings_warning),
     };
     let configured = match settings.model_url {
         Some(model) => configured

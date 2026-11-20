@@ -97,6 +97,7 @@ pub struct ToolSession<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: M
     deferred: VecDeque<Event>,
     budget: ToolBudget,
     session: Option<mpsc::Receiver<SessionRequest>>,
+    skills_enabled: bool,
     run: Option<tokio::sync::watch::Sender<Option<Arc<()>>>>,
     current_run: Option<Arc<()>>,
     session_answer_pending: bool,
@@ -127,6 +128,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             deferred: VecDeque::new(),
             budget,
             session: None,
+            skills_enabled: false,
             run: None,
             current_run: None,
             session_answer_pending: false,
@@ -148,6 +150,11 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
     ) -> Self {
         self.session = Some(requests);
         self.run = Some(run);
+        self
+    }
+
+    pub(crate) fn with_skill_reader(mut self, enabled: bool) -> Self {
+        self.skills_enabled = enabled;
         self
     }
 
@@ -244,7 +251,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                     self.active = None;
                 }
             }
-            Event::Tool { id, call } => {
+            Event::Tool { id, mut call } => {
                 if self.active.is_none()
                     && self
                         .dispatcher
@@ -255,6 +262,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 {
                     self.admit_turn(&call.thread_id, &call.turn_id)?;
                 }
+                crate::bridge_voice::normalize_skill_arguments(&mut call, self.skills_enabled);
                 let mut dispatcher = self.dispatcher.take().ok_or(Error::Unavailable)?;
                 let (cancel, cancelled) = oneshot::channel();
                 self.request = Some(id);

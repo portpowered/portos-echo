@@ -178,6 +178,83 @@ class Delegation:
         return {'delegations': self.delegations, 'models': self.models, 'appends': self.appends}
 
 
+class RunnerSkills(Delegation):
+    names = ('brief', 'unused', 'unlisted', 'malformed')
+    expected = ({'body': 'Summarize the answer in one sentence.\n'},
+                {'error': 'skill_not_enabled'}, {'error': 'skill_not_enabled'}, {'error': 'invalid_arguments'})
+
+    mcp_content = [{'type': 'text', 'text': 'MCP delivered brief.'}]
+
+    def __init__(self, tools, mcp):
+        super().__init__(tools, False, model='gpt-6.1-sol', web_search='disabled', identity='runner-skills')
+        self.prompt = 'Fixture delegation runner-skills. Check brief, unused, unlisted, and malformed arguments.'
+        self.reply = 'Finished checking the enabled skill.'
+        self.mcp = mcp
+        self.mcp_calls = []
+        if mcp:
+            self.names = ('brief', 'malformed')
+            self.expected = (self.mcp_content, 'tool request refused')
+            self.prompt = 'Fixture delegation runner-skills. Try the configured MCP reader and malformed arguments.'
+            self.reply = 'Finished checking the MCP reader.'
+
+    def mcp_response(self, request):
+        assert self.mcp is not None and request['jsonrpc'] == '2.0'
+        method = request['method']
+        if method == 'notifications/initialized':
+            return 202, None
+        if method == 'initialize':
+            result = {'protocolVersion': '2025-03-26', 'capabilities': {'tools': {}},
+                      'serverInfo': {'name': 'skill-name-fixture', 'version': '1'}}
+        elif method == 'tools/list':
+            result = {'tools': [{**self.tools[0], 'name': self.mcp}]}
+        else:
+            assert method == 'tools/call'
+            self.mcp_calls.append(request['params'])
+            result = {'content': self.mcp_content}
+        return 200, {'jsonrpc': '2.0', 'id': request['id'], 'result': result}
+
+    def respond(self, body):
+        assert body['model'] == self.model
+        expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
+                     'parameters': deepcopy(tool['inputSchema']), 'strict': False} for tool in self.tools]
+        for tool in expected:
+            if tool['name'] == 'extend_session':
+                tool['parameters']['properties']['seconds'].pop('minimum')
+        tools = self.check_tools(body, expected)
+        outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
+        index = len(self.models)
+        assert index <= len(self.names) and len(outputs) == index, 'wrong skill output count'
+        for name, item, result in zip(self.names, outputs, self.expected):
+            assert item['call_id'] == f'skill-{name}', 'wrong skill call ID'
+            actual = item['output'] if isinstance(result, str) else json.loads(item['output'])
+            assert actual == result, 'wrong skill result: ' + json.dumps(item)
+        self.outputs = outputs
+        if index < len(self.names):
+            name = self.names[index]
+            arguments = [] if name == 'malformed' else {'name': name}
+            item = {'type': 'function_call', 'id': f'fc-{name}', 'call_id': f'skill-{name}',
+                    'namespace': 'functions', 'name': 'read_skill', 'arguments': json.dumps(arguments),
+                    'status': 'completed'}
+        else:
+            item = {'type': 'message', 'id': 'msg-skills', 'role': 'assistant', 'status': 'completed',
+                    'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
+        self.models.append({'tools': tools, 'outputs': index})
+        response = {'id': f'skills-{index}', 'status': 'completed', 'output': [item]}
+        events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
+                  {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
+                  {'type': 'response.completed', 'response': response}]
+        return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
+
+    def append(self, value):
+        assert not self.appends and len(self.models) == len(self.names) + 1, 'unexpected skill append'
+        assert value['delegation_item_id'] == self.identity
+        assert value['content'] == [{'type': 'input_text', 'text': self.reply}]
+        self.appends.append(self.identity)
+
+    def snapshot(self):
+        return {**super().snapshot(), 'skill_outputs': self.outputs, 'mcp_calls': self.mcp_calls}
+
+
 def model_identity(body):
     # The pin includes earlier turns in Responses input. The latest marked
     # delegation owns this request, even if the fixture has started another one.

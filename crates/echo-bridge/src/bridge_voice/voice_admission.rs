@@ -201,20 +201,11 @@ where
         .checked_add(options.connect_timeout)
         .ok_or(Error::Input)?;
     let mut setup_observer = |notice| observe(ServeNotice::Session(notice));
-    // A call with tools advertises end_session, so it carries its guidance.
-    let advertised = tools.is_some();
     let (mut media, instructions) = tokio::select! {
         biased;
         () = cancelled.as_mut() => return Err(Error::Control),
         result = super::earcon::negotiating(device.1, super::earcon::capture_during(&mut device.2, async {
-            // One clock sample: the delegated turn and the Live prompt carry the same snapshot.
-            let (runner, voice) = super::prompts::snapshot(options.call.instructions, options.call.prompt, &mut trace)?;
-            let (runner, voice) = super::voice_config::session_guidance((runner, voice), advertised);
-            let (now, zone) = (clock(), options.call.time_zone);
-            let instructions = (
-                super::voice_config::call_instructions(&runner, now, zone)?,
-                super::voice_config::call_instructions(&voice, now, zone)?,
-            );
+            let instructions = admitted_instructions(&options.call, tools.as_deref(), clock, &mut trace)?;
             let media = timeout_at(deadline, peer()).await.map_err(|_| Error::Deadline)??;
             Ok::<_, Error>((media, instructions))
         }), &mut setup_observer) => result?,
@@ -249,6 +240,23 @@ where
     )
     .await
     .map(|_| ())
+}
+
+fn admitted_instructions(
+    call: &bridge_codex::Options<'_>,
+    tools: Option<&super::voice_tools::Tools>,
+    clock: impl FnOnce() -> std::time::SystemTime,
+    trace: &mut Option<crate::bridge_trace::Trace>,
+) -> Result<(String, String), Error> {
+    let prompts = super::prompts::snapshot(call.instructions, call.prompt, trace)?;
+    // A call with tools advertises end_session, so it carries its guidance.
+    let (runner, voice) = super::voice_config::session_guidance(prompts, tools.is_some());
+    let (now, zone) = (clock(), call.time_zone);
+    let mut runner = super::voice_config::call_instructions(&runner, now, zone)?;
+    if let Some(tools) = tools {
+        tools.skills.append_instructions(&mut runner);
+    }
+    Ok((runner, super::voice_config::call_instructions(&voice, now, zone)?))
 }
 
 async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(

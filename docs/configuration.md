@@ -31,6 +31,7 @@ this is not a dedicated per-agent sandbox. The screen app receives public state 
 | `private/audit/` | Audit directory 0700 with private 0600 records and `bridge-kill` state. Keep operational data private. |
 | `private/bridge.trace`, `private/bridge.log` | Installer launcher trace and process output; private diagnostics, not microphone recordings. |
 | `home/notes/` | Optional local notes exposed through the bridge's scoped home tools; keep credentials out. |
+| `home/skills/` | Optional owner skills exposed to the delegated runner through its `read_skill` tool. |
 
 For a manual host placement, nominate equivalent paths outside the repository and preserve the same private modes.
 The installer does not rewrite the old binary/CA paths in the Echo example; use the corrected `bin/` paths in
@@ -78,6 +79,25 @@ migration diagnostics naming these prompt files.
 
 An invalid prompt on initial startup has no previously accepted text to retain and fails admission;
 correct it before starting. The retain-previous behavior applies to reloads of a running owner.
+
+### Owner skills
+
+Copy the [sample skill](../examples/skills/brief/SKILL.md) to `skills/brief/SKILL.md` under the directory
+configured in `[home].dir`. Set `skills = ["brief"]` in the base `[codex]` table and restart.
+Use a UTF-8 Markdown file with `---` delimiters around the front matter and one line each for `name`
+and `description`. The name must exactly match its folder and its entry in the selection.
+Use distinct folder names without path separators or `..`. Use ordinary directories and files.
+The private Codex home is unsupported for owner skills.
+
+The delegated runner sees the enabled names and descriptions and can call `read_skill` for their Markdown
+bodies. The body starts after the closing delimiter's line ending and retains its original whitespace.
+The bridge reads the enabled files at startup, so restart after changing either a file or the selection.
+Omit `skills` or set `skills = []` to disable the catalog and tool. An unknown selected name reports its
+indexed key, such as `codex.skills[0]: unknown skill`, and exits with status 2. Remove the key before rolling
+back to an older bridge binary.
+
+The encoded catalog may use up to half of the Codex RPC frame (512 KiB). The rest is available for the
+runner prompt, settings, and tool declarations. An oversized selection reports `codex.skills` at startup.
 
 ## Voice agent access and what it may do
 
@@ -235,6 +255,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `codex.delegate_effort` | Optional nonempty string sent to runner; decoder imposes no enum, pinned app server validates supported effort. | boundary / yes |
 | `codex.delegate_fast` | Boolean, default false. True requests priority processing for the delegated model. False selects standard routing. | boundary / yes |
 | `codex.time_zone` | Default unset; IANA-name syntax (nonempty slash components using ASCII letters/digits/underscore/plus/minus). Not a lookup validating that zone exists. | restart / no |
+| `codex.skills` | Default []; ordered list of distinct owner skill names under `home.dir/skills`. Nonempty requires the configured Codex client runner and agent home. | restart / no |
 
 Set `codex.time_zone` to the operator's IANA time zone for time answers.
 Run `adb shell getprop persist.sys.timezone` to see the device zone.

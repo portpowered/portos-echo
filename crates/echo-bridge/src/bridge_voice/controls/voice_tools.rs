@@ -18,6 +18,11 @@ use echo_screen_contract::settings_v1::LinkStatusV1;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot};
+#[path = "voice_tools/runner_skills.rs"]
+mod runner_skills;
+use runner_skills::READ_SKILL;
+pub use runner_skills::RunnerSkills;
+pub(crate) use runner_skills::normalize_skill_arguments;
 
 /// Bounds Port OS catalog discovery well inside the call's connect deadline.
 const DISCOVERY: Duration = Duration::from_secs(5);
@@ -136,6 +141,7 @@ pub(super) fn session_specs() -> [ToolSpec; 2] {
 #[derive(Clone)]
 pub(super) struct Session<H> {
     host: H,
+    skills: RunnerSkills,
     requests: mpsc::Sender<SessionRequest>,
     run: tokio::sync::watch::Receiver<Option<Arc<()>>>,
 }
@@ -143,10 +149,16 @@ pub(super) struct Session<H> {
 impl<H> Session<H> {
     pub(super) fn new(
         host: H,
+        skills: RunnerSkills,
         requests: mpsc::Sender<SessionRequest>,
         run: tokio::sync::watch::Receiver<Option<Arc<()>>>,
     ) -> Self {
-        Self { host, requests, run }
+        Self {
+            host,
+            skills,
+            requests,
+            run,
+        }
     }
 }
 
@@ -157,6 +169,7 @@ impl<H: ToolHost + Sync> ToolHost for Session<H> {
     async fn call_tool(&self, name: &str, args: Value, key: &str) -> Result<ToolResult, ToolError> {
         // Raw arguments never leave this host; only the parsed command does.
         let command = match name {
+            READ_SKILL if self.skills.is_enabled() => return Ok(self.skills.read(&args)),
             EXTEND => match args.as_object().map(|object| (object.len(), object.get("seconds"))) {
                 Some((1, Some(seconds))) => seconds
                     .as_u64()
@@ -184,6 +197,7 @@ pub(super) struct Tools {
     pub host: Option<Local<Policy<Mcp>>>,
     pub config: AgentConfig,
     pub budget: ToolBudget,
+    pub(super) skills: RunnerSkills,
     allowed: Vec<String>,
     server: Option<String>,
     specs: Option<Vec<ToolSpec>>,
@@ -199,6 +213,7 @@ impl Tools {
             host: None,
             config: config.agent.clone(),
             budget: ToolBudget::new(config.agent.daily_request_cap, move || Ok(utc_day())),
+            skills: RunnerSkills::default(),
             allowed: config
                 .mcp
                 .server
@@ -215,6 +230,11 @@ impl Tools {
 
     pub(super) fn with_portos_permissions(mut self, permissions: Option<PortosPermissions>) -> Self {
         self.portos_permissions = permissions;
+        self
+    }
+
+    pub(super) fn with_runner_skills(mut self, skills: Option<&RunnerSkills>) -> Self {
+        self.skills = skills.cloned().unwrap_or_default();
         self
     }
 
@@ -291,6 +311,7 @@ impl Tools {
         // Discovery occurs once, before thread/start, and never grants authority.
         let mut local = session_specs().to_vec();
         local.extend(self.host.as_ref().ok_or(Error::Unavailable)?.notes.specs());
+        local.extend(self.skills.spec());
         local_catalog(self.specs.clone().unwrap_or_default(), &self.allowed, local)
     }
 
@@ -358,7 +379,11 @@ pub(super) fn session_catalog(specs: Vec<ToolSpec>, allowed: &[String]) -> Resul
 }
 
 fn local_catalog(specs: Vec<ToolSpec>, allowed: &[String], local: Vec<ToolSpec>) -> Result<Catalog, Error> {
-    Catalog::with_local(specs, allowed, local, &NAMES).map_err(|_| Error::Input)
+    let mut reserved = NAMES.to_vec();
+    if local.iter().any(|spec| spec.name == READ_SKILL) {
+        reserved.push(READ_SKILL);
+    }
+    Catalog::with_local(specs, allowed, local, &reserved).map_err(|_| Error::Input)
 }
 
 pub(super) async fn conversation<L, R, W, P>(
@@ -411,12 +436,17 @@ where
             device,
             &mut call,
             (
-                Session::new(tools.host.as_ref().ok_or(Error::Unavailable)?.clone(), requests, active),
+                Session::new(
+                    tools.host.as_ref().ok_or(Error::Unavailable)?.clone(),
+                    tools.skills.clone(),
+                    requests,
+                    active,
+                ),
                 catalog,
                 tools.config.clone(),
                 tools.budget.clone(),
             ),
-            Some((receiver, run)),
+            Some((receiver, run, tools.skills.is_enabled())),
             options.session,
             cancelled.as_mut(),
             &mut observe,
