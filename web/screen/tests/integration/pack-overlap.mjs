@@ -39,7 +39,10 @@ async function observe(state, surfaces, violations) {
     );
 }
 
-export async function checkTemplateLayout(t, open, playing, reloads) {
+export async function checkTemplateLayout(
+    t,
+    { open, playing, reloads, refresh },
+) {
     const generated = process.env.SCREEN_PACK_EYES_FIXTURE;
     assert.ok(generated, "suite owner must prepare template@0.2.0");
     const fixture = await open(t, {
@@ -71,6 +74,7 @@ export async function checkTemplateLayout(t, open, playing, reloads) {
         exact: true,
     });
     await settings.click();
+    await refresh(page);
     await page
         .getByLabel("Pack HTTPS URL", { exact: true })
         .fill(fixture.peer.url);

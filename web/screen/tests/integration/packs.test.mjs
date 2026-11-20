@@ -186,7 +186,7 @@ test("R1 native CSS, generated character and multiple previews retain selection"
 });
 
 test("FACE 960×600 generated template keeps stage and native controls apart", async (t) => {
-    await checkTemplateLayout(t, open, playing, reloads);
+    await checkTemplateLayout(t, { open, playing, reloads, refresh });
 });
 
 async function playing(page, name) {
