@@ -41,7 +41,17 @@ thread and turn IDs are omitted. An observed prepared answer is included when
 payloads are enabled; it remains the same text passed to the local append.
 Normal abandonment joins cancellation and closes the trace lifetime; owner drop
 attempts a cancelled resolution without replacing the original runtime error.
-The retained Client and native lifecycle/tool observers remain in progress.
+The native single reader records each observed `handoff_request` as
+`delegation.created`, with its task and the run active at creation. Observed
+turn completion, failure or interruption closes matching delegations once;
+an observed deadline takes precedence over the interrupt it triggers. Realtime
+closure and owner abandonment cancel outstanding lifetimes. Control, child EOF
+and media failures use fixed failure classes. Final agent-item text may populate
+`answer`, but never changes `handback=unobserved`. Duplicate handoffs and terminal
+notifications cannot produce additional lifetimes or resolutions.
+The retained Client, native tool completion/count observer, full managed-exit
+matrix and real-pin append witness remain in progress. Native counts currently
+describe emitted tool rows (none), not an assertion that no tool ran.
 
 ## Purpose and placement
 

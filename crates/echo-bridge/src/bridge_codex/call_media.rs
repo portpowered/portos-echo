@@ -250,6 +250,11 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         if result.is_err() || matches!(&result, Ok(MediaEvent::Control(Event::Closed))) {
             let diagnostic = self.diagnostic(source);
             self.active = false;
+            if source == "call.media_failed"
+                && let Some(trace) = &mut self.call.tool_trace
+            {
+                let _ = trace.close("failed", Some("media_failed"));
+            }
             self.call.fail();
             let _ = self.peer.close().await;
             self.closed = true;

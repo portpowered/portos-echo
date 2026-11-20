@@ -53,11 +53,13 @@ impl PortosReceipts {
 pub(crate) struct ToolTrace {
     trace: Trace,
     names: Vec<(String, String)>,
+    native: super::native_delegation::Native,
 }
 
 impl ToolTrace {
     pub fn new(trace: Trace, catalog: &Catalog) -> Self {
         Self {
+            native: super::native_delegation::Native::new(trace.clone()),
             trace,
             names: catalog
                 .tools()
@@ -69,6 +71,18 @@ impl ToolTrace {
                 })
                 .collect(),
         }
+    }
+
+    pub fn notification(&mut self, method: &str, params: &serde_json::Value) -> Result<(), Error> {
+        self.native.notification(method, params)
+    }
+
+    pub fn close(&mut self, outcome: &str, reason: Option<&str>) -> Result<(), Error> {
+        self.native.close(outcome, reason)
+    }
+
+    pub fn timeout(&mut self, turn: &str) {
+        self.native.timeout(turn);
     }
 
     pub fn interrupt(&mut self, event: &str, turn: &TurnInterrupt) -> Result<(), Error> {

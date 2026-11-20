@@ -41,6 +41,7 @@ use std::{
 };
 use tokio::time::Instant;
 mod delegation_payload;
+mod native_delegation;
 mod tool_receipts;
 pub(crate) use tool_receipts::{PortosReceipts, ToolTrace};
 

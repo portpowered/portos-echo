@@ -158,6 +158,9 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             biased;
             () = expiry(deadline) => {
                 if let Some(params) = self.dispatcher.as_mut().and_then(Dispatcher::expire) {
+                    if let Some(trace) = &mut self.port.call.tool_trace {
+                        trace.timeout(&params.turn_id);
+                    }
                     self.port.interrupt(&params, Instant::now() + Duration::from_secs(2))?;
                 }
                 Ok(other())

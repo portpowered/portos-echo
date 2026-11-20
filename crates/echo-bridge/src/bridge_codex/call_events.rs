@@ -24,6 +24,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
                 if params["threadId"].as_str() != self.thread.as_deref() {
                     return Ok(Event::Other);
                 }
+                if let Some(trace) = &mut self.tool_trace {
+                    trace.notification(&method, &params)?;
+                }
                 if method == "thread/realtime/itemAdded" {
                     return Ok(if params["item"]["type"] == "input_audio_buffer.speech_started" {
                         Event::SpeechStarted
