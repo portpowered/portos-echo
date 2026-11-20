@@ -10,6 +10,7 @@ use std::sync::{
 };
 use tokio::sync::watch;
 
+mod portos_unlinked;
 mod trace_exits;
 mod trace_failures;
 mod trace_isolation;

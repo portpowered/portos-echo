@@ -14,9 +14,13 @@ use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
 use echo_config::{AgentConfig, BridgeConfig};
 use echo_delegation::codex_dispatch::Catalog;
 use echo_mcp_client::{McpClient, McpError};
+use echo_screen_contract::settings_v1::LinkStatusV1;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot};
+
+/// Bounds Port OS catalog discovery well inside the call's connect deadline.
+const DISCOVERY: Duration = Duration::from_secs(5);
 
 pub(super) struct Mcp {
     client: Option<McpClient<Token>>,
@@ -277,24 +281,44 @@ impl Tools {
 
     pub async fn catalog(&mut self) -> Result<Catalog, Error> {
         if self.specs.is_none() {
-            self.specs = Some(
-                self.host
-                    .as_ref()
-                    .ok_or(Error::Unavailable)?
-                    .list_tools()
-                    .await
-                    .map_err(|_| Error::Unavailable)?,
-            );
+            let host = self.host.as_ref().ok_or(Error::Unavailable)?;
+            self.specs = match self.grant() {
+                Some(grant) => self.discover_portos(host, &grant).await?,
+                None => Some(host.list_tools().await.map_err(|_| Error::Unavailable)?),
+            };
         }
         // Link can complete through the operator endpoint before the first wake.
         // Discovery occurs once, before thread/start, and never grants authority.
         let mut local = session_specs().to_vec();
         local.extend(self.host.as_ref().ok_or(Error::Unavailable)?.notes.specs());
-        local_catalog(
-            self.specs.as_ref().ok_or(Error::Unavailable)?.clone(),
-            &self.allowed,
-            local,
-        )
+        local_catalog(self.specs.clone().unwrap_or_default(), &self.allowed, local)
+    }
+
+    /// An unlinked, revoked or unreachable Port OS never stops voice: this call
+    /// advertises no server tools and the next call discovers again. No token
+    /// is requested without a usable grant, so nothing is rejected on screen.
+    /// Only the safe category is traced; no remote text or token.
+    async fn discover_portos(
+        &self,
+        host: &Local<Policy<Mcp>>,
+        grant: &bridge_mcp::Grant,
+    ) -> Result<Option<Vec<ToolSpec>>, Error> {
+        let reason = if grant.link_status() == LinkStatusV1::Linked {
+            match tokio::time::timeout(DISCOVERY, host.list_tools()).await {
+                Ok(Ok(specs)) => return Ok(Some(specs)),
+                Ok(Err(ToolError::Unauthorized)) => "unauthorized",
+                Ok(Err(ToolError::Timeout)) | Err(_) => "timeout",
+                Ok(Err(_)) => "unavailable",
+            }
+        } else {
+            "unlinked"
+        };
+        self.trace.clone().ok_or(Error::Unavailable)?.record(
+            "mcp.tools_list.unavailable",
+            None,
+            json!({"server":self.server,"reason":reason}),
+        )?;
+        Ok(None)
     }
 
     pub async fn close(&mut self) {
