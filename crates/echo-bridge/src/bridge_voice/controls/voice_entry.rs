@@ -25,7 +25,12 @@ pub fn execute_process(settings: Settings) -> Result<(), Error> {
         .audit
         .log_dir
         .join("bridge-kill");
+    // Local fake routes stay on loopback; a real run measures its clock against the network.
+    let local = settings.model_url.is_some();
     let mut configured = prepare(settings)?;
+    if !local {
+        configured = configured.with_default_time_servers();
+    }
     let mut retained = None;
     loop {
         let completion = process_generation(&mut configured, address, &media, retained)?;

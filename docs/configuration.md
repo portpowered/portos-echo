@@ -146,6 +146,9 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `voice.session_max_seconds` | Integer 3–2147483647, default 600; cap for agent-granted waiting extensions, at least listen seconds. Does not cut active speech/playback. | restart / no |
 | `audio` | Optional audio policy table. | restart / no |
 | `audio.reply_lead_ms` | Positive u16 multiple of 20 milliseconds, default 200; maximum send lead. | restart / no |
+| `clock` | Optional network-time table. The bridge measures its clock against SNTP servers and tells the model the measured time while the system clock is more than 2 s off; see [architecture](architecture.md), launch contract item 9. | restart / no |
+| `clock.servers` | Array of at most 8 `host` or `host:port` names (port 123 when omitted). Default: `0.pool.ntp.org` to `3.pool.ntp.org`. `[]` turns measurement off. | restart / no |
+| `clock.interval_seconds` | Integer 60–86400, default 3600; time between measurements after the one at startup. | restart / no |
 | `agent` | Required delegated-task policy table. | restart / no |
 | `agent.backend` | `client` (default) or `muse` parses; current Codex voice runtime admits only client. | restart / no |
 | `agent.max_tool_calls` | Integer 1–32, default 8, per delegated task. | boundary / yes |

@@ -2,6 +2,7 @@
 //! credential paths remain literal and are never opened or expanded.
 
 mod config_auth;
+mod config_clock;
 mod config_codex;
 mod config_decode;
 mod config_muse;
@@ -9,6 +10,7 @@ mod config_settings;
 mod config_validate;
 mod config_voice;
 pub use config_auth::ChatGptAuthConfig;
+pub use config_clock::{ClockConfig, DEFAULT_TIME_SERVERS};
 pub use config_codex::{CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS, WebSearch, realtime_voices};
 pub use config_muse::{AgentBackend, MuseConfig};
 pub use config_settings::{EffectiveConfig, SettingsOverlay};
@@ -79,6 +81,7 @@ pub struct BridgeConfig {
     pub live: LiveConfig,
     pub voice: VoiceConfig,
     pub audio: AudioConfig,
+    pub clock: ClockConfig,
     pub agent: AgentConfig,
     pub agent_backend: AgentBackend,
     pub muse: Option<MuseConfig>,

@@ -48,6 +48,7 @@ fn committed_example_loads_with_all_expected_values() {
         muse: None,
         chatgpt_auth: echo_config::ChatGptAuthConfig::default(),
         audio: echo_config::AudioConfig::default(),
+        clock: echo_config::ClockConfig::default(),
         voice: echo_config::VoiceConfig::default(),
         trace: echo_config::TraceConfig::default(),
         echo: EchoConfig {

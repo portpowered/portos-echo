@@ -1,4 +1,4 @@
-use echo_bridge::{Error, bridge_input, bridge_mcp, bridge_operator, bridge_runtime};
+use echo_bridge::{Error, bridge_input, bridge_mcp, bridge_operator, bridge_runtime, bridge_time::clock_command};
 use std::{io::Write, process::ExitCode};
 
 fn main() -> ExitCode {
@@ -7,6 +7,11 @@ fn main() -> ExitCode {
     let lab_idle = std::env::var("ECHO_LAB_SESSION_IDLE_SECONDS").ok();
     match bridge_mcp::parse(&args, lab.iter().any(Option::is_some) || lab_idle.is_some()) {
         Ok(Some(command)) => return mcp_operator(command),
+        Err(error) => return input_error(&error),
+        Ok(None) => (),
+    }
+    match clock_command::parse(&args, lab.iter().any(Option::is_some) || lab_idle.is_some()) {
+        Ok(Some(command)) => return outcome(command.execute(&mut std::io::stdout())),
         Err(error) => return input_error(&error),
         Ok(None) => (),
     }
