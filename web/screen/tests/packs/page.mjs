@@ -427,6 +427,15 @@ test("pack page: reload freshness, reconnect, safe failures and disposal", async
     });
     await reload(page, 2);
     await page.waitForFunction(() => !!window.finishDecode);
+    const loading = await page.evaluate(() => {
+        const count = window.packRequests.length;
+        window.streams[0].dispatchEvent(new Event("open"));
+        return count;
+    });
+    assert.equal(
+        await page.evaluate(() => window.packRequests.length),
+        loading,
+    );
     assert.match(
         await page.locator(".pack-stage img").getAttribute("data-src"),
         /\/rest\.png\?/,

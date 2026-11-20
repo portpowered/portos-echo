@@ -131,7 +131,7 @@ async function open(t) {
         };
     });
     const page = await context.newPage();
-    page.on("response", (response) => {
+    context.on("response", (response) => {
         if (response.status() >= 400)
             console.log(
                 "F25 refused response:",
@@ -271,6 +271,7 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
         "speaking.webm",
         "idle.webm",
     ]);
+    console.log(`F25 decoded state sources: ${sources.join(" -> ")}`);
     await f.update({
         state: "emotion",
         name: "happy",
@@ -352,8 +353,30 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
     );
     // Observe the real decoder's MP4 path, overriding only capability selection.
     const mp4 = await f.context.newPage();
+    mp4.setDefaultTimeout(5000);
+    mp4.on("console", (message) =>
+        console.log("F25 MP4 page:", message.text()),
+    );
+    console.log(
+        "F25 real codec capabilities:",
+        await mp4.evaluate(() => {
+            const video = document.createElement("video");
+            return {
+                vp9: video.canPlayType('video/webm; codecs="vp9"'),
+                h264: video.canPlayType('video/mp4; codecs="avc1.42E01E"'),
+            };
+        }),
+    );
     await mp4.addInitScript(() => {
         HTMLMediaElement.prototype.canPlayType = () => "";
+        window.addEventListener(
+            "error",
+            (event) => {
+                if (event.target instanceof HTMLMediaElement)
+                    console.log("media error", event.target.error?.code);
+            },
+            true,
+        );
     });
     await mp4.goto(page.url());
     await playing(mp4, "idle.mp4");

@@ -24,6 +24,7 @@ export function mountPacks(
     let state: UiState = { state: "ready", message: "" };
     let revision = -1;
     let refreshNeeded = false;
+    let openedOnce = false;
     function clear() {
         const changed = host.classList.contains("screen-pack");
         cleanup?.();
@@ -135,6 +136,8 @@ export function mountPacks(
             if (!controller.signal.aborted && !stopped) {
                 if (clear()) redraw();
             }
+        } finally {
+            if (pending === controller) pending = undefined;
         }
     }
     const changed = (event: MessageEvent) => {
@@ -151,6 +154,12 @@ export function mountPacks(
         }
     };
     const opened = () => {
+        if (!openedOnce) {
+            openedOnce = true;
+            // Mount already starts this read. Cancelling and replacing it on
+            // the first SSE open races its still-running bounded disk scan.
+            if (pending && !pending.signal.aborted) return;
+        }
         void reload();
     };
     const visibility = new MutationObserver(() => {
