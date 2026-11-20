@@ -56,10 +56,10 @@ async fn queued(
     } else {
         format!("/screen-packs/v1/template@0.1.0/{file}")
     };
-    let url = format!(
-        "http://127.0.0.1:{}{path}?token=synthetic-pair",
-        server.bound_addr.port()
-    );
+    let mut url = reqwest::Url::parse("http://127.0.0.1").unwrap();
+    url.set_port(Some(server.bound_addr.port())).unwrap();
+    url.set_path(&path);
+    url.set_query(Some("token=synthetic-pair"));
     let request = tokio::spawn(async move {
         reqwest::Client::builder()
             .no_proxy()
