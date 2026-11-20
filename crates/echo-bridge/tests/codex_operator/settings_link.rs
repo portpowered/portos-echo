@@ -3,7 +3,7 @@ use super::*;
 use echo_bridge::{Error, bridge_voice::Configured};
 use echo_link::fake::{FakeConnector, Observer};
 use echo_mcp_auth::mock::Mock;
-use std::{future::Future, io::Write as _, task::Poll};
+use std::{future::Future, task::Poll};
 
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 controlled Python child and loopback OAuth/settings"]
@@ -201,7 +201,17 @@ async fn paired_grant_journey(fixture: &Fixture, expected: &str) {
     let (result, ()) = Box::pin(async { tokio::join!(work, inspect) }).await;
     assert!(!result.unwrap().restart_requested);
     super::host::released(fixture).await;
-    mock.close().await.unwrap();
+    let reopened = echo_mcp_auth::AuthClient::open(echo_mcp_auth::AuthOptions {
+        resource_url: format!("{}/mcp", mock.base()),
+        client_id: "echo-lab".into(),
+        scopes: vec!["endpoint:read".into()],
+        storage_dir: fixture.directory.path().join("grant"),
+        request_timeout: Duration::from_secs(5),
+    })
+    .await
+    .unwrap();
+    assert!(!reopened.has_grant());
+    mock.shutdown().await.unwrap();
 }
 
 async fn failed_link(journey: &mut PairedGrant<'_>, epoch: u64, state: &str) {
