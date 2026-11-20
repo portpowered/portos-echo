@@ -456,6 +456,7 @@ def release_cases():
         (box.root / "fault").write_text("push")
         box.install(code=1)
         require((box.device / "releases/pending").is_file(), "partial install is not marked")
+        require(not (box.device / "private/launch.sh").exists(), "partial install left a boot launcher")
         box.run(["status"], 1)
         box.run(["start"], 1)
         box.run(["rollback"])
@@ -463,6 +464,7 @@ def release_cases():
         box.files["bridge"].write_text("version C")
         box.install()
         require((box.device / "bin/echo-bridge").read_text() == "version C", "recovery did not install")
+        require((box.device / "private/launch.sh").is_file(), "recovery did not restore the launcher")
     for kind in ("symlink", "hardlink", "fifo", "owner", "mode"):
         with Sandbox() as box:
             box.install()

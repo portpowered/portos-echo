@@ -78,7 +78,8 @@ if test -d '${device:?}/releases/previous'; then
 fi
 mv '${device:?}/releases/stage' '${device:?}/releases/previous'
 rm -rf '${device:?}/releases/retired'
-touch '${device:?}/releases/pending'"
+touch '${device:?}/releases/pending'
+rm -f '${device:?}/private/launch.sh'"
 }
 release_publish() {
   if [ -n "${release_bundle-}" ]; then
