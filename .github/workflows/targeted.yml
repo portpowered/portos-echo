@@ -3,30 +3,40 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Optional lane commit to verify
+        description: Exact lane commit to verify
         type: string
-        required: false
+        required: true
 jobs:
-  schemas:
-    if: ${{ inputs.source_ref == '' }}
+  browser:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - run: npm --prefix web/screen ci --offline=false
+      - run: cd web/screen && npx --offline playwright install --with-deps chromium
+      - run: cd web/screen && npm run build && node --test --test-timeout=30000 tests/render.test.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: fast-mode-screen
+          path: web/screen/test-results/screenshots/
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_ref }}
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
           target: lint-contracts
-      - run: UPDATE_SCHEMAS=1 cargo test --offline --locked -p echo-screen-contract --test screen_schema settings_v2_schema_snapshots
+      - run: cargo test --offline --locked -p echo-config --test config_load -- --nocapture
       - run: cargo test --offline --locked -p echo-screen-contract --test screen_schema settings_v2_schema_snapshots
-      - run: npm --prefix web/screen ci --ignore-scripts --offline=false
-      - run: npm --prefix web/screen run generate:schema
-      - run: npm --prefix web/screen run check:schema
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: fast-mode-schemas
-          path: |
-            schemas/screen/settings_patch_v2.json
-            schemas/screen/settings_snapshot_v2.json
-            web/screen/src/settings/model.ts
+      - run: cargo test --offline --locked -p echo-screen-contract --test screen_wire -- --nocapture
