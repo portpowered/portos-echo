@@ -1,21 +1,26 @@
 name: Screen media tools
-description: Provision the verified Linux FFmpeg build for generated screen media
+description: Provision verified Linux tools for generating and inspecting screen media
 runs:
   using: composite
   steps:
-    - name: Install pinned FFmpeg
+    - name: Install pinned FFmpeg and FFprobe
       shell: sh
       run: |
-        # Use a single pinned static Linux build to avoid the APT dependency fetch.
+        # Use matching static Linux builds to avoid the APT dependency fetch.
         directory=$(mktemp -d "$RUNNER_TEMP/screen-media.XXXXXX")
-        archive="$directory/ffmpeg.gz"
-        timeout --kill-after=5s 75s curl --fail --silent --show-error --location \
-          --connect-timeout 10 --max-time 30 --retry 2 \
-          https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-x64.gz \
-          --output "$archive"
-        echo "bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa  $archive" | sha256sum --check
-        gzip -dc "$archive" > "$directory/ffmpeg"
-        chmod +x "$directory/ffmpeg"
+        release=https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1
+        install_tool() {
+          tool=$1
+          archive="$directory/$tool.gz"
+          timeout --kill-after=5s 75s curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 30 --retry 2 \
+            "$release/$tool-linux-x64.gz" --output "$archive"
+          echo "$2  $archive" | sha256sum --check
+          gzip -dc "$archive" > "$directory/$tool"
+          chmod +x "$directory/$tool"
+        }
+        install_tool ffmpeg bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa
+        install_tool ffprobe 25d9b6ccb05e3d9de9e04e31e2506d8dd7f9f0418981965ac6df12e8d3afd067
         "$directory/ffmpeg" -hide_banner -encoders > "$directory/encoders"
         grep -E '[[:space:]]libvpx-vp9[[:space:]]' "$directory/encoders"
         grep -E '[[:space:]]libx264[[:space:]]' "$directory/encoders"
