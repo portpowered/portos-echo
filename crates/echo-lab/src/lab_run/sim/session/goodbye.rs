@@ -19,10 +19,9 @@ use serde_json::{Value, json};
 use std::{path::Path, time::Duration};
 use tokio::time::Instant;
 
-const GOODBYE: &str = "okay thanks, bye";
+pub(super) const GOODBYE: &str = "okay thanks, bye";
 const QUESTION: &str = "thanks, and what time is it?";
 const FOLLOWUP: &str = "what day is it?";
-pub(super) const REQUEST: &str = "end the session";
 const FAREWELL: &str = "Goodbye.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -51,9 +50,11 @@ impl Journey {
     }
 
     fn script(self) -> Value {
+        // The hand-off is the real wire shape: the user's own words. The
+        // scripted runner stands in for the model that reads them.
         let end = |wait_for_release| {
             json!([
-                {"request":REQUEST,"call":"end_session","arguments":{},"wait_for_release":wait_for_release},
+                {"request":GOODBYE,"call":"end_session","arguments":{},"wait_for_release":wait_for_release},
                 {"silent":true}
             ])
         };
@@ -274,15 +275,14 @@ impl World {
             self.provider.control(Control::Delegate(turn)).await?;
             self.wait("late native goodbye", |world| world.provider.count("waiting") == 1, 0)
                 .await?;
+            // A follow-up spoken in the gap before the runner's end arrives.
             self.transcript("canary", "user", FOLLOWUP, true).await?;
-            self.transcript("canary-reply", "assistant", "Unexpected follow-up.", false)
-                .await?;
             self.wait(
                 "canary delivery",
                 |world| {
                     world.provider.observed.borrow()["events_sent"]
                         .as_array()
-                        .is_some_and(|events| events.contains(&json!("canary-reply")))
+                        .is_some_and(|events| events.contains(&json!("canary")))
                 },
                 20,
             )

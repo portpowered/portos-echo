@@ -26,7 +26,7 @@ async fn call_turn_events_match_thread_and_keep_early_lifecycle_order() {
             matches!(call.next().await.unwrap(), Event::TurnStarted {thread,turn} if thread=="thread-1" && turn=="turn-1")
         );
         assert!(
-            matches!(call.next().await.unwrap(), Event::TurnCompleted {thread,turn} if thread=="thread-1" && turn=="turn-1")
+            matches!(call.next().await.unwrap(), Event::TurnCompleted {thread,turn,answered:false} if thread=="thread-1" && turn=="turn-1")
         );
         call.stop(deadline()).await.unwrap();
     };
@@ -224,36 +224,57 @@ async fn call_projects_only_matching_speech_items_and_ignores_unknown_items() {
     tokio::join!(client, remote);
 }
 
+/// The real hand-off carries the user's words and the transcript since the
+/// last hand-off. No field names the voice model's intent, so every hand-off
+/// projects alike and only the runner's final text marks a turn as answered.
 #[tokio::test(start_paused = true)]
-async fn voice_listen_projects_current_thread_handoffs_once_and_reserves_exact_goodbye() {
+async fn voice_listen_projects_each_current_thread_handoff_once_whatever_the_user_said() {
     let (mut io, mut server) = fixture();
     let client = async {
         let mut call = Call::new(&mut io);
         call.start(&options(), vec![], "fixture-offer", deadline())
             .await
             .unwrap();
-        assert!(matches!(call.next().await.unwrap(), Event::Other));
-        assert!(matches!(call.next().await.unwrap(), Event::ReplyHandoff));
-        assert!(matches!(call.next().await.unwrap(), Event::Other));
-        assert!(matches!(call.next().await.unwrap(), Event::GoodbyeHandoff));
-        assert!(matches!(call.next().await.unwrap(), Event::Other));
+        for answered in [false, true, false] {
+            assert!(matches!(call.next().await.unwrap(), Event::Other));
+            assert!(matches!(call.next().await.unwrap(), Event::ReplyHandoff));
+            assert!(matches!(call.next().await.unwrap(), Event::Other));
+            assert!(matches!(call.next().await.unwrap(), Event::TurnStarted { .. }));
+            for _ in 0..3 {
+                assert!(matches!(call.next().await.unwrap(), Event::Other));
+            }
+            assert!(
+                matches!(call.next().await.unwrap(), Event::TurnCompleted { answered: seen, .. } if seen == answered)
+            );
+        }
         call.stop(deadline()).await.unwrap();
     };
     let remote = async {
         start(&mut server).await;
-        for (thread, id, text) in [
-            ("foreign", "farewell", "end the session"),
-            ("thread-1", "ordinary", "End the session"),
-            ("thread-1", "ordinary", "End the session"),
-            ("thread-1", "farewell", "end the session"),
-            ("thread-1", "farewell", "end the session"),
+        for (id, words, text) in [
+            ("farewell", "okay thanks, bye", ""),
+            ("ordinary", "thanks, and what time is it?", "It is noon."),
+            ("magic", "end the session", " "),
         ] {
-            notification(
-                &mut server,
-                "thread/realtime/itemAdded",
-                json!({"threadId":thread,"item":{"type":"handoff_request","handoff_id":id,"input_transcript":text}}),
-            )
-            .await;
+            let item = json!({"type":"handoff_request","handoff_id":id,"item_id":id,"input_transcript":words,
+                "active_transcript":[{"role":"user","text":words},{"role":"assistant","text":"Goodbye."}]});
+            let turn = json!({"threadId":"thread-1","turn":{"id":id,"status":"completed"}});
+            let agent = |thread: &str, phase: serde_json::Value, text: &str| json!({"threadId":thread,"turnId":id,"item":{"type":"agentMessage","phase":phase,"text":text}});
+            let foreign = json!({"threadId":"foreign","item":item});
+            notification(&mut server, "thread/realtime/itemAdded", foreign).await;
+            for _ in 0..2 {
+                let added = json!({"threadId":"thread-1","item":item});
+                notification(&mut server, "thread/realtime/itemAdded", added).await;
+            }
+            notification(&mut server, "turn/started", turn.clone()).await;
+            for (thread, phase, said) in [
+                ("thread-1", json!("commentary"), "Working."),
+                ("foreign", serde_json::Value::Null, "Foreign."),
+                ("thread-1", json!("final_answer"), text),
+            ] {
+                notification(&mut server, "item/completed", agent(thread, phase, said)).await;
+            }
+            notification(&mut server, "turn/completed", turn).await;
         }
         stop(&mut server).await;
     };

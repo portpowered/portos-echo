@@ -463,18 +463,11 @@ async fn media(
         }
         MediaEvent::Control(Event::TurnStarted { .. }) => {
             source.meter.endpoint(Instant::now(), Endpoint::DelegatedTurn);
-            if source.session.goodbye.is_none() {
-                source.delegation.started();
-            }
+            source.delegation.started();
             Ok(())
         }
-        MediaEvent::Control(Event::TurnCompleted { .. }) => {
-            voice_listen::complete_turn(source);
-            Ok(())
-        }
-        MediaEvent::Control(Event::GoodbyeHandoff) => {
-            voice_listen::goodbye_handoff(source);
-            Ok(())
+        MediaEvent::Control(Event::TurnCompleted { answered, .. }) => {
+            voice_listen::complete_turn(answered, port, source).await
         }
         MediaEvent::Control(Event::SpeechStarted) => {
             source.heard_user(BargeTrigger::SpeechStarted, "", false);

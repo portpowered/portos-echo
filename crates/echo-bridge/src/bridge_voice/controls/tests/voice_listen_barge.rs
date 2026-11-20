@@ -28,12 +28,6 @@ impl VoicePort for RunPort<'_> {
 
 #[tokio::test(start_paused = true)]
 async fn voice_listen_barge_after_settled_reply_retains_run_and_fresh_idle_deadline() {
-    for goodbye in [false, true] {
-        barge_after_settled_reply(goodbye).await;
-    }
-}
-
-async fn barge_after_settled_reply(goodbye: bool) {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -49,7 +43,6 @@ async fn barge_after_settled_reply(goodbye: bool) {
     };
     let receipts = Cell::new(0);
     let paused = Cell::new(0);
-    let outcomes = RefCell::new(Vec::new());
     let mut work = Box::pin(super::super::super::run(
         &client,
         &mut events,
@@ -68,21 +61,16 @@ async fn barge_after_settled_reply(goodbye: bool) {
             match notice {
                 Notice::ReplyPlayed => receipts.set(receipts.get() + 1),
                 Notice::ReplyPaused => paused.set(paused.get() + 1),
-                Notice::SessionTool(receipt) => outcomes.borrow_mut().push(receipt.outcome),
                 _ => (),
             }
             Ok(())
         },
     ));
-    let prefix = journey(&mut work, &tx, &observer, &receipts, &paused, goodbye.then_some(&owner)).await;
+    let prefix = journey(&mut work, &tx, &observer, &receipts, &paused).await;
     tokio::time::advance(Duration::from_millis(1)).await;
     let stats = work.await.unwrap();
     assert_eq!(stats.reply_sent, u64::try_from(prefix + 12).unwrap());
     assert_eq!((receipts.get(), cuts(&observer)), (3, 1));
-    assert_eq!(
-        outcomes.into_inner().as_slice(),
-        if goodbye { &["applied"][..] } else { &[] }
-    );
     assert_eq!(observer.commands().last(), Some(&Command::EndRun));
     assert_replacement_pcm(&observer);
 }
@@ -93,7 +81,6 @@ async fn journey(
     observer: &Observer,
     receipts: &Cell<usize>,
     paused: &Cell<usize>,
-    goodbye_owner: Option<&RefCell<Option<Arc<()>>>>,
 ) -> usize {
     reply(tx, 5000).await;
     settle(work, observer, receipts, 1).await;
@@ -101,9 +88,6 @@ async fn journey(
     // be abandoned when speech cuts it, even after the old idle would expire.
     tokio::time::advance(Duration::from_secs(2)).await;
     unfinished(tx).await;
-    if let Some(owner) = goodbye_owner {
-        apply_end(work, tx, owner).await;
-    }
     poll(work.as_mut()).await;
     tokio::time::advance(Duration::from_secs(2)).await;
     poll(work.as_mut()).await;
@@ -114,25 +98,6 @@ async fn journey(
     assert_eq!(frames(observer), prefix + 12);
     before_expiry(work, observer).await;
     prefix
-}
-
-async fn apply_end(
-    work: &mut Pin<Box<impl Future<Output = Result<super::super::super::Stats, Error>>>>,
-    tx: &mpsc::Sender<MediaEvent>,
-    owner: &RefCell<Option<Arc<()>>>,
-) {
-    let (request, mut answer) = session_request(
-        crate::bridge_codex::SessionCommand::End,
-        owner.borrow().as_ref().unwrap(),
-        "farewell",
-    );
-    tx.send(MediaEvent::Control(Event::GoodbyeHandoff)).await.unwrap();
-    tx.send(MediaEvent::Control(request)).await.unwrap();
-    poll(work.as_mut()).await;
-    assert_eq!(
-        answer.try_recv().unwrap().content,
-        serde_json::json!({"ending_after_reply": true})
-    );
 }
 
 async fn cut(
@@ -250,7 +215,11 @@ fn turn(started: bool) -> MediaEvent {
     MediaEvent::Control(if started {
         Event::TurnStarted { thread, turn }
     } else {
-        Event::TurnCompleted { thread, turn }
+        Event::TurnCompleted {
+            thread,
+            turn,
+            answered: true,
+        }
     })
 }
 

@@ -194,6 +194,10 @@ fn dispatch(started: bool) -> MediaEvent {
     MediaEvent::Control(if started {
         Event::TurnStarted { thread, turn }
     } else {
-        Event::TurnCompleted { thread, turn }
+        Event::TurnCompleted {
+            thread,
+            turn,
+            answered: true,
+        }
     })
 }

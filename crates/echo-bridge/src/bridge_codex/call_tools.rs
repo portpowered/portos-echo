@@ -21,13 +21,6 @@ use tokio::{
 
 type Work<H> = Pin<Box<dyn Future<Output = (Dispatcher<H>, Option<Outcome>)>>>;
 
-#[derive(Default)]
-enum TurnOwner {
-    #[default]
-    CurrentRun,
-    Handoff(Option<Arc<()>>),
-}
-
 /// Validated bridge-owned session control; raw arguments never leave the host.
 /// `Invalid` carries rejected arguments for the named builtin (`end` for
 /// `end_session`), so the controller still writes the receipt.
@@ -106,7 +99,6 @@ pub struct ToolSession<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: M
     session: Option<mpsc::Receiver<SessionRequest>>,
     run: Option<tokio::sync::watch::Sender<Option<Arc<()>>>>,
     current_run: Option<Arc<()>>,
-    next_turn_owner: TurnOwner,
     session_answer_pending: bool,
 }
 
@@ -137,7 +129,6 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             session: None,
             run: None,
             current_run: None,
-            next_turn_owner: TurnOwner::CurrentRun,
             session_answer_pending: false,
         })
     }
@@ -196,12 +187,6 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 MediaEvent::Control(event @ (Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => {
                     self.observed_control(event)
                 },
-                MediaEvent::Control(Event::GoodbyeHandoff) => {
-                    if self.active.is_none() {
-                        self.next_turn_owner = TurnOwner::Handoff(self.current_run.clone());
-                    }
-                    Ok(if self.current_run.is_some() { MediaEvent::Control(Event::GoodbyeHandoff) } else { other() })
-                },
                 event => Ok(event),
             },
         }
@@ -215,9 +200,10 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 thread: thread.clone(),
                 turn: turn.clone(),
             },
-            Event::TurnCompleted { thread, turn } => Event::TurnCompleted {
+            Event::TurnCompleted { thread, turn, answered } => Event::TurnCompleted {
                 thread: thread.clone(),
                 turn: turn.clone(),
+                answered: *answered,
             },
             _ => Event::Other,
         };
@@ -235,7 +221,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             if self.deferred.len() == 32 {
                 return Err(Error::Unavailable);
             }
-            if let Event::TurnCompleted { thread, turn } = &event
+            if let Event::TurnCompleted { thread, turn, .. } = &event
                 && self.active.as_ref() == Some(&(thread.clone(), turn.clone()))
             {
                 if let Some(cancel) = self.cancel.take() {
@@ -252,7 +238,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             Event::TurnStarted { thread, turn } => {
                 self.start_turn(&thread, &turn)?;
             }
-            Event::TurnCompleted { thread, turn } => {
+            Event::TurnCompleted { thread, turn, .. } => {
                 let dispatcher = self.dispatcher.as_mut().ok_or(Error::Unavailable)?;
                 if dispatcher.finish_turn(&thread, &turn).is_ok() {
                     self.active = None;
@@ -305,11 +291,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         self.active = Some((thread.into(), turn.into()));
         // Keep the turn's owner even when the next wake wins the device poll.
         if let Some(owner) = &self.run {
-            let run = match std::mem::take(&mut self.next_turn_owner) {
-                TurnOwner::CurrentRun => self.current_run.clone(),
-                TurnOwner::Handoff(run) => run,
-            };
-            owner.send_replace(run);
+            owner.send_replace(self.current_run.clone());
         }
         if self.budget.admit_turn().is_err()
             && let Some(params) = self.dispatcher.as_mut().and_then(Dispatcher::refuse_budget)

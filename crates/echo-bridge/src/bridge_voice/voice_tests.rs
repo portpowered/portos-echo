@@ -361,11 +361,11 @@ async fn voice_all_webrtc_media_after_done_is_discarded() {
 }
 
 fn turn(started: bool) -> MediaEvent {
-    let (thread, turn) = ("thread-1".to_owned(), "turn-1".to_owned());
+    let (thread, turn, answered) = ("thread-1".to_owned(), "turn-1".to_owned(), true);
     MediaEvent::Control(if started {
         Event::TurnStarted { thread, turn }
     } else {
-        Event::TurnCompleted { thread, turn }
+        Event::TurnCompleted { thread, turn, answered }
     })
 }
 

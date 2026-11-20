@@ -131,7 +131,6 @@ async fn transcripts<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite +
                 | Event::Tool { .. }
                 | Event::TurnStarted { .. }
                 | Event::TurnCompleted { .. }
-                | Event::GoodbyeHandoff
                 | Event::ReplyHandoff
                 | Event::SpeechStarted
                 | Event::Session(_),

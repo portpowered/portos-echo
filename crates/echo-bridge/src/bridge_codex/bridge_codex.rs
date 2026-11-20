@@ -32,12 +32,29 @@ use tokio::{
 
 /// Payloads intentionally have no Debug/Display implementation.
 pub enum Event {
-    Transcript { role: String, text: String, done: bool },
-    ReplyDone { text: String },
-    Tool { id: RequestId, call: ToolCall },
-    TurnStarted { thread: String, turn: String },
-    TurnCompleted { thread: String, turn: String },
-    GoodbyeHandoff,
+    Transcript {
+        role: String,
+        text: String,
+        done: bool,
+    },
+    ReplyDone {
+        text: String,
+    },
+    Tool {
+        id: RequestId,
+        call: ToolCall,
+    },
+    TurnStarted {
+        thread: String,
+        turn: String,
+    },
+    /// `answered` is false when the delegated runner finished without any
+    /// final text, so no hand-back will be spoken for this turn.
+    TurnCompleted {
+        thread: String,
+        turn: String,
+        answered: bool,
+    },
     ReplyHandoff,
     SpeechStarted,
     Session(SessionRequest),
@@ -78,6 +95,7 @@ pub struct Call<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> {
     interrupt: Option<(RequestId, Instant)>,
     interrupted: Option<TurnInterrupt>,
     handoffs: std::collections::HashSet<String>,
+    answered: Option<String>,
     tool_trace: Option<crate::bridge_trace::ToolTrace>,
     setup_trace: Option<crate::bridge_trace::Trace>,
 }
@@ -92,6 +110,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             interrupt: None,
             interrupted: None,
             handoffs: std::collections::HashSet::new(),
+            answered: None,
             tool_trace: None,
             setup_trace: None,
         }

@@ -363,7 +363,7 @@ async fn dispatch<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Un
                     assert_eq!(Some(thread.as_str()), call_thread.as_deref());
                     assert!(started.replace((thread, turn)).is_none());
                 }
-                MediaEvent::Control(Event::TurnCompleted { thread, turn }) if exhausted => {
+                MediaEvent::Control(Event::TurnCompleted { thread, turn, .. }) if exhausted => {
                     assert_eq!(started, Some((thread, turn)));
                     return;
                 }
