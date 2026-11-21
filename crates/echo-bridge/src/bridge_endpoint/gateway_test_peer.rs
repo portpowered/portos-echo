@@ -109,7 +109,7 @@ impl Callback for Upgrade<'_> {
         }
         if self
             .1
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
             .is_ok()
         {
             self.0.try_send(GatewayEvent::Rejected(Instant::now())).unwrap();

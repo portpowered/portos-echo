@@ -211,6 +211,39 @@ fn endpoint_session_replies_keep_request_ids_and_resolved_route() {
 }
 
 #[test]
+fn endpoint_snapshot_accepts_base64_and_keeps_the_sample_metadata() {
+    use echo_contracts::endpoint::{GetSnapshot, Snapshot, SnapshotFormat, SnapshotImage};
+
+    let request: GetSnapshot = serde_json::from_value(json!({"responseFormat":"BASE64"})).unwrap();
+    assert!(matches!(request.response_format, SnapshotFormat::Base64));
+    for payload in [
+        json!({}),
+        json!({"responseFormat":"base64"}),
+        json!({"responseFormat":null}),
+    ] {
+        assert!(serde_json::from_value::<GetSnapshot>(payload).is_err());
+    }
+    let reply = CommandReply {
+        request_id: "snapshot-1",
+        outcome: Snapshot::captured(
+            SnapshotImage::jpeg("AA==".into(), 2, 1),
+            "2027-01-15T08:00:00.125Z".into(),
+        ),
+    };
+    assert_eq!(
+        to_value(Uplink::new("get-snapshot", "resolved-route", reply)).unwrap(),
+        json!({
+            "header":{"namespace":ECHO_PLUGIN,"name":"get-snapshot","version":"1.0"},
+            "target":{"type":"ROUTE","value":"resolved-route"},
+            "payload":{"requestId":"snapshot-1","outcome":{
+                "ok":true,"image":{"mimeType":"image/jpeg","data":"AA==","width":2,"height":1},
+                "timeOfSample":"2027-01-15T08:00:00.125Z"
+            }}
+        })
+    );
+}
+
+#[test]
 fn endpoint_session_ended_is_unsolicited_and_preserves_identity() {
     let ended = SessionEnded {
         session_id: "session-1",

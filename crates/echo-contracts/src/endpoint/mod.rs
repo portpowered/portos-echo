@@ -26,8 +26,7 @@ pub struct SetOutputMute {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetSnapshot {
-    #[serde(rename = "responseFormat")]
-    pub format: SnapshotFormat,
+    pub response_format: SnapshotFormat,
 }
 
 #[derive(Deserialize)]
@@ -39,8 +38,20 @@ pub enum SnapshotFormat {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
-    pub image: SnapshotImage,
-    pub time_of_sample: String,
+    ok: bool,
+    image: SnapshotImage,
+    time_of_sample: String,
+}
+
+impl Snapshot {
+    #[must_use]
+    pub fn captured(image: SnapshotImage, time_of_sample: String) -> Self {
+        Self {
+            ok: true,
+            image,
+            time_of_sample,
+        }
+    }
 }
 
 #[derive(Serialize)]

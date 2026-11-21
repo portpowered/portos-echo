@@ -5,7 +5,6 @@ use super::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use echo_contracts::endpoint::{CommandReply, GetSnapshot, Snapshot, SnapshotImage, Uplink};
-use serde::Serialize;
 use serde_json::Value;
 use std::{
     future::Future,
@@ -41,13 +40,6 @@ pub(super) struct Camera {
     capture: Mutex<()>,
 }
 
-#[derive(Serialize)]
-struct Success {
-    ok: bool,
-    #[serde(flatten)]
-    snapshot: Snapshot,
-}
-
 impl Camera {
     pub(super) async fn reply(
         &self,
@@ -81,10 +73,7 @@ impl Camera {
                 result.map_err(|_| timed_out())?.ok_or_else(camera_error)?
             }
         };
-        let outcome = Success {
-            ok: true,
-            snapshot: sample.encode()?,
-        };
+        let outcome = sample.encode()?;
         let reply = CommandReply { request_id, outcome };
         let body = serde_json::to_vec(&Uplink::new("get-snapshot", route, reply)).map_err(|_| camera_error())?;
         if !matches!(shutter.has_changed(), Ok(false)) {
@@ -102,10 +91,10 @@ impl Sample {
         if self.width == 0 || self.height == 0 || self.jpeg.is_empty() || self.jpeg.len() > MAX_MESSAGE / 4 * 3 {
             return Err(camera_error());
         }
-        Ok(Snapshot {
-            image: SnapshotImage::jpeg(STANDARD.encode(self.jpeg), self.width, self.height),
-            time_of_sample: sample_time(self.sampled_at)?,
-        })
+        Ok(Snapshot::captured(
+            SnapshotImage::jpeg(STANDARD.encode(self.jpeg), self.width, self.height),
+            sample_time(self.sampled_at)?,
+        ))
     }
 }
 
