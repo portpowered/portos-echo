@@ -135,6 +135,7 @@ async fn reject(python: &str, record: &Secret<Value>, pem: &[u8]) -> Result<(), 
             .append_pair("grant_type", "refresh_token")
             .append_pair("client_id", record["client_id"].as_str().ok_or(ERROR)?)
             .append_pair("refresh_token", record["grant"]["refresh_token"].as_str().ok_or(ERROR)?)
+            .append_pair("resource", record["resource"].as_str().ok_or(ERROR)?)
             .finish(),
     );
     let (status, value) = transport::request(python, "POST", endpoint, proof.expose(), body.expose(), pem).await?;

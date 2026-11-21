@@ -331,6 +331,7 @@ impl AuthClient {
                 "client_id",
                 state.record.client_id.as_deref().ok_or(AuthError::Storage)?,
             ),
+            ("resource", state.record.resource.as_str()),
         ];
         // Mark before the request: cancellation/transport failure can mean the
         // server rotated. Never replay an ambiguous refresh in this process.

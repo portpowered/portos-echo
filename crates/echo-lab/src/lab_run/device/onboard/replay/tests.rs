@@ -40,6 +40,23 @@ fn mcp_device_replay_requires_rotated_token_same_key_and_config_identity() {
 }
 
 #[test]
+fn mcp_device_replay_uses_committed_id_or_checks_an_explicit_pin() {
+    let mut old = record();
+    let mut new = old.clone();
+    new["grant"]["refresh_token"] = "synthetic-current".into();
+    let pinned = |id| CONFIG.replacen("[mcp]", &format!("[mcp]\nclient_id = \"{id}\""), 1);
+    let matching = pinned(old["client_id"].as_str().unwrap());
+    assert_eq!(rotated(&bytes(&old), &bytes(&new), &matching).unwrap().expose(), &old);
+    let mismatch = pinned("dcr_different");
+    assert!(matches!(rotated(&bytes(&old), &bytes(&new), &mismatch), Err(e) if e == ERROR));
+    for missing in [Value::Null, json!(""), json!(" ")] {
+        old["client_id"] = missing.clone();
+        new["client_id"] = missing;
+        assert!(matches!(rotated(&bytes(&old), &bytes(&new), CONFIG), Err(e) if e == ERROR));
+    }
+}
+
+#[test]
 fn mcp_device_replay_proof_is_signed_by_snapshot_key_with_unique_fresh_claims() {
     let record = record();
     let endpoint = "https://127.0.0.1/token";
@@ -127,7 +144,7 @@ async fn t3_on_device_mcp_replay_observes_tls_invalid_grant_with_old_token_and_s
     assert_eq!(
         report["form"],
         json!({"grant_type":["refresh_token"],
-        "client_id":[record["client_id"]],"refresh_token":["synthetic-consumed"]})
+        "client_id":[record["client_id"]],"refresh_token":["synthetic-consumed"],"resource":[record["resource"]]})
     );
     let token = report["proof"].as_str().unwrap();
     let parts: Vec<_> = token.split('.').collect();

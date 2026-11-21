@@ -189,7 +189,12 @@ fn replay(peer: &Peer) {
     let claims: Value = serde_json::from_slice(&B64.decode(parts[1]).unwrap()).unwrap();
     assert_eq!(claims["htu"], format!("{}/token", peer.issuer));
     assert_eq!(claims["htm"], "POST");
-    assert_eq!(rows[0]["form"]["refresh_token"], json!(["synthetic-consumed"]));
+    let committed = grant();
+    assert_eq!(
+        rows[0]["form"],
+        json!({"grant_type":["refresh_token"],"refresh_token":["synthetic-consumed"],
+               "client_id":[committed["client_id"]],"resource":[committed["resource"]]})
+    );
 }
 
 #[test]
