@@ -310,7 +310,7 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
     // An accepted tap draws nothing over the face: the controls come back
     // and the status line stays empty and invisible.
     await page.locator("button.home-tap:enabled").waitFor();
-    const feedback = page.locator('[role="status"]');
+    const feedback = page.locator('.screen-presentation + [role="status"]');
     assert.equal(await feedback.textContent(), "");
     assert.equal(
         await feedback.isVisible(),

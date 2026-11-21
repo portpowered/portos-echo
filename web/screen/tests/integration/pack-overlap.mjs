@@ -245,7 +245,7 @@ export async function checkTemplateLayout(
     });
     // An accepted action draws no status box over the face.
     await page.locator("button.home-tap:enabled").waitFor();
-    const feedback = page.locator('[role="status"]');
+    const feedback = page.locator('.screen-presentation + [role="status"]');
     assert.equal(await feedback.textContent(), "");
     assert.equal(await feedback.isVisible(), false);
     await observe(

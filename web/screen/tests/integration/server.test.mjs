@@ -213,9 +213,12 @@ test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and
         true,
     );
     assert.deepEqual(posts, [{ action: "approve", id: "approval-1" }]);
-    // The failure report clears itself without a newer frame.
+    // The failure report goes away without a newer frame. The revoked
+    // stream may report its own interruption in the same line meanwhile.
     await page.waitForFunction(
-        () => document.querySelector('[role="status"]').textContent === "",
+        () =>
+            document.querySelector('[role="status"]').textContent !==
+            "Action could not be sent",
         undefined,
         { timeout: 8000 },
     );
