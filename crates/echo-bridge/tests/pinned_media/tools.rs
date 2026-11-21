@@ -440,7 +440,7 @@ async fn snapshot(
             value,
             json!({"calls":[{
             "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-            "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}],
+            "model":"gpt-live-1.1-codex", "alpha":"quicksilver=v2"}],
             "sidebands":1,"external":0,"delegations":["delegation-local"],
             "models":[{"tools":names,"outputs":0}],"appends":[]})
         );
@@ -450,7 +450,7 @@ async fn snapshot(
         value,
         json!({"calls":[{
             "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-            "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}],
+            "model":"gpt-live-1.1-codex", "alpha":"quicksilver=v2"}],
             "sidebands":1,"external":0, "delegations":["delegation-local"],
             "models":[{"tools":names,"outputs":0},
                       {"tools":names,"outputs":1}],

@@ -177,7 +177,7 @@ def verify(sdps, tools, started, closed):
     call = observed['calls'][0]
     assert call['body']['sdp'] == 'v=0\r\ns=fake-offer\r\n'
     assert urllib.parse.parse_qs(urllib.parse.urlsplit(call['path']).query) == {'intent': ['quicksilver'], 'architecture': ['avas']}, call['path']
-    assert call['body']['session']['model'] == 'gpt-live-1-codex', call['body']['session']['model']
+    assert call['body']['session']['model'] == 'gpt-live-1.1-codex', call['body']['session']['model']
     assert sdps == [ANSWER] and started == ['v3'], (sdps, started)
     assert [body['tools'] for body in observed['responses']] == [EXPECTED_TOOLS, EXPECTED_TOOLS]
     assert normalized == [['echo_test', 'web_search'], ['echo_test', 'web_search']], normalized
@@ -249,7 +249,7 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
                     report = json.loads(line.removeprefix('RUST_REPORT='))
             result = child.wait(timeout=10)
             calls = [{'path': x['path'], 'model': x['body']['session']['model']} for x in observed['calls']]
-            assert result == 0, ('expected explicit v3, model=gpt-live-1-codex, '
+            assert result == 0, ('expected explicit v3, model=gpt-live-1.1-codex, '
                                  'query=intent=quicksilver&architecture=avas; observed calls=' +
                                  json.dumps(calls) + '; Rust: ' + child.stderr.read())
             assert report is not None, 'Rust journey produced no report'

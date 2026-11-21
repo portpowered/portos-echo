@@ -90,10 +90,34 @@ codex_source() {
   git -C "$work/source" checkout -q --detach FETCH_HEAD
   for change in "$repo"/third_party/codex/patches/*.patch; do
     [ -f "$change" ] || continue
-    case $change in */0003-pagable-arm-layout.patch) continue ;; esac
-    git -C "$work/source" apply --unidiff-zero --check "$change"
-    git -C "$work/source" apply --unidiff-zero "$change"
+    case $change in
+      */0003-pagable-arm-layout.patch) continue ;;
+      */0001-release-lock-versions.patch) set -- --unidiff-zero ;;
+      *) set -- ;;
+    esac
+    git -C "$work/source" apply "$@" --check "$change"
+    git -C "$work/source" apply "$@" "$change"
   done
+}
+
+codex_check_lock() {
+  python3 - "$work/source/codex-rs" <<'PY'
+from pathlib import Path
+import sys
+import tomllib
+
+root = Path(sys.argv[1])
+with (root / "Cargo.toml").open("rb") as manifest:
+    expected = tomllib.load(manifest)["workspace"]["package"]["version"]
+with (root / "Cargo.lock").open("rb") as lock:
+    packages = tomllib.load(lock)["package"]
+for package in packages:
+    if "source" not in package and package["version"] != expected:
+        raise SystemExit(
+            f"build-codex-armv7: local package {package['name']} is locked at "
+            f"{package['version']}; expected {expected}"
+        )
+PY
 }
 
 codex_pagable() {
@@ -177,7 +201,7 @@ codex_cleanup() {
 
 codex_main() {
   stage='' work_claimed=false output_claimed=false
-  commit=a956835d020762cb2b570053af06f643a11c0ecc
+  commit=ccf9be8cc458bd6b8336fe84d68d8893f2691a5e
   repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
   codex_prerequisites
   codex_paths
@@ -193,6 +217,7 @@ codex_main() {
   stage=$(mktemp -d "$output.staging.XXXXXX")
   codex_environment
   codex_source >&2
+  codex_check_lock
   codex_pagable >&2
   codex_ca
   codex_build

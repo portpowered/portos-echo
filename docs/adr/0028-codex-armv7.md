@@ -7,20 +7,20 @@ status: proposed; Android build evidence pending
 
 # Pinned Codex Android ARM build
 
-The owner's W2d decision authorizes building OpenAI Codex release
-`rust-v0.160.0`, commit `a956835d020762cb2b570053af06f643a11c0ecc`,
-for the future W4 deployment. This target builds its standalone
+The owner's W2d decision authorizes building OpenAI Codex for the W4 deployment.
+The current release is `rust-v0.171.0`, commit `ccf9be8cc458bd6b8336fe84d68d8893f2691a5e`.
+This target builds its standalone
 `codex-app-server`, without changing repository crates or runtime behavior.
 The [research brief](../spikes/codex-app-server.md) describes an older main;
-the release pin wins. At this pin `codex-rs/rust-toolchain.toml` says
-1.95.0, rather than the payload's 1.99.1. We explicitly select installed
-Rust 1.100.0 and NDK 27.3.13750724, API 24.
+the release pin wins. Upstream uses Rust 1.99.1 at this pin. The Android
+helper selects Rust 1.100.0 and NDK 27.3.13750724, API 24.
 
-The release manifest versions its workspace packages as 0.160.0 but its
-lockfile retains 159 local packages at 0.0.0. Patch 0001 reconciles only
+The release manifest versions its workspace packages as 0.171.0 but its
+lockfile retains 174 local packages at 0.0.0. Patch 0001 reconciles only
 those local lock versions so Cargo can run with `--locked`. It changes no
 external version, checksum, feature or dependency. Its zero-context hunks
-apply only after verifying the exact pinned source. Other build failures
+apply only after verifying the exact pinned source. The helper checks every
+source-less lock entry against the workspace version before building. Other build failures
 remain blockers; behavioral portability changes require a new decision.
 
 Coordinator mailbox answer 1 (2026-11-16) authorizes patch 0003 for locked
@@ -34,7 +34,8 @@ version, dependencies or shared registry cache. GNU tar is also required to
 unpack the crate.
 
 Coordinator mailbox answer 2 (2026-11-16) authorizes patch 0004: in
-`exec-server/src/no_follow/unix.rs`, lines 220/221/228/229 and 313/314/320,
+`exec-server/src/no_follow/unix.rs`, in the statx (300–314), fstatat (323–332)
+and removal (416–423) paths of the current pin,
 widen libc's `S_IFMT`, `S_IFLNK`, `S_IFDIR` and `S_IFREG` constants from
 ARM32 Android's `u16` to rustix `Stat.st_mode`'s `u32` using `u32::from`.
 Every mask, comparison, symlink rejection and removal decision is preserved.
@@ -46,7 +47,7 @@ these constants already are `u32`.
 
 The pre-approved upstream closure includes OpenSSL, aws-lc, portable-pty,
 bundled SQLite and compression libraries. No package enters this repository's
-Cargo.lock. pe-ci has no Android static `OPENSSL_DIR`; `openssl-sys` 0.9.111
+Cargo.lock. The build has no Android static `OPENSSL_DIR`; `openssl-sys` 0.9.118
 fails because pkg-config cannot cross-compile. Patch 0002 enables its existing
 vendored feature for ARMv7 Android only, as explicitly authorized. The locked
 `openssl-src` supplies the source. NDK tools are on PATH and

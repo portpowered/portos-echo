@@ -82,18 +82,18 @@ def stage_asset(stage, pin, asset, member_name, binary_name, record):
 def main():
     root = pathlib.Path(sys.argv[1]).resolve()
     pin = tomllib.loads((root / 'codex.pin').read_text())
-    commit = 'a956835d020762cb2b570053af06f643a11c0ecc'
-    if (pin['repo'], pin['tag'], pin['commit']) != ('https://github.com/openai/codex', 'rust-v0.160.0', commit):
+    commit = 'ccf9be8cc458bd6b8336fe84d68d8893f2691a5e'
+    if (pin['repo'], pin['tag'], pin['commit']) != ('https://github.com/openai/codex', 'rust-v0.171.0', commit):
         raise ValueError('invalid pin')
     if platform.system() != 'Linux' or platform.machine() not in ('x86_64', 'AMD64'):
         raise ValueError('unsupported host; requires Linux x86_64')
     target = 'x86_64-unknown-linux-musl'
     asset = pin['assets'][target]
-    expected = '306865417d4ee7a927785852910a527f41e1e159add390ac5ae3accb67d44a13'
+    expected = '01baa2e47809f8597be5b2f8abd4e4dfe3fb5bcb6e504c2fbaaad97056c15e8d'
     if asset != {'name': 'codex-x86_64-unknown-linux-musl.tar.gz', 'sha256': expected}:
         raise ValueError('invalid asset pin')
     host = pin['assets']['code-mode-host-' + target]
-    host_expected = 'ac6cd6288f0e39f46a33eba1cfd37711651f14f33dbc73d6a1b82eb45e038cac'
+    host_expected = 'd78619030c1b8d0a4d9c9c67667c1bfa23ad9d9edc63d87ffeaa86796f3d868c'
     if host != {'name': 'codex-code-mode-host-' + target + '.tar.gz', 'sha256': host_expected}:
         raise ValueError('invalid code-mode host pin')
     assets = ((asset, 'codex-' + target, 'binary.sha256'),

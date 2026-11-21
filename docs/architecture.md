@@ -351,8 +351,8 @@ starts a fresh child after a backoff (sequence (i)); it does not replay the fail
 
 #### Language — Codex app server
 
-Rust, pinned upstream `openai/codex`, release `rust-v0.160.0`, commit
-`a956835d020762cb2b570053af06f643a11c0ecc`, selected by [codex.pin](../codex.pin). The PC uses a verified vendor
+Rust, pinned upstream `openai/codex`, release `rust-v0.171.0`, commit
+`ccf9be8cc458bd6b8336fe84d68d8893f2691a5e`, selected by [codex.pin](../codex.pin). The PC uses a verified vendor
 binary; the [ARM build](adr/0028-codex-armv7.md) carries authorized build patches for the W4 target.
 
 #### Responsibilities — Codex app server
@@ -475,8 +475,8 @@ span multiple Echo wakes.
 
 The app server creates the call with HTTPS SDP exchange and attaches its WSS sideband. The bridge's
 [media peer](../crates/echo-media/src/media_peer.rs) sends/receives Opus over WebRTC SRTP after ICE/DTLS,
-with an ordered `oai-events` SCTP channel. The pin defaults V3 to `gpt-live-1-codex` in
-`codex-rs/core/src/realtime_conversation.rs`; plan section 3.3 instead names `gpt-live-1.1-codex`.
+with an ordered `oai-events` SCTP channel. The pin defaults V3 to `gpt-live-1.1-codex` in
+`codex-rs/core/src/realtime_conversation.rs` and selects `cove` on the WebRTC backend call route.
 That is a source/plan discrepancy, not proof of the model a real provider resolves.
 The app server forwards transcript notifications and handles native delegation. Local PCM conversion,
 playout pacing and `played` receipt are outside the cloud call.
@@ -1044,8 +1044,8 @@ configured owner. Legacy M3 sim evidence and host queue tests do not prove this 
 #### What it is — Delegation
 
 Live is the realtime speech model; a delegated Codex model performs longer reasoning and tool work.
-The pinned V3 default is `gpt-live-1-codex`, while the plan names `gpt-live-1.1-codex`; this discrepancy
-does not establish which model a real provider resolves. The delegated model is separately selected.
+The app server requests the pinned V3 default `gpt-live-1.1-codex` on the backend call route.
+The delegated model is separately selected.
 
 #### How we use it — Delegation
 

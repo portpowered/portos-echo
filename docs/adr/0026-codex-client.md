@@ -10,8 +10,8 @@ status: implementation in progress
 The [program plan](../program/plan.md#33-the-codex-app-server) selects the
 unmodified Codex app server for call control and delegated turns. `echo-codex`
 is an additive component; the bridge and its current Live path remain unchanged.
-The selected release is `rust-v0.160.0`, commit
-`a956835d020762cb2b570053af06f643a11c0ecc`. `codex.pin` fixes the Linux musl and code-mode-host
+The selected release is `rust-v0.171.0`, commit
+`ccf9be8cc458bd6b8336fe84d68d8893f2691a5e`. `codex.pin` fixes the Linux musl and code-mode-host
 asset digests. The Linux helper verifies archives before publishing an external
 cache, retains upstream LICENSE and NOTICE, and rejects corrupt warm entries.
 `ECHO_CODEX_OFFLINE=1` permits only cache reads during a test.
