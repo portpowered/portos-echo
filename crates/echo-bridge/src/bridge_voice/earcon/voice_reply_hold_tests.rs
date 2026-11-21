@@ -87,6 +87,8 @@ async fn run(gaps: &[u64], silence: u64) -> Timeline {
         write(&mut harness.mouth, gap / 20, 0);
         write(&mut harness.mouth, 25, 1000);
     }
+    // The whole reply is written: its last sound closes the mouth.
+    harness.mouth.settle();
     harness.play(&mut view).await;
     tokio::time::advance(Duration::from_millis(silence)).await;
     harness.complete(&mut view);
@@ -106,6 +108,20 @@ async fn a_600_ms_gap_closes_the_mouth_without_leaving_the_run() {
         (1680, ready()),
     ];
     assert_eq!(run(&[600], 0).await, expected);
+}
+
+/// A breath between words is not the end of speech: gaps shorter than
+/// 300 ms never leave Speaking.
+#[tokio::test(start_paused = true)]
+async fn gaps_shorter_than_300_ms_stay_speaking() {
+    // Audio 0-500, 520-1020, 1220-1720 and 2000-2500 ms.
+    let expected = [
+        (0, UiState::Listening),
+        (80, UiState::Speaking),
+        (2580, UiState::Connected),
+        (2580, ready()),
+    ];
+    assert_eq!(run(&[20, 200, 280], 0).await, expected);
 }
 
 #[tokio::test(start_paused = true)]

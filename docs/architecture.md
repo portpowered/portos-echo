@@ -1160,6 +1160,7 @@ mouth animation would need timing aligned with audible playback.
 The bridge publishes `UiState` through SSE `ScreenFrame`s; the page renders `Ready`, `Listening`,
 `Connected`, `Speaking`, errors, mute, link and approval presentations. Touch sends HTTP `UiAction`s.
 Mute can mask other presentations; emotion expiry restores activity. `Speaking` follows forwarded reply PCM.
+A quiet stretch shorter than 300 ms inside a reply stays `Speaking`; the end of a reply leaves it at once.
 
 #### Why — Screen and mouth state
 

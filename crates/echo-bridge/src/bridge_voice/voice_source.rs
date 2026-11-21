@@ -170,6 +170,13 @@ impl Source {
     pub fn wrote(&mut self, frame: &[u8]) {
         let now = Instant::now();
         self.mouth.wrote(frame, now);
+        // A reply being spoken is an answer. The no-answer window covers the
+        // wait for one, and the next quiet inside it, never the speech itself.
+        if self.mouth.voiced()
+            && let Ok(due) = self.controller.replacement_deadline()
+        {
+            self.answer_due = self.answer_due.max(due);
+        }
         self.meter.wrote(now);
         self.ear.played(frame, now);
     }

@@ -9,7 +9,9 @@ use tokio::time::{Duration, Instant};
 pub(super) const HANDBACK_GRACE: Duration = Duration::from_secs(20);
 
 /// The reply's deadline and what its expiry means. The no-answer window runs
-/// from the user's last end of speech, never while they are still speaking.
+/// from the user's last end of speech, never while they are still speaking,
+/// and again from the last reply audio written while the reply is voiced: a
+/// reply of any length plays to its end, and one that stalls still ends.
 pub(super) fn deadline(source: &Source, played: Option<Instant>) -> (Option<Instant>, Error) {
     if played.is_some() {
         return (played, Error::Deadline);

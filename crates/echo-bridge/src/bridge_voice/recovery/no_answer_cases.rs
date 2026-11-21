@@ -269,3 +269,86 @@ async fn no_answer_unanswered_follow_up_speech_ends_the_run_without_a_failure() 
     assert_eq!(count(&observer, &Command::EndRun), 1);
     assert_eq!(cuts(&observer), 0);
 }
+
+/// The call seen on the Echo: a story that takes longer to tell than the
+/// no-answer window. Its audio arrives as it is spoken, and it plays to the end.
+#[tokio::test(start_paused = true)]
+async fn no_answer_window_never_ends_a_reply_that_is_being_spoken() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    let played = Cell::new(0);
+    let start = Instant::now();
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        guard(None),
+        std::future::pending(),
+        |notice| {
+            played.set(played.get() + usize::from(matches!(notice, Notice::ReplyPlayed)));
+            Ok(())
+        },
+    ));
+    send(&tx, [said("Once upon a time")]).await;
+    for _ in 0..140 {
+        send(&tx, audible(25)).await;
+        tick(work.as_mut(), 25).await;
+    }
+    assert_eq!(Instant::now() - start, Duration::from_secs(70));
+    send(&tx, [done()]).await;
+    play(work.as_mut(), &observer).await;
+    let stats = work.await.unwrap();
+    // Every frame received was played; the pacer may add a few of its own.
+    assert_eq!(stats.reply_received, 3500);
+    assert!((3500..3510).contains(&stats.reply_sent), "{}", stats.reply_sent);
+    assert_eq!(played.get(), 1);
+    assert_eq!(count(&observer, &Command::EndRun), 1);
+    assert_eq!(cuts(&observer), 0);
+}
+
+/// A reply that stops mid-speech and never finishes is unanswered one window
+/// after its last sound, not one window after the wake.
+#[tokio::test(start_paused = true)]
+async fn no_answer_window_restarts_at_the_last_reply_audio_and_still_ends_a_stalled_reply() {
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    let start = Instant::now();
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        guard(None),
+        std::future::pending(),
+        |notice| {
+            assert!(!matches!(notice, Notice::ReplyPlayed));
+            Ok(())
+        },
+    ));
+    wait(work.as_mut(), 50).await;
+    send(&tx, [said("Once upon")]).await;
+    for _ in 0..10 {
+        send(&tx, audible(25)).await;
+        tick(work.as_mut(), 25).await;
+    }
+    // 55 s after the wake the reply has gone quiet. The first window would
+    // have ended it at 60 s.
+    assert_eq!(Instant::now() - start, Duration::from_secs(55));
+    wait(work.as_mut(), 55).await;
+    assert_eq!(work.await, Err(Error::NoResponse));
+    let ended = Instant::now() - start;
+    assert!(
+        (Duration::from_secs(114)..=Duration::from_secs(116)).contains(&ended),
+        "ended {ended:?} after the wake"
+    );
+    assert_eq!(count(&observer, &Command::EndRun), 0);
+}
