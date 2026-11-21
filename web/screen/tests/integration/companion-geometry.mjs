@@ -349,8 +349,8 @@ async function checkNative(page, { text, buttons }) {
 // A held clip (one named in held) shows no frame while its pose holds, and
 // its last frame may end the clip unseen. A replay of one is known to have
 // played through by the time from its first frame to the next replay's. The
-// first replay's first frame may be seen late, behind the entry and reveal,
-// so that time is checked from the second replay on.
+// clip's first replay may show its first frame late, behind the entry clip
+// or the reveal, so that time is checked from its second replay on.
 export function checkHandoffs(rows, expectedClips, { held = [] } = {}) {
     const heads = rows.filter(({ boundary }) => boundary === "head");
     const tails = rows.filter(({ boundary }) => boundary === "tail");
@@ -364,6 +364,7 @@ export function checkHandoffs(rows, expectedClips, { held = [] } = {}) {
         assert.equal(tail.replay, index);
         assert.notEqual(tail.element, head.element);
         const holds = held.includes(tail.clip);
+        const first = heads.findIndex(({ clip }) => clip === tail.clip);
         assert.ok(
             tail.ended && (holds || tail.duration - tail.mediaTime <= 0.12),
             diagnostic(tail),
@@ -372,7 +373,7 @@ export function checkHandoffs(rows, expectedClips, { held = [] } = {}) {
             head.mediaTime <= 0.1 && head.observedAt > tail.observedAt,
             diagnostic(head),
         );
-        if (holds && index > 0)
+        if (holds && index > first)
             assert.ok(
                 head.observedAt - heads[index].observedAt >=
                     (2000 * tail.duration) / 3,

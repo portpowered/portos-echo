@@ -348,8 +348,10 @@ async function alternatePlayback(f) {
         pixel.every((value, i) => Math.abs(value - [16, 24, 39][i]) <= 4),
         pixel,
     );
-    const setup = ["setup-enter.mp4", "setup.mp4", "setup.mp4"];
-    const observer = await armPlayback(mp4, setup, 2);
+    // Three replays, so the held clip is seen to play through once after
+    // its first replay, which checkHandoffs does not time.
+    const setup = ["setup-enter.mp4", ...Array(3).fill("setup.mp4")];
+    const observer = await armPlayback(mp4, setup, 3);
     await f.update(
         presentations.find(([state]) => state.state === "link_code")[0],
     );
