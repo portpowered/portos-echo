@@ -398,6 +398,8 @@ export function mountSettings(
         if (event.key === "Escape") leave();
     });
     return {
+        // Open with unsaved edits: the page must not reload under them.
+        dirty: () => !panel.hidden && sections.some((item) => item.dirty()),
         update(state: UiState) {
             muted.hidden = state.state !== "muted";
             // The bridge republishes its relink error only when a relink is

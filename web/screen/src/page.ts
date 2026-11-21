@@ -1,6 +1,6 @@
 import type { ScreenFrame, UiAction, UiState } from "./model";
 import { Presentation } from "./state";
-import { endpoints, postAction } from "./transport";
+import { endpoints, postAction, watchBuild } from "./transport";
 import { animate } from "./emotion";
 import { formatExpiry } from "./expiry";
 import { mountSettings } from "./settings/view";
@@ -35,6 +35,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
     let expiryTimer: ReturnType<typeof setTimeout> | undefined;
     let settings: ReturnType<typeof mountSettings> | undefined;
     let packs: ReturnType<typeof mountPacks> | undefined;
+    let unwatchBuild: (() => void) | undefined;
     async function send(action: UiAction, frame: ScreenFrame): Promise<void> {
         if (disposed || pending || presentation.current !== frame) return;
         const controller = new AbortController();
@@ -246,6 +247,11 @@ export function startPage(root: HTMLElement, href: string): () => void {
                 (signal) =>
                     postAction(urls.actions, { action: "relink" }, signal),
             );
+        unwatchBuild = watchBuild(
+            stream,
+            href,
+            () => settings?.dirty() ?? false,
+        );
     } catch {
         diagnostic.textContent = "Screen configuration is invalid";
         return () => {};
@@ -271,6 +277,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         clearTimeout(expiryTimer);
         settings?.dispose();
         packs?.dispose();
+        unwatchBuild?.();
         stream.close();
         cancelPending?.();
         window.removeEventListener("pagehide", dispose);

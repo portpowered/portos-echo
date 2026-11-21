@@ -134,6 +134,12 @@ test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and
         "Local link failed",
     );
     await update(approval);
+    // The document names the page build; every request names the one the
+    // running page loaded with, so this page never reloads itself.
+    const build = await page
+        .locator('meta[name="echo-build"]')
+        .getAttribute("content");
+    assert.match(build, /^[0-9a-f]{16}$/);
     for (const [path, file] of [
         ["/", "index.html"],
         ["/tokens.css", "tokens.css"],
@@ -142,12 +148,18 @@ test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and
     ]) {
         const response = await fetch(origin + path);
         assert.equal(response.status, 200);
+        const source = await readFile(
+            new URL(`../../dist/${file}`, import.meta.url),
+            "utf8",
+        );
         assert.equal(
             await response.text(),
-            await readFile(
-                new URL(`../../dist/${file}`, import.meta.url),
-                "utf8",
-            ),
+            path === "/"
+                ? source.replace(
+                      "<head>",
+                      `<head>\n    <meta name="echo-build" content="${build}" />`,
+                  )
+                : source,
         );
         assert.equal(response.headers.get("referrer-policy"), "no-referrer");
     }

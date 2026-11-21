@@ -10,6 +10,7 @@ import "./settings/page-v2.mjs";
 import "./settings/accounts.mjs";
 import "./settings/packs.mjs";
 import "./settings/leave.mjs";
+import "./settings/reload.mjs";
 import "./packs/player.mjs";
 import "./packs/page.mjs";
 

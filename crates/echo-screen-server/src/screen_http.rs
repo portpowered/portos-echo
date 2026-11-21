@@ -27,6 +27,7 @@ pub(super) struct HttpState {
     pub(crate) drain: watch::Receiver<Option<tokio::time::Instant>>,
     pub(crate) packs: Arc<crate::packs::Files>,
     pub(crate) origin: String,
+    build: Arc<str>,
     settings: Option<mpsc::Sender<SettingsRequest>>,
 }
 
@@ -69,6 +70,7 @@ pub(crate) fn router(
             stop,
             drain,
             origin: format!("http://{addr}"),
+            build: screen_assets::build_id(&screen_assets::startup_bundle()).into(),
             settings,
             packs,
         })
@@ -97,7 +99,7 @@ pub(crate) fn authorized(core: &Core, uri: &Uri) -> bool {
 }
 
 async fn index(State(state): State<HttpState>) -> Response {
-    screen_assets::index_with_settings(state.settings.is_some())
+    screen_assets::index_with_settings(state.settings.is_some(), &state.build)
 }
 
 impl HttpState {
@@ -215,6 +217,7 @@ mod tests {
             stop: stop_rx,
             drain: drain_rx,
             origin: "http://127.0.0.1:1".into(),
+            build: "synthetic".into(),
             settings: None,
             packs: Arc::default(),
         };
@@ -251,6 +254,7 @@ mod tests {
                 stop: stop_rx,
                 drain: drain_rx,
                 origin: "http://127.0.0.1:1".into(),
+                build: "synthetic".into(),
                 settings: None,
                 packs: Arc::default(),
             };

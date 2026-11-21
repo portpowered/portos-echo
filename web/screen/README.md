@@ -18,6 +18,14 @@ receive 503 and lagging streams disconnect. POST accepts JSON up to 65536 bytes
 and refuses a supplied foreign Origin. No action is executed or retried here.
 LAN access must wait for pinned TLS in W3.
 
+Every served document names its page build in `<meta name="echo-build">`: a
+digest of the document, both stylesheets and the script bundle. Each time the
+events stream opens, the page fetches the document again and reloads itself
+once when the build named there is not its own, so a bridge upgraded in place
+never keeps driving the previous page. It reloads at most once per build,
+waits while Settings holds unsaved edits, and does nothing when no build is
+named.
+
 The optional home-backed settings host adds a fixed
 `<meta name="echo-settings" content="v1">` capability to the served page.
 That page shows a top-right Settings gear. Back or Escape returns to the
