@@ -5,6 +5,8 @@ use super::*;
 use std::cell::Cell;
 
 const WINDOW: Duration = Duration::from_secs(60);
+/// A window short enough for a reply to outlast it in a few hundred frames.
+const SHORT: Duration = Duration::from_secs(2);
 const GRACE: Duration = voice_wait::HANDBACK_GRACE;
 
 fn guard(listen_timeout: Option<Duration>) -> Options {
@@ -272,6 +274,9 @@ async fn no_answer_unanswered_follow_up_speech_ends_the_run_without_a_failure() 
 
 /// The call seen on the Echo: a story that takes longer to tell than the
 /// no-answer window. Its audio arrives as it is spoken, and it plays to the end.
+/// The window here is two seconds and the story five: each paced frame costs
+/// the test a thousand polls of the run, so the 70 s story of the call took
+/// most of the 30 s a test is allowed.
 #[tokio::test(start_paused = true)]
 async fn no_answer_window_never_ends_a_reply_that_is_being_spoken() {
     let observer = Observer::default();
@@ -287,7 +292,10 @@ async fn no_answer_window_never_ends_a_reply_that_is_being_spoken() {
         &mut events,
         mic,
         &mut port,
-        guard(None),
+        Options {
+            response_deadline: start + SHORT,
+            ..guard(None)
+        },
         std::future::pending(),
         |notice| {
             played.set(played.get() + usize::from(matches!(notice, Notice::ReplyPlayed)));
@@ -295,17 +303,19 @@ async fn no_answer_window_never_ends_a_reply_that_is_being_spoken() {
         },
     ));
     send(&tx, [said("Once upon a time")]).await;
-    for _ in 0..140 {
+    for _ in 0..10 {
         send(&tx, audible(25)).await;
         tick(work.as_mut(), 25).await;
     }
-    assert_eq!(Instant::now() - start, Duration::from_secs(70));
+    // Two and a half windows of speech, and the run is still pending.
+    assert_eq!(Instant::now() - start, Duration::from_secs(5));
+    assert!(Instant::now() - start > 2 * SHORT);
     send(&tx, [done()]).await;
     play(work.as_mut(), &observer).await;
     let stats = work.await.unwrap();
     // Every frame received was played; the pacer may add a few of its own.
-    assert_eq!(stats.reply_received, 3500);
-    assert!((3500..3510).contains(&stats.reply_sent), "{}", stats.reply_sent);
+    assert_eq!(stats.reply_received, 250);
+    assert!((250..260).contains(&stats.reply_sent), "{}", stats.reply_sent);
     assert_eq!(played.get(), 1);
     assert_eq!(count(&observer, &Command::EndRun), 1);
     assert_eq!(cuts(&observer), 0);
