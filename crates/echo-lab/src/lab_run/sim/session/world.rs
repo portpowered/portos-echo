@@ -336,10 +336,7 @@ impl World {
         if let Some(provider) = &self.provider {
             failures.extend(provider.quiesce().await.err());
         }
-        if let Some(mut bridge) = self.bridge.take() {
-            failures.extend(bridge.close().await.err());
-            self.collect_trace_failures(&mut failures);
-        }
+        self.close_bridge(&mut failures).await;
         if let Some(relay) = self.relay.take() {
             match relay.close().await {
                 Ok(timing) => self.wire.push(timing.session_observation()),
@@ -370,11 +367,14 @@ impl World {
         }
     }
 
-    fn collect_trace_failures(&mut self, failures: &mut Vec<String>) {
-        failures.extend(self.read_trace().and_then(|()| self.trace.finish()).err());
-        failures.extend(self.retain_trace().err());
-        for record in self.trace.records.iter().filter(|r| r["event"] == "bridge.error") {
-            failures.push(format!("session bridge: {}", record["reason"]));
+    async fn close_bridge(&mut self, failures: &mut Vec<String>) {
+        if let Some(mut bridge) = self.bridge.take() {
+            failures.extend(bridge.close().await.err());
+            failures.extend(self.read_trace().and_then(|()| self.trace.finish()).err());
+            failures.extend(self.retain_trace().err());
+            for record in self.trace.records.iter().filter(|r| r["event"] == "bridge.error") {
+                failures.push(format!("session bridge: {}", record["reason"]));
+            }
         }
     }
 
