@@ -52,9 +52,8 @@ pub struct CodexConfig {
     pub skills: Vec<String>,
 }
 
-/// Owner, 2026-11-18: conversation is the default and a hand-off is the exception.
-/// Device, 2026-11-21: "answer directly" and "if unsure, answer instead" kept the
-/// Live voice from delegating a hold or an end right after it answered a question.
+/// Owner, 2026-11-18: conversation stays with the voice. Device, 2026-11-21: waiting
+/// and ending lead, delegated first, or the voice answered them with speech alone.
 pub const LIVE_INSTRUCTIONS: &str = r#"You are a friendly voice assistant on a smart speaker. Answer briefly.
 
 Waiting and ending are background-agent tasks. When the user asks you to wait, hold on, pause, give them a minute, or end, stop or hang up the call, delegate it to the background agent with the user's exact words before you say anything. Do this every time, also right after you answered another question. Never handle these yourself: your words alone cannot keep the call open or close it. Saying goodbye does not end the call; only the delegation does, so delegate first and say goodbye only after it.
@@ -270,22 +269,21 @@ mod tests {
 
     #[test]
     fn agent_home_builtin_prompts_match_the_admitted_text() {
+        // The shipped default prompt files are these texts (voice.md adds the web-search note).
+        let voice = include_str!("../../../examples/prompts/voice.md");
         assert_eq!(
-            LIVE_INSTRUCTIONS,
-            r#"You are a friendly voice assistant on a smart speaker. Answer briefly.
+            voice
+                .split(
+                    "
 
-Waiting and ending are background-agent tasks. When the user asks you to wait, hold on, pause, give them a minute, or end, stop or hang up the call, delegate it to the background agent with the user's exact words before you say anything. Do this every time, also right after you answered another question. Never handle these yourself: your words alone cannot keep the call open or close it. Saying goodbye does not end the call; only the delegation does, so delegate first and say goodbye only after it.
-User: What time is it? You: It's ten past three. User: Hold on for two minutes. You: [delegate "Hold on for two minutes."] Sure, I'll wait.
-User: What's twelve times four? You: Forty-eight. User: End the call now. You: [delegate "End the call now."] Okay, ending the call. Goodbye!
-User: Thanks, that's all. You: [delegate "Thanks, that's all."] Bye for now!
-
-Talk with the user yourself for small talk, opinions, explanations, general knowledge and arithmetic. Delegate actions on devices or services, and live or personal data you do not have. After a delegation, say one short acknowledgement and wait for its result; never delegate the same request twice. The context is a call-start snapshot: answer time, date, and day-of-week questions yourself from it. When no operator time zone is configured, UTC does not establish the user's local time zone."#
+When current facts"
+                )
+                .next(),
+            Some(LIVE_INSTRUCTIONS)
         );
         assert_eq!(
-            RUNNER_INSTRUCTIONS,
-            r"Client audio bridge
-
-For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Describe a queued or pending action as submitted and stop. Even a successful delivery receipt only confirms delivery. When checking the effect of a completed light command, read the resolved lights' fresh power state once. Report only the confirmed result or uncertainty in one short sentence. If the tool says to relink Port OS, relay that instruction."
+            include_str!("../../../examples/prompts/runner.md").trim_end(),
+            RUNNER_INSTRUCTIONS
         );
         // The goodbye guidance is the bridge's own, never part of a base prompt.
         for base in [LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS] {
