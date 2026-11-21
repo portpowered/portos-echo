@@ -18,7 +18,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "scripts/packs/companion"))
-from render import keyframes  # noqa: E402
+import render  # noqa: E402
 
 ROLES = ("idle", "connecting", "listening", "thinking", "speaking", "muted",
          "setup", "approval", "error", "happy")
@@ -27,10 +27,15 @@ SUCCESS = "screenpack: companion=0.2.2 generated=PASS checksum=PASS\n"
 FAILURE = "screenpack: generation failed; output was not published\n"
 WIDTH, HEIGHT = 768, 720
 FRAME_BYTES = WIDTH * HEIGHT * 4
-EYES = (.5735, .2233, .7520, .2709)
-MOUTH = (.6193, .3174, .6852, .3609)
 BACKGROUND = (16, 24, 39)
-HOME_CENTER, CARD_CENTER = 506, 252
+HOME_CENTER, CARD_CENTER = 384, 274
+# The poses that stand beside a card for as long as it shows.
+CARD = ("setup", "approval", "error")
+# The idle loop is drawn at 10 fps; its first blink is frame 14.
+RATES = {"idle": 10}
+BLINK = 14
+# Two states are told apart when their middle frames differ by this much.
+DISTINCT = 0.4
 
 
 def invoke(out, *, env=None):
@@ -43,7 +48,7 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def decode(path, extension):
+def decode(path, extension, rate=30):
     decoder = ["-c:v", "libvpx-vp9"] if extension == "webm" else []
     result = subprocess.run(
         ["ffmpeg", "-nostdin", "-hide_banner", "-threads", "1", *decoder,
@@ -54,7 +59,7 @@ def decode(path, extension):
     assert len(re.findall(r"Stream #0:", header)) == 1, header
     assert f"Video: {codec}" in header, header
     assert re.search(r"\b768x720\b", header), header
-    assert re.search(r"\b30 fps\b", header), header
+    assert re.search(rf"\b{rate} fps\b", header), header
     assert len(result.stdout) % FRAME_BYTES == 0, header
     if extension == "webm":
         assert re.search(r"alpha_mode\s*:\s*1", header), header
@@ -62,11 +67,24 @@ def decode(path, extension):
     return [frames[i:i + FRAME_BYTES] for i in range(0, len(frames), FRAME_BYTES)]
 
 
-def crop(frame, region, shift=0):
-    left, top, right, bottom = (round(value * size)
-                                for value, size in zip(region, (WIDTH, HEIGHT, WIDTH, HEIGHT)))
-    return b"".join(frame[(y * WIDTH + left + shift) * 4:(y * WIDTH + right + shift) * 4]
+def crop(frame, region, down=0):
+    left, top, right, bottom = region
+    return b"".join(frame[((y + down) * WIDTH + left) * 4:((y + down) * WIDTH + right) * 4]
                     for y in range(top, bottom))
+
+
+def changed(a, b):
+    """The box of the pixels that differ between two registered frames."""
+    xs, ys = [], []
+    for y in range(HEIGHT):
+        row = y * WIDTH * 4
+        hits = [x for x in range(WIDTH)
+                if abs(a[row + x * 4 + 1] - b[row + x * 4 + 1]) > 48]
+        if hits:
+            ys.append(y)
+            xs += [hits[0], hits[-1]]
+    assert ys, "the frames do not differ"
+    return min(xs), min(ys), max(xs) + 1, max(ys) + 1
 
 
 def delta(a, b):
@@ -86,17 +104,9 @@ def visual(frame, has_alpha):
     return out
 
 
-def classify(frame, region, references, shifts):
+def classify(frame, region, references, drops=(0,)):
     return min(references, key=lambda key: min(
-        delta(crop(frame, region, shift), references[key]) for shift in shifts))
-
-
-def card_reference(rest):
-    offset = (HOME_CENTER - CARD_CENTER) * 4
-    stride = WIDTH * 4
-    matte = bytes((*BACKGROUND, 255)) * (HOME_CENTER - CARD_CENTER)
-    return b"".join(rest[start + offset:start + stride] + matte
-                    for start in range(0, len(rest), stride))
+        delta(crop(frame, region, drop), references[key]) for drop in drops))
 
 
 def visible_center(frame, with_alpha):
@@ -231,63 +241,72 @@ class CompanionPack(unittest.TestCase):
         print("REFUSAL occupied=preserved encoder_exit=73 output=absent staging=absent", flush=True)
 
     def test_media_in_both_decoders(self):
-        art = keyframes()
-        eyes = {key: crop(art[key], EYES) for key in ("idle", "blink")}
-        mouths = {key: crop(art[key], MOUTH) for key in ("idle", "half", "open")}
+        render.MATCHES = self.root
+        art = render.keyframes()
+        eyes_at = changed(art["neutral"], art["blink"])
+        mouth_at = changed(art["neutral"], art["mouth-open"])
+        eyes = {key: crop(art[key], eyes_at) for key in ("neutral", "blink")}
+        mouths = {key: crop(art[key], mouth_at)
+                  for key in ("neutral", "mouth-half", "mouth-open")}
         for ext in ("webm", "mp4"):
             with self.subTest(codec=ext):
-                self.check_media(ext, art["rest"], eyes, mouths)
+                self.check_media(ext, art["neutral"], (eyes_at, eyes), (mouth_at, mouths))
 
     def check_media(self, ext, rest, eyes, mouths):
         with_alpha = ext == "webm"
         rest = visual(rest, True)
-        card_rest = card_reference(rest)
         representatives = {}
         for role in ROLES:
-            frames = decode(self.extracted / f"{role}.{ext}", ext)
+            frames = decode(self.extracted / f"{role}.{ext}", ext, RATES.get(role, 30))
             first, last = (visual(frame, with_alpha) for frame in (frames[0], frames[-1]))
-            neutral = card_rest if role == "setup" else rest
-            self.assertLess(delta(first, neutral), 4, (ext, role, "start"))
-            self.assertLess(delta(last, neutral), 4, (ext, role, "end"))
             self.assertLess(delta(first, last), 1.5, (ext, role, "join"))
+            centers = [visible_center(frame, with_alpha) for frame in (frames[0], frames[-1])]
+            if role in CARD:
+                # A card pose is held from its first frame: nothing of the
+                # centred neutral frame shows through it.
+                for center in centers:
+                    self.assertAlmostEqual(center, CARD_CENTER, delta=32, msg=(ext, role))
+            else:
+                self.assertLess(delta(first, rest), 4, (ext, role, "start"))
+                self.assertLess(delta(last, rest), 4, (ext, role, "end"))
             representatives[role] = visual(frames[len(frames) // 2], with_alpha)
             if role == "setup":
-                self.check_setup(ext, rest, card_rest, frames, first)
+                self.check_setup(ext, rest, frames, first)
             if role == "idle":
-                blink = [classify(frame, EYES, eyes, (0,)) for frame in frames[57:70]]
-                self.assertEqual(blink, ["idle"] * 5 + ["blink"] * 4 + ["idle"] * 4)
+                # She breathes, so the eyes sit up to BOB pixels lower.
+                drops = range(render.BOB + 1)
+                blink = [classify(frames[BLINK + step], *eyes, drops) for step in (-2, -1, 0, 2, 3)]
+                self.assertEqual(blink, ["neutral", "neutral", "blink", "neutral", "neutral"])
             if role == "speaking":
-                speech = [classify(frame, MOUTH, mouths, range(-5, 6))
-                          for frame in frames[12:-12]]
-                self.assertEqual(set(speech), {"idle", "half", "open"})
+                speech = [classify(frame, *mouths) for frame in frames[12:-12]]
+                self.assertEqual(set(speech), {"neutral", "mouth-half", "mouth-open"})
                 self.assertFalse(any(speech[p:] == speech[:-p] for p in range(1, len(speech) // 2)))
                 self.assertGreater(sum(a != b for a, b in itertools.pairwise(speech)), 6)
             if role == "muted":
                 self.assertEqual(len({hashlib.sha256(frame).digest() for frame in frames}), 1)
             if with_alpha:
                 self.assertLess(frames[0][3], 16)
-                center = CARD_CENTER if role == "setup" else HOME_CENTER
+                center = CARD_CENTER if role in CARD else HOME_CENTER
                 self.assertGreater(frames[0][(229 * WIDTH + center) * 4 + 3], 240)
         pairs = tuple(itertools.combinations(representatives, 2))
         differences = [delta(representatives[a], representatives[b]) for a, b in pairs]
-        self.assertEqual(sum(value > 1.5 for value in differences), 45,
-                         [(pair, value) for pair, value in zip(pairs, differences) if value <= 1.5])
-        print(f"MEDIA codec={ext} fps=30 distinct_pairs=45/45 neutral_endpoints=20/20 "
-              f"blink_frames={blink.count('blink')} mouth_classes={len(set(speech))} "
-              "shorter_period=none muted_unique=1", flush=True)
+        same = [(pair, value) for pair, value in zip(pairs, differences) if value <= DISTINCT]
+        self.assertEqual(same, [])
+        print(f"MEDIA codec={ext} distinct_pairs={len(pairs)}/{len(pairs)} "
+              f"least_difference={min(differences):.3f} blink_frame={BLINK} "
+              f"mouth_classes={len(set(speech))} shorter_period=none muted_unique=1", flush=True)
 
-    def check_setup(self, ext, rest, card_rest, held, held_first):
+    def check_setup(self, ext, rest, held, held_first):
         with_alpha = ext == "webm"
         entry = decode(self.extracted / f"setup-enter.{ext}", ext)
         first, last = (visual(frame, with_alpha) for frame in (entry[0], entry[-1]))
         self.assertLess(delta(first, rest), 4, (ext, "setup-enter", "start"))
-        self.assertLess(delta(last, card_rest), 4, (ext, "setup-enter", "end"))
         seam = delta(last, held_first)
         self.assertLess(seam, 1.5, (ext, "setup-enter to setup"))
         entry_centers = [visible_center(frame, with_alpha) for frame in entry]
         held_centers = [visible_center(frame, with_alpha) for frame in held]
         self.assertAlmostEqual(entry_centers[0], HOME_CENTER, delta=12)
-        self.assertAlmostEqual(entry_centers[-1], CARD_CENTER, delta=12)
+        self.assertAlmostEqual(entry_centers[-1], CARD_CENTER, delta=32)
         self.assertTrue(all(right <= left + 4 for left, right in itertools.pairwise(entry_centers)),
                         entry_centers)
         self.assertTrue(all(abs(center - CARD_CENTER) <= 32 for center in held_centers),

@@ -453,11 +453,14 @@ release downloads in tests.
 ## Companion pack
 
 Companion 0.2.2 is an optional cel-shaded character with poses for Echo's screen
-states and a happy emote. In Listening, she cups an ear with her mouth closed.
+states and a happy emote. In Listening, she tilts her head with her mouth closed.
+Beside a card (link code, approval, error) she stands left of centre from the
+clip's first frame. The idle loop breathes and blinks at 10 fps; the other
+clips are 30 fps.
 Her `mouth` set drives [lip sync](#lip-sync): the neutral frame is the closed
 mouth, `mouth-half.png` and `mouth-open.png` the other two, and each vowel
 drawing under `scripts/packs/companion/art/` is published when it exists.
-The clock and date share a centre line below the character. Codex image generation
+The clock and date sit bottom right, over the character. Codex image generation
 produced an original reference sheet and edited it into the poses. The checked-in PNGs and their
 [generation prompts](../scripts/packs/companion/prompts.md) are the source for
 the offline video build.
