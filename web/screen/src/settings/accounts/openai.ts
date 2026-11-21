@@ -25,7 +25,9 @@ const operationLabels: Record<OpenAiAccountV2["operation_state"], string> = {
 export function mountOpenAI(
     parent: AccountRow,
     actions: string,
-    perform: (work: (signal: AbortSignal) => Promise<string>) => Promise<void>,
+    perform: (
+        work: (signal: AbortSignal) => Promise<string>,
+    ) => Promise<unknown>,
 ) {
     const linkStatus = element("p");
     const operationStatus = element("p");

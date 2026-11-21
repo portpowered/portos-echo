@@ -13,6 +13,20 @@ export function element<K extends keyof HTMLElementTagNameMap>(
     node.textContent = value;
     return node;
 }
+// What leaving Settings asks of a section: whether it holds edits that were
+// never saved, and its own save, true once the bridge accepted it.
+export type Section = { dirty: () => boolean; save: () => Promise<boolean> };
+export type Track = (section: Section) => void;
+export type Save<T> = (value: T) => Promise<boolean>;
+
+// A section's action row: its save button on the column's right edge, any
+// secondary action to its left.
+export function actions(...buttons: HTMLElement[]) {
+    const row = element("div");
+    row.className = "settings-actions";
+    row.append(...buttons);
+    return row;
+}
 // One row: the label at the left and its control at the right. `control` may
 // wrap `target` (a stepper); the label always names `target` alone.
 export function field(
@@ -56,7 +70,8 @@ export function number(
 
 export function settingsForm(
     snapshot: Snapshot | SnapshotV2,
-    save: (patch: PatchV2) => void,
+    save: Save<PatchV2>,
+    track: Track,
     extra?: { rows: HTMLElement[]; addPatch: (patch: PatchV2) => void },
 ) {
     const form = element("form");
@@ -105,10 +120,9 @@ export function settingsForm(
             "p",
             "Settings apply after the current reply finishes. Prompt edits apply to the next conversation.",
         ),
-        element("button", "Save settings"),
+        actions(element("button", "Save settings")),
     );
-    form.addEventListener("submit", (event) => {
-        event.preventDefault();
+    function edits() {
         const patch: PatchV2 = {};
         if (enabled.checked !== values.voice.session_listen_enabled)
             (patch.voice ??= {}).session_listen_enabled = enabled.checked;
@@ -119,10 +133,23 @@ export function settingsForm(
             patch.codex = { voice: voice.value };
         if (cap.value !== values.agent.daily_request_cap)
             (patch.agent ??= {}).daily_request_cap = cap.value;
-        if (tools && tools.input.valueAsNumber !== legacyCap)
+        // Read the saved cap now: an accepted save has already updated it.
+        if (
+            tools &&
+            snapshot.version === 1 &&
+            tools.input.valueAsNumber !== snapshot.settings.agent.max_tool_calls
+        )
             (patch.agent ??= {}).max_tool_calls = tools.input.valueAsNumber;
         extra?.addPatch(patch);
-        save(patch);
+        return patch;
+    }
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        void save(edits());
+    });
+    track({
+        dirty: () => Object.keys(edits()).length > 0,
+        save: async () => form.reportValidity() && save(edits()),
     });
     return form;
 }
@@ -130,7 +157,8 @@ export function settingsForm(
 export function promptForm(
     kind: "voice" | "runner",
     text: string,
-    save: (text: string) => void,
+    save: Save<string>,
+    track: Track,
 ) {
     const form = element("form");
     const input = element("textarea");
@@ -143,20 +171,28 @@ export function promptForm(
     form.append(
         element("h2", `${kind === "voice" ? "Voice" : "Runner"} instructions`),
         prompt,
-        element("button", `Save ${kind}.md`),
+        actions(element("button", `Save ${kind}.md`)),
     );
-    form.addEventListener("submit", (event) => {
-        event.preventDefault();
+    let loaded = text;
+    async function submit() {
         if (
             !input.value.trim() ||
             new TextEncoder().encode(input.value).length > 32768
         ) {
             input.setCustomValidity("Use nonblank text of at most 32 KiB.");
             input.reportValidity();
-            return;
+            return false;
         }
-        save(input.value);
+        const value = input.value;
+        const saved = await save(value);
+        if (saved) loaded = value;
+        return saved;
+    }
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        void submit();
     });
+    track({ dirty: () => input.value !== loaded, save: submit });
     input.addEventListener("input", () => input.setCustomValidity(""));
     return form;
 }
