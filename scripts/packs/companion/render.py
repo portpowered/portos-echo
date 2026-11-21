@@ -20,23 +20,18 @@ CENTER = WIDTH // 2
 SUBPIXEL = 4
 BOB = 10
 
-# Artwork rectangles (x, y, w, h), with atlas gutters removed. Every pose is
-# scaled to POSE_HEIGHT, so each rectangle is a bust of the same proportion.
-# The neutral frame and its variants are whole generated images of one size
-# and framing. They share one rectangle, so they register with each other;
-# the renderer only places, sequences and cross-fades them.
+# Every frame is a whole generated image of one size and framing: the neutral
+# master and one edit of it per mouth shape, blink and state. They share one
+# rectangle (x, y, w, h), so they register with each other; the renderer only
+# places, grades, sequences and cross-fades them.
 MASTER = (0, 6, 1024, 1530)
-VARIANTS = ("mouth-half", "mouth-open", "blink", "listening")
-POSES = {
-    "connecting": ("poses", (634, 12, 287, 487)),
-    "thinking": ("poses", (113, 524, 309, 487)),
-    "error": ("poses", (613, 523, 320, 488)),
-    "happy": ("poses", (1159, 524, 264, 487)),
-    "setup": ("cards", (103, 18, 610, 847)),
-    "approval": ("cards", (1068, 16, 525, 851)),
-}
+VARIANTS = ("mouth-half", "mouth-open", "blink", "listening", "connecting",
+            "thinking", "error", "happy", "setup", "approval")
 # Poses shown next to a card stand left of centre, clear of the card.
 CARD_SHIFT = {"setup": -110, "approval": -110, "error": -110}
+# One colour grade for every frame, from -1 (cool) to 1 (warm): red gains and
+# blue loses a fifth of it. Set by the build's --warmth option.
+WARMTH = 0.0
 
 # Unequal held mouth shapes, from the first frame after the neutral one. The
 # runs never repeat as a shorter regular speech cycle.
@@ -81,8 +76,9 @@ def raw_input(path):
 
 def cutout(sheet, rect, filters):
     x, y, width, height = rect
+    grade = f"colorchannelmixer=rr={1 + WARMTH / 5:.4f}:bb={1 - WARMTH / 5:.4f},"
     return run(["-i", str(ART / f"{sheet}.png"), "-vf",
-                f"format=rgba,crop={width}:{height}:{x}:{y},"
+                f"format=rgba,crop={width}:{height}:{x}:{y},{grade if WARMTH else ''}"
                 f"lutrgb=a='if(lt(val,16),0,val)',{filters}", "-frames:v", "1",
                 "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
 
@@ -111,11 +107,9 @@ def mix(first, second):
 
 
 def keyframes():
-    frames = {name: raster(sheet, rect) for name, (sheet, rect) in POSES.items()}
+    frames = {name: raster(name, MASTER) for name in VARIANTS}
     for name, x in CARD_SHIFT.items():
         frames[name] = shift(frames[name], x, 0)
-    for name in VARIANTS:
-        frames[name] = raster(name, MASTER)
     frames["bob"] = [raster("neutral", MASTER, drop) for drop in range(BOB * SUBPIXEL + 1)]
     frames["neutral"] = frames["bob"][0]
     return frames
@@ -230,7 +224,9 @@ def encode(pack, raw, role, count):
          str(pack / f"{role}.mp4")])
 
 
-def render(pack, work):
+def render(pack, work, warmth=0.0):
+    global WARMTH
+    WARMTH = warmth
     frames = keyframes()
     run([*raw_input("pipe:0"), "-frames:v", "1", "-threads", "1",
          str(pack / "rest.png")], frames["neutral"])

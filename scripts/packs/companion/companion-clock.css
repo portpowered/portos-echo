@@ -1,0 +1,12 @@
+.pack-clock,
+.pack-date {
+    text-align: right;
+}
+.pack-clock {
+    font-size: 72px;
+    font-weight: 700;
+}
+.pack-date {
+    font-size: 28px;
+    opacity: 0.85;
+}

@@ -33,11 +33,10 @@ def manifest(version):
         "layout": {
             "safe_area": {"x": 0, "y": 0, "width": 100, "height": 100},
             "slots": {
-                # Time and date sit bottom right, drawn over the stage. Their
-                # size and place come from these slots alone, so they hold
-                # still whatever the page reloads.
-                "clock": {"x": 72, "y": 70, "font_scale": 2},
-                "date": {"x": 72, "y": 84, "font_scale": 1.25},
+                # Time and date sit bottom right, drawn over the stage and
+                # right-aligned on x by the pack's stylesheet.
+                "clock": {"x": 96, "y": 71},
+                "date": {"x": 96, "y": 89},
                 "status": {"x": 62, "y": 14, "font_scale": 1},
                 "link_code": {"x": 62, "y": 24},
                 "approval": {"x": 62, "y": 24},
@@ -45,6 +44,7 @@ def manifest(version):
             },
             "stage": {"anchor": {"x": 50, "y": 50}, "scale": 2,
                       "background": BACKGROUND},
+            "css": "companion-clock.css",
         },
         "character": {
             "rest": "rest.png",
@@ -76,7 +76,7 @@ def archive_pack(pack, archive):
     archive.with_suffix(".gz.sha256").write_text(f"{digest}  {archive.name}\n", encoding="ascii")
 
 
-def build(version, out):
+def build(version, out, warmth=0.0):
     if sys.platform != "linux" or out.exists() or out.is_symlink():
         raise ValueError("Linux and an unused output path are required")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +85,9 @@ def build(version, out):
         payload = stage / "output"
         pack = payload / f"companion@{version}"
         pack.mkdir(parents=True)
-        render(pack, stage)
+        render(pack, stage, warmth)
+        stylesheet = Path(__file__).with_name("companion-clock.css")
+        (pack / stylesheet.name).write_bytes(stylesheet.read_bytes())
         (pack / "pack.json").write_text(json.dumps(manifest(version), indent=2) + "\n",
                                        encoding="utf-8")
         archive_pack(pack, payload / f"companion-{version}.screenpack.tar.gz")
@@ -100,11 +102,15 @@ def main():
     parser = argparse.ArgumentParser(description="Build Companion screen-pack data (Linux only).")
     parser.add_argument("--version", required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--warmth", type=float, default=0.0,
+                        help="colour grade of every frame, -1 (cool) to 1 (warm)")
     args = parser.parse_args()
+    if not -1 <= args.warmth <= 1:
+        parser.error("invalid warmth")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?", args.version):
         parser.error("invalid version")
     try:
-        build(args.version, args.out.absolute())
+        build(args.version, args.out.absolute(), args.warmth)
     except (OSError, ValueError, subprocess.SubprocessError):
         print(DIAGNOSTIC, file=sys.stderr)
         return 1
