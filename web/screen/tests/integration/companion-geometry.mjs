@@ -614,20 +614,63 @@ export async function checkSteadyColour({ page }) {
 }
 
 // The idle home screen is what the display shows most of the day. On the Echo
-// every video frame that differs from the last costs a software decode and a
-// full redraw, off the page's main thread, so the pack keeps the idle loop
-// slow and the page does no work of its own between frames. Measured here in
-// headless Chromium over seven seconds of the idle loop:
+// a playing clip costs about 16% of a core with nothing changing and about 3%
+// more for each frame it shows a second, all off the page's main thread. The
+// idle loop is therefore one slow breath at 10 fps and then a hold with
+// blinks, and the page does no work of its own between frames. Measured here
+// in headless Chromium over the first seven seconds of the idle loop:
 //
-//                               30 fps idle loop   10 fps idle loop   budget
-//     frames shown per second               30.0               10.0       16
-//     main thread busy, ms/s                 3.1                3.2       30
-//     script, ms/s                          0.62               0.69       10
-//     layout and style, ms/s                0.21               0.23        5
+//                             30 fps loop   10 fps loop   breath, hold   budget
+//     frames shown per second        30.0          10.0             4.6        7
+//     main thread busy, ms/s          3.1           3.2             3.9       30
+//     script, ms/s                   0.62          0.69            0.73       10
+//     layout and style, ms/s         0.21          0.23            0.18        5
 //
-// The frame rate is what separates the two builds; the main-thread budgets
-// keep per-frame page work from creeping in beside it.
-const idleBudget = { frames: 16, task: 30, script: 10, layout: 5 };
+// On the Echo the three builds take 88%, 45% and 24% of a core (WebView
+// renderer plus the screen app). The frame rate is what separates them; the
+// main-thread budgets keep per-frame page work from creeping in beside it.
+const idleBudget = { frames: 7, task: 30, script: 10, layout: 5 };
+
+async function count(window_ms) {
+    const proto = HTMLVideoElement.prototype;
+    const original = {
+        frame: proto.requestVideoFrameCallback,
+        timeout: window.setTimeout,
+        interval: window.setInterval,
+        animation: window.requestAnimationFrame,
+    };
+    let armed = 0;
+    const counted = (call) =>
+        function (...args) {
+            armed++;
+            return call.apply(this, args);
+        };
+    proto.requestVideoFrameCallback = counted(original.frame);
+    window.setTimeout = counted(original.timeout);
+    window.setInterval = counted(original.interval);
+    window.requestAnimationFrame = counted(original.animation);
+    let frames = 0;
+    let done = false;
+    for (const video of document.querySelectorAll(".pack-stage video")) {
+        const tick = () => {
+            if (done) return;
+            frames++;
+            original.frame.call(video, tick);
+        };
+        original.frame.call(video, tick);
+    }
+    const start = performance.now();
+    await new Promise((resolve) =>
+        original.timeout.call(window, resolve, window_ms),
+    );
+    done = true;
+    proto.requestVideoFrameCallback = original.frame;
+    window.setTimeout = original.timeout;
+    window.setInterval = original.interval;
+    window.requestAnimationFrame = original.animation;
+    const seconds = (performance.now() - start) / 1000;
+    return { frames: frames / seconds, armed: armed / seconds };
+}
 
 export async function checkIdleCost({ page }) {
     await page.waitForFunction(
@@ -668,7 +711,10 @@ export async function checkIdleCost({ page }) {
                 ({ name, value }) => [name, value],
             ),
         );
-    // The page runs untouched while its own cost is measured.
+    // The frames the display is given are counted over the whole window, with
+    // every timer and frame callback the page arms itself.
+    const counting = page.evaluate(count, 7000);
+    await page.waitForTimeout(1000);
     const before = await metrics();
     await page.waitForTimeout(4000);
     const after = await metrics();
@@ -679,55 +725,13 @@ export async function checkIdleCost({ page }) {
         script: rate("ScriptDuration"),
         layout: rate("LayoutDuration") + rate("RecalcStyleDuration"),
     };
-
-    // Then the frames the display is given are counted, with every timer and
-    // frame callback the page arms itself in the same window.
-    const shown = await page.evaluate(async (window_ms) => {
-        const proto = HTMLVideoElement.prototype;
-        const original = {
-            frame: proto.requestVideoFrameCallback,
-            timeout: window.setTimeout,
-            interval: window.setInterval,
-            animation: window.requestAnimationFrame,
-        };
-        let armed = 0;
-        const counted = (call) =>
-            function (...args) {
-                armed++;
-                return call.apply(this, args);
-            };
-        proto.requestVideoFrameCallback = counted(original.frame);
-        window.setTimeout = counted(original.timeout);
-        window.setInterval = counted(original.interval);
-        window.requestAnimationFrame = counted(original.animation);
-        let frames = 0;
-        let done = false;
-        for (const video of document.querySelectorAll(".pack-stage video")) {
-            const tick = () => {
-                if (done) return;
-                frames++;
-                original.frame.call(video, tick);
-            };
-            original.frame.call(video, tick);
-        }
-        const start = performance.now();
-        await new Promise((resolve) =>
-            original.timeout.call(window, resolve, window_ms),
-        );
-        done = true;
-        proto.requestVideoFrameCallback = original.frame;
-        window.setTimeout = original.timeout;
-        window.setInterval = original.interval;
-        window.requestAnimationFrame = original.animation;
-        const seconds = (performance.now() - start) / 1000;
-        return { frames: frames / seconds, armed: armed / seconds };
-    }, 3000);
+    const shown = await counting;
     await session.detach();
     console.log(
         `B8 idle frames_per_s=${shown.frames.toFixed(1)} armed_per_s=${shown.armed.toFixed(2)} task_ms_per_s=${cost.task.toFixed(1)} script_ms_per_s=${cost.script.toFixed(2)} layout_ms_per_s=${cost.layout.toFixed(2)} layouts=${after.LayoutCount - before.LayoutCount} recalcs=${after.RecalcStyleCount - before.RecalcStyleCount}`,
     );
     assert.ok(
-        shown.frames > 2 && shown.frames <= idleBudget.frames,
+        shown.frames > 0 && shown.frames <= idleBudget.frames,
         `idle shows ${shown.frames.toFixed(1)} frames a second`,
     );
     // A loop that re-arms itself every frame would arm 10 or more a second.
