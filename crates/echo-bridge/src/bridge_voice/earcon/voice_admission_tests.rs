@@ -371,3 +371,39 @@ async fn wake_earcon_admission_peer_deadline_cuts_without_success_or_connected()
         1
     );
 }
+
+#[cfg(test)]
+pub(crate) async fn endpoint_fixture(
+    connector: impl echo_link::LinkConnector,
+    stream: tokio::io::DuplexStream,
+    cancelled: impl Future<Output = ()>,
+    ready: &tokio::sync::Notify,
+) -> Result<(), Error> {
+    use echo_link::LinkConnector as _;
+    let (read, write) = tokio::io::split(stream);
+    let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
+    let retained = super::super::retained_link::Retained::new(connector);
+    let mut link = retained.connect().await.unwrap();
+    link.enable_capture(30).await.unwrap();
+    let remote = remote_admission::Options {
+        silent: || super::super::retained_link::Capture::Silent,
+        remote_mic: true,
+    };
+    let result = service(
+        &mut link,
+        &mut io,
+        options(),
+        async || Ok(MemoryPeer),
+        cancelled,
+        |notice| {
+            if matches!(notice, ServeNotice::Ready) {
+                ready.notify_one();
+            }
+            Ok(())
+        },
+        (None, None, false, None, Some(remote)),
+    )
+    .await;
+    retained.close().await;
+    result
+}

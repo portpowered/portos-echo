@@ -210,7 +210,10 @@ async fn t3_endpoint_pair_without_a_production_resolver_keeps_settings_and_mcp_a
         let mut grant = registered(&mock, home.path()).await;
         let (owner, _) = settings_owner(home.path(), &mock, false);
         let (service, send) = SettingsService::resume(Box::new(owner));
-        let settings = Settings::serve(service, send, grant.grant.clone()).await;
+        let settings = Settings::serve(service, send, grant.grant.clone(), |done| async {
+            let _ = done.await;
+        })
+        .await;
         settings.save(true, "Kitchen").await;
         let view = settings.snapshot().await;
         assert_eq!(view["portos"]["endpoint_name"], "Kitchen");

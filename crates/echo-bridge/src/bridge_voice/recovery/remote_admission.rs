@@ -11,7 +11,7 @@ use crate::{
 use echo_contracts::endpoint::AssistantState;
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
 use std::{sync::Arc, time::Duration};
-use tokio::time::{Instant, sleep_until, timeout_at};
+use tokio::time::{sleep_until, timeout_at};
 
 type DeviceRun<L> = <<L as EchoLink>::Events as LinkEvents>::Run;
 
@@ -124,7 +124,7 @@ async fn capture<L: EchoLink>(
     tokio::pin!(send);
     let mut lease = start.lease();
     let mut matched = None;
-    let mut sent = false;
+    let mut requested = false;
     let refusal = loop {
         tokio::select! {
             biased;
@@ -140,11 +140,11 @@ async fn capture<L: EchoLink>(
                 }
                 break no_capture();
             }
-            result = &mut send, if !sent => {
+            result = &mut send, if !requested => {
                 if !matches!(result, Ok(Ok(()))) {
                     break no_capture();
                 }
-                sent = true;
+                requested = true;
             }
             event = events.recv() => match event?.ok_or(Error::Wyoming)? {
                 LinkEvent::RemoteCapture { request_id, run } if request_id == &*request => matched = Some(run),

@@ -330,7 +330,7 @@ pub(crate) async fn ending() {
     if let Some(voice) = Voice::current() {
         voice.ending().await;
     } else {
-        std::future::pending().await
+        std::future::pending::<()>().await
     }
 }
 
@@ -338,7 +338,7 @@ pub(crate) async fn start_waiting() {
     if let Some(voice) = Voice::current() {
         voice.start_waiting().await;
     } else {
-        std::future::pending().await;
+        std::future::pending::<()>().await;
     }
 }
 

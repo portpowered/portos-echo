@@ -478,41 +478,7 @@ async fn probe(client: &impl EchoLink) -> Result<(), Error> {
 mod tests;
 
 #[cfg(test)]
-pub(crate) async fn endpoint_fixture(
-    connector: impl echo_link::LinkConnector,
-    stream: tokio::io::DuplexStream,
-    cancelled: impl Future<Output = ()>,
-    ready: &tokio::sync::Notify,
-) -> Result<(), Error> {
-    use super::voice_config::tests::{MemoryPeer, admission_options};
-    use echo_link::LinkConnector as _;
-    let (read, write) = tokio::io::split(stream);
-    let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
-    let retained = super::retained_link::Retained::new(connector);
-    let mut link = retained.connect().await.unwrap();
-    link.enable_capture(30).await.unwrap();
-    let remote = remote_admission::Options {
-        silent: super::retained_link::Capture::Silent,
-        remote_mic: true,
-    };
-    let result = service(
-        &mut link,
-        &mut io,
-        admission_options(),
-        async || Ok(MemoryPeer),
-        cancelled,
-        |notice| {
-            if matches!(notice, ServeNotice::Ready) {
-                ready.notify_one();
-            }
-            Ok(())
-        },
-        (None, None, false, None, Some(remote)),
-    )
-    .await;
-    retained.close().await;
-    result
-}
+pub(crate) use tests::endpoint_fixture;
 
 #[cfg(test)]
 #[path = "controls/prompts/admission_tests.rs"]

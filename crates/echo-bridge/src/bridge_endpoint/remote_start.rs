@@ -21,7 +21,7 @@ impl Start {
         received: Instant,
         lease: watch::Receiver<()>,
     ) -> (Self, oneshot::Receiver<Value>) {
-        let (reply, receiver) = oneshot::channel();
+        let (reply, outcome) = oneshot::channel();
         (
             Self {
                 payload,
@@ -29,7 +29,7 @@ impl Start {
                 lease,
                 reply,
             },
-            receiver,
+            outcome,
         )
     }
 
