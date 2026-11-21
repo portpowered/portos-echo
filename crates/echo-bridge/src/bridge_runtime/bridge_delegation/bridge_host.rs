@@ -80,4 +80,11 @@ impl Host {
             Self::Muse(muse) => muse.abandon().await,
         }
     }
+
+    pub fn cancel(&mut self) {
+        match self {
+            Self::Client(client) => client.cancel(),
+            Self::Muse(muse) => muse.cancel(),
+        }
+    }
 }

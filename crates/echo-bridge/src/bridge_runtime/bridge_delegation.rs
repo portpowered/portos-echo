@@ -363,11 +363,15 @@ impl Client {
         Ok(())
     }
 
-    /// Signal and join work before another run can use the call.
-    pub async fn abandon(&mut self) -> bool {
+    fn cancel(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
+    }
+
+    /// Signal and join work before another run can use the call.
+    pub async fn abandon(&mut self) -> bool {
+        self.cancel();
         let abandoned = self.pending.is_some() || self.completed.is_some();
         if let Some(task) = self.pending.as_mut() {
             let _ = task.await;

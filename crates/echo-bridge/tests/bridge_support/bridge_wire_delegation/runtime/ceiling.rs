@@ -10,13 +10,7 @@ async fn bridge_wire_runtime_ceiling_abandons_model_and_next_wake_plays() {
     assert!(app.live.commentary.try_recv().is_err());
     assert!(!trace(&app.path()).iter().any(|e| e["event"] == "run.failed"));
     elapse(Duration::from_secs(29)).await;
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(5), stalled.read(&mut [0]))
-            .await
-            .unwrap()
-            .unwrap(),
-        0
-    );
+    model_abandoned(&mut stalled).await;
     bridge_lifecycle::control(&mut app.satellite, "hassmic-flush").await;
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
@@ -24,13 +18,7 @@ async fn bridge_wire_runtime_ceiling_abandons_model_and_next_wake_plays() {
     bridge_refusal::error(&mut app.satellite, false).await;
     trace_checks::resolved(&app.path(), "stalled", "cancelled", "unobserved");
     assert_no_request(&app.model).await;
-    app.wake().await;
-    let _ = respond(&mut stalled, "late result").await;
-    let mut fresh = app.request("fresh").await;
-    respond(&mut fresh, "next wake answered").await.unwrap();
-    app.commentary("fresh", "next wake answered").await;
-    app.live.events.send("synthetic.more_audio".into()).await.unwrap();
-    play(&mut app).await;
+    next_wake_plays(&mut app, &mut stalled).await;
     assert_eq!(
         handback_edges(&app.path()),
         vec![
@@ -43,6 +31,54 @@ async fn bridge_wire_runtime_ceiling_abandons_model_and_next_wake_plays() {
     assert_eq!(
         entries.iter().find(|e| e["event"] == "run.failed").unwrap()["reason"],
         "session waiting ceiling reached"
+    );
+    assert_eq!(app.live.calls.load(Ordering::SeqCst), 2);
+    assert!(app.live.commentary.try_recv().is_err());
+    app.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "T3 controlled application and loopback peers"]
+async fn bridge_wire_runtime_acknowledgement_plays_across_the_run_ceiling() {
+    let mut app = Application::start(3, 90).await;
+    let mut stalled = app.request("stalled").await;
+    elapse(Duration::from_secs(89)).await;
+    app.live.send_acknowledged("synthetic.more_audio".into()).await;
+    read_pcm(&mut app, 1).await;
+    elapse(Duration::from_secs(2)).await;
+    read_pcm(&mut app, 31).await;
+    model_abandoned(&mut stalled).await;
+    app.live
+        .send_acknowledged(json!({"type":"response.audio.done"}).to_string())
+        .await;
+    bridge_lifecycle::control(&mut app.satellite, "audio-stop").await;
+    assert_eq!(
+        handback_edges(&app.path()),
+        vec![(json!("reply.started"), json!("run-1"))]
+    );
+    bridge_short::send(&mut app.satellite, "played", json!({})).await;
+    bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
+    bridge_lifecycle::control(&mut app.satellite, "hassmic-end").await;
+    let entries = trace(&app.path());
+    let played = entries.iter().find(|e| e["event"] == "reply.played").unwrap();
+    assert_eq!(played["run_id"], "run-1");
+    assert_eq!(played["outcome"], "played");
+    assert!(
+        !entries
+            .iter()
+            .any(|e| matches!(e["event"].as_str(), Some("reply.cut" | "run.failed")))
+    );
+    trace_checks::resolved(&app.path(), "stalled", "cancelled", "unobserved");
+    next_wake_plays(&mut app, &mut stalled).await;
+    assert_eq!(
+        handback_edges(&app.path()),
+        vec![
+            (json!("reply.started"), json!("run-1")),
+            (json!("reply.played"), json!("run-1")),
+            (json!("session.commentary.append"), json!("run-2")),
+            (json!("reply.started"), json!("run-2")),
+            (json!("reply.played"), json!("run-2")),
+        ]
     );
     assert_eq!(app.live.calls.load(Ordering::SeqCst), 2);
     assert!(app.live.commentary.try_recv().is_err());
@@ -112,6 +148,26 @@ async fn play(app: &mut Application) {
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
     bridge_lifecycle::control(&mut app.satellite, "hassmic-end").await;
+}
+
+async fn next_wake_plays(app: &mut Application, stalled: &mut TcpStream) {
+    app.wake().await;
+    let _ = respond(stalled, "late result").await;
+    let mut fresh = app.request("fresh").await;
+    respond(&mut fresh, "next wake answered").await.unwrap();
+    app.commentary("fresh", "next wake answered").await;
+    app.live.events.send("synthetic.more_audio".into()).await.unwrap();
+    play(app).await;
+}
+
+async fn model_abandoned(stalled: &mut TcpStream) {
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), stalled.read(&mut [0]))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
 }
 
 async fn read_pcm(app: &mut Application, frames: usize) {

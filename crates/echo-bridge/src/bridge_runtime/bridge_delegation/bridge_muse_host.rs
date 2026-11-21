@@ -160,11 +160,15 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
         terminal
     }
 
-    pub async fn abandon(&mut self) -> bool {
-        let abandoned = self.active.take().is_some();
+    pub fn cancel(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
+    }
+
+    pub async fn abandon(&mut self) -> bool {
+        let abandoned = self.active.take().is_some();
+        self.cancel();
         if self.pending.is_some() {
             self.ready().await;
         }
