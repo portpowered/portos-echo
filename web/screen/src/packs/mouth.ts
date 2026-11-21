@@ -1,5 +1,5 @@
 import type { MouthBatch, MouthSample } from "../model";
-import { SPEAK_HOLD_MS, type Schedule } from "./player";
+import type { Schedule } from "./player";
 
 // Stills of the whole character, one per mouth shape. The bridge sends what
 // the voice is doing; the still for the sample due now covers the speaking
@@ -33,6 +33,9 @@ export const MOUTH_IDLE_MS = 150;
 export const HALF_AT = 10;
 export const VOWEL_AT = 30;
 export const OPEN_AT = 55;
+// After speaking, the shut mouth covers the speaking clip until the stage
+// shows another clip. A stage that never does uncovers it after this long.
+export const UNCOVER_MAX_MS = 2000;
 // A sender clock this far from the last one has restarted.
 const CLOCK_JUMP_MS = 2000;
 const QUEUE_MAX = 64;
@@ -70,6 +73,7 @@ export class Lips {
     private applied = 0;
     private pending: (() => void) | undefined;
     private release: (() => void) | undefined;
+    private leaving = false;
 
     constructor(
         private has: (shape: MouthShape) => boolean,
@@ -106,19 +110,35 @@ export class Lips {
     state(name: string): void {
         this.release?.();
         this.release = undefined;
+        this.leaving = false;
         if (name === "speaking") {
             this.allowed = true;
             this.arm();
-        } else if (name === "wake" && this.shown !== undefined) {
-            // A pause between words: the shut mouth stays for as long as
-            // the player keeps the speaking clip under it.
-            this.release = this.schedule(() => this.stop(), SPEAK_HOLD_MS);
-        } else this.stop();
+            return;
+        }
+        if (name === "" || this.shown === undefined) return this.stop();
+        // The speaking clip stays on the stage until the next clip's first
+        // frame: the mouth stays over it until then. A pause between words
+        // ("wake") still takes samples; any other state shuts the mouth.
+        if (name !== "wake") {
+            this.pending?.();
+            this.pending = undefined;
+            this.allowed = false;
+            this.set("closed");
+        }
+        this.leaving = true;
+        this.release = this.schedule(() => this.stop(), UNCOVER_MAX_MS);
+    }
+
+    // The stage now shows a clip of the pack state `showing`.
+    revealed(showing: string): void {
+        if (this.leaving && showing !== "speaking") this.stop();
     }
 
     stop(): void {
         this.release?.();
         this.release = undefined;
+        this.leaving = false;
         this.pending?.();
         this.pending = undefined;
         this.allowed = false;

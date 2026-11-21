@@ -358,9 +358,11 @@ The page decodes every mouth still before the pack shows. While the pack is
 speaking, the still for the sample due now covers the speaking clip: under 10
 the `closed` still; a vowel still when the sample names a vowel the pack has and
 openness is at least 30; otherwise `half`, or `open` from 55. With no sample for
-150 ms the mouth shuts. A pause between words keeps the shut mouth for as long as
-the speaking clip is held (500 ms), then the pack's own clip shows again; any
-other state shows it at once. Reduced motion shows no mouth stills.
+150 ms the mouth shuts. The speaking clip stays on the stage until the next
+clip's first frame is ready, so the shut mouth stays over it until then: through
+a pause between words, where samples still move it, and after any other state,
+which shuts it at once. A stage that shows no other clip uncovers it after 2 s.
+Reduced motion shows no mouth stills.
 
 When a reply is cut (a barge-in or a stop word), the bridge drops the samples it
 still holds and sends one shut sample stamped now. The page replaces every

@@ -78,6 +78,11 @@ export class Player {
         private schedule: Schedule = timer,
     ) {}
 
+    // The pack state whose clips are on the stage.
+    get showing(): string {
+        return this.shown;
+    }
+
     update(state: UiState, immediate = false): boolean {
         if (state.state === "emotion") {
             const clip = own(this.character.emotes, state.name);

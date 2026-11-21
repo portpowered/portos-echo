@@ -154,7 +154,7 @@ export async function packPage(t, pack = manifest, vp9 = true) {
 }
 export const send = (page, seq, state) =>
     emit(page, frame(seq, JSON.stringify(state)));
-const loaded = (page) =>
+export const loaded = (page) =>
     page.evaluate(() => {
         const video = [...document.querySelectorAll("video")].find(
             (v) => v.hidden && v.dataset.src,

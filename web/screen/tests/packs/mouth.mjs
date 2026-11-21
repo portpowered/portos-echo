@@ -5,10 +5,10 @@ import {
     mouthEvents,
     mouthShape,
     MOUTH_IDLE_MS,
+    UNCOVER_MAX_MS,
 } from "../../dist/lib/packs/mouth.js";
-import { SPEAK_HOLD_MS } from "../../dist/lib/packs/player.js";
 import { decodeMouth } from "../../dist/lib/decoder.js";
-import { hiddenSource, manifest, packPage, send } from "./page.mjs";
+import { hiddenSource, loaded, manifest, packPage, send } from "./page.mjs";
 
 const batch = (sent, samples) =>
     decodeMouth(
@@ -185,43 +185,63 @@ test("pack mouth: samples move the mouth only while the pack is speaking", () =>
         [1260, "closed"],
         [1300, "open"],
     ]);
-    // A pause between words: the mouth shuts and stays over the clip for as
-    // long as the player holds the speaking clip, then uncovers it.
+    // A pause between words: the mouth shuts and stays over the speaking
+    // clip while the stage still shows it, replays of its loop included.
     lips.state("wake");
     advance(MOUTH_IDLE_MS);
     assert.deepEqual(shown.at(-1), [1450, "closed"]);
-    advance(SPEAK_HOLD_MS - MOUTH_IDLE_MS - 1);
+    advance(350);
+    lips.revealed("speaking");
     assert.equal(shown.length, 4);
-    advance(1);
-    assert.deepEqual(shown.at(-1), [1800, undefined]);
-    // Speech that resumes within the hold keeps the mouth.
+    // The next clip's first frame uncovers it.
+    advance(200);
+    lips.revealed("wake");
+    assert.deepEqual(shown.at(-1), [2000, undefined]);
+    // Speech that resumes within the pause keeps the mouth, and a clip
+    // revealed while speaking uncovers nothing.
     lips.state("speaking");
-    lips.receive(batch(1800, [[1810, 80]]));
+    lips.receive(batch(2000, [[2010, 80]]));
     advance(20);
     lips.state("wake");
-    advance(SPEAK_HOLD_MS - 1);
+    advance(400);
     lips.state("speaking");
+    lips.revealed("wake");
     advance(5000);
     assert.deepEqual(shown.slice(5), [
-        [1810, "open"],
-        [1960, "closed"],
+        [2010, "open"],
+        [2160, "closed"],
     ]);
-    // Any other state uncovers the clip at once and drops what is due.
-    lips.receive(batch(7000, [[7100, 80]]));
+    // Any other state shuts the mouth at once and drops what is due; the
+    // shut mouth covers the speaking clip until the next clip shows.
+    lips.receive(batch(7420, [[7430, 80]]));
+    advance(10);
+    assert.deepEqual(shown.at(-1), [7430, "open"]);
+    lips.receive(batch(7430, [[7500, 80]]));
     lips.state("listening");
-    assert.deepEqual(shown.at(-1), [7319, undefined]);
-    advance(1000);
-    assert.equal(shown.length, 8);
+    assert.deepEqual(shown.at(-1), [7430, "closed"]);
+    advance(300);
+    assert.equal(shown.length, 9);
+    lips.revealed("listening");
+    assert.deepEqual(shown.at(-1), [7730, undefined]);
+    // A stage that never shows another clip uncovers it in the end.
+    lips.state("speaking");
+    lips.receive(batch(7730, [[7740, 80]]));
+    advance(10);
+    lips.state("wake");
+    advance(UNCOVER_MAX_MS - 1);
+    assert.deepEqual(shown.at(-1), [7890, "closed"]);
+    advance(1);
+    assert.deepEqual(shown.at(-1), [9740, undefined]);
     // A sample long past is not shown late.
-    lips.receive(batch(8319, [[8320, 80]]));
+    lips.receive(batch(9740, [[9741, 80]]));
     advance(MOUTH_IDLE_MS + 1);
     lips.state("speaking");
     advance(1000);
-    assert.equal(shown.length, 8);
+    assert.equal(shown.length, 13);
     // Without a mouth showing, a pause has nothing to hold.
     lips.state("wake");
-    advance(SPEAK_HOLD_MS);
-    assert.equal(shown.length, 8);
+    advance(UNCOVER_MAX_MS);
+    assert.equal(shown.length, 13);
 });
 
 test("pack mouth: a cut reply shuts the mouth at once and its queued samples never show", () => {
@@ -409,18 +429,23 @@ test("pack page: a mouth set covers the speaking clip with the still for the sam
         assert.equal((await mouth(page)).shown, "rest.png");
     }
     // A pause between words keeps her shut mouth while the speaking clip is
-    // held, then her own clip shows again.
+    // held; her own clip shows again with the next clip's first frame.
     await send(page, 3, { state: "connected" });
     await tick(page, 499);
     assert.equal((await mouth(page)).shown, "rest.png");
-    await tick(page, 1);
+    await tick(page, 300);
+    assert.equal((await mouth(page)).shown, "rest.png");
+    await loaded(page);
     assert.equal((await mouth(page)).lips, false);
-    // Listening uncovers the clip at once.
+    // Listening shuts her mouth at once, over the speaking clip, until the
+    // listening clip shows.
     await send(page, 4, { state: "speaking" });
     await lipSync(page, run(90, "none", 20));
     await tick(page, 20);
     assert.equal((await mouth(page)).shown, "mouth-open.png");
     await send(page, 5, { state: "listening" });
+    assert.equal((await mouth(page)).shown, "rest.png");
+    await loaded(page);
     assert.deepEqual(await mouth(page), {
         lips: false,
         stills: 4,
