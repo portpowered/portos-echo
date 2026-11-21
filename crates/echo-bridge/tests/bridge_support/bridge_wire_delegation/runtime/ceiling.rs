@@ -46,11 +46,13 @@ async fn bridge_wire_runtime_acknowledgement_plays_across_the_run_ceiling() {
     app.live.send_acknowledged("synthetic.more_audio".into()).await;
     read_pcm(&mut app, 1).await;
     elapse(Duration::from_secs(2)).await;
-    read_pcm(&mut app, 31).await;
+    read_pcm(&mut app, 1).await;
     model_abandoned(&mut stalled).await;
+    // The audio-done edge releases the resampler's final frame.
     app.live
         .send_acknowledged(json!({"type":"response.audio.done"}).to_string())
         .await;
+    read_pcm(&mut app, 30).await;
     bridge_lifecycle::control(&mut app.satellite, "audio-stop").await;
     assert_eq!(
         handback_edges(&app.path()),
