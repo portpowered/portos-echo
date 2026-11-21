@@ -102,7 +102,7 @@ async fn t3_registration_failures_are_redacted_cli_receipts_without_challenge() 
             let error = prepared.execute(&mut output).await.unwrap_err();
             assert_eq!(error.to_string(), message);
             assert_eq!(error, Error::Mcp(expected));
-            assert!(output.is_empty());
+            assert_eq!(output, [] as [u8; 0]);
             assert!(!owner.grant.client.has_grant());
             assert!(!directory.path().join("grant/grant.json").exists());
             assert_eq!(

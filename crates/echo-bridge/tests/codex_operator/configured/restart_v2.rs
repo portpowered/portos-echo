@@ -59,14 +59,33 @@ async fn relink_with_settings(fixture: &Fixture, mock: &echo_mcp_auth::mock::Moc
     let client = reqwest::Client::new();
     let url = settings_runtime_url(fixture, "/settings/v2");
     let requests = mock.state.lock().unwrap().requests.len();
+    let legacy = legacy_portos_snapshot(&client, &url).await;
+    assert_eq!(mock.state.lock().unwrap().requests.len(), requests);
+
+    let pending = start_portos_relink(fixture, &client, &url).await;
+    let linked = approved_portos_snapshot(&client, &url).await;
+
+    assert_client_identity_omitted(&[legacy, pending, linked]);
+    assert_registered_client_used(mock, requests);
+    writeln!(
+        std::io::stdout().lock(),
+        "Port OS Settings: legacy advice=true, pending advice=true, approved advice=omitted, client identifiers=0"
+    )
+    .unwrap();
+}
+
+async fn legacy_portos_snapshot(client: &reqwest::Client, url: &reqwest::Url) -> Value {
     let mut unpaired = url.clone();
     unpaired.set_query(None);
     assert_eq!(client.get(unpaired).send().await.unwrap().status(), 401);
-    let legacy = snapshot(&client, &url).await;
+    let legacy = snapshot(client, url).await;
     assert_eq!(legacy["portos"]["link_status"], "linked");
     assert_eq!(legacy["portos"]["server"]["granted_scopes"], json!(["endpoint:read"]));
     assert_eq!(legacy["portos"]["relink_advised"], true);
-    assert_eq!(mock.state.lock().unwrap().requests.len(), requests);
+    legacy
+}
+
+async fn start_portos_relink(fixture: &Fixture, client: &reqwest::Client, url: &reqwest::Url) -> Value {
     let operation = settings_runtime_url(fixture, "/settings/v2/portos");
     let response = client
         .post(operation)
@@ -75,21 +94,32 @@ async fn relink_with_settings(fixture: &Fixture, mock: &echo_mcp_auth::mock::Moc
         .await
         .unwrap();
     assert_eq!(response.status(), 202);
-    let pending = wait_account(&client, &url, |value| value["portos"].get("challenge").is_some()).await;
+    let pending = wait_account(client, url, |value| value["portos"].get("challenge").is_some()).await;
     assert_eq!(pending["portos"]["operation_state"], "linking");
     assert_eq!(pending["portos"]["relink_advised"], true);
-    let linked = wait_account(&client, &url, |value| value["portos"]["operation_state"] != "linking").await;
+    pending
+}
+
+async fn approved_portos_snapshot(client: &reqwest::Client, url: &reqwest::Url) -> Value {
+    let linked = wait_account(client, url, |value| value["portos"]["operation_state"] != "linking").await;
     assert_eq!(linked["portos"]["operation_state"], "idle");
     assert_eq!(linked["portos"]["link_status"], "linked");
     assert_eq!(linked["portos"]["server"]["granted_scopes"], json!(["endpoint:read"]));
     assert_eq!(linked["portos"].get("relink_advised"), None);
     assert_eq!(linked["portos"].get("challenge"), None);
-    for value in [legacy, pending, linked] {
+    linked
+}
+
+fn assert_client_identity_omitted(snapshots: &[Value]) {
+    for value in snapshots {
         let body = value.to_string();
         for private in [LEGACY_CLI, REGISTERED_CLIENT, "client_id"] {
             assert!(!body.contains(private), "client identity reached Settings");
         }
     }
+}
+
+fn assert_registered_client_used(mock: &echo_mcp_auth::mock::Mock, requests: usize) {
     let state = mock.state.lock().unwrap();
     assert_eq!(
         state.requests[requests..]
@@ -99,11 +129,6 @@ async fn relink_with_settings(fixture: &Fixture, mock: &echo_mcp_auth::mock::Moc
         ["/register", "/custom/link", "/custom/token"]
     );
     assert_eq!(state.requests[requests + 2].form["client_id"], REGISTERED_CLIENT);
-    writeln!(
-        std::io::stdout().lock(),
-        "Port OS Settings: legacy advice=true, pending advice=true, approved advice=omitted, client identifiers=0"
-    )
-    .unwrap();
 }
 
 #[tokio::test]

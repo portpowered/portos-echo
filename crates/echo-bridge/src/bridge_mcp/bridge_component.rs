@@ -199,6 +199,7 @@ impl TlsPeer {
                 .unwrap();
         let origin = "https://127.0.0.1";
         config.mcp.server[0].url = format!("{origin}:{port}/mcp");
+        config.mcp.client_id = Some("synthetic-cli".into());
         config.mcp.scopes = scopes;
         config.mcp.state_dir = Some(root.join("grant"));
         config.mcp.operator_listen = ([127, 0, 0, 1], 0).into();
