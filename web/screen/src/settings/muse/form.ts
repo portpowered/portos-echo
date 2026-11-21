@@ -1,6 +1,6 @@
 import { decodeSaved, type PatchV2 } from "../api";
 import { saveSettingsV2 } from "../api-v2";
-import { actions as formActions, element } from "../forms";
+import { actions as formActions, element, field } from "../forms";
 import { museReasons, probeMuse } from "./api";
 import type { MuseStatusV2 } from "../model";
 
@@ -10,15 +10,6 @@ type Perform = (
     keep?: boolean,
 ) => Promise<boolean>;
 
-function labelled<T extends HTMLInputElement | HTMLTextAreaElement>(
-    text: string,
-    field: T,
-) {
-    const label = element("label", text);
-    label.append(field);
-    return label;
-}
-
 export function museForm(
     initial: MuseStatusV2,
     actions: string,
@@ -26,9 +17,9 @@ export function museForm(
 ) {
     let accepted = initial;
     const form = element("form");
-    form.className = "settings-form";
+    form.setAttribute("aria-label", "Muse connection");
     const status = element("p");
-    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
     const url = element("input");
     url.type = "text";
     url.autocomplete = "off";
@@ -49,9 +40,9 @@ export function museForm(
     clear.type = "button";
     form.append(
         status,
-        labelled("Muse bridge URL", url),
-        labelled("Muse CA (base64 DER)", ca),
-        labelled("Muse credential", credential),
+        field("Muse bridge URL", url),
+        field("Muse CA (base64 DER)", ca),
+        field("Muse credential", credential),
         formActions(test, clear, save),
     );
 
