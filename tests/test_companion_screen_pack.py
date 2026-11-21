@@ -285,6 +285,15 @@ class CompanionPack(unittest.TestCase):
                 self.assertEqual(set(speech), {"neutral", "mouth-half", "mouth-open"})
                 self.assertFalse(any(speech[p:] == speech[:-p] for p in range(1, len(speech) // 2)))
                 self.assertGreater(sum(a != b for a, b in itertools.pairwise(speech)), 6)
+                # Outside the mouth the decoded frames differ by codec noise only.
+                changes = [index + 12 for index, (a, b) in
+                           enumerate(itertools.pairwise(speech)) if a != b][:8]
+                body = max(outside_delta(visual(frames[index], with_alpha),
+                                         visual(frames[0], with_alpha),
+                                         [frame_box(render.MOUTH)]) for index in changes)
+                self.assertLessEqual(body, CODEC_NOISE[ext], ext)
+                print(f"SPEAKING codec={ext} outside_mouth_mean={body:.3f} "
+                      f"tolerance={CODEC_NOISE[ext]}", flush=True)
             if role == "muted":
                 self.assertEqual(len({hashlib.sha256(frame).digest() for frame in frames}), 1)
             if with_alpha:
@@ -292,7 +301,13 @@ class CompanionPack(unittest.TestCase):
                 center = CARD_CENTER if role in CARD else HOME_CENTER
                 self.assertGreater(frames[0][(229 * WIDTH + center) * 4 + 3], 240)
         pairs = tuple(itertools.combinations(representatives, 2))
-        differences = [delta(representatives[a], representatives[b]) for a, b in pairs]
+        # Speaking is the neutral frame but for its mouth, so it is told apart
+        # by the mouth alone.
+        mouth_at = mouths[0]
+        differences = [
+            delta(crop(representatives[a], mouth_at), crop(representatives[b], mouth_at))
+            if "speaking" in (a, b) else delta(representatives[a], representatives[b])
+            for a, b in pairs]
         same = [(pair, value) for pair, value in zip(pairs, differences) if value <= DISTINCT]
         self.assertEqual(same, [])
         print(f"MEDIA codec={ext} distinct_pairs={len(pairs)}/{len(pairs)} "
@@ -317,6 +332,132 @@ class CompanionPack(unittest.TestCase):
         print(f"SETUP codec={ext} entry={entry_centers[0]}->{entry_centers[-1]} "
               f"held_frames={len(held)} held_center={min(held_centers)}..{max(held_centers)} "
               f"entry_join_delta={seam:.3f}", flush=True)
+
+
+def frame_box(region):
+    """A region's bounds in frame pixels, grown by the reach of the resampling
+    that places the art: (left, top, right, bottom), clipped to the frame."""
+    x, y, width, height = render.MASTER
+    scale_x, scale_y = render.pose_width(render.MASTER) / width, render.POSE_HEIGHT / height
+    origin = render.CENTER - render.pose_width(render.MASTER) // 2
+    left, top, right, bottom = render.bounds(region)
+    return (max(0, int(origin + (left - x) * scale_x) - REACH),
+            max(0, int(render.POSE_TOP + (top - y) * scale_y) - REACH),
+            min(WIDTH, int(origin + (right - x) * scale_x) + 1 + REACH),
+            min(HEIGHT, int(render.POSE_TOP + (bottom - y) * scale_y) + 1 + REACH))
+
+
+def outside_delta(a, b, boxes):
+    """Mean absolute RGBA difference over the pixels outside every box."""
+    total = count = 0
+    for y in range(HEIGHT):
+        row = y * WIDTH * 4
+        cuts = sorted((left, right) for left, top, right, bottom in boxes if top <= y < bottom)
+        spans, x = [], 0
+        for left, right in cuts:
+            if left > x:
+                spans.append((x, left))
+            x = max(x, right)
+        spans.append((x, WIDTH))
+        for start, stop in spans:
+            if stop <= start:
+                continue
+            first = a[row + start * 4:row + stop * 4]
+            second = b[row + start * 4:row + stop * 4]
+            count += len(first)
+            if first != second:
+                total += sum(abs(p - q) for p, q in zip(first, second))
+    return total / count
+
+
+# Lanczos at four times the frame size reaches three art pixels past a
+# region; in frame pixels that is under two, and the area filter adds one.
+REACH = 4
+# Placed frames are compared before any codec, so outside their regions they
+# must equal the master exactly.
+RAW_TOLERANCE = 0
+# The speaking clip is lossy in both codecs, so two of its frames may differ a
+# little even where their pixels were equal: mean RGBA levels outside the
+# mouth. Measured 0.000 (VP9) and 0.208 (H.264); before the mouth frames were
+# composited the placed frames alone differed there by 0.90 to 1.32.
+CODEC_NOISE = {"webm": 0.1, "mp4": 0.5}
+# The seam a region's feather leaves: at most this many levels between two
+# neighbouring pixels comes from the change of weight alone. A hard-edged
+# region would step by the whole edit-to-master difference, up to 255.
+SEAM_STEP = 12
+
+
+class CompanionMasks(unittest.TestCase):
+    """T1: a mouth frame differs from the master only inside the mouth
+    region, so nothing but her mouth moves while she speaks. Needs ffmpeg
+    only; no pack is built."""
+
+    @classmethod
+    def setUpClass(cls):
+        directory = tempfile.TemporaryDirectory(prefix="companion-masks-")
+        cls.addClassCleanup(directory.cleanup)
+        render.MATCHES = Path(directory.name)
+        cls.frames = {sheet: render.raster(sheet, render.MASTER)
+                      for sheet in ("neutral", *render.REGIONS)}
+
+    def test_every_mouth_has_a_region(self):
+        mouths = {path.stem for path in render.ART.glob("mouth-*.png")}
+        self.assertEqual(mouths, set(render.REGIONS))
+        # Every frame the speaking clip plays is the master or a mouth.
+        self.assertLessEqual({shape for shape, _ in render.SPEECH} - {"neutral"},
+                             set(render.REGIONS))
+
+    def test_outside_its_region_a_frame_is_the_master(self):
+        master = self.frames["neutral"]
+        for sheet, region in render.REGIONS.items():
+            box = frame_box(region)
+            outside = outside_delta(self.frames[sheet], master, [box])
+            inside = delta(crop(self.frames[sheet], box), crop(master, box))
+            self.assertLessEqual(outside, RAW_TOLERANCE, sheet)
+            self.assertGreater(inside, 0.5, sheet)
+            print(f"MASK sheet={sheet} box={box} outside_mean={outside:.3f} "
+                  f"inside_mean={inside:.2f}", flush=True)
+
+    def test_two_mouths_agree_outside_both_regions(self):
+        worst = 0
+        for first, second in itertools.combinations(render.REGIONS, 2):
+            boxes = [frame_box(render.REGIONS[first]), frame_box(render.REGIONS[second])]
+            difference = outside_delta(self.frames[first], self.frames[second], boxes)
+            self.assertLessEqual(difference, RAW_TOLERANCE, (first, second))
+            worst = max(worst, difference)
+        pairs = len(render.REGIONS) * (len(render.REGIONS) - 1) // 2
+        print(f"MASK pairs={pairs} worst_outside_mean={worst:.3f} "
+              f"tolerance={RAW_TOLERANCE}", flush=True)
+
+    def test_seam_is_smooth(self):
+        rect = render.MASTER
+        width = rect[2]
+        master = render.source("neutral", rect).read_bytes()
+        for sheet, region in render.REGIONS.items():
+            edit = render.decoded(sheet, rect)
+            rows = render.mask(region, rect)
+            # Weights run from 255 inside a shape to 0 outside its feather,
+            # with no jump at the box the weights are worked out in.
+            self.assertEqual({rows[0], rows[-1]} - {None}, set(), sheet)
+            seam = hard = 0
+            for y, weights in enumerate(rows):
+                if weights is None:
+                    continue
+                self.assertEqual((weights[0], weights[-1]), (0, 0), (sheet, y))
+                below = rows[y + 1] if y + 1 < len(rows) else None
+                for x in range(width):
+                    share = weights[x]
+                    for other in (weights[x + 1] if x + 1 < width else share,
+                                  below[x] if below is not None else 0):
+                        if other == share:
+                            continue
+                        i = (y * width + x) * 4
+                        change = max(abs(edit[i + c] - master[i + c]) for c in range(3))
+                        seam = max(seam, abs(share - other) * change / 255)
+                        hard = max(hard, change)
+            self.assertLessEqual(seam, SEAM_STEP, sheet)
+            print(f"SEAM sheet={sheet} feather={region[0]} step={seam:.1f} "
+                  f"hard_edge_step={hard} budget={SEAM_STEP}", flush=True)
 
 
 if __name__ == "__main__":

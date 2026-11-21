@@ -3,8 +3,9 @@
 Every image was generated with built-in Codex image generation using
 transparent output (`codex exec` with the source image attached). The offline
 builder only crops, scales, places, sequences and cross-fades these PNGs. It
-never edits a face: each mouth shape, the blink and the Listening head are
-whole generated frames.
+never draws a face: the blink and the state poses are whole generated frames,
+and each mouth frame is the master with the generated mouth shown only inside
+a feathered mouth region (see `REGIONS` in `render.py`).
 
 ## reference.png
 

@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 20
+last modified: 2026, november, 21
 status: implemented; downloadable bridge-rendered layouts and characters
 ---
 
@@ -475,6 +475,34 @@ The clock and date sit bottom right, over the character. Codex image generation
 produced an original reference sheet and edited it into the poses. The checked-in PNGs and their
 [generation prompts](../scripts/packs/companion/prompts.md) are the source for
 the offline video build.
+
+### Mouth frames change only the mouth
+
+Each generated edit redraws the whole picture, so its hair, clothes and
+outlines sit a little off the master's even after the per-edit colour map. A
+mouth shape changes every few frames while she speaks, and that drift would
+flicker over her whole body. The build therefore composites every mouth frame
+(the speaking clip's half and open shapes and each lip-sync still) from the
+master:
+
+- The edit's region is data beside the pose table in
+  `scripts/packs/companion/render.py`: a feather radius and shapes in master
+  pixels (the 1024 × 1536 art), each an ellipse or a rectangle. Companion's
+  mouth region is one ellipse around the lips with a 16-pixel feather. Never
+  hand-paint a mask.
+- Inside a shape the frame is the colour-matched edit; over the feather it
+  fades into the master with a smooth step, mixed with premultiplied alpha;
+  outside the region every pixel is the master's own, so the difference
+  between two mouth frames there is exactly zero.
+- Every `mouth-*` drawing needs a region; the build stops on one without.
+
+The state poses (Listening, Thinking and the rest) and the blink stay whole
+edits: their head and eye motion is meant. A future pack that adds a frame
+played while she speaks gives it a region the same way, sized to what the
+frame is meant to change. `tests/test_companion_screen_pack.py`
+(`CompanionMasks`, run by `make test-unit-python`) checks that the placed mouth
+frames equal the master outside their region, that every two mouth frames agree
+there, and that the feather adds at most 12 levels between neighbouring pixels.
 
 On Linux with Python 3 and ffmpeg (libvpx-vp9 and libx264 enabled):
 

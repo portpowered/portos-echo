@@ -11,6 +11,7 @@ import {
     checkIdleCost,
     checkInterruptedEntry,
     checkSteadyColour,
+    checkStillBody,
     playbackTrace,
     visibleCharacterBoxes,
     viewport as displayViewport,
@@ -524,6 +525,11 @@ test("T3 Companion drops a pending entry clip when the state moves on", async (t
 test(
     "T3 Companion keeps one colour through the blink, the mouth shapes and the still",
     withSelected(checkSteadyColour),
+);
+
+test(
+    "T3 Companion changes only her mouth while she speaks",
+    withSelected(checkStillBody),
 );
 
 test(

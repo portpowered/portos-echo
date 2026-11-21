@@ -613,6 +613,97 @@ export async function checkSteadyColour({ page }) {
     );
 }
 
+// While she speaks only her mouth may change: every mouth frame is the neutral
+// one outside the mouth region, so her hair, outlines and jacket hold still.
+// Outside the region's box (clip pixels, feather and resampling included),
+// the lossless stills must equal rest.png exactly; the lossy speaking clip's
+// frames may differ from its first by codec noise only. Mean RGBA levels.
+const MOUTH_BOX = [340, 225, 443, 292];
+const STILL_NOISE = 0;
+const CLIP_NOISE = 0.1;
+export async function checkStillBody({ page }) {
+    const rows = await page
+        .locator(".screen-pack .pack-stage")
+        .evaluate(async (stage, [left, top, right, bottom]) => {
+            const clip = stage.querySelector("video[data-clip]").dataset.clip;
+            const canvas = document.createElement("canvas");
+            canvas.width = 768;
+            canvas.height = 720;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+            const read = (source) => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(source, 0, 0);
+                return ctx.getImageData(0, 0, 768, 720).data;
+            };
+            const outside = (a, b) => {
+                let total = 0;
+                let count = 0;
+                for (let y = 0; y < 720; y++) {
+                    for (let x = 0; x < 768; x++) {
+                        if (x >= left && x < right && y >= top && y < bottom)
+                            continue;
+                        const i = (y * 768 + x) * 4;
+                        for (let c = 0; c < 4; c++)
+                            total += Math.abs(a[i + c] - b[i + c]);
+                        count += 4;
+                    }
+                }
+                return total / count;
+            };
+            const still = stage.querySelector("img:not(.pack-mouth)");
+            await still.decode();
+            const rest = read(still);
+            const rows = [];
+            for (const mouth of stage.querySelectorAll(".pack-mouth")) {
+                await mouth.decode();
+                const name = new URL(mouth.src).pathname.split("/").at(-1);
+                if (name !== "rest.png")
+                    rows.push(["still", name, outside(read(mouth), rest)]);
+            }
+            const video = document.createElement("video");
+            video.muted = true;
+            video.preload = "auto";
+            const event = (name) =>
+                new Promise((resolve, reject) => {
+                    video.addEventListener(name, resolve, { once: true });
+                    video.addEventListener("error", reject, { once: true });
+                });
+            video.src = clip.replace(/[^/?]+\.webm/, "speaking.webm");
+            await event("loadeddata");
+            let first = null;
+            // The first 41 frames hold every mouth shape of the clip.
+            for (let frame = 0; frame <= 40; frame++) {
+                video.currentTime = (frame + 0.5) / 30;
+                await event("seeked");
+                const pixels = read(video);
+                if (first === null) first = pixels;
+                else
+                    rows.push([
+                        "clip",
+                        `speaking:${frame}`,
+                        outside(pixels, first),
+                    ]);
+            }
+            video.removeAttribute("src");
+            video.load();
+            return rows;
+        }, MOUTH_BOX);
+    const worst = (kind) =>
+        Math.max(...rows.filter(([k]) => k === kind).map(([, , v]) => v));
+    console.log(
+        `B8 mouth-only stills=${rows.filter(([k]) => k === "still").length} ` +
+            `still_outside_mouth=${worst("still").toFixed(3)} ` +
+            `clip_outside_mouth=${worst("clip").toFixed(3)} ` +
+            `budgets=${STILL_NOISE},${CLIP_NOISE}`,
+    );
+    for (const [kind, name, value] of rows)
+        assert.ok(
+            value <= (kind === "still" ? STILL_NOISE : CLIP_NOISE),
+            `${name} differs outside the mouth by ${value}`,
+        );
+    assert.ok(rows.some(([, name]) => name === "mouth-open.png"));
+}
+
 // The idle home screen is what the display shows most of the day. On the Echo
 // a playing clip costs about 16% of a core with nothing changing and about 3%
 // more for each frame it shows a second, all off the page's main thread. The

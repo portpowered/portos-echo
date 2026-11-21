@@ -2,6 +2,7 @@
 
 import math
 from pathlib import Path
+import re
 import subprocess
 
 ART = Path(__file__).with_name("art")
@@ -27,6 +28,17 @@ BOB = 10
 MASTER = (0, 6, 1024, 1530)
 VARIANTS = ("mouth-half", "mouth-open", "blink", "listening", "connecting",
             "thinking", "error", "happy", "setup", "approval")
+# An edit redraws the whole picture, so its hair, clothes and outlines sit a
+# little off the master's. While she speaks the mouth shape changes every few
+# frames, and that drift would flicker over her whole body. A mouth frame is
+# therefore the master with its edit shown only over a region: a feather
+# radius and shapes in master pixels (the 1024 x 1536 art), ("ellipse",
+# centre x, centre y, radius x, radius y) or ("rect", left, top, right,
+# bottom). The edit shows fully inside a shape and fades into the master over
+# the feather around it; every other pixel is the master's own. The state
+# poses and the blink are whole edits: their motion is meant.
+MOUTH = (16, (("ellipse", 527, 523, 82, 44),))
+REGIONS = {f"mouth-{shape}": MOUTH for shape in ("half", "open", "a", "i", "u", "e", "o")}
 # Poses shown next to a card stand left of centre, clear of the card.
 CARD_SHIFT = {"setup": -110, "approval": -110, "error": -110}
 # A generated edit comes back a few levels brighter than its master, by an
@@ -81,6 +93,7 @@ LOSSY = ("idle", "speaking")
 
 MATCHES = None
 SMALL = {}
+MASKS = {}
 
 
 def run(args, data=None):
@@ -156,12 +169,118 @@ def colour_match(sheet):
     return path
 
 
-def cutout(sheet, rect, filters):
+def decoded(sheet, rect):
+    """The sheet's RGBA pixels inside rect; an edit's colours are matched to
+    the master's."""
     x, y, width, height = rect
-    grade = f"colorchannelmixer=rr={1 + WARMTH / 5:.4f}:bb={1 - WARMTH / 5:.4f},"
-    match = "" if sheet == "neutral" else f"lut3d=file={colour_match(sheet)},"
+    match = "" if sheet == "neutral" else f",lut3d=file={colour_match(sheet)}"
     return run(["-i", str(ART / f"{sheet}.png"), "-vf",
-                f"format=rgba,crop={width}:{height}:{x}:{y},{match}{grade if WARMTH else ''}"
+                f"format=rgba,crop={width}:{height}:{x}:{y}{match}", "-frames:v", "1",
+                "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
+
+
+def distance(shape, x, y):
+    """Pixels from (x, y) out to the shape; 0 inside it."""
+    kind, *values = shape
+    if kind == "rect":
+        left, top, right, bottom = values
+        return math.hypot(max(left - x, 0, x - right), max(top - y, 0, y - bottom))
+    centre_x, centre_y, radius_x, radius_y = values
+    u, v = (x - centre_x) / radius_x, (y - centre_y) / radius_y
+    level = math.hypot(u, v)
+    if level <= 1:
+        return 0.0
+    # Near the edge, the ellipse's level above 1 over the level's slope; never
+    # nearer than the ellipse's own box, so the weight is 0 outside bounds().
+    return max((level - 1) * level / math.hypot(u / radius_x, v / radius_y),
+               abs(x - centre_x) - radius_x, abs(y - centre_y) - radius_y)
+
+
+def bounds(region):
+    """The box (left, top, right, bottom), in master pixels, outside which a
+    region shows none of its edit."""
+    feather, shapes = region
+    boxes = [shape[1:] if shape[0] == "rect" else
+             (shape[1] - shape[3], shape[2] - shape[4], shape[1] + shape[3], shape[2] + shape[4])
+             for shape in shapes]
+    return (min(box[0] for box in boxes) - feather, min(box[1] for box in boxes) - feather,
+            max(box[2] for box in boxes) + feather, max(box[3] for box in boxes) + feather)
+
+
+def weight(region, x, y):
+    """How much of the edit shows at master pixel (x, y), from 0 to 255: all
+    of it inside a shape, then a smooth step down to none over the feather."""
+    feather, shapes = region
+    outside = min(distance(shape, x, y) for shape in shapes) / feather
+    if outside >= 1:
+        return 0
+    return round(255 * (1 - outside * outside * (3 - 2 * outside)))
+
+
+def mask(region, rect):
+    """The region's weight at every pixel of rect, one bytes row per row;
+    None for a row it leaves to the master."""
+    key = (region, rect)
+    if key not in MASKS:
+        x, y, width, height = rect
+        left, top, right, bottom = bounds(region)
+        left, right = max(0, math.floor(left) - x), min(width, math.ceil(right) - x + 1)
+        top, bottom = max(0, math.floor(top) - y), min(height, math.ceil(bottom) - y + 1)
+        rows = [None] * height
+        for row in range(top, bottom):
+            rows[row] = (bytes(left) + bytes(weight(region, x + column, y + row)
+                                             for column in range(left, right))
+                         + bytes(width - right))
+        MASKS[key] = rows
+    return MASKS[key]
+
+
+def merge(master, edit, rows, width):
+    """The master with the edit shown by each pixel's weight. Colours are
+    mixed premultiplied, so a moved silhouette leaves no dark fringe."""
+    out = bytearray(master)
+    stride = width * 4
+    for row, weights in enumerate(rows):
+        if weights is None:
+            continue
+        at = row * stride
+        for run_of in re.finditer(rb"\xff+|[\x01-\xfe]+", weights):
+            start, stop = run_of.span()
+            if weights[start] == 255:
+                out[at + start * 4:at + stop * 4] = edit[at + start * 4:at + stop * 4]
+                continue
+            for column in range(start, stop):
+                share = weights[column]
+                i = at + column * 4
+                old, new = master[i + 3] * (255 - share), edit[i + 3] * share
+                cover = old + new
+                out[i + 3] = (cover + 127) // 255
+                for c in range(3):
+                    out[i + c] = ((master[i + c] * old + edit[i + c] * new + cover // 2) // cover
+                                  if cover else 0)
+    return bytes(out)
+
+
+def source(sheet, rect):
+    """The file of a frame's unplaced pixels: the edit's own, or the master's
+    with the edit shown only inside the sheet's region."""
+    path = MATCHES / f"{sheet}@{'.'.join(map(str, rect))}.rgba"
+    if not path.exists():
+        if sheet not in REGIONS:
+            pixels = decoded(sheet, rect)
+        else:
+            pixels = merge(source("neutral", rect).read_bytes(), decoded(sheet, rect),
+                           mask(REGIONS[sheet], rect), rect[2])
+        path.write_bytes(pixels)
+    return path
+
+
+def cutout(sheet, rect, filters):
+    width, height = rect[2:]
+    grade = f"colorchannelmixer=rr={1 + WARMTH / 5:.4f}:bb={1 - WARMTH / 5:.4f},"
+    return run(["-f", "rawvideo", "-pixel_format", "rgba", "-video_size", f"{width}x{height}",
+                "-i", str(source(sheet, rect)), "-vf",
+                f"format=rgba,{grade if WARMTH else ''}"
                 f"lutrgb=a='if(lt(val,16),0,val)',{filters}", "-frames:v", "1",
                 "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
 
