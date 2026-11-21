@@ -77,11 +77,18 @@ BLINKS = (42, 249, 387)
 IDLE_FPS = 10
 IDLE_STEP = FPS // IDLE_FPS
 # A state loop returns to the neutral frame only where it joins, so the held
-# poses use long loops.
+# poses use long loops. Muted is the neutral frame throughout; its loop is as
+# long as a card pose's, so it too is replayed only every ten seconds.
 FRAMES = {"idle": IDLE_LENGTH // IDLE_STEP, "connecting": 150, "listening": 240, "thinking": 240,
-          "speaking": 100, "muted": 30, "setup": 60, "setup-enter": 16, "approval": 300,
+          "speaking": 100, "muted": 300, "setup": 60, "setup-enter": 16, "approval": 300,
           "error": 300, "happy": 45}
 TRANSITION = 10
+# A state pose is still between the cross-fades at its ends, and a card pose
+# is still throughout, yet the display decodes and redraws every frame it is
+# given. These clips are therefore held like the idle loop: they carry a frame
+# only where the picture changes, at 30 fps through a cross-fade, and none
+# while the pose holds.
+HELD = ("connecting", "thinking", "muted", "setup", "approval", "error")
 # These clips are the neutral frame with a bob or a mouth, or a pose held
 # left of centre beside a card. A cross-fade between the centred neutral frame
 # and a shifted pose would show two of her, so the page glides between them.
@@ -308,11 +315,15 @@ def mix(first, second):
     return bytes(map(lambda a, b: (a + b + 1) >> 1, first, second))
 
 
-def keyframes():
-    frames = {name: raster(name, MASTER) for name in VARIANTS}
+def keyframes(names=VARIANTS, breath=True):
+    """The placed frames of the named poses and the neutral frame; with
+    breath, the neutral frame at every depth of the idle bob too."""
+    frames = {name: raster(name, MASTER) for name in names}
     for name, x in CARD_SHIFT.items():
-        frames[name] = shift(frames[name], x, 0)
-    frames["bob"] = [raster("neutral", MASTER, drop) for drop in range(BOB * SUBPIXEL + 1)]
+        if name in frames:
+            frames[name] = shift(frames[name], x, 0)
+    depths = BOB * SUBPIXEL + 1 if breath else 1
+    frames["bob"] = [raster("neutral", MASTER, drop) for drop in range(depths)]
     frames["neutral"] = frames["bob"][0]
     return frames
 
@@ -408,18 +419,25 @@ def encode(pack, raw, role, count, keep=None):
         transition = ease_in_out("N-1", count)
         blended = f"lte(n,{TRANSITION})+gte(n,{count - TRANSITION})"
     rate = IDLE_FPS if role == "idle" else FPS
-    # Only the frames in keep are coded, each at its own time.
-    held = "" if keep is None else "select='" + "+".join(f"eq(n,{n})" for n in keep) + "',"
+    # Only the frames in keep are coded, each at its own time. The MP4 is
+    # selected after its background is laid under it: the overlay gives a
+    # frame for every frame of the constant-rate background, so a selection
+    # made before it would come out at the constant rate, its holds dropped.
+    held = "null" if keep is None else "select='" + "+".join(f"eq(n,{n})" for n in keep) + "'"
     timing = [] if keep is None else ["-fps_mode", "vfr"]
+    # With frames coded out of order the MP4 of a held clip lists a shorter
+    # length than its frames span (13.4 s for the 16 s idle loop).
+    ordered = [] if keep is None else ["-bf", "0"]
     count = count if keep is None else len(keep)
     graph = (
         "[0:v]format=gbrap,premultiply=inplace=1[rest];"
         "[1:v]format=gbrap,premultiply=inplace=1[pose];"
         f"[pose][rest]blend=all_expr='B+(A-B)*({transition})':shortest=1"
         f":enable='{blended}',"
-        f"unpremultiply=inplace=1,format=yuva420p,{held}split[webm][alpha];"
+        "unpremultiply=inplace=1,format=yuva420p,split[alpha][matte];"
+        f"[alpha]{held}[webm];"
         f"color=c={BACKGROUND}:s={SIZE}:r={rate}[background];"
-        "[background][alpha]overlay=shortest=1,format=yuv420p[mp4]"
+        f"[background][matte]overlay=shortest=1,format=yuv420p,{held}[mp4]"
     )
     fixed = ["-an", "-threads", "1", "-fflags", "+bitexact",
              "-flags:v", "+bitexact", "-map_metadata", "-1", "-frames:v", str(count)]
@@ -432,7 +450,8 @@ def encode(pack, raw, role, count, keep=None):
          *raw_input(raw, rate), "-filter_complex", graph,
          "-map", "[webm]", *fixed, *timing, *gop, "-c:v", "libvpx-vp9",
          "-auto-alt-ref", "0", *vp9_quality, str(pack / f"{role}.webm"),
-         "-map", "[mp4]", *fixed, *timing, *gop, "-c:v", "libx264", *h264_quality, "-preset", "fast",
+         "-map", "[mp4]", *fixed, *timing, *gop, *ordered, "-c:v", "libx264", *h264_quality,
+         "-preset", "fast",
          "-x264-params", "aq-mode=0:mbtree=0", "-movflags", "+faststart",
          str(pack / f"{role}.mp4")])
 
@@ -445,14 +464,34 @@ def render(pack, work, warmth=WARMTH):
     frames = keyframes()
     run([*raw_input("pipe:0"), "-frames:v", "1", "-threads", "1",
          str(pack / "rest.png")], frames["neutral"])
+    for role in FRAMES:
+        clip(pack, work, role, frames)
+
+
+def clip(pack, work, role, frames, hold=True):
+    """Encode one role's clip into pack. A held role carries only the frames
+    where its picture changes, unless hold is False."""
+    count = FRAMES[role]
     raw = work / "frames.rgba"
-    for role, count in FRAMES.items():
-        keep, last = [], None
-        with raw.open("wb") as stream:
-            for index, frame in enumerate(timeline(role, frames)):
-                # The last frame is kept so the clip keeps its length.
-                if frame != last or index == count - 1:
-                    keep.append(index)
-                last = frame
-                stream.write(frame)
-        encode(pack, raw, role, count, keep if role == "idle" else None)
+    keep, last = [], None
+    fading = cross_fade(role, count)
+    with raw.open("wb") as stream:
+        for index, frame in enumerate(timeline(role, frames)):
+            # The last frame is kept so the clip keeps its length. A held
+            # pose keeps its second frame too: the page reveals a clip on the
+            # first frame it presents once playing, which would otherwise be
+            # the last, seconds later.
+            if (frame != last or index in fading or index == count - 1
+                    or (index == 1 and role in HELD)):
+                keep.append(index)
+            last = frame
+            stream.write(frame)
+    encode(pack, raw, role, count, keep if hold and role in ("idle", *HELD) else None)
+
+
+def cross_fade(role, count):
+    """The frames the encoder blends with the neutral frame, and the first
+    frame after each blend, which returns to the pose."""
+    if role in UNBLENDED:
+        return range(0)
+    return {*range(TRANSITION + 2), *range(count - TRANSITION - 1, count)}

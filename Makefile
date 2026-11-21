@@ -62,6 +62,7 @@ test-unit-python:
 	python -m unittest discover -s crates/echo-lab/src/lab_run/sim/host_tests
 	python -m unittest discover -s crates/echo-lab/src/lab_run/device/clip_tests
 	python -B tests/test_companion_screen_pack.py CompanionMasks
+	python -B tests/test_companion_holds.py
 
 test-unit-screen:
 	if [ -f web/screen/package.json ]; then cd web/screen && npm ci && npm test; fi

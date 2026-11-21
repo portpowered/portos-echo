@@ -10,6 +10,7 @@ import {
     checkHeldLinkCode,
     checkIdleCost,
     checkInterruptedEntry,
+    checkStillCost,
     checkSteadyColour,
     checkStillBody,
     playbackTrace,
@@ -347,13 +348,15 @@ async function alternatePlayback(f) {
         pixel.every((value, i) => Math.abs(value - [16, 24, 39][i]) <= 4),
         pixel,
     );
-    const setup = ["setup-enter.mp4", "setup.mp4", "setup.mp4"];
-    const observer = await armPlayback(mp4, setup, 2);
+    // Three replays, so the held clip is seen to play through once after
+    // its first replay, which checkHandoffs does not time.
+    const setup = ["setup-enter.mp4", ...Array(3).fill("setup.mp4")];
+    const observer = await armPlayback(mp4, setup, 3);
     await f.update(
         presentations.find(([state]) => state.state === "link_code")[0],
     );
     const { rows } = await playbackTrace(observer);
-    checkHandoffs(rows, setup);
+    checkHandoffs(rows, setup, { held: ["setup.mp4"] });
     assert.ok(rows.every(({ art }) => art));
     await mp4.close();
     await f.page.emulateMedia({ reducedMotion: "reduce" });
@@ -535,6 +538,16 @@ test(
 test(
     "T3 Companion idle home screen stays cheap to draw",
     withSelected(checkIdleCost),
+);
+
+test(
+    "T3 Companion error and approval stay cheap to draw",
+    withSelected(checkStillCost("error", "approval")),
+);
+
+test(
+    "T3 Companion link code and muted stay cheap to draw",
+    withSelected(checkStillCost("link_code", "muted")),
 );
 
 test(

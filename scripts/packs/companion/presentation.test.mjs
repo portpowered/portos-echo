@@ -88,9 +88,10 @@ async function seek(page, frame) {
             const seeked = new Promise((resolve) =>
                 video.addEventListener("seeked", resolve, { once: true }),
             );
+            // A held clip presents the frame it holds, which began earlier.
             const presented = new Promise((resolve) => {
                 const check = (_, { mediaTime }) => {
-                    if (Math.round(mediaTime * fps) === frame) resolve();
+                    if (Math.round(mediaTime * fps) <= frame) resolve();
                     else video.requestVideoFrameCallback(check);
                 };
                 video.requestVideoFrameCallback(check);

@@ -48,18 +48,25 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def decoder(path, extension, rate):
+    """ffmpeg arguments that decode a clip to RGBA frames at rate: a frame
+    the clip holds is repeated for as long as it holds."""
+    codec = ["-c:v", "libvpx-vp9"] if extension == "webm" else []
+    return ["ffmpeg", "-nostdin", "-hide_banner", "-threads", "1", *codec,
+            "-i", str(path), "-map", "0", "-threads", "1", "-pix_fmt", "rgba",
+            "-fps_mode", "cfr", "-r", str(rate), "-f", "rawvideo", "pipe:1"]
+
+
 def decode(path, extension, rate=30):
-    decoder = ["-c:v", "libvpx-vp9"] if extension == "webm" else []
-    result = subprocess.run(
-        ["ffmpeg", "-nostdin", "-hide_banner", "-threads", "1", *decoder,
-         "-i", str(path), "-map", "0", "-threads", "1", "-pix_fmt", "rgba",
-         "-f", "rawvideo", "pipe:1"], capture_output=True, check=True)
+    result = subprocess.run(decoder(path, extension, rate), capture_output=True, check=True)
     header = result.stderr.decode().split("Stream mapping:")[0]
     codec = "vp9" if extension == "webm" else "h264"
     assert len(re.findall(r"Stream #0:", header)) == 1, header
     assert f"Video: {codec}" in header, header
     assert re.search(r"\b768x720\b", header), header
-    assert re.search(rf"\b{rate} fps\b", header), header
+    # An MP4 lists its mean frame rate, which a hold lowers; a WebM its own.
+    if extension == "webm":
+        assert re.search(rf"\b{rate} fps\b", header), header
     assert len(result.stdout) % FRAME_BYTES == 0, header
     if extension == "webm":
         assert re.search(r"alpha_mode\s*:\s*1", header), header
@@ -258,6 +265,8 @@ class CompanionPack(unittest.TestCase):
         representatives = {}
         for role in ROLES:
             frames = decode(self.extracted / f"{role}.{ext}", ext, RATES.get(role, 30))
+            # Each clip lasts as long in both codecs, its holds included.
+            self.assertEqual(len(frames), render.FRAMES[role], (ext, role, "length"))
             first, last = (visual(frame, with_alpha) for frame in (frames[0], frames[-1]))
             self.assertLess(delta(first, last), 1.5, (ext, role, "join"))
             centers = [visible_center(frame, with_alpha) for frame in (frames[0], frames[-1])]
