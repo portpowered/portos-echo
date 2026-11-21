@@ -364,7 +364,9 @@ async fn configured_watchdog_survives_reconnect_without_duplicate_registration()
     let device = async {
         let registration = peer::receive(&mut server).await;
         assert_eq!(registration.header.r#type, "run-satellite");
-        assert_eq!(registration.header.data, Some(json!({"hassmic_failsafe_seconds":605})));
+        // The pinned hassmic reads the watchdog from the data segment only.
+        assert_eq!(registration.header.data, None);
+        assert_eq!(registration.data, Some(json!({"hassmic_failsafe_seconds":605})));
         assert_eq!(peer::receive(&mut server).await.header.r#type, "describe");
         // Let describe settle before replacing the generation.
         peer::send(&mut server, "info", json!({}), vec![]).await;
@@ -373,7 +375,9 @@ async fn configured_watchdog_survives_reconnect_without_duplicate_registration()
         connections.send(Ok(io)).await.unwrap();
         let registration = peer::receive(&mut fresh).await;
         assert_eq!(registration.header.r#type, "run-satellite");
-        assert_eq!(registration.header.data, Some(json!({"hassmic_failsafe_seconds":605})));
+        // The pinned hassmic reads the watchdog from the data segment only.
+        assert_eq!(registration.header.data, None);
+        assert_eq!(registration.data, Some(json!({"hassmic_failsafe_seconds":605})));
         peer::send(&mut fresh, "ping", json!("fresh"), vec![]).await;
         assert_eq!(tokio::io::AsyncReadExt::read(&mut fresh, &mut [0]).await.unwrap(), 0);
     };

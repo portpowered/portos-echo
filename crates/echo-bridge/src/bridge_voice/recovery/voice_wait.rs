@@ -253,4 +253,51 @@ mod tests {
         let played = Instant::now() + options.played_timeout;
         assert_eq!(deadline(&source, Some(played)), (Some(played), Error::Deadline));
     }
+
+    /// A run admitted at `opened` with the Echo's own windows: a 15 s listen
+    /// window and the default `voice.session_max_seconds` of 600 s.
+    fn admitted(opened: Instant) -> (Source, Instant) {
+        let mut source = Source::new(200, false).unwrap();
+        let ceiling = opened + Duration::from_secs(600);
+        source.run_ceiling = Some(ceiling);
+        source.answer_due = opened + Duration::from_secs(15);
+        (source, ceiling)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_long_delegated_turn_outlives_the_no_answer_and_listen_windows() {
+        let (mut source, ceiling) = admitted(Instant::now());
+        let idle = Instant::now() + Duration::from_secs(15);
+        source.delegation.started();
+        // Two minutes of thinking and tool calls, far past both windows.
+        tokio::time::advance(Duration::from_secs(120)).await;
+        assert_eq!(deadline(&source, None), (Some(ceiling), Error::SessionCeiling));
+        assert_eq!(listening(&source, idle), (Some(ceiling), Err(Error::SessionCeiling)));
+        // Its completion re-arms the wait: the answer's grace, then no answer.
+        source.delegation.completed();
+        let owed = Instant::now() + HANDBACK_GRACE;
+        assert_eq!(deadline(&source, None), (Some(owed), Error::NoResponse));
+        assert_eq!(listening(&source, idle), (Some(owed), Err(Error::NoResponse)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_session_with_nothing_in_progress_still_ends_at_its_windows() {
+        let (source, _) = admitted(Instant::now());
+        let idle = Instant::now() + Duration::from_secs(15);
+        assert!(!source.delegation.waiting());
+        assert_eq!(deadline(&source, None), (Some(source.answer_due), Error::NoResponse));
+        assert_eq!(listening(&source, idle), (Some(idle), Ok(false)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_delegated_turn_ends_at_the_run_ceiling() {
+        let opened = Instant::now();
+        let (mut source, ceiling) = admitted(opened);
+        source.delegation.started();
+        tokio::time::advance(Duration::from_secs(599)).await;
+        let idle = Instant::now() + Duration::from_secs(15);
+        assert_eq!(deadline(&source, None), (Some(ceiling), Error::SessionCeiling));
+        assert_eq!(listening(&source, idle), (Some(ceiling), Err(Error::SessionCeiling)));
+        assert_eq!(ceiling.duration_since(opened), Duration::from_secs(600));
+    }
 }

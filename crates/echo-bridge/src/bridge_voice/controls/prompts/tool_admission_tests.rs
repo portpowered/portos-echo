@@ -113,7 +113,8 @@ async fn remote(
     assert_prompt_bytes(home, expected.0, expected.1);
     let thread = format!("thread-{index}");
     // Owner files replace the base prompts only. The bridge advertises
-    // end_session, so its own guidance for that tool follows either file.
+    // end_session, so its own guidance for that tool joins either file: after
+    // the runner's, ahead of the voice's.
     let runner = format!(
         "{}
 
@@ -125,8 +126,8 @@ async fn remote(
         "{}
 
 {}",
-        expected.1,
-        echo_config::LIVE_SESSION_GUIDANCE
+        echo_config::LIVE_SESSION_GUIDANCE,
+        expected.1
     );
     assert!(runner.contains("immediately call end_session with {} once") && voice.contains("hand off once"));
     let advertised: Vec<_> = catalog.as_array().unwrap().iter().map(|tool| &tool["name"]).collect();

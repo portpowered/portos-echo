@@ -8,7 +8,7 @@ SESSION_TOOLS = [
     {'name': 'extend_session', 'description': 'Extend listening for this voice session within its configured bound.',
      'inputSchema': {'type': 'object', 'properties': {'seconds': {'type': 'integer', 'minimum': 1}},
                      'required': ['seconds'], 'additionalProperties': False}},
-    {'name': 'end_session', 'description': 'End this voice session after its current reply has played.',
+    {'name': 'end_session', 'description': 'End this voice session now, stopping any reply and work still in progress.',
      'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
 ]
 SESSION_NAMES = [tool['name'] for tool in SESSION_TOOLS]

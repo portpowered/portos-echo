@@ -291,39 +291,36 @@ async fn voice_listen_transport_eof_and_closed_call_never_become_idle_success() 
     }
 }
 
-/// The hand-off is an ordinary one: only the runner's applied `end_session`
-/// and its silent finish end the run, at the farewell's playback boundary.
+/// An applied `end_session` supersedes everything (owner, 2026-11-21): the
+/// delegated turn still running owes nothing more, and the run closes as soon
+/// as the farewell already being spoken has played, uncut, instead of waiting
+/// for the turn's answer.
 #[tokio::test(start_paused = true)]
-async fn voice_listen_runner_end_closes_at_the_farewell_in_either_tool_order() {
-    use Step::{End, Handoff, Played, Reply, Silent};
-    goodbye_with_end(&[Handoff(true), End, Reply, Silent, Played], (1, 12)).await;
-    goodbye_with_end(&[Handoff(true), Reply, End, Silent, Played], (1, 12)).await;
-}
-
-/// A hand-off after Played opens a reply like any other. It gets no audio:
-/// the silent end closes it and the run, with or without speech in the gap.
-#[tokio::test(start_paused = true)]
-async fn voice_listen_runner_end_after_played_closes_without_another_listen_window() {
-    use Step::{Asked, End, Handoff, Heard, Played, Reply, Silent};
+async fn voice_listen_runner_end_keeps_the_farewell_and_drops_the_running_delegation() {
+    use Step::{End, Handoff, Played, Reply};
     for first in [false, true] {
-        goodbye_with_end(&[Reply, Played, Heard, Handoff(first), End, Silent, Played], (2, 12)).await;
-        goodbye_with_end(
-            &[Reply, Played, Heard, Asked, Handoff(first), End, Silent, Played],
-            (2, 12),
-        )
-        .await;
+        goodbye_with_end(&[Handoff(first), Reply, End, Played], 0).await;
     }
 }
 
-/// The hand-off carries no sign that it is a goodbye, so a follow-up the
-/// voice model already answered before the receipt plays to its end. The run
-/// still closes at that boundary, not after another listen window.
+/// An end before any farewell audio still cuts the opened playback at once.
 #[tokio::test(start_paused = true)]
-async fn voice_listen_runner_end_after_an_answered_gap_follow_up_closes_at_that_reply() {
-    use Step::{Asked, End, Handoff, Heard, Played, Reply, Silent};
+async fn voice_listen_runner_end_before_the_farewell_closes_at_once() {
+    use Step::{End, Handoff};
     for first in [false, true] {
-        let steps = [Reply, Played, Heard, Asked, Handoff(first), Reply, End, Silent, Played];
-        goodbye_with_end(&steps, (2, 24)).await;
+        goodbye_with_end(&[Handoff(first), End], 1).await;
+    }
+}
+
+/// After a played reply, an end during the next hand-off closes at once, with
+/// or without speech in the gap and whether or not the voice answered first.
+#[tokio::test(start_paused = true)]
+async fn voice_listen_runner_end_after_played_closes_without_another_listen_window() {
+    use Step::{Asked, End, Handoff, Heard, Played, Reply};
+    for first in [false, true] {
+        goodbye_with_end(&[Reply, Played, Heard, Handoff(first), End], 1).await;
+        goodbye_with_end(&[Reply, Played, Heard, Asked, Handoff(first), End], 1).await;
+        goodbye_with_end(&[Reply, Played, Heard, Asked, Handoff(first), Reply, End, Played], 0).await;
     }
 }
 
@@ -333,13 +330,12 @@ enum Step {
     Handoff(bool),
     End,
     Reply,
-    Silent,
     Played,
     Heard,
     Asked,
 }
 
-async fn goodbye_with_end(steps: &[Step], (starts, sent): (usize, u64)) {
+async fn goodbye_with_end(steps: &[Step], cuts: usize) {
     let device = Observer::default();
     let mut client = FakeConnector::new(device.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -390,15 +386,16 @@ async fn goodbye_with_end(steps: &[Step], (starts, sent): (usize, u64)) {
     .await;
     assert_eq!(answer.content, serde_json::json!({"ending_after_reply": true}));
     assert_eq!(receipts, ["applied"]);
-    // Neither the response deadline nor an idle window ended the run.
-    assert!(started.elapsed() < Duration::from_secs(3));
+    // The running turn held the run to its 60 s ceiling; the end did not wait
+    // for it, nor for the response deadline or an idle window.
+    assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    assert!(!source.delegation.in_flight());
     assert!(source.controller.ready_to_close(true, true));
-    assert_eq!(source.stats.reply_sent, sent);
     let commands = device.commands();
-    let opened = commands.iter().filter(|cmd| matches!(cmd, Command::Start(..))).count();
-    let frames = commands.iter().filter(|cmd| matches!(cmd, Command::Frame(_))).count();
-    assert_eq!((opened, u64::try_from(frames)), (starts, Ok(sent)));
-    assert!(!commands.iter().any(|cmd| matches!(cmd, Command::Cut(_))));
+    assert_eq!(
+        commands.iter().filter(|cmd| matches!(cmd, Command::Cut(_))).count(),
+        cuts
+    );
 }
 
 async fn goodbye_run<T>(
@@ -408,17 +405,21 @@ async fn goodbye_run<T>(
     inputs: impl Future<Output = T>,
 ) -> T {
     tokio::pin!(run);
-    let mut stops = 0;
+    let (mut stops, mut cuts) = (0, 0);
     let run = poll_fn(|cx| {
         let result = run.as_mut().poll(cx);
-        let seen = device
-            .commands()
-            .iter()
-            .filter(|cmd| matches!(cmd, Command::Stop))
-            .count();
+        let commands = device.commands();
+        let seen = commands.iter().filter(|cmd| matches!(cmd, Command::Stop)).count();
         if seen > stops {
             stops = seen;
             stopped.notify_one();
+        }
+        // The device acknowledges a cut as it acknowledges a finished reply.
+        let cut = commands.iter().filter(|cmd| matches!(cmd, Command::Cut(_))).count();
+        if cut > cuts {
+            cuts = cut;
+            device.finish(Ok(()));
+            cx.waker().wake_by_ref();
         }
         result.map(Result::unwrap)
     });
@@ -439,7 +440,6 @@ async fn goodbye_inputs(
             Step::Handoff(turn_first) => handoff(tx, *turn_first).await,
             Step::End => send_control(tx, end.take().unwrap()).await,
             Step::Reply => reply(tx, 5000).await,
-            Step::Silent => send_control(tx, silent_turn()).await,
             Step::Played => {
                 stopped.notified().await;
                 device.finish(Ok(()));
@@ -452,14 +452,6 @@ async fn goodbye_inputs(
         }
     }
     answer.await.unwrap()
-}
-
-fn silent_turn() -> Event {
-    Event::TurnCompleted {
-        thread: "thread".into(),
-        turn: "turn".into(),
-        answered: false,
-    }
 }
 
 async fn handoff(tx: &mpsc::Sender<MediaEvent>, turn_first: bool) {

@@ -244,14 +244,18 @@ impl World {
         self.wait(
             "runner tool response",
             |world| {
-                world.provider.observed.borrow()["models"]
-                    .as_array()
-                    .is_some_and(|models| {
-                        models
-                            .iter()
-                            .any(|model| model["turn"] == turn && model["outputs"] != json!([]))
-                    })
-                    && world.count("delegation.resolved") >= if reply == 1 && world.run_id == "run-1" { 2 } else { 1 }
+                // The end's interrupt may stop the turn before its next model
+                // request; it lands after the run, outside its trace rows.
+                world.trace.records.iter().any(|row| row["event"] == "turn.interrupted")
+                    || world.provider.observed.borrow()["models"]
+                        .as_array()
+                        .is_some_and(|models| {
+                            models
+                                .iter()
+                                .any(|model| model["turn"] == turn && model["outputs"] != json!([]))
+                        })
+                        && world.count("delegation.resolved")
+                            >= if reply == 1 && world.run_id == "run-1" { 2 } else { 1 }
             },
             20,
         )

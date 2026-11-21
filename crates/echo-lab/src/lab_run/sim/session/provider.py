@@ -132,7 +132,9 @@ class Script:
 
         The Echo has no code-mode host, so a tool that is only an `exec`
         callable cannot be called there. Responses Lite carries declarations
-        as one input block of namespaces; search is the app server's `web.run`.
+        as one input block of namespaces. The app server's `web.run` is never
+        declared directly: a code-mode-only model reserves it and the backend
+        refuses a direct declaration (HTTP 400, Codex 0.171.0 on the Echo).
 
         No release is pinned, so the app server's own tools are not compared:
         the T3 native-extras witness shows they do nothing in a bridge thread.
@@ -144,7 +146,7 @@ class Script:
         declared = [tool['name'] for tool in function_tools([])[:-1]]
         direct = [tool for namespace in blocks[0] if namespace['name'] == 'functions'
                   for tool in namespace['tools'] if tool['name'] in declared]
-        assert [tool['name'] for tool in direct] == declared and 'web.run' in names, \
+        assert [tool['name'] for tool in direct] == declared and 'web.run' not in names, \
             'bridge tools are not direct declarations: ' + json.dumps(names)
         return direct + function_tools([])[-1:]
 
@@ -284,7 +286,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                        if item.get('type') == 'message' and item.get('role') == 'developer'
                                        for part in item['content'] if part.get('type') == 'input_text'), '')
         if script and any('request' in turn[0] for turn in script.turns):
-            if 'hand off once so the background agent ends the session' not in script.instructions:
+            if 'hand off once with their words so the background agent ends the session' not in script.instructions:
                 emit({'event': 'provider.failure', 'failure': 'missing goodbye Live prompt'})
         observed['calls'] += 1
         emit({'event': 'provider.offer', 'offer': body['sdp']})

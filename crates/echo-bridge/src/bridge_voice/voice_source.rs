@@ -155,6 +155,7 @@ impl Source {
 
     /// Close the reply's quality window. `lost` is the call's cumulative RTP loss.
     pub fn settle(&mut self, lost: u64) -> ReplyQuality {
+        self.reply.hush();
         self.meter.paced(self.reply.take_playout());
         let mut quality = self.meter.settle(lost);
         quality.mic = self.ear.rest();
@@ -250,6 +251,33 @@ impl Source {
     #[must_use]
     pub fn barge_due(&self) -> Option<Instant> {
         self.barge.due(Instant::now(), self.reply.finished())
+    }
+
+    /// An applied `end_session` supersedes everything (owner, 2026-11-21):
+    /// nothing delegated is owed any more, and a reply opened for it stops at
+    /// once, as a barge-in cut does. A reply already audible is the Live
+    /// voice's farewell for the end's hand-off: it plays out, and the run ends
+    /// at its playback boundary. Between replies there is nothing to stop.
+    /// True when that farewell is done and only held for the delegated answer.
+    pub fn end_if_ended(&mut self, port: &mut impl VoicePort) -> Result<bool, Error> {
+        if !self.session.ending() || self.controller.cutting() || self.controller.closing() {
+            return Ok(false);
+        }
+        let held = self.delegation.held();
+        self.delegation = Delegation::default();
+        if self.controller.idle_deadline().is_some() {
+            return Ok(false);
+        }
+        if self.reply.spoken() {
+            return Ok(held);
+        }
+        self.stale = true;
+        port.retire_audio();
+        self.fresh_reply()?;
+        self.mouth = Mouth::default();
+        crate::bridge_runtime::bridge_pacing::reply_lips::cut(Instant::now());
+        self.controller.cut();
+        Ok(false)
     }
 
     /// The model has yielded to the user: the pending barge-in cuts the reply.
@@ -367,6 +395,9 @@ impl Source {
             self.barge.heard(now, audible(frame));
             if held && !self.barge.pending() {
                 self.meter.released(now);
+            }
+            if audible(frame) {
+                self.reply.speak();
             }
             let wanted = self.meter.arrived(now);
             self.meter.targeted(self.reply.retarget(wanted));

@@ -263,7 +263,7 @@ fn session_tools() -> [Value; 2] {
             "inputSchema":{"type":"object","properties":{"seconds":{"type":"integer","minimum":1}},
                 "required":["seconds"],"additionalProperties":false}}),
         json!({"name":"end_session",
-            "description":"End this voice session after its current reply has played.",
+            "description":"End this voice session now, stopping any reply and work still in progress.",
             "inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
     ]
 }

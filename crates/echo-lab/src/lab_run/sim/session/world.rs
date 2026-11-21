@@ -50,6 +50,7 @@ pub(super) struct World {
     question: Option<long_wait::Question>,
     recovery: bool,
     media_boundary: Option<MediaBoundary>,
+    journey: Option<super::Journey>,
 }
 
 impl World {
@@ -67,6 +68,7 @@ impl World {
         self.private = Some(Root::create(root.into())?);
         self.root = root.into();
         self.recovery = journey.recovers();
+        self.journey = Some(journey);
         self.media_boundary = (journey == super::Journey::ActiveMedia).then_some(MediaBoundary::Waiting);
         let address = self.start_device(python, journey).await?;
         let provider = Provider::start(python, script).await?;
@@ -173,6 +175,12 @@ impl World {
         Ok(())
     }
 
+    /// The delegated turn ends the session before anything is voiced: the
+    /// turn settles when the run ends, with no reply to play.
+    fn ends_unvoiced(&self) -> bool {
+        self.journey == Some(super::Journey::End)
+    }
+
     fn relay(&self) -> Result<&Relay, String> {
         self.relay.as_ref().ok_or_else(|| "session: missing wire".into())
     }
@@ -208,6 +216,9 @@ impl World {
             let milliseconds = gates.advance(provider, &timing, admitted, playback_pending).await?;
             self.step(milliseconds).await?;
             if gates.idle && self.played()? > replies {
+                return Ok(());
+            }
+            if self.ends_unvoiced() && self.completed {
                 return Ok(());
             }
             if self.epoch() > started + STALL_MS {
@@ -271,7 +282,8 @@ impl World {
             }
         }
         if !self.recovery {
-            self.relay()?.wait_session(self.turns, 1).await?;
+            let replies = if self.ends_unvoiced() { 0 } else { self.turns };
+            self.relay()?.wait_session(replies, 1).await?;
         }
         self.read_trace()
     }

@@ -144,8 +144,9 @@ Consequences:
 - **No code of ours runs as root on the Echo.** The screen client is an ordinary app; hassmic is upstream's.
 - **One persistent session per wake word.** With `-D` the run and its capture stay open after each reply is Played,
   listening for `voice.session_listen_seconds` (default 15 s); speech in that window continues the same run. The run
-  ends at idle expiry, right after the current reply when the agent calls `end_session`, or at the
-  `voice.session_max_seconds` ceiling for delegated waiting and listening granted by `extend_session`.
+  ends at idle expiry, at once when the agent calls `end_session` (the applied end cuts the reply and interrupts a
+  running delegated turn), or at the `voice.session_max_seconds` ceiling for delegated waiting and listening granted
+  by `extend_session`. Only the automatic ends wait for a running delegated turn.
   Active speech and playback retain their own completion rules (`docs/program/decisions.md`).
   The Live call stays open for `session_idle_seconds`, so the next wake word continues the same conversation.
 
@@ -217,7 +218,8 @@ need, since the Echo's disk is small.
   direct declarations beside them, never `exec` callables: `exec` runs in `codex-code-mode-host`, which the
   Echo's armv7 install does not have, so a tool that is only an `exec` callable cannot be called on the Echo
   (decision 2026-11-20). Both configuration paths set
-  `features.code_mode.direct_only_tool_namespaces=["web","functions"]`. "Only the bridge's tools" means the
+  `features.code_mode.direct_only_tool_namespaces=["functions"]`; `web.run` is not a direct declaration, since
+  the live backend refuses one for code-mode-only models (decision 2026-11-21). "Only the bridge's tools" means the
   effect surface: the only callable effects are the bridge's declared tools, search and, inside `exec`,
   `clock__curr_time`. T3 (`pinned_media/tools_provider.py`) fails if either list widens (decision 2026-11-17)
   and proves a direct call with no code-mode host beside the app server.

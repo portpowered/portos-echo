@@ -147,3 +147,17 @@ fn watch_children(
     });
     (receive, task)
 }
+
+/// The bridge's `run-satellite` registration data. The pinned hassmic reads
+/// it only from the frame's data segment, never inline in the header.
+pub(super) async fn registration(satellite: &mut tokio::net::TcpStream) -> Value {
+    let mut decoder = echo_contracts::wyoming::Decoder::new();
+    loop {
+        let byte = tokio::io::AsyncReadExt::read_u8(satellite).await.unwrap();
+        if let Some(event) = decoder.feed(&[byte]).unwrap().pop() {
+            assert_eq!(event.header.r#type, "run-satellite");
+            assert_eq!(event.header.data, None);
+            return event.data.unwrap();
+        }
+    }
+}

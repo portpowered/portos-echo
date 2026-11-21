@@ -446,7 +446,27 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             let result = completed(&mut self.work).await;
             self.settle(result)?;
         }
-        self.port.flush_tool_answer().await
+        self.port.flush_tool_answer().await?;
+        // An applied end supersedes delegated work still running (owner,
+        // 2026-11-21): its turn is interrupted once `end_session` is answered.
+        let completing = self
+            .deferred
+            .iter()
+            .any(|event| matches!(event, Event::TurnCompleted { .. }));
+        match self.active.clone().filter(|_| !completing) {
+            Some((thread_id, turn_id)) => {
+                let params = echo_codex::codex_protocol::TurnInterrupt { thread_id, turn_id };
+                match self
+                    .port
+                    .interrupt_after_end(&params, Instant::now() + Duration::from_secs(2))
+                {
+                    // Already interrupting, or the call is gone: nothing left to stop.
+                    Err(Error::Input | Error::Unavailable) => Ok(()),
+                    result => result,
+                }
+            }
+            None => Ok(()),
+        }
     }
 }
 

@@ -74,6 +74,7 @@ pub trait VoicePort {
     fn finish_muse_run(&mut self) -> impl Future<Output = Result<(), Error>> {
         std::future::ready(Ok(()))
     }
+    /// Deliver an applied `end_session` answer; interrupt the running delegated turn.
     fn flush_session_answer(&mut self) -> impl Future<Output = Result<(), Error>> {
         std::future::ready(Ok(()))
     }
@@ -490,7 +491,8 @@ async fn media(
             Ok(())
         }
         MediaEvent::Control(Event::Session(request)) => {
-            session_tools::answer(request, &mut source.session, &mut source.controller, observe)
+            session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
+            voice_listen::end_if_ended(port, source).await
         }
         MediaEvent::Control(Event::Other | Event::ReplyHandoff(_)) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),

@@ -85,7 +85,9 @@ impl Journey {
                 {"call":"extend_session","arguments":{"seconds":100}},
                 {"say":"I will keep listening."}
             ]]),
-            Self::End => json!([[{"call":"end_session","arguments":{}}, {"say":"Goodbye."}]]),
+            // The runner's guidance: end, then an empty reply. The end also
+            // interrupts the turn, so nothing it might say later is owed.
+            Self::End => json!([[{"call":"end_session","arguments":{}}, {"silent":true}]]),
             Self::Limits => {
                 let mut steps = vec![json!({"call":"extend_session","arguments":{"seconds":1}}); LONG_CALLS];
                 steps.push(json!({"say":LONG_ANSWER,"wait_for_release":true}));

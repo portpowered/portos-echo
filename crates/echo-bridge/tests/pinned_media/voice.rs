@@ -1,6 +1,7 @@
 //! T3 public executable: pin + real media + loopback Wyoming, controlled clock.
 use super::*;
 use std::io::Write as _;
+mod end_call;
 #[cfg(target_os = "linux")]
 mod fast_mode;
 mod first_wake;

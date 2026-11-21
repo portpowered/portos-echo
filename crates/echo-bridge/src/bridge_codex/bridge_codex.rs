@@ -97,7 +97,8 @@ pub struct Call<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> {
     thread: Option<String>,
     time_zone: Option<String>,
     early: VecDeque<Event>,
-    interrupt: Option<(RequestId, Instant)>,
+    /// Pending interrupt, deadline, and whether a missed ack is tolerated.
+    interrupt: Option<(RequestId, Instant, bool)>,
     interrupted: Option<TurnInterrupt>,
     handoffs: std::collections::HashSet<String>,
     answered: Option<String>,
@@ -312,17 +313,29 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         if self.phase != Phase::Active {
             return Err(Error::Unavailable);
         }
-        if let Some((id, deadline)) = &self.interrupt {
-            let result = timeout_at(*deadline, self.io.wait_reply(id))
+        if let Some((id, deadline, best_effort)) = self.interrupt.clone() {
+            let result = timeout_at(deadline, self.io.wait_reply(&id))
                 .await
                 .map_err(|_| Error::Deadline)
-                .and_then(|reply| reply.map_err(rpc_error));
-            if let Err(error) = result {
-                self.fail();
-                return Err(error);
-            }
-            if let (Some(trace), Some(turn)) = (&mut self.tool_trace, &self.interrupted) {
-                trace.interrupt("turn.interrupt_acknowledged", turn)?;
+                .and_then(|reply| match reply {
+                    // The turn ended before the interrupt reached it.
+                    Ok(_) | Err(RpcError::Remote(_)) => Ok(()),
+                    Err(error) => Err(rpc_error(error)),
+                });
+            match result {
+                // The call outlives an applied end's unacknowledged interrupt.
+                Err(Error::Deadline) if best_effort => {
+                    self.io.cancel(&id);
+                }
+                Err(error) => {
+                    self.fail();
+                    return Err(error);
+                }
+                Ok(()) => {
+                    if let (Some(trace), Some(turn)) = (&mut self.tool_trace, &self.interrupted) {
+                        trace.interrupt("turn.interrupt_acknowledged", turn)?;
+                    }
+                }
             }
             self.interrupt = None;
         }
@@ -388,13 +401,25 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             return Err(Error::Deadline);
         }
         let id = self.io.begin_request("turn/interrupt", params).map_err(rpc_error)?;
-        self.interrupt = Some((id, deadline));
+        self.interrupt = Some((id, deadline, false));
         self.interrupted = Some(TurnInterrupt {
             thread_id: params.thread_id.clone(),
             turn_id: params.turn_id.clone(),
         });
         if let Some(trace) = &mut self.tool_trace {
             trace.interrupt("turn/interrupt", params)?;
+        }
+        Ok(())
+    }
+
+    /// Interrupt the turn an applied end leaves running. Best effort: a missed
+    /// acknowledgement cancels the request instead of closing the call.
+    /// # Errors
+    /// As `interrupt`.
+    pub fn interrupt_after_end(&mut self, params: &TurnInterrupt, deadline: Instant) -> Result<(), Error> {
+        self.interrupt(params, deadline)?;
+        if let Some((.., best_effort)) = &mut self.interrupt {
+            *best_effort = true;
         }
         Ok(())
     }
@@ -427,7 +452,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         .await
         .unwrap_or(Err(Error::Deadline));
         self.early.clear();
-        if let Some((id, _)) = self.interrupt.take() {
+        if let Some((id, ..)) = self.interrupt.take() {
             self.io.cancel(&id);
         }
         if result.is_err() {

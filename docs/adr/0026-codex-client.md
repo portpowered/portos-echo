@@ -1224,6 +1224,15 @@ receives a `resources/*` request. A future extra that is not inert fails that te
 signal to switch it off in the thread settings or take a new decision. The bridge has no RPC that
 reports the model-facing catalog, so the test's output, not the bridge trace, is the record of it.
 
+**Search is not a direct declaration (2026-11-21).** With the newest release the Echo's every
+delegated turn failed about a second after it started. The backend answered the runner's first model
+request with HTTP 400: `web.run` is reserved for use by that code-mode-only model and a client
+declaration of it must match its configured schema. Declaring only `functions` directly
+(`features.code_mode.direct_only_tool_namespaces=["functions"]`) cleared it on the device, as did
+`web_search = "disabled"`. Both configuration paths now set `["functions"]`. The T3 fake backend
+refuses a direct `web.run` the same way. Search then sits behind `exec`, which needs
+`codex-code-mode-host`, so it is unavailable on the Echo until that host is built for armv7.
+
 **`request_user_input_async`.** Codex registers it only when its request-user-input feature is on,
 and the bridge keeps that feature off, so the tool is absent. The bridge never called it and nothing
 replaces it. `end_session` is a direct bridge tool and works as before.

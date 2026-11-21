@@ -57,10 +57,8 @@ async fn codex_voice_entry_binary_authenticates_before_ready_and_reaps_after_eof
             std::fs::read_to_string(fixture.home.join("last-method")).unwrap(),
             "thread/realtime/listVoices"
         );
-        let registration = bridge_short::read(&mut satellite).await.0;
-        assert_eq!(registration["type"], "run-satellite");
         assert_eq!(
-            registration["data"],
+            fixture::registration(&mut satellite).await,
             json!({"hassmic_failsafe_seconds": if mode == "api_key" { 65 } else { 605 }})
         );
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
@@ -362,7 +360,7 @@ fn assert_local_routes(observed: &Value, live: &str, model: &str, search: &str) 
         "experimental_realtime_webrtc_call_base_url":format!("{live}/backend-api/codex"),
         "experimental_realtime_ws_base_url":format!("{live}/v1"),
         "features.skip_host_skill_discovery":true, "web_search":search,
-        "features.code_mode.direct_only_tool_namespaces":["web","functions"],
+        "features.code_mode.direct_only_tool_namespaces":["functions"],
         "mcp_servers":{}, "cli_auth_credentials_store":"file"
     });
     for key in [

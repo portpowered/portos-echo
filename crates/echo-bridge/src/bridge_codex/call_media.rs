@@ -340,6 +340,15 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         self.call.interrupt(params, deadline)
     }
 
+    /// # Errors
+    /// As `interrupt`; a missed acknowledgement never closes the call.
+    pub fn interrupt_after_end(&mut self, params: &TurnInterrupt, deadline: Instant) -> Result<(), Error> {
+        if !self.active {
+            return Err(Error::Unavailable);
+        }
+        self.call.interrupt_after_end(params, deadline)
+    }
+
     #[must_use]
     pub fn dropped_frames(&self) -> DropCounts {
         self.peer.dropped_frames()

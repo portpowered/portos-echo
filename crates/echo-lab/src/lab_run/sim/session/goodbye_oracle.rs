@@ -41,13 +41,13 @@ pub(super) fn farewell(
     if played.len() != expected || played.iter().any(|row| row["outcome"] != "played") {
         return Err("goodbye: extra, missing or cut bridge reply".into());
     }
-    if records.iter().any(|row| {
-        matches!(
-            row["event"].as_str(),
-            Some("bridge.error" | "turn.interrupt_acknowledged" | "turn.interrupted" | "live.closed")
-        )
-    }) {
-        return Err("goodbye: bridge failure, interruption or premature Live call close".into());
+    // An applied end interrupts the runner's turn when it is still running
+    // (decision 2026-11-21): that is the end, not a failure.
+    if records
+        .iter()
+        .any(|row| matches!(row["event"].as_str(), Some("bridge.error" | "live.closed")))
+    {
+        return Err("goodbye: bridge failure or premature Live call close".into());
     }
     handback(records, run, turn, provider)?;
     let ends = if run == "run-2" { 2 } else { 1 };
@@ -75,13 +75,17 @@ fn handback(records: &[Value], run: &str, turn: usize, provider: &Value) -> Resu
         .flatten()
         .filter(|model| model["turn"] == turn)
         .collect();
+    // The runner sees its tool answer unless the end's interrupt stopped the
+    // turn before its next model request.
+    let interrupted = records.iter().any(|row| row["event"] == "turn.interrupted");
+    let answered = models.len() == 2
+        && models[1]["outputs"].as_array().map(Vec::len) == Some(1)
+        && tool_result(&models[1]["outputs"][0]) == Some(json!({"ending_after_reply": true}));
     if created.len() != 1
         || provider["requests"][turn] != super::goodbye::GOODBYE
         || !real_handoff(&created[0]["task"])
-        || models.len() != 2
-        || models[0]["outputs"] != json!([])
-        || models[1]["outputs"].as_array().map(Vec::len) != Some(1)
-        || tool_result(&models[1]["outputs"][0]) != Some(json!({"ending_after_reply": true}))
+        || models.first().is_none_or(|model| model["outputs"] != json!([]))
+        || !(answered || (interrupted && models.len() == 1))
         || provider["appends"]
             .as_array()
             .is_none_or(|appends| appends.contains(&json!(id)))
@@ -168,7 +172,9 @@ fn wire_replies(
     for (index, (stream, frames)) in streams.iter().zip(&counts).enumerate() {
         let played = stream["played_us"].as_u64().ok_or("goodbye: missing device Played")?;
         if index == spoken {
-            if stream["ending"] != "stop" || stream["pcm_bytes"] != 0 || !frames.is_empty() || played < last_played {
+            // Empty either way: closed, or cut by the end that superseded it.
+            let closed = stream["ending"] == "stop" || stream["ending"] == "flush";
+            if !closed || stream["pcm_bytes"] != 0 || !frames.is_empty() || played < last_played {
                 return Err(format!("goodbye: audio followed the farewell: {stream}"));
             }
             last_played = played;

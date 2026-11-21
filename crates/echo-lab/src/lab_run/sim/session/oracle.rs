@@ -25,6 +25,9 @@ pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, Stri
         }
         return Ok(summary);
     }
+    if journey == Journey::End {
+        return end(evidence);
+    }
     let summary = common(evidence)?;
     let detail = match journey {
         Journey::Turns => turns(evidence, &summary)?,
@@ -32,10 +35,11 @@ pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, Stri
         Journey::Dispatch => dispatch(evidence, &summary)?,
         Journey::Extend => extend(evidence, &summary, 12_000)?,
         Journey::LongWait => long_wait(evidence, &summary)?,
-        Journey::End => end(evidence, &summary)?,
         Journey::Limits => limits(evidence, &summary)?,
         Journey::LongQuestion => long_question(evidence, &summary)?,
-        Journey::Recovery | Journey::ActiveMedia => return Err("session: invalid recovery dispatch".into()),
+        Journey::End | Journey::Recovery | Journey::ActiveMedia => {
+            return Err("session: invalid journey dispatch".into());
+        }
     };
     Ok(json!({"timeline":summary,"journey":detail}))
 }
@@ -407,20 +411,43 @@ fn long_wait(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
     Ok(detail)
 }
 
-fn end(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
-    let results = outputs(evidence, 1)?;
-    if results != [json!({"ending_after_reply":true})] {
-        return Err(format!("session: end results {results:?}"));
+/// The delegated turn ends the session before anything was voiced. An end
+/// supersedes everything (owner, 2026-11-21): the run closes at once, cutting
+/// the reply opened for the turn, and nothing the turn could still say plays.
+fn end(evidence: &Evidence) -> Result<Value, String> {
+    let records = evidence.records;
+    let opened = elapsed(records, "run.started");
+    let ended = elapsed(records, "wyoming.run_ended");
+    if opened.len() != 1 || ended.len() != 1 || elapsed(records, "bridge.run_completed").len() > 1 {
+        return Err(format!(
+            "session: expected one run and one end, observed opened={opened:?} ended={ended:?}"
+        ));
     }
-    let receipts = receipts(evidence.records, "end_session");
-    if receipts.len() != 1 || receipts[0]["outcome"] != "applied" {
+    if records.iter().any(|r| r["event"] == "bridge.error") {
+        return Err("session: bridge.error recorded".into());
+    }
+    let receipts = receipts(records, "end_session");
+    let applied = receipts.first().and_then(|r| r["elapsed_ms"].as_u64());
+    let Some(applied) = applied.filter(|_| receipts.len() == 1 && receipts[0]["outcome"] == "applied") else {
         return Err(format!("session: end receipts {receipts:?}"));
+    };
+    // At once: within a clock step or two of the receipt, never a listen window.
+    let end = ended[0];
+    if end < applied || end >= applied + LISTEN_MS / 2 {
+        return Err(format!("session: end at {end} ms for the receipt at {applied} ms"));
     }
-    let played = last_played(summary)?;
-    let end = ended(summary)?;
-    // Not before the reply settles, and without waiting for idle expiry.
-    if end < played || end >= played + LISTEN_MS {
-        return Err(format!("session: end at {end} ms for Played at {played} ms"));
+    let wire = evidence.wire.last().ok_or("session: missing wire observation")?;
+    let audible = wire["streams"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|s| s["audible_samples"].as_u64().is_some_and(|n| n > 0));
+    if wire["run_opened_us"].as_array().map(Vec::len) != Some(1)
+        || wire["explicit_end_us"].as_array().map(Vec::len) != Some(1)
+        || audible
+    {
+        return Err(format!("session: wire receipts mismatch: {wire}"));
     }
-    Ok(json!({"results":results,"receipts":receipts,"end_after_played_ms":end - played}))
+    Ok(json!({"receipts":receipts,"run_opened_ms":opened[0],"run_ended_ms":end,
+        "end_after_receipt_ms":end - applied,"replies_voiced":0}))
 }

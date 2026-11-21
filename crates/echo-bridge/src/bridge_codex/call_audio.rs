@@ -130,6 +130,8 @@ pub struct ReplyAudio {
     partial: Vec<u8>,
     pacer: ClockPacer<Vec<u8>>,
     finished: bool,
+    /// The reply has taken audible audio: it is speaking, not just opened.
+    spoken: bool,
 }
 
 impl ReplyAudio {
@@ -142,6 +144,7 @@ impl ReplyAudio {
             partial: Vec::with_capacity(960),
             pacer: ClockPacer::new(lead_ms),
             finished: false,
+            spoken: false,
         })
     }
 
@@ -209,6 +212,22 @@ impl ReplyAudio {
     /// What the pacer did since this was last asked.
     pub(crate) fn take_playout(&mut self) -> Playout {
         self.pacer.take_playout()
+    }
+
+    /// Audible audio was accepted into this reply.
+    pub fn speak(&mut self) {
+        self.spoken = true;
+    }
+
+    /// The reply settled: what it said is no longer being spoken.
+    pub fn hush(&mut self) {
+        self.spoken = false;
+    }
+
+    /// Whether this reply has accepted audible audio since it opened.
+    #[must_use]
+    pub fn spoken(&self) -> bool {
+        self.spoken
     }
 
     /// The reply was flushed; later peer media is not part of it.
