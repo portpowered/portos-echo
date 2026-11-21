@@ -28,7 +28,25 @@ pub(super) async fn forward(sink: Option<&impl ReplySink>, pending: Option<&[u8]
     sink.send(frame.to_vec()).await.map_err(Error::from)
 }
 
+/// Every reply of one run; the run's open speech latch is reported at its end.
 pub(super) async fn replies<L: EchoLink>(
+    client: &L,
+    input: (&mut L::Events, &mut <L::Events as LinkEvents>::Run),
+    port: &mut impl VoicePort,
+    (source, drain): (
+        &mut Source,
+        &mut Option<crate::bridge_mcp::bridge_clock::receipt::VoiceDrain>,
+    ),
+    options: &Options,
+    cancelled: impl Future<Output = ()>,
+    observe: &mut impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let result = reply_loop(client, input, port, (&mut *source, drain), options, cancelled, observe).await;
+    let marks = super::voice_wait::run_marks::run_ended(source, observe);
+    result.and(marks)
+}
+
+async fn reply_loop<L: EchoLink>(
     client: &L,
     input: (&mut L::Events, &mut <L::Events as LinkEvents>::Run),
     port: &mut impl VoicePort,
@@ -231,6 +249,7 @@ pub(super) async fn think<L: EchoLink>(
     source: &mut Source,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
+    super::voice_wait::run_marks::report(source, observe)?;
     if let Some(on) = source.thinking_change() {
         if on {
             // The screen holds this state through queued audio. The mouth's
@@ -299,6 +318,7 @@ async fn listen<E: LinkEvents>(
     tokio::pin!(cancelled);
     let mut turn_started = false;
     loop {
+        super::voice_wait::run_marks::report(source, observe)?;
         // A granted extension moves the deadline; a requested end closes now.
         let idle = source.controller.idle_deadline().ok_or(Error::Input)?;
         let delegated = source.delegation.waiting();
@@ -317,7 +337,9 @@ async fn listen<E: LinkEvents>(
             // Playback has settled before entering listen. A running delegated
             // turn still owns this reply; finish it before admitting cleanup.
             () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),
-            () = until(deadline) => return expiry,
+            () = until(deadline) => {
+                if let Some(expiry) = super::voice_wait::listen_lapsed(source, expiry) { return expiry; }
+            },
             result = listening_step((events, microphone), port, source, &mut turn_started, observe) => {
                 if result? { return Ok(true); }
             },

@@ -219,6 +219,9 @@ impl<'a> View<'a> {
                 }
                 self.trace.record("session.tool_receipt", self.run.as_deref(), fields)
             }
+            SessionNotice::Run(Notice::Mark(mark)) => {
+                self.trace.record(mark.event(), self.run.as_deref(), mark.fields())
+            }
             SessionNotice::Run(Notice::ReplyPlayed | Notice::ReplySettled(_) | Notice::Transcript { .. }) => Ok(()),
             SessionNotice::MicrophoneCompleted(stats) => self.microphone_completed(&stats),
             SessionNotice::ReplyCompleted(stats) => self.reply_completed(&stats),

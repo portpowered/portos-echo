@@ -134,10 +134,12 @@ fn normalizes_only_incidental_values_and_keeps_measurements_and_relationships() 
 }
 
 #[test]
-fn reply_quality_and_timing_measurements_are_not_golden_steps() {
+fn reply_quality_timing_and_speech_latch_measurements_are_not_golden_steps() {
     let mut records = journey();
     let expected = recorded(&records);
     records.push(json!({"event":"reply.quality","elapsed_ms":9,"run_id":"r-a","underruns":3}));
+    records.push(json!({"event":"speech.latched","elapsed_ms":9,"run_id":"r-a",
+        "held_ms":420,"reason":"cleared","transcribed":false}));
     records.push(json!({"event":"timing","elapsed_ms":9,"run_id":"r-a",
         "name":"first_audio_after_endpoint_ms","duration_ms":40,"endpoint":"delegated_turn"}));
     assert_eq!(compare(&trace(&records), &expected), Ok(()));

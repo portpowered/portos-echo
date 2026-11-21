@@ -8,6 +8,8 @@ pub struct VoiceConfig {
     pub session_listen_enabled: bool,
     pub session_listen_seconds: u32,
     pub session_max_seconds: u32,
+    /// How long a user speech start with no transcript text counts as speech.
+    pub speech_start_expiry_seconds: u32,
 }
 
 impl Default for VoiceConfig {
@@ -16,6 +18,7 @@ impl Default for VoiceConfig {
             session_listen_enabled: true,
             session_listen_seconds: 15,
             session_max_seconds: 600,
+            speech_start_expiry_seconds: 20,
         }
     }
 }
@@ -32,6 +35,12 @@ impl VoiceConfig {
             return Err(ConfigError::new(
                 "voice.session_max_seconds",
                 "must be within 3..=2147483647",
+            ));
+        }
+        if !(3..=300).contains(&self.speech_start_expiry_seconds) {
+            return Err(ConfigError::new(
+                "voice.speech_start_expiry_seconds",
+                "must be within 3..=300",
             ));
         }
         if self.session_max_seconds < self.session_listen_seconds {
@@ -57,6 +66,9 @@ pub(super) fn decode(value: toml::de::DeValue<'_>) -> Result<VoiceConfig, Config
         session_max_seconds: f
             .optional("session_max_seconds")?
             .unwrap_or(defaults.session_max_seconds),
+        speech_start_expiry_seconds: f
+            .optional("speech_start_expiry_seconds")?
+            .unwrap_or(defaults.speech_start_expiry_seconds),
     };
     f.finish()?;
     Ok(result)
@@ -70,17 +82,14 @@ mod tests {
 
     #[test]
     fn voice_listen_rejects_invalid_ranges_and_nonintegers_without_values() {
-        for field in ["session_listen_seconds", "session_max_seconds"] {
-            let range = if field == "session_listen_seconds" {
-                "3..=300"
-            } else {
-                "3..=2147483647"
-            };
-            let overflow = if field == "session_listen_seconds" {
-                "301"
-            } else {
-                "2147483648"
-            };
+        for field in [
+            "session_listen_seconds",
+            "session_max_seconds",
+            "speech_start_expiry_seconds",
+        ] {
+            let short = field != "session_max_seconds";
+            let range = if short { "3..=300" } else { "3..=2147483647" };
+            let overflow = if short { "301" } else { "2147483648" };
             for value in ["0", "2", overflow, "4294967295"] {
                 let error = BridgeConfig::from_toml_str(&format!("{MINIMAL}\n[voice]\n{field}={value}\n")).unwrap_err();
                 assert_eq!(error.to_string(), format!("voice.{field}: must be within {range}"));

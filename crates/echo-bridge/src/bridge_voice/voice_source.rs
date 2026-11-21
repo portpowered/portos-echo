@@ -67,6 +67,7 @@ pub(super) struct Source {
     /// The device was told a dispatch is running in silence.
     thinking: bool,
     pub user_speech: UserSpeech,
+    pub marks: super::voice_wait::Marks,
     /// When a reply nobody has begun is unanswered: one response window
     /// after the reply opened or the user was last heard to stop speaking.
     pub answer_due: Instant,
@@ -136,15 +137,6 @@ impl Source {
         self.stale || self.controller.retired()
     }
 
-    /// The user stopped speaking: the Live session's end of speech, their
-    /// whole transcript or the end of capture. The no-answer window restarts.
-    pub fn user_quiet(&mut self) {
-        self.user_speech = UserSpeech::Quiet;
-        if let Ok(due) = self.controller.replacement_deadline() {
-            self.answer_due = due;
-        }
-    }
-
     /// Give the configured listen window from now.
     pub fn renew_idle(&mut self) {
         let listen = self.session.listen();
@@ -204,6 +196,7 @@ impl Source {
             mouth: Mouth::default(),
             thinking: false,
             user_speech: UserSpeech::Quiet,
+            marks: super::voice_wait::Marks::default(),
             answer_due: Instant::now(),
             follow_up: FollowUp::First,
             run_ceiling: None,
@@ -228,7 +221,7 @@ impl Source {
         if whole {
             self.user_quiet();
         } else {
-            self.user_speech = UserSpeech::Active;
+            self.user_active(matches!(trigger, BargeTrigger::UserTranscript));
         }
         let replying = !self.delegation.in_flight() && self.controller.speaking();
         // Nobody talks over a reply that has not sounded yet, and a reply

@@ -259,6 +259,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `voice.session_listen_enabled` | Boolean, default true; keep listening after reply. | boundary / yes |
 | `voice.session_listen_seconds` | Integer 3–300, default 15; listening window. Must not exceed session_max_seconds. | boundary / yes |
 | `voice.session_max_seconds` | Integer 3–2147483647, default 600; run ceiling for delegated waiting and agent-granted listening extensions, at least listen seconds. Active speech and playback finish under their existing rules. | restart / no |
+| `voice.speech_start_expiry_seconds` | Integer 3–300, default 20; how long a user speech start with no transcript text counts as speech. The pinned V3 session sends no speech-stopped, so without text the latch expires and the no-answer, idle and listen deadlines apply again. Speech also holds the `voice.session_max_seconds` cap by this long at most. | restart / no |
 | `audio` | Optional audio policy table. | restart / no |
 | `audio.reply_lead_ms` | Positive u16 multiple of 20 milliseconds, default 200; maximum send lead. | restart / no |
 | `clock` | Optional network-time table. The bridge measures its clock against SNTP servers and tells the model the measured time while the system clock is more than 2 s off; see [architecture](architecture.md), launch contract item 9. | restart / no |
