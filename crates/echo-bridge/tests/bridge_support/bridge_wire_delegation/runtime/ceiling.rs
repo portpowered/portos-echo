@@ -29,6 +29,7 @@ async fn bridge_wire_runtime_ceiling_abandons_model_and_next_wake_plays() {
     let mut fresh = app.request("fresh").await;
     respond(&mut fresh, "next wake answered").await.unwrap();
     app.commentary("fresh", "next wake answered").await;
+    app.live.events.send("synthetic.more_audio".into()).await.unwrap();
     play(&mut app).await;
     assert_eq!(
         handback_edges(&app.path()),
@@ -50,8 +51,10 @@ async fn bridge_wire_runtime_ceiling_abandons_model_and_next_wake_plays() {
 
 #[tokio::test]
 #[ignore = "T3 controlled application and loopback peers"]
-async fn bridge_wire_runtime_twelve_calls_after_sixty_seconds_play_on_the_same_run() {
+async fn bridge_wire_runtime_twelve_calls_after_acknowledgement_play_on_the_same_run() {
     let mut app = Application::start(20, 90).await;
+    app.live.send_acknowledged("synthetic.muse_audio".into()).await;
+    read_pcm(&mut app, 1).await;
     let mut socket = app.request("slow").await;
     for index in 1..=12 {
         let id = format!("call-{index}");
@@ -73,12 +76,15 @@ async fn bridge_wire_runtime_twelve_calls_after_sixty_seconds_play_on_the_same_r
     assert!(app.live.commentary.try_recv().is_err());
     respond(&mut socket, "twelve successful calls").await.unwrap();
     app.commentary("slow", "twelve successful calls").await;
+    app.live.events.send("synthetic.more_audio".into()).await.unwrap();
+    // Consume the remaining acknowledgement frames before checking answer PCM.
+    read_pcm(&mut app, 9).await;
     play(&mut app).await;
     assert_eq!(
         handback_edges(&app.path()),
         vec![
-            (json!("session.commentary.append"), json!("run-1")),
             (json!("reply.started"), json!("run-1")),
+            (json!("session.commentary.append"), json!("run-1")),
             (json!("reply.played"), json!("run-1")),
         ]
     );
@@ -101,10 +107,17 @@ fn handback_edges(path: &Path) -> Vec<(Value, Value)> {
 }
 
 async fn play(app: &mut Application) {
-    app.live.events.send("synthetic.more_audio".into()).await.unwrap();
     let path = app.path();
     bridge_short::receive_short(&mut app.satellite, &app.live, &path, 32).await;
     bridge_short::send(&mut app.satellite, "played", json!({})).await;
     bridge_short::send(&mut app.satellite, "audio-stop", json!({})).await;
     bridge_lifecycle::control(&mut app.satellite, "hassmic-end").await;
+}
+
+async fn read_pcm(app: &mut Application, frames: usize) {
+    for _ in 0..frames {
+        let (header, bytes) = bridge_short::read_reply(&mut app.satellite).await;
+        assert_eq!(header["type"], "audio-chunk");
+        assert_eq!(bytes, vec![0; 960]);
+    }
 }

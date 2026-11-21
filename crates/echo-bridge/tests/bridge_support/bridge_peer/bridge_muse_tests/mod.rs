@@ -44,11 +44,8 @@ async fn muse_correlated_success() {
     configure(directory.path(), port, &muse, "");
     let model = bridge_wire_delegation::Model::start(false, true).await;
     let mut live = bridge_peer::Live::bind_frames(0).await;
-    let mut bridge = Process::spawn(&mut bridge_wire_delegation::run_command(
-        directory.path(),
-        &live.url,
-        &model.origin,
-    ));
+    let mut command = bridge_wire_delegation::run_command(directory.path(), &live.url, &model.origin);
+    let mut bridge = Process::spawn(command.arg("--sim-clock"));
     assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
     assert_eq!(host.command("wake").await, "wake");
     let path = directory.path().join("trace");
@@ -65,9 +62,24 @@ async fn muse_correlated_success() {
     let calls = muse.calls();
     assert_eq!(calls.len(), 1);
     check_gadget(&calls[0], id);
+    let receipt = bridge
+        .command(r#"{"action":"advance_clock","milliseconds":61000}"#)
+        .await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&receipt).unwrap(),
+        json!({"event":"bridge.clock_advanced","milliseconds":61000})
+    );
     muse.set_time(161).await;
     assert_eq!(muse.report(id).await, json!({"accepted":true,"task_id":id}));
-    reply(&mut live, &mut bridge, &mut host, &path, "Muse test job completed").await;
+    play_reply(
+        &mut live,
+        &mut bridge,
+        &mut host,
+        &path,
+        ("muse-d-1", "Muse test job completed", "run-1"),
+        true,
+    )
+    .await;
     check_trace(&path, Some(id));
     assert_eq!(model.request_count(), 0);
     bridge.finish(0).await;

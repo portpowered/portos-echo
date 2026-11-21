@@ -386,7 +386,7 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
             if Instant::now() < self.wait.cutoff
                 && self.delegation.dispatch(event, self.id, self.trace, self.wait.cutoff)?
             {
-                self.wait.delegated = true;
+                self.wait.delegation_started();
             }
             Ok(())
         } else {

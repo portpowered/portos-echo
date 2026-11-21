@@ -124,6 +124,10 @@ impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
         self.pending = None;
     }
 
+    pub fn awaiting_result(&self) -> bool {
+        self.active.is_some()
+    }
+
     pub async fn service(&mut self, call: &mut impl LivePort, trace: &mut Trace) -> Result<(), Error> {
         if self.pending.as_ref().is_some_and(JoinHandle::is_finished) {
             self.ready().await;

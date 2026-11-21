@@ -320,7 +320,7 @@ async fn produce_turns<L: EchoLink>(
         let received = source.received;
         let drained = source.receive(call).await?;
         if source.received > received {
-            context.wait.media_started();
+            context.wait.media_started(context.delegation.awaiting_result());
         }
         let timing = context.service_delegation(source.user_speaking, call).await?;
         context.screen.presentation.expire_emotion()?;

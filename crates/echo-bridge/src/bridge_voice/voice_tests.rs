@@ -453,7 +453,7 @@ async fn voice_utterance_in_progress_when_the_turn_starts_is_the_filler() {
     assert_eq!(delegated_answer(filler, said("It's three.")).await, (12, 12));
 }
 #[tokio::test(start_paused = true)]
-async fn voice_delegated_answer_missing_the_deadline_ends_after_the_filler_without_failing() {
+async fn voice_stuck_delegation_cuts_once_the_filler_has_played_at_the_run_ceiling() {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -462,35 +462,30 @@ async fn voice_delegated_answer_missing_the_deadline_ends_after_the_filler_witho
     let (mut port, tx) = port();
     send(&tx, [turn(true), said("One sec."), done()]).await;
     send(&tx, audible(12)).await;
+    let options = options();
     let mut work = Box::pin(run(
         &client,
         &mut events,
         mic,
         &mut port,
-        options(),
+        options,
         std::future::pending(),
         |_| Ok(()),
     ));
     pending(work.as_mut()).await;
-    tokio::time::advance(Duration::from_secs(9)).await;
+    tokio::time::advance(Duration::from_secs(10)).await;
     pending(work.as_mut()).await;
-    // The filler played up to the resampler's held tail; the reply stays open.
-    assert_eq!(frames(&observer).len(), 11);
-    assert_ne!(observer.commands().last(), Some(&Command::Stop));
-    assert!(!observer.commands().contains(&Command::EndRun));
-    tokio::time::advance(Duration::from_secs(1)).await;
-    pending(work.as_mut()).await;
-    tick(work.as_mut(), 1).await;
-    // The deadline flushes the tail and ends the reply instead of failing.
-    assert_eq!(frames(&observer).len(), 12);
-    assert_eq!(observer.commands().last(), Some(&Command::Stop));
-    // The abandoned answer arriving late is dropped, not a fatal late-media error.
+    // The ordinary deadline leaves the filler tail and reply open.
+    let filler = frames(&observer);
+    assert_eq!(filler.len(), 11);
+    assert!(matches!(observer.commands().last(), Some(Command::Frame(_))));
+    tokio::time::advance(options.session_max - Duration::from_secs(10)).await;
+    // PCM ready at the cutoff must stay on the retiring call.
     send(&tx, audible(1)).await;
-    pending(work.as_mut()).await;
-    observer.finish(Ok(()));
-    let stats = work.await.unwrap();
-    assert_eq!((stats.reply_received, stats.reply_sent), (13, 12));
-    assert_eq!(observer.commands().last(), Some(&Command::EndRun));
+    assert_eq!(work.await, Err(Error::SessionCeiling));
+    assert_eq!(observer.commands().last(), Some(&Command::Cut(0)));
+    assert_eq!(frames(&observer), filler);
+    assert!(matches!(port.events.try_recv(), Ok(Ok(MediaEvent::Audio(_)))));
 }
 
 fn assert_drained_reply(observer: &Observer, old_frames: usize) {

@@ -9,8 +9,14 @@ const RESPONSE: Duration = Duration::from_secs(10);
 pub(super) struct Wait {
     pub cutoff: Instant,
     response: Instant,
-    pub delegated: bool,
-    media: bool,
+    phase: Phase,
+}
+
+#[derive(PartialEq, Eq)]
+enum Phase {
+    Response,
+    DelegatedWait,
+    DelegatedReply,
 }
 
 impl Wait {
@@ -28,28 +34,32 @@ impl Wait {
         Self {
             cutoff,
             response: Instant::now() + RESPONSE,
-            delegated: false,
-            media: false,
+            phase: Phase::Response,
         }
     }
 
-    pub fn media_started(&mut self) {
-        if !self.media && self.delegated {
+    pub fn delegation_started(&mut self) {
+        self.phase = Phase::DelegatedWait;
+    }
+
+    pub fn media_started(&mut self, awaiting_result: bool) {
+        // An acknowledgement can straddle the handoff. Only audio after the
+        // result has been sent starts the delegated reply's response timer.
+        if self.phase == Phase::DelegatedWait && !awaiting_result {
+            self.phase = Phase::DelegatedReply;
             self.response = Instant::now() + RESPONSE;
         }
-        self.media = true;
     }
 
     pub fn next_reply(&mut self) {
-        if self.delegated {
+        if self.phase != Phase::Response {
             self.response = Instant::now() + RESPONSE;
         }
-        self.delegated = false;
-        self.media = false;
+        self.phase = Phase::Response;
     }
 
     pub fn deadline(&self, user_speaking: bool) -> (Option<Instant>, Error) {
-        if self.delegated && !self.media {
+        if self.phase == Phase::DelegatedWait {
             ((!user_speaking).then_some(self.cutoff), Error::SessionCeiling)
         } else {
             (Some(self.response), Error::Deadline)

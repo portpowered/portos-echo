@@ -58,7 +58,7 @@ impl BridgeConfig {
     /// Parse the base and return fixed diagnostics for any deprecated keys.
     ///
     /// # Errors
-    /// Returns the same safe diagnostics as [Self::from_toml_str].
+    /// Returns the same safe diagnostics as [`Self::from_toml_str`].
     pub fn from_toml_str_with_warnings(input: &str) -> Result<(Self, Vec<ConfigError>), ConfigError> {
         let table = toml::de::DeTable::parse(input).map_err(|error| {
             let offset = error.span().map_or(0, |span| span.start);
@@ -83,7 +83,7 @@ impl BridgeConfig {
     /// Read the base once and preserve its deprecation diagnostics.
     ///
     /// # Errors
-    /// Returns the same safe diagnostics as [Self::load].
+    /// Returns the same safe diagnostics as [`Self::load`].
     pub fn load_with_warnings(path: impl AsRef<Path>) -> Result<(Self, Vec<ConfigError>), ConfigError> {
         let input = std::fs::read_to_string(path)
             .map_err(|_| ConfigError::new("config", "cannot read UTF-8 configuration file"))?;

@@ -51,6 +51,13 @@ impl Host {
         }
     }
 
+    pub fn awaiting_result(&self) -> bool {
+        match self {
+            Self::Client(client) => client.active.is_some(),
+            Self::Muse(muse) => muse.awaiting_result(),
+        }
+    }
+
     pub async fn service(
         &mut self,
         call: &mut impl LivePort,
