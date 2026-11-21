@@ -1,7 +1,7 @@
 //! T3 integrated installation, voice, camera, REST recovery and gateway lifecycle.
 use super::{
     command_tests::receipts,
-    voice_tests::{app_stop, assert_end, begin_text, play_reply},
+    voice_tests::{Device, app_stop, assert_end, begin_text, play_reply},
     *,
 };
 use echo_mcp_auth::mock::{MessageFault, Request};
@@ -28,20 +28,37 @@ async fn t3_endpoint_integrated() {
             assert_installed(home.path(), &mock).await;
             text_and_snapshot(&gateway, &mock, &mut fixture).await;
             assert_malformed_frames(&gateway, &mock).await;
-            assert_retry(&gateway, &mock).await;
             debounce_and_reconnect(&mut gateway, &mock, &mut fixture).await;
             camera.started(2).await;
-            let device_id = read_install(home.path())["deviceId"].clone();
-            fixture.settings.unlink().await;
-            gateway.assert_disconnect().await;
-            assert_unlinked(home.path(), &fixture.settings, device_id).await;
-            advance(Duration::from_secs(61)).await;
-            assert!(gateway.received.try_recv().is_err());
+            tokio::select! {
+                () = retry_and_unlink(home.path(), &mut gateway, &mock, &fixture.settings) => {}
+                () = answer_idle_probes(&mut fixture.device) => {}
+            }
             assert_private_trace(home.path());
             fixture.settings.close().await;
             grant.close().await;
         })))
         .await;
+}
+
+async fn retry_and_unlink(home: &Path, gateway: &mut Gateway, mock: &Mock, settings: &Settings) {
+    assert_retry(gateway, mock).await;
+    let device_id = read_install(home)["deviceId"].clone();
+    settings.unlink().await;
+    gateway.assert_disconnect().await;
+    assert_unlinked(home, settings, device_id).await;
+    for _ in 0..244 {
+        advance(Duration::from_millis(250)).await;
+        assert!(gateway.received.try_recv().is_err());
+    }
+}
+
+async fn answer_idle_probes(device: &mut Device) {
+    loop {
+        let frame = device.next().await;
+        assert_eq!(frame.header.r#type, "describe");
+        device.send("info", json!({})).await;
+    }
 }
 
 #[tokio::test(start_paused = true)]
