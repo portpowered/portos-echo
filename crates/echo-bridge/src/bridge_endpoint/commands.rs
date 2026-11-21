@@ -1,4 +1,6 @@
 //! Correlate supported-route commands before they reach a local owner.
+use super::snapshot::Camera;
+use crate::bridge_trace::Trace;
 use echo_contracts::endpoint::{CommandHeader, CommandReply, CommandTarget, EndSession, StartSession, Uplink, VERSION};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -43,18 +45,56 @@ impl Receipts {
 }
 
 impl Command {
-    pub(super) async fn reply(self, route: &str, lease: tokio::sync::watch::Receiver<()>) -> Option<Vec<u8>> {
+    pub(super) async fn reply(
+        self,
+        route: &str,
+        lease: tokio::sync::watch::Receiver<()>,
+        camera: &Camera,
+        trace: Option<&Trace>,
+    ) -> Option<Vec<u8>> {
         let Self {
             header,
             payload,
             received,
         } = self;
-        let outcome = correlate(&header, payload, received, lease).await;
+        let outcome = if (header.namespace.as_str(), header.name.as_str()) == ("snapshot", "get-snapshot") {
+            match camera.reply(route, &header.message_id, payload, received).await {
+                Ok(body) => {
+                    audit(trace, "get-snapshot", "OK", received);
+                    return Some(body);
+                }
+                Err(outcome) => outcome,
+            }
+        } else {
+            correlate(&header, payload, received, lease).await
+        };
+        let code = outcome["failure"]["code"].as_str().unwrap_or("OK");
+        audit(trace, audit_name(&header), code, received);
         let reply = CommandReply {
             request_id: &header.message_id,
             outcome,
         };
         serde_json::to_vec(&Uplink::new(&header.name, route, reply)).ok()
+    }
+}
+
+fn audit_name(header: &CommandHeader) -> &str {
+    match (header.namespace.as_str(), header.name.as_str()) {
+        ("assistant-session", "start-session" | "end-session")
+        | ("speaker", "set-volume" | "adjust-volume" | "set-mute")
+        | ("snapshot", "get-snapshot") => &header.name,
+        _ => "unsupported",
+    }
+}
+
+fn audit(trace: Option<&Trace>, name: &str, code: &str, received: Instant) {
+    if let Some(trace) = trace {
+        let duration_ms = u64::try_from(received.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let _ = trace.clone().record(
+            "endpoint.command",
+            None,
+            json!({ "name": name, "code": code, "duration_ms": duration_ms }),
+        );
     }
 }
 

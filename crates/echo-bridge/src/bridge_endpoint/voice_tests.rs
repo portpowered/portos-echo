@@ -48,14 +48,24 @@ pub(super) struct Fixture {
     pub(super) settings: Settings,
     pub(super) device: Device,
     pub(super) app: BufReader<DuplexStream>,
-    stale: Arc<Notify>,
+    pub(super) stale: Arc<Notify>,
 }
 
 pub(super) async fn fixture(home: &Path, mock: &Mock, gateway: &Gateway, shared_grant: Arc<Grant>) -> Fixture {
+    fixture_with_camera(home, mock, gateway, shared_grant, None).await
+}
+
+pub(super) async fn fixture_with_camera(
+    home: &Path,
+    mock: &Mock,
+    gateway: &Gateway,
+    shared_grant: Arc<Grant>,
+    camera: Option<Arc<dyn snapshot::CameraSource>>,
+) -> Fixture {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let connector =
         echo_wyoming::adapter::connector(listener.local_addr().unwrap(), echo_wyoming::ClientOptions::default());
-    let (settings, app, ready, stale) = fixture_with_link(home, mock, gateway, shared_grant, connector).await;
+    let (settings, app, ready, stale) = fixture_with_link(home, mock, gateway, shared_grant, connector, camera).await;
     let (device, _) = listener.accept().await.unwrap();
     let mut device = Device::new(device);
     device.receive("run-satellite").await;
@@ -75,8 +85,9 @@ pub(super) async fn fixture_with_link(
     gateway: &Gateway,
     shared_grant: Arc<Grant>,
     connector: impl echo_link::LinkConnector + 'static,
+    camera: Option<Arc<dyn snapshot::CameraSource>>,
 ) -> (Settings, BufReader<DuplexStream>, Arc<Notify>, Arc<Notify>) {
-    let (service, send_settings) = Settings::configured(home, mock, gateway, Arc::new(Resolver), false);
+    let (service, send_settings) = Settings::with_camera(home, mock, gateway, Arc::new(Resolver), false, camera);
     let (app, server) = tokio::io::duplex(16384);
     let ready = Arc::new(Notify::new());
     let signal = ready.clone();
@@ -106,7 +117,7 @@ pub(super) async fn fixture_with_link(
     (settings, BufReader::new(server), ready, stale)
 }
 
-async fn missing_capture(gateway: &Gateway, mock: &Mock, device: &mut Device) {
+pub(super) async fn missing_capture(gateway: &Gateway, mock: &Mock, device: &mut Device) {
     let at = Instant::now();
     send(
         gateway,
@@ -161,15 +172,15 @@ async fn mic_start(
 
 async fn finish_capture(app: &mut BufReader<DuplexStream>, device: &mut Device) {
     app_start(app).await;
-    play_reply(app, device).await;
+    play_reply(app, device, "fixture reply").await;
     device.receive("hassmic-end").await;
     app_stop(app).await;
 }
 
 async fn text_start(gateway: &Gateway, mock: &Mock, app: &mut BufReader<DuplexStream>, device: &mut Device) {
-    let reply = begin_text(gateway, mock, app, "text", false).await;
+    let reply = begin_text(gateway, mock, app, "text", false, "hello").await;
     let session = reply["sessionId"].as_str().unwrap();
-    play_reply(app, device).await;
+    play_reply(app, device, "fixture reply").await;
     app_stop(app).await;
     assert_end(mock, session, "remote", "completed").await;
 }
@@ -181,8 +192,8 @@ async fn text_followup(
     device: &mut Device,
     ordered: &Notify,
 ) {
-    let reply = begin_text(gateway, mock, app, "text-followup", true).await;
-    play_reply(app, device).await;
+    let reply = begin_text(gateway, mock, app, "text-followup", true, "hello").await;
+    play_reply(app, device, "fixture reply").await;
     let capture = device.remote_request().await;
     device.pipeline(Some(&capture)).await;
     device.send("hassmic-mute", json!({"muted":false})).await;
@@ -193,12 +204,13 @@ async fn text_followup(
     assert_end(mock, reply["sessionId"].as_str().unwrap(), "remote", "completed").await;
 }
 
-async fn begin_text(
+pub(super) async fn begin_text(
     gateway: &Gateway,
     mock: &Mock,
     app: &mut BufReader<DuplexStream>,
     request: &str,
     listen: bool,
+    text: &str,
 ) -> Value {
     let at = Instant::now();
     send(
@@ -207,7 +219,7 @@ async fn begin_text(
             "start-session",
             request,
             ROUTE,
-            &json!({"reason":"fixture","initialText":"hello","listen":listen}),
+            &json!({"reason":"fixture","initialText":text,"listen":listen}),
         ),
     )
     .await;
@@ -215,7 +227,7 @@ async fn begin_text(
     let append = rpc(app, "thread/realtime/appendText").await;
     assert_eq!(
         append["params"],
-        json!({"threadId":"test-thread","role":"user","text":"hello"})
+        json!({"threadId":"test-thread","role":"user","text":text})
     );
     answer(app, &append, json!({})).await;
     let reply = outcome(mock, request).await;
@@ -252,9 +264,9 @@ async fn assert_start_refused(gateway: &Gateway, mock: &Mock, id: &str, code: &s
     assert!(at.elapsed() <= Duration::from_secs(1));
 }
 
-async fn play_reply(app: &mut BufReader<DuplexStream>, device: &mut Device) {
+pub(super) async fn play_reply(app: &mut BufReader<DuplexStream>, device: &mut Device, text: &str) {
     device.receive("audio-start").await;
-    write(app, &json!({"method":"thread/realtime/transcript/done","params":{"threadId":"test-thread","role":"assistant","text":"fixture reply"}})).await;
+    write(app, &json!({"method":"thread/realtime/transcript/done","params":{"threadId":"test-thread","role":"assistant","text":text}})).await;
     device.receive("audio-stop").await;
     device.send("played", Value::Null).await;
 }
@@ -333,7 +345,7 @@ async fn assert_busy(gateway: &Gateway, mock: &Mock, id: &str) {
     assert!(started.elapsed() <= Duration::from_secs(1));
 }
 
-async fn assert_end(mock: &Mock, id: &str, origin: &str, reason: &str) {
+pub(super) async fn assert_end(mock: &Mock, id: &str, origin: &str, reason: &str) {
     let payload = message(mock, "session-ended", "sessionId", &json!(id)).await;
     assert_eq!(
         (payload["origin"].as_str(), payload["reason"].as_str()),
@@ -342,7 +354,7 @@ async fn assert_end(mock: &Mock, id: &str, origin: &str, reason: &str) {
     assert!(payload["endedAt"].as_str().unwrap().ends_with('Z'));
 }
 
-async fn outcome(mock: &Mock, id: &str) -> Value {
+pub(super) async fn outcome(mock: &Mock, id: &str) -> Value {
     loop {
         if let Some(reply) = receipts(mock)
             .into_iter()
@@ -386,7 +398,7 @@ async fn app_start(app: &mut BufReader<DuplexStream>) {
     answer(app, &start, json!({})).await;
 }
 
-async fn app_stop(app: &mut BufReader<DuplexStream>) {
+pub(super) async fn app_stop(app: &mut BufReader<DuplexStream>) {
     let stop = rpc(app, "thread/realtime/stop").await;
     write(
         app,

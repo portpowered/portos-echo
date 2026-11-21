@@ -1,6 +1,10 @@
 //! The endpoint T3 gateway accepts only synthetic endpoint tokens.
 use futures_util::{SinkExt, StreamExt};
-use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle, time::Instant};
 use tokio_tungstenite::{
     accept_hdr_async,
     tungstenite::{
@@ -14,6 +18,7 @@ pub(super) struct Gateway {
     pub(super) template: String,
     pub(super) received: mpsc::Receiver<GatewayEvent>,
     pub(super) frames: mpsc::Sender<Message>,
+    failures: Arc<AtomicUsize>,
     task: JoinHandle<()>,
 }
 
@@ -21,6 +26,7 @@ pub(super) struct Gateway {
 pub(super) enum GatewayEvent {
     Upgrade(String, String, bool),
     Disconnected,
+    Rejected(Instant),
 }
 
 impl Gateway {
@@ -32,11 +38,13 @@ impl Gateway {
         );
         let (events, received) = mpsc::channel(8);
         let (frames, outgoing) = mpsc::channel(8);
-        let task = tokio::spawn(gateway(listener, events, outgoing));
+        let failures = Arc::new(AtomicUsize::new(0));
+        let task = tokio::spawn(gateway(listener, events, outgoing, failures.clone()));
         Self {
             template,
             received,
             frames,
+            failures,
             task,
         }
     }
@@ -53,6 +61,10 @@ impl Gateway {
     pub(super) async fn assert_disconnect(&mut self) {
         assert_eq!(self.received.recv().await, Some(GatewayEvent::Disconnected));
     }
+
+    pub(super) fn reject_next(&self, count: usize) {
+        self.failures.store(count, Ordering::SeqCst);
+    }
 }
 
 impl Drop for Gateway {
@@ -61,9 +73,14 @@ impl Drop for Gateway {
     }
 }
 
-async fn gateway(listener: TcpListener, events: mpsc::Sender<GatewayEvent>, mut frames: mpsc::Receiver<Message>) {
+async fn gateway(
+    listener: TcpListener,
+    events: mpsc::Sender<GatewayEvent>,
+    mut frames: mpsc::Receiver<Message>,
+    failures: Arc<AtomicUsize>,
+) {
     while let Ok((stream, _)) = listener.accept().await {
-        let Ok(mut socket) = accept_hdr_async(stream, Upgrade(&events)).await else {
+        let Ok(mut socket) = accept_hdr_async(stream, Upgrade(&events, &failures)).await else {
             continue;
         };
         loop {
@@ -76,7 +93,7 @@ async fn gateway(listener: TcpListener, events: mpsc::Sender<GatewayEvent>, mut 
     }
 }
 
-struct Upgrade<'a>(&'a mpsc::Sender<GatewayEvent>);
+struct Upgrade<'a>(&'a mpsc::Sender<GatewayEvent>, &'a AtomicUsize);
 
 impl Callback for Upgrade<'_> {
     fn on_request(self, request: &Request, response: Response) -> Result<Response, ErrorResponse> {
@@ -88,6 +105,16 @@ impl Callback for Upgrade<'_> {
         if !bearer.starts_with("Bearer endpoint-access-") {
             let mut refused = HttpResponse::new(None);
             *refused.status_mut() = StatusCode::UNAUTHORIZED;
+            return Err(refused);
+        }
+        if self
+            .1
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
+            .is_ok()
+        {
+            self.0.try_send(GatewayEvent::Rejected(Instant::now())).unwrap();
+            let mut refused = HttpResponse::new(None);
+            *refused.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
             return Err(refused);
         }
         self.0

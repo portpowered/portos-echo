@@ -24,6 +24,47 @@ pub struct SetOutputMute {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSnapshot {
+    #[serde(rename = "responseFormat")]
+    pub format: SnapshotFormat,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum SnapshotFormat {
+    Base64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub image: SnapshotImage,
+    pub time_of_sample: String,
+}
+
+#[derive(Serialize)]
+pub struct SnapshotImage {
+    #[serde(rename = "mimeType")]
+    mime_type: &'static str,
+    data: String,
+    width: u32,
+    height: u32,
+}
+
+impl SnapshotImage {
+    #[must_use]
+    pub fn jpeg(data: String, width: u32, height: u32) -> Self {
+        Self {
+            mime_type: "image/jpeg",
+            data,
+            width,
+            height,
+        }
+    }
+}
+
+#[derive(Deserialize)]
 pub struct Downlink {
     pub header: CommandHeader,
     pub target: CommandTarget,

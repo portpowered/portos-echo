@@ -6,13 +6,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
     sync::Notify,
     task::JoinHandle,
     time::Instant,
 };
 
+#[path = "mock_http/mod.rs"]
+mod http;
 #[path = "mock_proofs.rs"]
 #[cfg(test)]
 mod tests;
@@ -25,6 +27,14 @@ pub struct Request {
     pub form: BTreeMap<String, String>,
     pub json: Option<Value>,
     pub time: u64,
+    pub received: Instant,
+    pub message_body: Option<Arc<[u8]>>,
+    pub status: Option<u16>,
+}
+
+pub enum MessageFault {
+    Disconnect,
+    Status(u16),
 }
 
 #[derive(Default)]
@@ -45,6 +55,7 @@ pub struct State {
     pub jtis: BTreeSet<String>,
     pub lifetime: u64,
     pub fault: Option<(String, u16, Value)>,
+    pub message_faults: BTreeMap<String, VecDeque<MessageFault>>,
     pub metadata: Option<Value>,
     pub hold: Option<String>,
     pub held: bool,
@@ -186,49 +197,6 @@ fn invalid() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid mock request")
 }
 
-async fn read(stream: &mut TcpStream, start: Instant) -> std::io::Result<Request> {
-    let mut bytes = Vec::new();
-    let end = loop {
-        let mut byte = [0];
-        stream.read_exact(&mut byte).await?;
-        bytes.push(byte[0]);
-        if bytes.ends_with(b"\r\n\r\n") {
-            break bytes.len();
-        }
-        if bytes.len() >= 16384 {
-            return Err(invalid());
-        }
-    };
-    let text = String::from_utf8(bytes).map_err(|_| invalid())?;
-    let mut lines = text.split("\r\n");
-    let mut line = lines.next().ok_or_else(invalid)?.split_whitespace();
-    let method = line.next().ok_or_else(invalid)?.into();
-    let path = line.next().ok_or_else(invalid)?.into();
-    let headers: BTreeMap<String, String> = lines
-        .filter_map(|line| line.split_once(':'))
-        .map(|(k, v)| (k.to_lowercase(), v.trim().into()))
-        .collect();
-    let length = headers
-        .get("content-length")
-        .map_or(Ok(0), |v| v.parse::<usize>().map_err(|_| invalid()))?;
-    if length > 65536 {
-        return Err(invalid());
-    }
-    let mut body = vec![0; length];
-    stream.read_exact(&mut body).await?;
-    if end >= 16384 {
-        return Err(invalid());
-    }
-    Ok(Request {
-        method,
-        path,
-        headers,
-        form: url::form_urlencoded::parse(&body).into_owned().collect(),
-        json: serde_json::from_slice(&body).ok(),
-        time: start.elapsed().as_secs(),
-    })
-}
-
 async fn handle(
     mut stream: TcpStream,
     base: &str,
@@ -236,17 +204,20 @@ async fn handle(
     release: &Notify,
     start: Instant,
 ) -> std::io::Result<()> {
-    let request = read(&mut stream, start).await?;
+    let mut request = http::read(&mut stream, start).await?;
     let (status, body, hold) = {
         let mut state = shared.lock().map_err(|_| invalid())?;
-        state.requests.push(request.clone());
         let hold = state.hold.as_ref() == Some(&request.path);
         if hold {
             state.held = true;
         }
         let (status, body) = route(&request, base, &mut state);
+        let status = message_status(&mut state, &request, status);
+        request.status = status;
+        state.requests.push(request);
         (status, body, hold)
     };
+    let Some(status) = status else { return Ok(()) };
     if hold {
         release.notified().await;
     }
@@ -256,6 +227,23 @@ async fn handle(
         body.len()
     );
     stream.write_all(response.as_bytes()).await
+}
+
+fn message_status(state: &mut State, request: &Request, status: u16) -> Option<u16> {
+    if request.path != "/messages" || status != 202 {
+        return Some(status);
+    }
+    let fault = request
+        .json
+        .as_ref()
+        .and_then(|body| body["payload"]["requestId"].as_str())
+        .and_then(|id| state.message_faults.get_mut(id))
+        .and_then(VecDeque::pop_front);
+    match fault {
+        Some(MessageFault::Disconnect) => None,
+        Some(MessageFault::Status(status)) => Some(status),
+        None => Some(status),
+    }
 }
 
 fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {

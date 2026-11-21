@@ -157,8 +157,9 @@ impl SettingsService {
         current_grant: impl Fn() -> Option<Arc<Grant>>,
     ) -> (T, SettingsCompletion) {
         if let Some((runtime, control)) = self.endpoint.take() {
+            let trace = self.trace.clone();
             let settings = self.serve_inbox(work, link_status, &current_grant, Some(&control));
-            return Box::pin(runtime.scope(settings, &current_grant)).await;
+            return Box::pin(runtime.scope(settings, &current_grant, trace)).await;
         }
         self.serve_inbox(work, link_status, &current_grant, None).await
     }

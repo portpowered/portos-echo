@@ -70,6 +70,7 @@ async fn t3_endpoint_speaker_uses_reported_volume_and_independent_mic_privacy() 
                 &gateway,
                 grant.grant.clone(),
                 FakeConnector::new(observer.clone()),
+                None,
             )
             .await;
             ready.notified().await;

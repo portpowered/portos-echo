@@ -24,6 +24,8 @@ mod command_tests;
 mod gateway_test_peer;
 #[path = "setup_tests.rs"]
 mod setup_tests;
+#[path = "snapshot/witness.rs"]
+mod snapshot_tests;
 #[path = "speaker/witness.rs"]
 mod speaker_tests;
 #[path = "voice_tests.rs"]
@@ -125,17 +127,35 @@ impl Settings {
         resolver: Arc<dyn RouteResolver>,
         base_enabled: bool,
     ) -> (SettingsService, mpsc::Sender<echo_screen_server::SettingsRequest>) {
+        Self::with_camera(home, mock, gateway, resolver, base_enabled, None)
+    }
+
+    fn with_camera(
+        home: &Path,
+        mock: &Mock,
+        gateway: &Gateway,
+        resolver: Arc<dyn RouteResolver>,
+        base_enabled: bool,
+        camera: Option<Arc<dyn snapshot::CameraSource>>,
+    ) -> (SettingsService, mpsc::Sender<echo_screen_server::SettingsRequest>) {
         let (owner, desired) = settings_owner(home, mock, base_enabled);
         let (service, send) = SettingsService::resume(Box::new(owner));
+        let mut transport = Transport::new(&gateway.template, &mock.base, true).unwrap();
+        transport.camera.source = camera;
         let runtime = Runtime::new(
             home.into(),
             mock.base.clone(),
             resolver,
             EndpointExchange::loopback(&mock.base, REQUEST_TIMEOUT).unwrap(),
-            Transport::new(&gateway.template, &mock.base, true).unwrap(),
+            transport,
             &desired,
         );
-        (service.with_endpoint(runtime), send)
+        (
+            service
+                .with_endpoint(runtime)
+                .with_trace(Trace::open(&home.join("settings-trace"), "api_key").unwrap()),
+            send,
+        )
     }
 
     async fn serve(

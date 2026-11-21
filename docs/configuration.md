@@ -107,6 +107,11 @@ or output mute. The current Wyoming peer does not acknowledge these controls, so
 `NOT_SUPPORTED`. Volume and output mute are unknown until the device reports them. Microphone
 privacy continues to control the assistant's muted state independently.
 
+Snapshot requests use the camera source's own shutter state. A closed shutter refuses capture,
+including if it closes during capture. A supported source returns one in-memory JPEG with its
+dimensions and sample time. The entire encoded reply is capped at 8 MiB. The bridge returns
+`NOT_SUPPORTED` until a camera source is installed.
+
 To downgrade, remove this section from the base file and Settings overlay.
 
 ### Muse

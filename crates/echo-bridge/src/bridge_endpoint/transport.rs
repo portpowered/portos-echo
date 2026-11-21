@@ -1,4 +1,4 @@
-use super::{Status, commands::Receipts, voice::Voice};
+use super::{Status, commands::Receipts, snapshot::Camera, voice::Voice};
 use echo_contracts::endpoint::Uplink;
 use echo_mcp_auth::{EndpointTokenSource, new_request_id};
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
@@ -22,7 +22,7 @@ use tokio_tungstenite::{
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const REPLY_WINDOW: Duration = Duration::from_secs(10);
 const MAX_COMMAND: usize = 64 * 1024;
-const MAX_MESSAGE: usize = 8 * 1024 * 1024;
+pub(super) const MAX_MESSAGE: usize = 8 * 1024 * 1024;
 const QUEUED_COMMANDS: usize = 32;
 const IN_FLIGHT_REPLIES: usize = 16;
 const PATH_MARKER: &str = "{authLinkId}";
@@ -31,6 +31,8 @@ pub(super) struct Transport {
     gateway: String,
     messages: Url,
     http: Client,
+    pub(super) camera: Camera,
+    pub(super) trace: Option<crate::bridge_trace::Trace>,
 }
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -75,6 +77,8 @@ impl Transport {
             gateway: gateway.into(),
             messages,
             http,
+            camera: Camera::default(),
+            trace: None,
         })
     }
 
@@ -227,7 +231,7 @@ impl Transport {
                     if let Some(command) = receipts.accept(route, &frame.text, frame.received, deadline) {
                         let lease = lease.clone();
                         replies.push(Box::pin(async move {
-                            let body = command.reply(route, lease).await;
+                            let body = command.reply(route, lease, &self.camera, self.trace.as_ref()).await;
                             self.send(tokens, body, deadline).await;
                         }));
                     }

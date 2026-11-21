@@ -2,6 +2,7 @@
 mod commands;
 pub(crate) use commands::refusal;
 pub(crate) mod remote_start;
+mod snapshot;
 #[path = "speaker/control.rs"]
 mod speaker;
 #[cfg(test)]
@@ -152,10 +153,12 @@ impl Runtime {
     }
 
     pub(crate) async fn scope<T>(
-        self,
+        mut self,
         work: impl Future<Output = T>,
         current_grant: impl Fn() -> Option<Arc<Grant>>,
+        trace: Option<crate::bridge_trace::Trace>,
     ) -> T {
+        self.transport.trace = trace;
         voice::CURRENT
             .scope(voice::Voice::default(), self.supervise(work, current_grant))
             .await
