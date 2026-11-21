@@ -301,3 +301,68 @@ async fn t3_registration_failures_never_issue_a_challenge_or_save_a_grant() {
     assert_eq!(mock.count("/custom/token"), 0);
     assert!(!directory.path().join("grant.json").exists());
 }
+
+#[tokio::test(start_paused = true)]
+async fn t3_link_failure_names_only_the_step_status_and_oauth_code() {
+    let mock = Mock::start().await;
+    mock.set_epoch(EPOCH);
+    advertise(&mock, json!(format!("{}{REGISTER}", mock.base)));
+    let directory = tempfile::tempdir().unwrap();
+    let client = automatic(&mock, directory.path(), EPOCH).await;
+    assert_eq!(client.take_link_failure(), None);
+    let private = json!("private detail");
+    for (path, step, status, code, expected, seen) in [
+        (REGISTER, "registration", 400, json!("invalid_redirect_uri"), AuthError::Protocol, Some("invalid_redirect_uri")),
+        (REGISTER, "registration", 400, json!("invalid_client_metadata"), AuthError::RegistrationRefused, Some("invalid_client_metadata")),
+        (REGISTER, "registration", 400, json!("Bearer synthetic.secret"), AuthError::Protocol, Some("unrecognized")),
+        (REGISTER, "registration", 429, private.clone(), AuthError::Transport, None),
+        (REGISTER, "registration", 201, json!(7), AuthError::Protocol, None),
+    ] {
+        mock.fault(path, status, json!({"error":code,"client_id":" ","error_description":"private detail"}));
+        error(drive(client.begin_link()).await, expected);
+        let failure = LinkFailure {
+            step,
+            http_status: Some(status),
+            oauth_error: seen.map(str::to_owned),
+        };
+        assert_eq!(client.take_link_failure(), Some(failure));
+        assert_eq!(client.take_link_failure(), None, "a failure is reported once");
+    }
+    assert_eq!(mock.count(REGISTER), 5);
+    assert_eq!(mock.count("/custom/link"), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_device_authorization_and_token_refusals_name_their_own_step() {
+    let mock = Mock::start().await;
+    mock.set_epoch(EPOCH);
+    let directory = tempfile::tempdir().unwrap();
+    let explicit = options(&mock, directory.path());
+    let client = Arc::new(drive(AuthClient::open_at_epoch(explicit, EPOCH)).await.unwrap());
+    mock.state.lock().unwrap().polling.push_back("invalid_client".into());
+    let link = drive(client.begin_link()).await.unwrap();
+    assert_eq!(client.take_link_failure(), None);
+    let task = start_approval(client.clone(), link).await;
+    advance(Duration::from_secs(5)).await;
+    error(drive(task).await.unwrap(), AuthError::Protocol);
+    let token = LinkFailure {
+        step: "token",
+        http_status: Some(400),
+        oauth_error: Some("invalid_client".into()),
+    };
+    assert_eq!(client.take_link_failure(), Some(token));
+
+    mock.fault("/custom/link", 400, json!({"error":"invalid_dpop_proof","error_description":"private detail"}));
+    error(drive(client.begin_link()).await, AuthError::Protocol);
+    let device = LinkFailure {
+        step: "device_authorization",
+        http_status: Some(400),
+        oauth_error: Some("invalid_dpop_proof".into()),
+    };
+    assert_eq!(client.take_link_failure(), Some(device));
+    error(drive(client.begin_link()).await, AuthError::Protocol);
+    mock.state.lock().unwrap().fault = None;
+    drive(client.begin_link()).await.unwrap();
+    assert_eq!(client.take_link_failure(), None, "a new attempt clears the last failure");
+    assert!(!client.has_grant());
+}

@@ -1,9 +1,9 @@
 use crate::{
-    AuthError, AuthOptions, LinkClient, TokenFuture, TokenProvider,
+    AuthError, AuthOptions, LinkClient, LinkFailure, TokenFuture, TokenProvider,
     discovery::{self, Metadata},
     proof::PrivateJwk,
     store::{Grant, Record, Registration, Store},
-    wire::{self, Pair, Reply},
+    wire::{self, Pair, Refusal, Reply},
 };
 use echo_contracts::secret::Secret;
 use reqwest::{Client, redirect::Policy};
@@ -74,6 +74,7 @@ pub struct AuthClient {
     linked: AtomicBool,
     epoch: u64,
     started: Instant,
+    failure: std::sync::Mutex<Option<LinkFailure>>,
 }
 
 impl AuthClient {
@@ -146,7 +147,26 @@ impl AuthClient {
                 None => wire::unix_now()?,
             },
             started: Instant::now(),
+            failure: std::sync::Mutex::default(),
         })
+    }
+
+    /// Take the sanitized facts of the link step that failed last, if any:
+    /// its name, the HTTP status and the OAuth error code. Nothing else.
+    pub fn take_link_failure(&self) -> Option<LinkFailure> {
+        self.failure.lock().ok().and_then(|mut last| last.take())
+    }
+
+    fn note(&self, failure: Option<LinkFailure>) {
+        if let Ok(mut last) = self.failure.lock() {
+            *last = failure;
+        }
+    }
+
+    fn refused(&self, step: &'static str, refusal: Refusal) -> AuthError {
+        let (failure, error) = refusal.at(step);
+        self.note(Some(failure));
+        error
     }
 
     /// Passive local grant status for presentation. Never acquires a token,
@@ -190,6 +210,7 @@ impl AuthClient {
     /// Returns an OAuth or transport failure; never includes server diagnostics.
     pub async fn begin_link(&self) -> Result<LinkInstructions, AuthError> {
         let state = self.state.lock().await;
+        self.note(None);
         let scope = self.options.scopes.join(" ");
         let identity = self.link_identity(&state.record, &scope).await?;
         let form = [
@@ -204,7 +225,8 @@ impl AuthClient {
             Some(state.record.private_key_jwk.expose()),
             self.now(),
         )
-        .await?
+        .await
+        .map_err(|refusal| self.refused("device_authorization", refusal))?
         else {
             return Err(AuthError::Protocol);
         };
@@ -243,7 +265,9 @@ impl AuthClient {
         let client_id = if record.registration.as_ref() == Some(&registration) {
             record.client_id.clone().ok_or(AuthError::Storage)?
         } else {
-            wire::register(&self.http, self.metadata.registration_url()?, name, scope).await?
+            wire::register(&self.http, self.metadata.registration_url()?, name, scope)
+                .await
+                .map_err(|refusal| self.refused("registration", refusal))?
         };
         Ok(LinkIdentity {
             client_id,
@@ -290,7 +314,8 @@ impl AuthClient {
                 ),
             )
             .await
-            .map_err(|_| AuthError::Expired)??;
+            .map_err(|_| AuthError::Expired)?
+            .map_err(|refusal| self.refused("token", refusal))?;
             match reply {
                 Reply::Pending => {}
                 Reply::SlowDown => {
@@ -360,6 +385,7 @@ impl AuthClient {
             self.now(),
         )
         .await
+        .map_err(AuthError::from)
         {
             Ok(Reply::Value(pair)) => self.publish(state, Some(pair.grant(self.now())?), None),
             Err(AuthError::RelinkRequired) => {

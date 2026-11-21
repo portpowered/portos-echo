@@ -26,6 +26,20 @@ impl Grant {
             .map_err(|_| AuthError::Protocol)
     }
 
+    /// Say which link step failed and how: a fixed category, the step name, the
+    /// HTTP status and the OAuth error code. Never a body, id, code or URL.
+    pub(super) fn link_failed(&self, id: u64, error: &AuthError) {
+        let failure = self.client.take_link_failure();
+        let fields = json!({
+            "operation_id": id,
+            "category": super::category(error),
+            "step": failure.as_ref().map(|failure| failure.step),
+            "http_status": failure.as_ref().and_then(|failure| failure.http_status),
+            "oauth_error": failure.as_ref().and_then(|failure| failure.oauth_error.as_deref()),
+        });
+        let _ = self.event("mcp.link.failed", fields);
+    }
+
     pub(super) fn used(&self) -> Result<(), AuthError> {
         if self.reloaded.swap(false, Ordering::AcqRel) {
             self.event("mcp.grant.reloaded", json!({}))?;

@@ -8,6 +8,7 @@
 mod auth;
 mod discovery;
 mod proof;
+mod refusal;
 mod store;
 mod wire;
 
@@ -17,6 +18,7 @@ mod wire;
 pub mod mock;
 
 pub use auth::{AuthClient, GrantStatus, LinkInstructions};
+pub use refusal::LinkFailure;
 use echo_contracts::secret::Secret;
 use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};
 
