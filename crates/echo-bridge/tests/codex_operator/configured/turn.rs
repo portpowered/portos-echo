@@ -73,7 +73,7 @@ async fn save_during_playback(
     }
     for patch in [
         json!({"agent":{"daily_request_cap":"3"}}),
-        json!({"codex":{"voice":"marin"}}),
+        json!({"codex":{"voice":"maple"}}),
     ] {
         assert_eq!(
             settings_runtime_patch(fixture, patch).await,
@@ -100,7 +100,7 @@ async fn pending_snapshot(fixture: &Fixture) {
         .await
         .unwrap();
     assert_eq!(snapshot["settings"]["agent"]["daily_request_cap"], "3");
-    assert_eq!(snapshot["settings"]["codex"]["voice"], "marin");
+    assert_eq!(snapshot["settings"]["codex"]["voice"], "maple");
     assert_eq!(snapshot["restart_pending"], true);
 }
 
@@ -114,7 +114,7 @@ fn assert_coalesced(fixture: &Fixture, path: &Path, host: &mut echo_bridge::brid
     };
     assert!(snapshot.restart_pending);
     assert_eq!(snapshot.settings.agent.daily_request_cap.as_str(), "3");
-    assert_eq!(snapshot.settings.codex.voice, "marin");
+    assert_eq!(snapshot.settings.codex.voice, "maple");
     let rows = trace(path);
     for event in ["bridge.run_completed", "settings.restart_prepared"] {
         assert_eq!(rows.iter().filter(|row| row["event"] == event).count(), 1);

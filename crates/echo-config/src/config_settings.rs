@@ -84,10 +84,25 @@ impl SettingsOverlay {
     }
 
     /// Decode only editable keys. Validation against the base is separate.
+    /// A stored voice the pin no longer accepts decodes as `default`.
     ///
     /// # Errors
     /// Returns fixed field diagnostics, never submitted keys, values or paths.
     pub fn from_toml_str(input: &str) -> Result<Self, ConfigError> {
+        Self::decode_stored(input).map(|(overlay, _)| overlay)
+    }
+
+    /// The overlay, and whether a retired stored voice was replaced.
+    fn decode_stored(input: &str) -> Result<(Self, bool), ConfigError> {
+        let mut overlay = Self::decode(input)?;
+        let retired = overlay.voice.as_deref().is_some_and(crate::config_codex::retired_voice);
+        if retired {
+            overlay.voice = Some("default".into());
+        }
+        Ok((overlay, retired))
+    }
+
+    fn decode(input: &str) -> Result<Self, ConfigError> {
         let table =
             toml::de::DeTable::parse(input).map_err(|_| ConfigError::new("settings.toml", "invalid TOML syntax"))?;
         let value = toml::de::DeValue::Table(table.into_inner());
@@ -147,6 +162,12 @@ impl SettingsOverlay {
     pub fn apply_to(&self, base: &BridgeConfig) -> Result<BridgeConfig, ConfigError> {
         if let Some(value) = self.screen_pack() {
             crate::config_screen::selection(value)?;
+        }
+        if self.voice.as_deref().is_some_and(crate::config_codex::retired_voice) {
+            return Err(ConfigError::new(
+                "codex.voice",
+                "not supported by the pinned realtime version; choose default or a listed voice",
+            ));
         }
         let mut config = base.clone();
         if let Some(value) = self.listen_enabled {
@@ -371,19 +392,28 @@ impl BridgeConfig {
     /// # Errors
     /// An invalid or unreadable base remains a startup error.
     pub fn load_effective(path: impl AsRef<Path>) -> Result<EffectiveConfig, ConfigError> {
-        let (base, deprecations) = Self::load_with_warnings(path)?;
+        let (mut base, deprecations) = Self::load_with_warnings(path)?;
+        let base_warning = crate::config_codex::retire_base_voice(&mut base);
         let overlay = base.home.as_ref().map_or_else(
-            || Ok(SettingsOverlay::default()),
+            || Ok((SettingsOverlay::default(), false)),
             |home| read_overlay(&home.dir.join("settings.toml")),
         );
-        match overlay.and_then(|overlay| overlay.apply_to(&base).map(|config| (overlay, config))) {
-            Ok((overlay, config)) => Ok(EffectiveConfig {
-                base,
-                config,
-                overlay,
-                warning: None,
-                deprecations,
-            }),
+        match overlay.and_then(|(overlay, retired)| overlay.apply_to(&base).map(|config| (overlay, config, retired))) {
+            Ok((overlay, config, retired)) => {
+                let warning = if retired {
+                    let reason = format!("ignored codex.voice: {}", crate::config_codex::RETIRED_VOICE);
+                    Some(ConfigError::new("settings.toml", reason))
+                } else {
+                    base_warning.filter(|_| overlay.voice.is_none())
+                };
+                Ok(EffectiveConfig {
+                    base,
+                    config,
+                    overlay,
+                    warning,
+                    deprecations,
+                })
+            }
             Err(error) => Ok(EffectiveConfig {
                 base: base.clone(),
                 config: base,
@@ -395,10 +425,12 @@ impl BridgeConfig {
     }
 }
 
-fn read_overlay(path: &Path) -> Result<SettingsOverlay, ConfigError> {
+fn read_overlay(path: &Path) -> Result<(SettingsOverlay, bool), ConfigError> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(SettingsOverlay::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((SettingsOverlay::default(), false));
+        }
         Err(_) => return Err(ConfigError::new("settings.toml", "cannot read overlay")),
     };
     if !metadata.is_file() {
@@ -413,5 +445,5 @@ fn read_overlay(path: &Path) -> Result<SettingsOverlay, ConfigError> {
         return Err(ConfigError::new("settings.toml", "overlay exceeds 65536 bytes"));
     }
     let text = String::from_utf8(bytes).map_err(|_| ConfigError::new("settings.toml", "expected UTF-8 overlay"))?;
-    SettingsOverlay::from_toml_str(&text)
+    SettingsOverlay::decode_stored(&text)
 }

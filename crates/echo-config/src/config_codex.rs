@@ -68,16 +68,48 @@ pub const RUNNER_INSTRUCTIONS: &str = r"Client audio bridge
 
 For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Describe a queued or pending action as submitted and stop. Even a successful delivery receipt only confirms delivery. When checking the effect of a completed light command, read the resolved lights' fresh power state once. Report only the confirmed result or uncertainty in one short sentence. If the tool says to relink Port OS, relay that instruction.";
 
-/// The app server's `RealtimeVoice` values at the pinned rust-v0.160.0 schema.
+/// The voices the pinned app server accepts for the realtime version the
+/// bridge sends. `thread/realtime/start` goes out as `"v3"`, and the pin
+/// (rust-v0.160.0, commit a956835d) validates a v3 voice against
+/// `RealtimeVoicesList::builtin().v1`; anything else fails the start right
+/// after the wake. This list is bound to that version: change both together.
 /// `default` is ours: it omits the field so the app server picks its voice.
-const REALTIME_VOICES: [&str; 19] = [
-    "alloy", "arbor", "ash", "ballad", "breeze", "cedar", "coral", "cove", "echo", "ember", "juniper", "maple",
-    "marin", "sage", "shimmer", "sol", "spruce", "vale", "verse",
+const REALTIME_VOICES: [&str; 9] = [
+    "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale",
 ];
+
+/// The pin's v2-only voices. Settings offered them before the list was bound
+/// to v3, so a stored one still loads, as `default` with a warning; it is
+/// never sent and can no longer be saved.
+const RETIRED_VOICES: [&str; 10] = [
+    "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse",
+];
+
+pub(crate) const RETIRED_VOICE: &str = "not supported by the pinned realtime version; using default";
 
 /// Canonical pinned choices; `default` omits the outgoing voice field.
 pub fn realtime_voices() -> impl Iterator<Item = &'static str> {
     std::iter::once("default").chain(REALTIME_VOICES)
+}
+
+pub(crate) fn retired_voice(voice: &str) -> bool {
+    RETIRED_VOICES.contains(&voice)
+}
+
+/// Replace a retired startup voice with `default`, so no later sparse merge
+/// can send it. The legacy Live path keeps `live.voice`, and stays quiet.
+pub(crate) fn retire_base_voice(config: &mut BridgeConfig) -> Option<ConfigError> {
+    if !config.codex_voice().is_some_and(retired_voice) {
+        return None;
+    }
+    let field = if config.codex.voice.is_some() {
+        "codex.voice"
+    } else {
+        "live.voice"
+    };
+    config.codex.voice = Some("default".into());
+    (field == "codex.voice" || config.codex.home.is_some())
+        .then(|| ConfigError::new("bridge.toml", format!("ignored {field}: {RETIRED_VOICE}")))
 }
 
 impl BridgeConfig {
@@ -163,13 +195,15 @@ impl BridgeConfig {
 }
 
 /// An unknown voice is refused offline: the app server rejects the whole
-/// realtime start as an invalid request, after the wake.
+/// realtime start as an invalid request, after the wake. A retired voice is
+/// admitted here only so an existing file still loads; see `RETIRED_VOICES`.
 pub(super) fn validate_voice(config: &BridgeConfig) -> Result<(), ConfigError> {
     for (field, voice) in [("codex.voice", &config.codex.voice), ("live.voice", &config.live.voice)] {
         if let Some(voice) = voice
             && !voice.trim().is_empty()
             && voice != "default"
             && !REALTIME_VOICES.contains(&voice.as_str())
+            && !retired_voice(voice)
         {
             return Err(ConfigError::new(field, "expected default or a pinned realtime voice"));
         }

@@ -10,7 +10,7 @@ use std::{fs, path::Path, time::Duration};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 const TOKEN: &str = "synthetic-settings-pair";
-const BASE: &str = "[echo]\nhost='127.0.0.1'\n[live]\nvoice='alloy'\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n";
+const BASE: &str = "[echo]\nhost='127.0.0.1'\n[live]\nvoice='cove'\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n";
 
 pub(crate) struct Fixture {
     root: tempfile::TempDir,
@@ -108,7 +108,7 @@ impl Fixture {
 async fn t3_settings_host_http_sparse_merge_validation_permissions_and_base_preservation() {
     let fixture = Fixture::open().await;
     let original = fixture.snapshot().await;
-    assert_eq!(original.settings.codex.voice, "alloy");
+    assert_eq!(original.settings.codex.voice, "cove");
     assert_eq!(original.prompts.voice, echo_config::LIVE_INSTRUCTIONS);
     assert!(!original.restart_pending);
     assert_eq!(
@@ -121,12 +121,12 @@ async fn t3_settings_host_http_sparse_merge_validation_permissions_and_base_pres
     );
     invalid_save_retains_file(&fixture).await;
     assert_eq!(
-        fixture.patch(serde_json::json!({"codex":{"voice":"marin"}})).await.0,
+        fixture.patch(serde_json::json!({"codex":{"voice":"maple"}})).await.0,
         StatusCode::OK
     );
     let snapshot = fixture.snapshot().await;
     assert_eq!(snapshot.settings.agent.max_tool_calls, 4);
-    assert_eq!(snapshot.settings.codex.voice, "marin");
+    assert_eq!(snapshot.settings.codex.voice, "maple");
     assert!(snapshot.restart_pending);
     assert_eq!(snapshot.settings.voice, original.settings.voice);
     assert_eq!(snapshot.link_status, LinkStatusV1::Unconfigured);
@@ -140,8 +140,37 @@ async fn t3_settings_host_http_sparse_merge_validation_permissions_and_base_pres
         BASE
     );
     let overlay = fs::read_to_string(fixture.path("settings.toml")).unwrap();
-    assert_eq!(overlay, "[agent]\nmax_tool_calls = 4\n\n[codex]\nvoice = \"marin\"\n");
+    assert_eq!(overlay, "[agent]\nmax_tool_calls = 4\n\n[codex]\nvoice = \"maple\"\n");
     owner_only(&fixture.path("settings.toml"));
+    fixture.close().await;
+}
+
+/// The pin refuses a v2-only voice for the v3 start, so a save never stores one.
+#[tokio::test]
+async fn t3_settings_host_http_refuses_a_voice_the_pinned_v3_start_rejects() {
+    let fixture = Fixture::open().await;
+    assert_eq!(
+        fixture.snapshot().await.allowed_voices,
+        [
+            "default", "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"
+        ]
+    );
+    for voice in ["alloy", "marin", "cedar"] {
+        assert_eq!(
+            fixture.patch(serde_json::json!({"codex":{"voice":voice}})).await,
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                serde_json::json!({
+                    "version":1,
+                    "message":"codex.voice: not supported by the pinned realtime version; choose default or a listed voice"
+                })
+            )
+        );
+    }
+    assert!(!fixture.path("settings.toml").exists());
+    let snapshot = fixture.snapshot().await;
+    assert_eq!(snapshot.settings.codex.voice, "cove");
+    assert!(!snapshot.restart_pending);
     fixture.close().await;
 }
 
