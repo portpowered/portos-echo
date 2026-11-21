@@ -11,45 +11,57 @@ BACKGROUND = "#101827"
 FRAME_BYTES = WIDTH * HEIGHT * 4
 FFMPEG = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
           "-filter_threads", "1", "-filter_complex_threads", "1"]
-POSE_HEIGHT = 680
-POSE_TOP = 24
-POSE_SCALE = POSE_HEIGHT / 292
-# Inside the fixed stage, these centers map to the middle of the home
-# screen and the middle of the left two thirds at 1280 × 748.
-HOME_CENTER = 506
-CARD_CENTER = 252
+# The bust is a little taller than the frame, so it runs from just under the
+# top edge off the bottom edge, and the idle bob never shows the cut waist.
+POSE_HEIGHT = 736
+POSE_TOP = 10
+CENTER = WIDTH // 2
+# The idle bob moves in quarter pixels, rendered by supersampling.
+SUBPIXEL = 4
+BOB = 10
 
-# Artwork rectangles (x, y, w, h), with atlas gutters removed. Keep the head
-# crown and waist aligned when changing poses.
-POSES = {
-    "rest": ("reference", (166, 6, 564, 881)),
-    "idle": ("poses", (97, 11, 327, 491)),
-    "connecting": ("poses", (634, 12, 287, 490)),
-    "listening": ("listening", (191, 150, 614, 1227)),
-    "thinking": ("poses", (113, 524, 309, 490)),
-    "error": ("poses", (613, 523, 320, 491)),
-    "happy": ("poses", (1159, 524, 264, 490)),
-    "setup": ("cards", (103, 18, 610, 852)),
-    "approval": ("cards", (1068, 16, 525, 856)),
-}
+# Every frame is a whole generated image of one size and framing: the neutral
+# master and one edit of it per mouth shape, blink and state. They share one
+# rectangle (x, y, w, h), so they register with each other; the renderer only
+# places, grades, sequences and cross-fades them.
+MASTER = (0, 6, 1024, 1530)
+VARIANTS = ("mouth-half", "mouth-open", "blink", "listening", "connecting",
+            "thinking", "error", "happy", "setup", "approval")
+# Poses shown next to a card stand left of centre, clear of the card.
+CARD_SHIFT = {"setup": -110, "approval": -110, "error": -110}
+# One colour grade for every frame, from -1 (cool) to 1 (warm): red gains and
+# blue loses a fifth of it. The build's --warmth option overrides it.
+WARMTH = -0.25
 
-# The lip/eyelid patches are feathered inside the face. Their placements are
-# in the original 256 × 320 registered raster, scaled with the idle sprite.
-PATCHES = {
-    "blink": ((718, 300, 252, 72), (96, 67, 66, 22)),
-    "half": ((1329, 394, 110, 80), (111, 94, 29, 23)),
-    "open": ((1869, 396, 110, 80), (111, 94, 29, 23)),
-}
-
-# Unequal held mouth shapes within one loop. The whole clip restarts at the
-# rest pose. The runs never repeat as a shorter regular speech cycle.
-SPEECH = (("idle", 9), ("half", 5), ("open", 8), ("half", 4), ("idle", 10),
-          ("open", 5), ("half", 8), ("idle", 4), ("half", 4), ("open", 10),
-          ("idle", 12))
-FRAMES = {"idle": 126, "connecting": 72, "listening": 48, "thinking": 72,
-          "speaking": 100, "muted": 30, "setup": 60, "setup-enter": 16, "approval": 60,
-          "error": 60, "happy": 45}
+# Unequal held mouth shapes, from the first frame after the neutral one. The
+# runs never repeat as a shorter regular speech cycle.
+SPEECH = (("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 2), ("neutral", 2),
+          ("mouth-half", 2), ("mouth-open", 3), ("mouth-half", 3),
+          ("mouth-open", 4), ("mouth-half", 2), ("neutral", 3),
+          ("mouth-half", 3), ("mouth-open", 5), ("mouth-half", 2), ("neutral", 2),
+          ("mouth-open", 3), ("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 3),
+          ("neutral", 4),
+          ("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 2), ("neutral", 2),
+          ("mouth-half", 3), ("mouth-open", 3), ("mouth-half", 2),
+          ("mouth-open", 5), ("mouth-half", 3), ("neutral", 3),
+          ("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 4), ("neutral", 4))
+# The idle loop is three breaths long, so the blinks in it come at unequal
+# gaps: 3.7 s, 3.2 s and, across the loop's seam, 5.1 s. A blink is four
+# frames: closing, closed twice, opening.
+BREATH = 120
+BLINKS = (42, 153, 249)
+# A state loop returns to the neutral frame only where it joins, so the held
+# poses use long loops.
+FRAMES = {"idle": 3 * BREATH + 1, "connecting": 150, "listening": 240, "thinking": 240,
+          "speaking": 100, "muted": 30, "setup": 60, "setup-enter": 16, "approval": 300,
+          "error": 300, "happy": 45}
 TRANSITION = 10
+# These clips are the neutral frame with a bob or a mouth, or a held card
+# pose: there is nothing to blend.
+UNBLENDED = ("idle", "speaking", "muted", "setup")
+# Whole generated frames differ a little everywhere, which lossless coding
+# cannot keep small. These clips are coded at a visually lossless quality.
+LOSSY = ("idle", "speaking")
 
 
 def run(args, data=None):
@@ -62,68 +74,44 @@ def raw_input(path):
             "-framerate", str(FPS), "-i", str(path)]
 
 
-def raster(sheet, rect, output_size, pad=""):
+def cutout(sheet, rect, filters):
     x, y, width, height = rect
-    out_width, out_height = output_size
-    # Lanczos resamples the existing atlas cutouts directly at the new size.
-    filters = (f"format=rgba,crop={width}:{height}:{x}:{y},"
-               f"lutrgb=a='if(lt(val,16),0,val)',"
-               f"scale={out_width}:{out_height}:flags=lanczos{pad}")
-    return run(["-i", str(ART / f"{sheet}.png"), "-vf", filters, "-frames:v", "1",
+    grade = f"colorchannelmixer=rr={1 + WARMTH / 5:.4f}:bb={1 - WARMTH / 5:.4f},"
+    return run(["-i", str(ART / f"{sheet}.png"), "-vf",
+                f"format=rgba,crop={width}:{height}:{x}:{y},{grade if WARMTH else ''}"
+                f"lutrgb=a='if(lt(val,16),0,val)',{filters}", "-frames:v", "1",
                 "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
 
 
-def blend_patch(frame, pixels, x, y, width, height):
-    pose = bytearray(frame)
-    for row in range(height):
-        for column in range(width):
-            i = (row * width + column) * 4
-            j = ((y + row) * WIDTH + x + column) * 4
-            edge = min(row, height - 1 - row, column, width - 1 - column)
-            alpha = min(1, edge / (4 * POSE_SCALE)) * (pixels[i + 3] / 255)
-            for channel in range(3):
-                pose[j + channel] = round(
-                    pose[j + channel] * (1 - alpha) + pixels[i + channel] * alpha)
-    return bytes(pose)
+def pose_width(rect):
+    return round(rect[2] * POSE_HEIGHT / rect[3])
 
 
-def face_patch(idle, source, placement):
-    x, y, width, height = placement
-    x = HOME_CENTER + round((x - 128) * POSE_SCALE)
-    y = POSE_TOP + round((y - 12) * POSE_SCALE)
-    width, height = round(width * POSE_SCALE), round(height * POSE_SCALE)
-    pixels = raster("expression", source, (width, height))
-    return blend_patch(idle, pixels, x, y, width, height)
+def raster(sheet, rect, drop=0):
+    """Place a pose in the frame, `drop` quarter pixels below POSE_TOP."""
+    width = pose_width(rect)
+    x = CENTER - width // 2
+    top = POSE_TOP * SUBPIXEL + drop
+    # Lanczos resamples the atlas cutout at four times the frame size. The
+    # area filter then averages it down, which gives the sub-pixel position.
+    return cutout(sheet, rect, (
+        f"scale={width * SUBPIXEL}:{POSE_HEIGHT * SUBPIXEL}:flags=lanczos,"
+        f"pad={WIDTH * SUBPIXEL}:{POSE_HEIGHT * SUBPIXEL + top}:{x * SUBPIXEL}:{top}"
+        f":color=black@0,crop={WIDTH * SUBPIXEL}:{HEIGHT * SUBPIXEL}:0:0,"
+        f"scale={WIDTH}:{HEIGHT}:flags=area"))
 
 
-def listening_mouth(listening, idle):
-    # Register the original closed lips with the new pose. The feathered
-    # margin blends the surrounding skin without changing the lip shape.
-    x, y, width, height = 463, 218, 76, 57
-    pixels = bytearray(b"".join(
-        idle[(row * WIDTH + x) * 4:(row * WIDTH + x + width) * 4]
-        for row in range(y, y + height)))
-    # Fade toward the cheek and nose instead of imposing a rectangle of
-    # Ready's face shading on the new pose.
-    for row in range(height):
-        for column in range(width):
-            radius = math.hypot((2 * column + 1) / width - 1, (2 * row + 1) / height - 1)
-            opacity = min(1, max(0, (1 - radius) / 0.56))
-            alpha = (row * width + column) * 4 + 3
-            pixels[alpha] = round(pixels[alpha] * opacity ** 2 * (3 - 2 * opacity))
-    return blend_patch(listening, pixels, x + 32, y - 6, width, height)
+def mix(first, second):
+    """The halfway frame of a cross-fade between two registered frames."""
+    return bytes(map(lambda a, b: (a + b + 1) >> 1, first, second))
 
 
 def keyframes():
-    frames = {}
-    for name, (sheet, rect) in POSES.items():
-        width = round(rect[2] * POSE_HEIGHT / rect[3])
-        x = HOME_CENTER - width // 2
-        frames[name] = raster(sheet, rect, (width, POSE_HEIGHT),
-                              f",pad={WIDTH}:{HEIGHT}:{x}:{POSE_TOP}:color=black@0")
-    for name, (source, placement) in PATCHES.items():
-        frames[name] = face_patch(frames["idle"], source, placement)
-    frames["listening"] = listening_mouth(frames["listening"], frames["idle"])
+    frames = {name: raster(name, MASTER) for name in VARIANTS}
+    for name, x in CARD_SHIFT.items():
+        frames[name] = shift(frames[name], x, 0)
+    frames["bob"] = [raster("neutral", MASTER, drop) for drop in range(BOB * SUBPIXEL + 1)]
+    frames["neutral"] = frames["bob"][0]
     return frames
 
 
@@ -142,29 +130,59 @@ def shift(frame, x, y):
     return b"".join(rows)
 
 
-def timeline(role, frames):
-    length = FRAMES[role]
-    speech = tuple(pose for pose, run_length in SPEECH for _ in range(run_length))
-    for index in range(length):
-        if role in ("muted", "setup-enter") or index in (0, length - 1):
-            yield frames["rest"]
+def bob(index):
+    """Quarter pixels below the neutral frame: one slow breath per BREATH."""
+    return round(BOB * SUBPIXEL * (1 - math.cos(math.tau * index / BREATH)) / 2)
+
+
+def idle(frames):
+    for index in range(FRAMES["idle"]):
+        drop = bob(index)
+        frame = frames["bob"][drop]
+        step = min((index - start for start in BLINKS if 0 <= index - start < 4), default=None)
+        if step is not None:
+            # The closed eyes ride the same breath as the frame they replace.
+            closed = raster("blink", MASTER, drop)
+            frame = closed if step in (1, 2) else mix(frame, closed)
+        yield frame
+
+
+def speaking(frames):
+    # The body is the neutral frame; only the mouth changes. Each new mouth
+    # shape is entered through the halfway frame of a cross-fade.
+    shapes = [pose for pose, run_length in SPEECH for _ in range(run_length)]
+    assert len(shapes) == FRAMES["speaking"] - 2
+    shapes = ["neutral", *shapes, "neutral"]
+    mixed = {}
+    for index, shape in enumerate(shapes):
+        last = shapes[index - 1] if index else shape
+        if last == shape:
+            yield frames[shape]
             continue
-        cycle = math.tau * index / (length - 1)
-        name, x, y = role, 0, 0
-        if role == "idle":
-            name = ("blink" if 62 <= index < 66 else
-                    "connecting" if 88 <= index < 98 else role)
-            # Hold the image registration across the four-frame blink.
-            y = -1 if 56 <= index <= 70 else round(math.cos(cycle) - 1)
-        elif role == "speaking":
-            name = speech[min(max(0, index - TRANSITION), len(speech) - 1)]
-            x = round(2 * math.sin(cycle))
+        pair = tuple(sorted((last, shape)))
+        if pair not in mixed:
+            mixed[pair] = mix(frames[pair[0]], frames[pair[1]])
+        yield mixed[pair]
+
+
+def timeline(role, frames):
+    if role == "idle":
+        yield from idle(frames)
+        return
+    if role == "speaking":
+        yield from speaking(frames)
+        return
+    length = FRAMES[role]
+    for index in range(length):
+        phase = index / (length - 1)
+        if role == "muted":
+            yield frames["neutral"]
         elif role == "happy":
-            y = -round(9 * math.sin(cycle / 2) ** 2)
-        elif role in ("connecting", "listening", "thinking"):
-            x = round(2 * math.sin(cycle))
-            y = -round(3 * math.sin(cycle / 2) ** 2)
-        yield shift(frames[name], round(x * POSE_SCALE), round(y * POSE_SCALE))
+            yield shift(frames[role], 0, -round(8 * math.sin(math.pi * phase) ** 2))
+        elif role == "setup-enter":
+            yield frames["setup"]
+        else:
+            yield frames[role]
 
 
 def ease_in_out(frame, count):
@@ -172,31 +190,21 @@ def ease_in_out(frame, count):
     return f"(1-cos(PI*({amount})))/2"
 
 
-def card_pan(role, count):
-    if role == "setup-enter":
-        amount = f"(1-cos(PI*n/{count - 1}))/2"
-    elif role == "setup":
-        amount = "1"
-    elif role in ("approval", "error"):
-        amount = ease_in_out("n", count)
-    else:
-        return ""
-    # Move the neutral pose once on entry and hold card registration on replay.
-    # Padding keeps the area revealed by the translation clear.
-    shift = HOME_CENTER - CARD_CENTER
-    return (f",pad={WIDTH + shift}:{HEIGHT}:0:0:color=black@0,"
-            f"crop={SIZE.replace('x', ':')}:x='{shift}*({amount})':y=0:exact=1")
-
-
 def encode(pack, raw, role, count):
     # Blend premultiplied colors so the short transitions have clean edges
     # on the alpha path. Both outputs derive from the exact same frames.
-    transition = ease_in_out("N-1", count)
+    if role in UNBLENDED:
+        transition = "1"
+    elif role == "setup-enter":
+        # Ends on the card pose, which the setup loop then holds.
+        transition = f"(1-cos(PI*(N-1)/{count - 1}))/2"
+    else:
+        transition = ease_in_out("N-1", count)
     graph = (
         "[0:v]format=gbrap,premultiply=inplace=1[rest];"
         "[1:v]format=gbrap,premultiply=inplace=1[pose];"
         f"[rest][pose]blend=all_expr='A+(B-A)*({transition})':shortest=1,"
-        f"unpremultiply=inplace=1{card_pan(role, count)},format=yuva420p,split[webm][alpha];"
+        "unpremultiply=inplace=1,format=yuva420p,split[webm][alpha];"
         f"color=c={BACKGROUND}:s={SIZE}:r={FPS}[background];"
         "[background][alpha]overlay=shortest=1,format=yuv420p[mp4]"
     )
@@ -205,19 +213,23 @@ def encode(pack, raw, role, count):
     # Encode the held frame identically, even across the first keyframe.
     gop = ["-g", "1"] if role == "muted" else []
     h264_quality = ["-qp", "18"] if role == "muted" else ["-crf", "18"]
+    vp9_quality = (["-crf", "10", "-b:v", "0", "-cpu-used", "2"] if role in LOSSY
+                   else ["-lossless", "1", "-cpu-used", "4"])
     run(["-loop", "1", "-framerate", str(FPS), "-i", str(pack / "rest.png"),
          *raw_input(raw), "-filter_complex", graph,
          "-map", "[webm]", *fixed, *gop, "-c:v", "libvpx-vp9",
-         "-auto-alt-ref", "0", "-lossless", "1", str(pack / f"{role}.webm"),
+         "-auto-alt-ref", "0", *vp9_quality, str(pack / f"{role}.webm"),
          "-map", "[mp4]", *fixed, *gop, "-c:v", "libx264", *h264_quality, "-preset", "fast",
          "-x264-params", "aq-mode=0:mbtree=0", "-movflags", "+faststart",
          str(pack / f"{role}.mp4")])
 
 
-def render(pack, work):
+def render(pack, work, warmth=WARMTH):
+    global WARMTH
+    WARMTH = warmth
     frames = keyframes()
     run([*raw_input("pipe:0"), "-frames:v", "1", "-threads", "1",
-         str(pack / "rest.png")], frames["rest"])
+         str(pack / "rest.png")], frames["neutral"])
     raw = work / "frames.rgba"
     for role, count in FRAMES.items():
         with raw.open("wb") as stream:

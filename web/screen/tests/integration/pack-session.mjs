@@ -149,7 +149,9 @@ export async function playing(page, name, identity) {
             );
             return (
                 video &&
-                new URL(video.src).pathname.endsWith(`/${identity}/${name}`) &&
+                new URL(video.dataset.clip).pathname.endsWith(
+                    `/${identity}/${name}`,
+                ) &&
                 video.readyState >= 2 &&
                 video.getVideoPlaybackQuality().totalVideoFrames > 0 &&
                 loads.every((count) => count > 0) &&
@@ -166,7 +168,9 @@ export async function playing(page, name, identity) {
     );
     return page
         .locator(activeVideo)
-        .evaluate((node) => new URL(node.src).pathname.split("/").at(-1));
+        .evaluate((node) =>
+            new URL(node.dataset.clip).pathname.split("/").at(-1),
+        );
 }
 
 export async function refresh(page) {
