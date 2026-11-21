@@ -280,6 +280,8 @@ class EndCall(Delegation):
         self.call_id = 'end-call-end_session'
         self.prompt = 'Fixture delegation end-call. The user said: thanks, that is all, please end the call now.'
         self.reply = 'Ending the call now.'
+        # The turn keeps running after end_session's result until released.
+        self.held = threading.Event()
 
     def respond(self, body):
         assert body['model'] == self.model

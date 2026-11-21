@@ -78,8 +78,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 case = manual_cases.get(identity)
                 assert case is not None, 'model request for unknown delegation'
             data = case.accept_model(body)
+            held = isinstance(case, tools_provider.EndCall) and len(case.models) == 2
             if case.release is not None:
                 assert case.release.wait(timeout=20), 'interrupted model release deadline'
+            elif held:
+                # The bridge's interrupt closes this stream before release.
+                case.held.wait(timeout=20)
             elif case.exhausted:
                 emit({'model_started': True})
         except AssertionError as error:
@@ -90,7 +94,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.respond(200, data, 'text/event-stream')
         except OSError:
             # The interrupted pin can close its HTTP stream before release.
-            if case.release is None:
+            if case.release is None and not held:
                 raise
 
     def do_POST(self):
@@ -203,6 +207,9 @@ try:
             delegation = tools_provider.EndCall(command['end_call'])
             manual_cases[delegation.identity] = delegation
             emit({'initialized': delegation.identity})
+        elif command == {'release_end': True}:
+            delegation.held.set()
+            emit({'models': len(delegation.models)})
         elif command == {'transcripts': True}:
             transcript_output.sendall(b't')
         elif command == {'transcript_count': True}:

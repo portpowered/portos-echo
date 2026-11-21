@@ -329,10 +329,12 @@ async fn voice_listen_cancellation_during_idle_never_reports_successful_end() {
 
 #[path = "voice_listen_barge.rs"]
 mod barge;
+#[path = "listen/voice_listen_hold.rs"]
+mod hold;
 #[path = "voice_listen_safety.rs"]
 mod safety;
 
-#[path = "voice_listen_restart.rs"]
+#[path = "listen/voice_listen_restart.rs"]
 mod restart;
 
 #[tokio::test(start_paused = true)]

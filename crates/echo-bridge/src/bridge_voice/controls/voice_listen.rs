@@ -42,7 +42,9 @@ pub(super) async fn replies<L: EchoLink>(
         )
         .await;
         if result == Err(Error::Control) && source.controller.cutting() {
-            if !settle_cut(source, options.listen_timeout.is_some(), observe)? {
+            // An applied end cut the reply: it settles and the run closes.
+            let ending = source.session.ending();
+            if !settle_cut(source, options.listen_timeout.is_some() || ending, observe)? {
                 generation_options.response_deadline = source.controller.replacement_deadline()?;
                 source.answer_due = generation_options.response_deadline;
                 continue;
@@ -321,6 +323,7 @@ async fn listening_step<E: LinkEvents>(
             match event {
                 MediaEvent::Control(Event::Session(request)) => {
                     super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
+                    source.end_if_ended(port)?;
                 }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
                 MediaEvent::Control(Event::TurnCompleted { .. }) => source.dispatch_completed(),

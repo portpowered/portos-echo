@@ -252,6 +252,26 @@ impl Source {
         self.barge.due(Instant::now(), self.reply.finished())
     }
 
+    /// An applied `end_session` supersedes everything (owner, 2026-11-21):
+    /// nothing delegated is owed any more, and an open reply stops where it is,
+    /// as a barge-in cut does. Between replies there is nothing to stop.
+    pub fn end_if_ended(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
+        if !self.session.ending() || self.controller.cutting() || self.controller.closing() {
+            return Ok(());
+        }
+        self.delegation = Delegation::default();
+        if self.controller.idle_deadline().is_some() {
+            return Ok(());
+        }
+        self.stale = true;
+        port.retire_audio();
+        self.fresh_reply()?;
+        self.mouth = Mouth::default();
+        crate::bridge_runtime::bridge_pacing::reply_lips::cut(Instant::now());
+        self.controller.cut();
+        Ok(())
+    }
+
     /// The model has yielded to the user: the pending barge-in cuts the reply.
     /// Retire all old playback state together; never flush an abandoned tail.
     /// Stream order identifies the replacement at its next assistant delta.

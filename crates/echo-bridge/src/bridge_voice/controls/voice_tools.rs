@@ -133,7 +133,7 @@ pub(super) fn session_specs() -> [ToolSpec; 2] {
         },
         ToolSpec {
             name: END.into(),
-            description: "End this voice session after its current reply has played.".into(),
+            description: "End this voice session now, stopping any reply and work still in progress.".into(),
             input_schema: json!({"type":"object","properties":{},"additionalProperties":false}),
         },
     ]

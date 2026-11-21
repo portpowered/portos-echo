@@ -93,7 +93,7 @@ async fn configured_journey(selection: Option<&str>, enabled: bool, mcp: Option<
         assert_eq!(read_json(&mut observed).await, json!({"initialized":"runner-skills"}));
     }
     let mut bridge = launch(root, origin);
-    let (mut satellite, stdin, mut peer) = Box::pin(admit_journey(
+    let (mut satellite, stdin, mut peer, stdout) = Box::pin(admit_journey(
         root,
         &listener,
         &config,
@@ -106,12 +106,15 @@ async fn configured_journey(selection: Option<&str>, enabled: bool, mcp: Option<
     drop(stdin);
     acknowledge_cut(&mut satellite).await;
     let output = bridge.wait_with_output().await.unwrap();
+    drop(stdout);
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     peer.close();
     drop(control);
     assert!(provider.wait().await.unwrap().success());
 }
 
+/// Admits the bridge and connects its call. The bridge's stdout comes back
+/// open: a closed pipe fails its next `bridge.*` line.
 pub(super) async fn admit_journey(
     root: &Path,
     listener: &TcpListener,
@@ -119,7 +122,7 @@ pub(super) async fn admit_journey(
     bridge: &mut tokio::process::Child,
     control: &mut tokio::process::ChildStdin,
     observed: &mut Output,
-) -> (TcpStream, tokio::process::ChildStdin, LivePeer) {
+) -> (TcpStream, tokio::process::ChildStdin, LivePeer, Output) {
     let mut stdin = bridge.stdin.take().unwrap();
     let (mut satellite, _) = listener.accept().await.unwrap();
     let mut stdout = BufReader::new(bridge.stdout.take().unwrap()).lines();
@@ -130,7 +133,7 @@ pub(super) async fn admit_journey(
     let connected =
         async { while lifecycle::next_frame(&mut screen).await.unwrap()["state"]["state"] != "connected" {} };
     await_connected(&mut peer, &mut stdin, &mut stdout, connected).await;
-    (satellite, stdin, peer)
+    (satellite, stdin, peer, stdout)
 }
 
 async fn observe_journey(
@@ -333,7 +336,7 @@ pub(super) fn declarations(enabled: bool, mcp: Option<&str>) -> Vec<Value> {
     let mut tools = vec![
         json!({"name":"extend_session","description":"Extend listening for this voice session within its configured bound.",
             "inputSchema":{"type":"object","properties":{"seconds":{"type":"integer","minimum":1}},"required":["seconds"],"additionalProperties":false}}),
-        json!({"name":"end_session","description":"End this voice session after its current reply has played.",
+        json!({"name":"end_session","description":"End this voice session now, stopping any reply and work still in progress.",
             "inputSchema":{"type":"object","properties":{},"additionalProperties":false}}),
     ];
     if enabled {

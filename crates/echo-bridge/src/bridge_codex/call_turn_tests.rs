@@ -148,8 +148,10 @@ async fn call_interrupt_preserves_id_across_cancelled_polls_and_buffers_notifica
     assert!(io.begin_request("account/read", &json!({})).is_ok());
 }
 
+/// A missed acknowledgement closes the generation. A remote refusal does not:
+/// the turn had already ended, which is all the interrupt asked for.
 #[tokio::test(start_paused = true)]
-async fn call_interrupt_deadline_and_remote_failure_close_the_generation() {
+async fn call_interrupt_deadline_closes_the_generation_and_remote_refusal_does_not() {
     for remote_failure in [false, true] {
         let (mut io, mut server) = fixture();
         let client = async {
@@ -165,9 +167,12 @@ async fn call_interrupt_deadline_and_remote_failure_close_the_generation() {
                 deadline(),
             )
             .unwrap();
-            assert!(
-                matches!(call.next().await, Err(error) if error == if remote_failure {Error::Unavailable} else {Error::Deadline})
-            );
+            if remote_failure {
+                assert!(matches!(call.next().await, Ok(Event::SpeechStarted)));
+                call.stop(deadline()).await.unwrap();
+            } else {
+                assert_eq!(call.next().await.err(), Some(Error::Deadline));
+            }
         };
         let remote = async {
             start(&mut server).await;
@@ -178,16 +183,59 @@ async fn call_interrupt_deadline_and_remote_failure_close_the_generation() {
                     json!({"id":request["id"],"error":{"code":-32000,"message":"untrusted payload"}}),
                 )
                 .await;
+                notification(
+                    &mut server,
+                    "thread/realtime/itemAdded",
+                    json!({"threadId":"thread-1","item":{"type":"input_audio_buffer.speech_started"}}),
+                )
+                .await;
+                stop(&mut server).await;
             } else {
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         };
         tokio::join!(client, remote);
-        assert_eq!(
-            io.begin_request("account/read", &json!({})),
-            Err(RpcError::Disconnected)
-        );
+        if !remote_failure {
+            assert_eq!(
+                io.begin_request("account/read", &json!({})),
+                Err(RpcError::Disconnected)
+            );
+        }
     }
+}
+
+/// An applied end's interrupt is best effort: a missed acknowledgement
+/// cancels it and the call goes on, retained for the next wake.
+#[tokio::test(start_paused = true)]
+async fn call_interrupt_after_end_survives_a_missed_acknowledgement() {
+    let (mut io, mut server) = fixture();
+    let client = async {
+        let mut call = Call::new(&mut io);
+        call.start(&options(), vec![], "fixture-offer", deadline())
+            .await
+            .unwrap();
+        let params = TurnInterrupt {
+            thread_id: "thread-1".into(),
+            turn_id: "turn-1".into(),
+        };
+        let ack = Instant::now() + Duration::from_secs(2);
+        call.interrupt_after_end(&params, ack).unwrap();
+        assert!(matches!(call.next().await, Ok(Event::SpeechStarted)));
+        call.stop(deadline()).await.unwrap();
+    };
+    let remote = async {
+        start(&mut server).await;
+        assert_eq!(read(&mut server).await["method"], "turn/interrupt");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        notification(
+            &mut server,
+            "thread/realtime/itemAdded",
+            json!({"threadId":"thread-1","item":{"type":"input_audio_buffer.speech_started"}}),
+        )
+        .await;
+        stop(&mut server).await;
+    };
+    tokio::join!(client, remote);
 }
 
 #[tokio::test(start_paused = true)]
