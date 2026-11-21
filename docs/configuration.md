@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 19
+last modified: 2026, november, 20
 status: active; accepted bridge configuration reference
 ---
 
@@ -272,8 +272,11 @@ Defaults are independent constants: changing issuer alone does not derive new de
 The public client defaults are defined in
 [config_auth.rs](../crates/echo-config/src/config_auth.rs) and [lib.rs](../crates/echo-config/src/lib.rs).
 
-Pinned realtime voices: `default`, `alloy`, `arbor`, `ash`, `ballad`, `breeze`, `cedar`, `coral`, `cove`,
-`echo`, `ember`, `juniper`, `maple`, `marin`, `sage`, `shimmer`, `sol`, `spruce`, `vale`, `verse`.
+Pinned realtime voices: `default`, `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`, `sol`, `spruce`, `vale`.
+The list is bound to the realtime version the bridge sends (`v3`) at the Codex pin; the pinned app server refuses
+any other voice when the call starts. A voice that earlier builds offered (`alloy`, `ash`, `ballad`, `cedar`, `coral`,
+`echo`, `marin`, `sage`, `shimmer`, `verse`) still loads from an existing `bridge.toml` or `settings.toml`, as
+`default` with one settings warning; Settings no longer offers or saves it.
 An unknown voice is rejected offline. `live.voice` is a legacy fallback; use `codex.voice` for the screen editor.
 
 ## Checking changes

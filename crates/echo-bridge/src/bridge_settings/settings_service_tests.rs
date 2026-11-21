@@ -24,7 +24,7 @@ impl Fixture {
         let home = root.path().join("home");
         fs::create_dir(&home).unwrap();
         let text = format!(
-            "[echo]\nhost='127.0.0.1'\n[live]\nvoice='alloy'\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n[home]\ndir='{}'\n",
+            "[echo]\nhost='127.0.0.1'\n[live]\nvoice='cove'\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n[home]\ndir='{}'\n",
             home.display()
         );
         let base_path = root.path().join("bridge.toml");
@@ -137,12 +137,12 @@ async fn t3_settings_service_signals_after_durable_save_and_serves_during_cleanu
         );
         boundary.await.unwrap();
         assert_eq!(
-            fixture.patch(json!({"codex":{"voice":"marin"}})).await,
+            fixture.patch(json!({"codex":{"voice":"maple"}})).await,
             json!({"version":1,"restart_pending":true})
         );
         let snapshot = fixture.snapshot().await;
         assert_eq!(snapshot.settings.agent.daily_request_cap.as_str(), "71");
-        assert_eq!(snapshot.settings.codex.voice, "marin");
+        assert_eq!(snapshot.settings.codex.voice, "maple");
         assert_eq!(snapshot.settings.agent.max_tool_calls, 4);
         release.send(()).unwrap();
     };
@@ -160,7 +160,7 @@ async fn t3_settings_service_signals_after_durable_save_and_serves_during_cleanu
     assert!(send.is_closed());
     assert_eq!(
         fixture.overlay(),
-        "[agent]\ndaily_request_cap = 71\nmax_tool_calls = 4\n\n[codex]\nvoice = \"marin\"\n"
+        "[agent]\ndaily_request_cap = 71\nmax_tool_calls = 4\n\n[codex]\nvoice = \"maple\"\n"
     );
     assert_eq!(fs::read(base_path).unwrap(), base);
     fixture.server.shutdown().await.unwrap();

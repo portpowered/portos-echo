@@ -364,14 +364,14 @@ mod tests {
         );
         std::fs::write(&path, &base).unwrap();
         let settings = home.join("settings.toml");
-        std::fs::write(&settings, "[voice]\nsession_listen_enabled=false\nsession_listen_seconds=42\n[codex]\nvoice='coral'\n[agent]\ndaily_request_cap=0\nmax_tool_calls=3\n").unwrap();
+        std::fs::write(&settings, "[voice]\nsession_listen_enabled=false\nsession_listen_seconds=42\n[codex]\nvoice='ember'\n[agent]\ndaily_request_cap=0\nmax_tool_calls=3\n").unwrap();
         let loaded = configured(path.to_str().unwrap().into(), "unused-trace".into(), None, None)
             .unwrap()
             .unwrap();
         let config = loaded.config.unwrap();
         assert_eq!(config.voice.session_listen_seconds, 42);
         assert!(!config.voice.session_listen_enabled);
-        assert_eq!(config.codex_voice(), Some("coral"));
+        assert_eq!(config.codex_voice(), Some("ember"));
         assert_eq!(config.agent.daily_request_cap, 0);
         assert_eq!(loaded.startup.as_ref().unwrap().overlay.legacy_tool_cap(), Some(3));
         assert_eq!(loaded.delegation.unwrap().0.daily_request_cap, 0);
@@ -392,6 +392,31 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(path).unwrap(), base);
         assert!(!directory.path().join("unused-trace").exists());
+    }
+
+    /// Owner, 2026-11-20: a saved `alloy` failed every wake at the pinned v3 start.
+    #[test]
+    fn settings_overlay_stored_retired_voice_starts_as_default_with_one_warning() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("agent-home");
+        std::fs::create_dir(&home).unwrap();
+        let path = directory.path().join("bridge.toml");
+        let example =
+            include_str!("../../../examples/bridge.example.toml").replace("echo.example.invalid", "127.0.0.1");
+        std::fs::write(&path, format!("{example}\n[home]\ndir='{}'\n", home.display())).unwrap();
+        let stored = "[voice]\nsession_listen_seconds=42\n[codex]\nvoice='alloy'\n";
+        std::fs::write(home.join("settings.toml"), stored).unwrap();
+        let loaded = configured(path.to_str().unwrap().into(), "unused-trace".into(), None, None)
+            .unwrap()
+            .unwrap();
+        let config = loaded.config.unwrap();
+        assert_eq!(config.codex_voice(), None);
+        assert_eq!(config.voice.session_listen_seconds, 42);
+        assert_eq!(
+            loaded.settings_warning.as_deref(),
+            Some("settings.toml: ignored codex.voice: not supported by the pinned realtime version; using default")
+        );
+        assert_eq!(std::fs::read_to_string(home.join("settings.toml")).unwrap(), stored);
     }
 
     #[test]
