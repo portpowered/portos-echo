@@ -94,8 +94,8 @@ fn sharded(id: &str, label: &str, count: u32, timeout: u32) -> String {
 pub(super) fn part(id: &str) -> String {
     match id {
         "test-unit-rust" => {
-            let run = "make test-unit-rust NEXTEST_PARTITION=count:${{ matrix.shard }}/4";
-            sharded(id, id, 4, 15) + &setup(id, false) + CODEX + NAMESPACE + &step(id, run)
+            let run = "      - name: test-unit-rust\n        env:\n          GH_TOKEN: ${{ github.token }}\n          CODEX_RELEASE: ${{ steps.codex.outputs.tag }}\n          ECHO_CODEX_OFFLINE: '1'\n        run: make test-unit-rust NEXTEST_PARTITION=count:${{ matrix.shard }}/4\n";
+            sharded(id, id, 4, 15) + &setup(id, false) + CODEX + NAMESPACE + run
         }
         "test-unit-screen" => {
             let run = "make test-unit-python test-unit-screen";

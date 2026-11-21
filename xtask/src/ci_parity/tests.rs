@@ -197,6 +197,47 @@ fn codex_provisioning_cannot_be_removed_or_made_optional() {
     }
 }
 #[test]
+fn codex_credentials_are_step_scoped_and_rust_make_reuses_the_selected_release() {
+    let (makefile, workflow) = fixture();
+    assert_eq!(evaluate(&makefile, &workflow), Ok(()));
+    let block = shards::part("test-unit-rust");
+    let token = "          GH_TOKEN: ${{ github.token }}\n";
+    let provision = "      - name: Provision verified Codex\n        env:\n";
+    let make = "      - name: test-unit-rust\n        env:\n";
+    let make_env = format!(
+        "{make}{token}          CODEX_RELEASE: ${{{{ steps.codex.outputs.tag }}}}\n          ECHO_CODEX_OFFLINE: '1'\n"
+    );
+    let without_make_token = block.replace(&format!("{make}{token}"), make);
+    for changed in [
+        block.replace(&format!("{provision}{token}"), provision),
+        without_make_token.clone(),
+        without_make_token.replace(
+            "    steps:\n",
+            "    env:\n      GH_TOKEN: ${{ github.token }}\n    steps:\n",
+        ),
+        block.replace(&make_env, &make_env.replace("          ECHO_CODEX_OFFLINE: '1'\n", "")),
+        block.replace(
+            &make_env,
+            &make_env.replace("          CODEX_RELEASE: ${{ steps.codex.outputs.tag }}\n", ""),
+        ),
+    ] {
+        assert_job_rejected(&workflow, &block, &changed, "test-unit-rust");
+    }
+
+    let sim = shared::expected_sim_action();
+    let setup = include_str!("../../../.github/actions/setup/action.yml");
+    let provision = "    - name: Provision verified Codex\n      env:\n";
+    let token = "        GH_TOKEN: ${{ github.token }}\n";
+    let without_token = sim.replace(&format!("{provision}{token}"), provision);
+    for changed in [
+        without_token.clone(),
+        without_token.replace("  steps:\n", "  env:\n    GH_TOKEN: ${{ github.token }}\n  steps:\n"),
+    ] {
+        let error = shared::check_setup(&changed, setup).unwrap_err();
+        assert!(error.contains("unsupported shared simulation provisioning"), "{error}");
+    }
+}
+#[test]
 fn echo_gate_requires_exact_provisioning_build_and_publication() {
     let (makefile, workflow) = fixture();
     let echo = job("build-echo", "build-echo");

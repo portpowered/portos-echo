@@ -8,7 +8,10 @@ checked against the SHA-256 digest GitHub publishes for it.
     codex_release.py resolve <root>   print tag=, version= and commit= lines
     codex_release.py host <root>      provision the Linux x86_64 app server, print its path
 """
+import datetime
+import email.utils
 import hashlib
+import http.client
 import json
 import os
 import pathlib
@@ -18,7 +21,10 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
+import urllib.error
+import urllib.parse
 import urllib.request
 
 REPOSITORY = 'https://github.com/openai/codex'
@@ -26,6 +32,8 @@ API = 'https://api.github.com/repos/openai/codex'
 STABLE = re.compile(r'rust-v(\d+)\.(\d+)\.(\d+)')
 TARGET = 'x86_64-unknown-linux-musl'
 POINTER = 'current.json'
+DOWNLOAD_HOSTS = {'github.com', 'raw.githubusercontent.com'}
+DOWNLOAD_DELAYS = (2, 4, 8, 16)
 
 
 def digest(path):
@@ -33,9 +41,81 @@ def digest(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
+def authenticate_download(request):
+    url = urllib.parse.urlsplit(request.full_url)
+    if url.scheme == 'https' and url.hostname in DOWNLOAD_HOSTS:
+        token = os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
+        if token:
+            # urllib leaves this header behind. The redirect handler checks the next URL.
+            request.add_unredirected_header('Authorization', 'Bearer ' + token)
+    return request
+
+
+class DownloadRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, url):
+        redirected = super().redirect_request(request, response, code, message, headers, url)
+        return authenticate_download(redirected) if redirected is not None else None
+
+
+def retry_delay(value, fallback):
+    if not value:
+        return fallback
+    value = value.strip()
+    try:
+        if re.fullmatch(r'[0-9]+', value):
+            return int(value)
+        date = email.utils.parsedate_to_datetime(value)
+        if date.tzinfo is None:
+            date = date.replace(tzinfo=datetime.timezone.utc)
+        return max(0, date.timestamp() - time.time())
+    except (ValueError, OverflowError):
+        return fallback
+
+
+def copy_download(source, target):
+    while True:
+        try:
+            chunk = source.read(shutil.COPY_BUFSIZE)
+        except (ConnectionError, TimeoutError, http.client.IncompleteRead) as error:
+            raise urllib.error.URLError('download interrupted') from error
+        if not chunk:
+            return
+        target.write(chunk)
+
+
+def open_download(opener, url):
+    try:
+        return opener.open(authenticate_download(urllib.request.Request(url)), timeout=120)
+    except (ConnectionError, TimeoutError) as error:
+        raise urllib.error.URLError('download interrupted') from error
+    except (ValueError, http.client.HTTPException):
+        raise ValueError('download failed (invalid request or response)') from None
+
+
+def download_failure(error):
+    # Preserve the rate-limit signal used by CI monitoring without printing upstream text.
+    limited = error.code == 429 or (error.code == 403 and (
+        'rate limit exceeded' in str(error.reason).lower() or error.headers.get('X-RateLimit-Remaining') == '0'))
+    detail = ': rate limit exceeded' if limited else ''
+    return ValueError(f'download failed (HTTP {error.code}{detail})')
+
+
 def fetch(url, path):
-    with urllib.request.urlopen(url, timeout=120) as source, path.open('wb') as target:
-        shutil.copyfileobj(source, target)
+    opener = urllib.request.build_opener(DownloadRedirect())
+    for delay in (*DOWNLOAD_DELAYS, None):
+        try:
+            with open_download(opener, url) as source, path.open('wb') as target:
+                copy_download(source, target)
+            return
+        except urllib.error.HTTPError as error:
+            with error:
+                if delay is None or not (error.code in (403, 429) or 500 <= error.code <= 599):
+                    raise download_failure(error) from None
+                delay = retry_delay(error.headers.get('Retry-After'), delay)
+        except urllib.error.URLError:
+            if delay is None:
+                raise ValueError('download failed (network error)') from None
+        time.sleep(delay)
 
 
 def api(path, accept='application/vnd.github+json'):
