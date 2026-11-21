@@ -104,10 +104,7 @@ fn restrictions(config: &mut SupervisorConfig, web_search: echo_config::WebSearc
     }
     for (key, value) in [
         ("features.skip_host_skill_discovery", "true"),
-        (
-            "features.code_mode.direct_only_tool_namespaces",
-            "[\"functions\"]",
-        ),
+        ("features.code_mode.direct_only_tool_namespaces", "[\"functions\"]"),
         ("web_search", &format!("\"{}\"", web_search.as_str())),
         ("mcp_servers", "{}"),
         ("cli_auth_credentials_store", "\"file\""),

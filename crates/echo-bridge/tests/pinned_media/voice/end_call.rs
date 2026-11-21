@@ -2,8 +2,8 @@
 //! server, and the bridge applies it. On the Echo the realtime model only
 //! answered a goodbye; this pins the hand-off's other half.
 use super::runner_skills::{
-    acknowledge_cut, admit_journey, check_thread, configure_skills, declarations, drive_peer, read_json, read_rpc,
-    send_json, start_provider, voice_context,
+    Output, acknowledge_cut, admit_journey, check_thread, configure_skills, declarations, drive_peer, read_json,
+    read_rpc, send_json, start_provider, voice_context,
 };
 use super::*;
 
@@ -35,19 +35,7 @@ async fn end_call_journey() {
         &mut observed,
     ))
     .await;
-    // The user's request becomes a delegation; its answer is appended only
-    // after the model has seen end_session's result.
-    send_json(&mut control, json!({"transcripts":true})).await;
-    assert_eq!(
-        drive_peer(&mut peer, read_json(&mut observed)).await,
-        json!({"append":"end-call"})
-    );
-    send_json(&mut control, json!({"session":true})).await;
-    let context = voice_context(&read_json(&mut observed).await);
-    let rows = read_rpc(root);
-    check_thread(&rows[0], &context, &tools, false);
-    send_json(&mut control, json!({"snapshot":"end-call"})).await;
-    check_end(root, &rows[1..], &read_json(&mut observed).await);
+    observe_end_call(root, &tools, &mut peer, &mut control, &mut observed).await;
     drop(stdin);
     acknowledge_cut(&mut satellite).await;
     let output = bridge.wait_with_output().await.unwrap();
@@ -55,6 +43,28 @@ async fn end_call_journey() {
     peer.close();
     drop(control);
     assert!(provider.wait().await.unwrap().success());
+}
+
+async fn observe_end_call(
+    root: &Path,
+    tools: &[Value],
+    peer: &mut LivePeer,
+    control: &mut tokio::process::ChildStdin,
+    observed: &mut Output,
+) {
+    // The user's request becomes a delegation; its answer is appended only
+    // after the model has seen end_session's result.
+    send_json(control, json!({"transcripts":true})).await;
+    assert_eq!(
+        drive_peer(peer, read_json(observed)).await,
+        json!({"append":"end-call"})
+    );
+    send_json(control, json!({"session":true})).await;
+    let context = voice_context(&read_json(observed).await);
+    let rows = read_rpc(root);
+    check_thread(&rows[0], &context, tools, false);
+    send_json(control, json!({"snapshot":"end-call"})).await;
+    check_end(root, &rows[1..], &read_json(observed).await);
 }
 
 fn check_end(root: &Path, rows: &[Value], provider: &Value) {
