@@ -82,6 +82,9 @@ pub trait VoicePort {
     fn flush_session_answer(&mut self) -> impl Future<Output = Result<(), Error>> {
         std::future::ready(Ok(()))
     }
+    fn end_remote(&mut self) -> impl Future<Output = Result<(), Error>> {
+        self.flush_session_answer()
+    }
     /// # Errors
     /// The call must be active and the bounded media sender available.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
@@ -105,7 +108,6 @@ pub trait VoicePort {
         0
     }
 }
-
 pub enum Notice {
     EarconPlayed(Duration),
     Device(LinkEvent<()>),

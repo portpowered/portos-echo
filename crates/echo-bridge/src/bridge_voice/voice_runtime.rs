@@ -426,10 +426,9 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
                             termination.observe(&notice);
                             view.observe(notice)
                         };
-                        let remote = super::remote_admission::Options {
-                            silent: || super::retained_link::Capture::Silent,
-                            remote_mic: options.delegation.is_some_and(|config| config.portos_endpoint.remote_mic),
-                        };
+                        let remote = super::remote_admission::Options::retained(
+                            options.delegation.is_some_and(|config| config.portos_endpoint.remote_mic),
+                        );
                         let context = (tools.as_mut(), Some(setup_trace), earcon, Some(&termination), Some(remote));
                         super::voice_admission::service(client, io, voice, peer, stopped(stopping), observe, context).await
                     }

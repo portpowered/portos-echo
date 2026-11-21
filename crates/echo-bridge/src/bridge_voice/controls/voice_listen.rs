@@ -91,7 +91,14 @@ pub(super) async fn replies<L: EchoLink>(
         source.answer_due = generation_options.response_deadline;
     }
     if source.session.ending() {
-        tokio::time::timeout(options.played_timeout, port.flush_session_answer())
+        let flush = async {
+            if crate::bridge_endpoint::voice::close_requested() {
+                port.end_remote().await
+            } else {
+                port.flush_session_answer().await
+            }
+        };
+        tokio::time::timeout(options.played_timeout, flush)
             .await
             .map_err(|_| Error::Deadline)??;
     }

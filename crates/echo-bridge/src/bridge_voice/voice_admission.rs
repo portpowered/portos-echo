@@ -147,7 +147,7 @@ where
                 io,
                 &mut options,
                 &mut peer,
-                gate.cancel(remote_stop(cancelled.as_mut(), lease, &stopped), &killed),
+                gate.cancel(remote_admission::stop(cancelled.as_mut(), lease, &stopped), &killed),
                 &mut publish,
                 (tools.as_deref_mut(), trace.clone()),
             ))
@@ -157,17 +157,16 @@ where
             {
                 termination.trip();
             }
-            if killed.get() && result == Err(Error::Control) {
-                settle_kill(client, io).await?;
-                gate.tripped(&mut publish)?;
-            } else if stopped.get() && result == Err(Error::Control) {
-                client.end_run().await?;
-                if let Some(endpoint) = &endpoint {
-                    endpoint.remote_failed();
-                }
-            } else {
-                report_run_end(client, result, &mut publish).await?;
-            }
+            settle_admission(
+                client,
+                io,
+                result,
+                (killed.get(), stopped.get()),
+                endpoint.as_ref(),
+                &mut gate,
+                &mut publish,
+            )
+            .await?;
         }
     });
     let result = super::earcon::scope(client, wake_earcon, work).await;
@@ -175,6 +174,25 @@ where
         endpoint.unavailable();
     }
     result
+}
+
+async fn settle_admission<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+    client: &impl EchoLink,
+    io: &mut RpcIo<R, W>,
+    result: Result<(), Error>,
+    (killed, stopped): (bool, bool),
+    endpoint: Option<&Voice>,
+    gate: &mut Gate<'_>,
+    publish: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    if result != Err(Error::Control) {
+        return report_run_end(client, result, publish).await;
+    }
+    if killed {
+        settle_kill(client, io).await?;
+        return gate.tripped(publish);
+    }
+    remote_admission::settle(client, endpoint, stopped).await
 }
 
 async fn serve_admitted<L, R, W, P>(
@@ -235,21 +253,6 @@ async fn settle_kill<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
         .map_err(Error::from)
 }
 
-async fn remote_stop(
-    cancelled: impl Future<Output = ()>,
-    lease: Option<tokio::sync::watch::Receiver<()>>,
-    stopped: &std::cell::Cell<bool>,
-) {
-    if let Some(mut lease) = lease {
-        tokio::select! {
-            () = cancelled => {}
-            _ = lease.changed() => stopped.set(true),
-        }
-    } else {
-        cancelled.await;
-    }
-}
-
 async fn select_admission<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     client: &L,
     events: &mut L::Events,
@@ -273,12 +276,21 @@ async fn select_admission<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unp
             let admission = tokio::select! {
                 biased;
                 () = cancelled.as_mut() => return Err(Error::Control),
+                result = idle_control(io) => return result.map(|()| None),
                 result = remote_admission::prepare((client, events), (remote.0, start), remote.1, (muted, gate), observe) => result?,
             };
             if admission.is_some() {
                 return Ok(admission);
             }
         }
+    }
+}
+
+async fn idle_control<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(io: &mut RpcIo<R, W>) -> Result<(), Error> {
+    loop {
+        let event = io.next_event().await.map_err(bridge_codex::rpc_error)?;
+        idle_message(io, event)?;
+        tokio::task::yield_now().await;
     }
 }
 
@@ -340,6 +352,7 @@ where
     let (mut media, instructions) = tokio::select! {
         biased;
         () = cancelled.as_mut() => return Err(Error::Control),
+        () = crate::bridge_endpoint::voice::ending() => return Err(Error::Control),
         result = super::earcon::negotiating(device.1, super::earcon::capture_during(&mut device.2, async {
             let instructions = admitted_instructions(&options.call, tools.as_deref(), clock, &mut trace)?;
             let media = timeout_at(deadline, peer()).await.map_err(|_| Error::Deadline)??;

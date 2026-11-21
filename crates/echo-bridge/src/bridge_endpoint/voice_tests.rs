@@ -12,50 +12,62 @@ use tokio::{
 
 #[tokio::test(start_paused = true)]
 async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
-    bridge_mcp::bridge_component::drive(async {
-        let home = tempfile::tempdir().unwrap();
-        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
-        mock.enable_endpoint_audience().unwrap();
-        let mut grant = registered(&mock, home.path()).await;
-        let mut gateway = Gateway::open().await;
-        let (service, send_settings) = Settings::configured(home.path(), &mock, &gateway, Arc::new(Resolver), false);
-        let (app, server) = tokio::io::duplex(16384);
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-        let connector =
-            echo_wyoming::adapter::connector(listener.local_addr().unwrap(), echo_wyoming::ClientOptions::default());
-        let ready = Arc::new(Notify::new());
-        let signal = ready.clone();
-        let settings = Settings::serve(service, send_settings, grant.grant.clone(), |stop| async move {
-            let result = crate::bridge_voice::endpoint_fixture(
-                connector,
-                app,
-                async {
-                    let _ = stop.await;
-                },
-                &signal,
-            )
+    tokio::task::LocalSet::new()
+        .run_until(bridge_mcp::bridge_component::drive(async {
+            let home = tempfile::tempdir().unwrap();
+            let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
+            mock.enable_endpoint_audience().unwrap();
+            let mut grant = registered(&mock, home.path()).await;
+            let mut gateway = Gateway::open().await;
+            let (service, send_settings) =
+                Settings::configured(home.path(), &mock, &gateway, Arc::new(Resolver), false);
+            let (app, server) = tokio::io::duplex(16384);
+            let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let connector = echo_wyoming::adapter::connector(
+                listener.local_addr().unwrap(),
+                echo_wyoming::ClientOptions::default(),
+            );
+            let ready = Arc::new(Notify::new());
+            let signal = ready.clone();
+            let shared_grant = grant.grant.clone();
+            let settings = Settings::serve_with_owner(send_settings, |stop| {
+                tokio::task::spawn_local(async move {
+                    let work = async {
+                        let result = crate::bridge_voice::endpoint_fixture(
+                            connector,
+                            app,
+                            async {
+                                let _ = stop.await;
+                            },
+                            &signal,
+                        )
+                        .await;
+                        assert_eq!(result, Err(crate::Error::Control));
+                    };
+                    service
+                        .scope_with_grant(work, || shared_grant.link_status(), || Some(shared_grant.clone()))
+                        .await;
+                })
+            })
             .await;
-            assert_eq!(result, Err(crate::Error::Control));
-        })
-        .await;
-        let (device, _) = listener.accept().await.unwrap();
-        let (mut device, mut app) = (Device::new(device), BufReader::new(server));
-        device.receive("run-satellite").await;
-        device.send("info", json!({})).await;
-        ready.notified().await;
-        settings.save(true, "Hall Echo").await;
-        gateway.assert_upgrade(4).await;
-        assert_installed(home.path(), &mock).await;
+            let (device, _) = listener.accept().await.unwrap();
+            let (mut device, mut app) = (Device::new(device), BufReader::new(server));
+            device.receive("run-satellite").await;
+            device.send("info", json!({})).await;
+            ready.notified().await;
+            settings.save(true, "Hall Echo").await;
+            gateway.assert_upgrade(4).await;
+            assert_installed(home.path(), &mock).await;
 
-        missing_capture(&gateway, &mock, &mut device).await;
-        text_start(&gateway, &mock, &mut app, &mut device).await;
-        wake_and_end(&gateway, &mock, &mut app, &mut device).await;
-        assert_eq!(receipts(&mock).len(), 5);
-        settings.close().await;
-        gateway.assert_disconnect().await;
-        grant.close().await;
-    })
-    .await;
+            missing_capture(&gateway, &mock, &mut device).await;
+            text_start(&gateway, &mock, &mut app, &mut device).await;
+            wake_and_end(&gateway, &mock, &mut app, &mut device).await;
+            assert_eq!(receipts(&mock).len(), 5);
+            settings.close().await;
+            gateway.assert_disconnect().await;
+            grant.close().await;
+        }))
+        .await;
 }
 
 async fn missing_capture(gateway: &Gateway, mock: &Mock, device: &mut Device) {

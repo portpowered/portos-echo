@@ -113,10 +113,7 @@ impl Settings {
         base_enabled: bool,
     ) -> Self {
         let (service, send) = Self::configured(home, mock, gateway, resolver, base_enabled);
-        Self::serve(service, send, grant, |done| async {
-            let _ = done.await;
-        })
-        .await
+        Self::serve(service, send, grant).await
     }
 
     fn configured(
@@ -139,19 +136,30 @@ impl Settings {
         (service.with_endpoint(runtime), send)
     }
 
-    async fn serve<F: Future<Output = ()> + Send + 'static>(
+    async fn serve(
         service: SettingsService,
         send: mpsc::Sender<echo_screen_server::SettingsRequest>,
         grant: Arc<Grant>,
-        work: impl FnOnce(oneshot::Receiver<()>) -> F,
+    ) -> Self {
+        Self::serve_with_owner(send, |done| {
+            tokio::spawn(async move {
+                let work = async {
+                    let _ = done.await;
+                };
+                service
+                    .scope_with_grant(work, || grant.link_status(), || Some(grant.clone()))
+                    .await;
+            })
+        })
+        .await
+    }
+
+    async fn serve_with_owner(
+        send: mpsc::Sender<echo_screen_server::SettingsRequest>,
+        start: impl FnOnce(oneshot::Receiver<()>) -> JoinHandle<()>,
     ) -> Self {
         let (stop, done) = oneshot::channel();
-        let work = work(done);
-        let owner = tokio::spawn(async move {
-            service
-                .scope_with_grant(work, || grant.link_status(), || Some(grant.clone()))
-                .await;
-        });
+        let owner = start(done);
         let (states, input) = mpsc::channel(8);
         let server = echo_screen_server::serve_with_settings(
             ([127, 0, 0, 1], 0).into(),

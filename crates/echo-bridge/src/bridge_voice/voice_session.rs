@@ -129,6 +129,7 @@ where
                 tokio::select! {
                     biased;
                     () = cancelled.as_mut() => return Err(Error::Control),
+                    () = crate::bridge_endpoint::voice::ending() => return Err(Error::Control),
                     result = async {
                         if Instant::now() >= options.deadline { return Err(Error::Deadline); }
                         validate(&options.session)?;

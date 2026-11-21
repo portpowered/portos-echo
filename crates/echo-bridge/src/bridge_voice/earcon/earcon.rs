@@ -1,5 +1,6 @@
 //! A scoped, bounded speaker owner, independent of reply audio and mouth state.
 mod capture;
+pub(super) use capture::Capture as BufferedCapture;
 #[cfg(test)]
 mod discovery_tests;
 #[cfg(test)]

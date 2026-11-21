@@ -263,13 +263,24 @@ impl<L: EchoLink> LinkEvents for Shared<L> {
 
 pub(in crate::bridge_voice) enum Capture<R> {
     Device(R),
+    Buffered(Box<(R, super::earcon::BufferedCapture)>),
     Silent,
+}
+
+impl<R> Capture<R> {
+    pub(super) fn buffered(self, frames: super::earcon::BufferedCapture) -> Self {
+        match self {
+            Self::Device(run) => Self::Buffered(Box::new((run, frames))),
+            other => other,
+        }
+    }
 }
 
 impl<R: MicrophoneRun> MicrophoneRun for Capture<R> {
     fn wake_phrase(&self) -> &str {
         match self {
             Self::Device(run) => run.wake_phrase(),
+            Self::Buffered(run) => run.0.wake_phrase(),
             Self::Silent => "",
         }
     }
@@ -277,6 +288,15 @@ impl<R: MicrophoneRun> MicrophoneRun for Capture<R> {
     async fn recv(&mut self) -> Result<Option<MicFrame>, Error> {
         match self {
             Self::Device(run) => run.recv().await,
+            Self::Buffered(buffered) => {
+                if let Some(frame) = buffered.1.pop() {
+                    Ok(Some(frame))
+                } else if buffered.1.ended() {
+                    Ok(None)
+                } else {
+                    buffered.0.recv().await
+                }
+            }
             Self::Silent => Ok(None),
         }
     }
@@ -284,6 +304,7 @@ impl<R: MicrophoneRun> MicrophoneRun for Capture<R> {
     fn stats(&self) -> RunStats {
         match self {
             Self::Device(run) => run.stats(),
+            Self::Buffered(run) => run.0.stats(),
             Self::Silent => RunStats::default(),
         }
     }

@@ -385,10 +385,7 @@ pub(crate) async fn endpoint_fixture(
     let retained = super::super::retained_link::Retained::new(connector);
     let mut link = retained.connect().await.unwrap();
     link.enable_capture(30).await.unwrap();
-    let remote = remote_admission::Options {
-        silent: || super::super::retained_link::Capture::Silent,
-        remote_mic: true,
-    };
+    let remote = remote_admission::Options::retained(true);
     let result = service(
         &mut link,
         &mut io,

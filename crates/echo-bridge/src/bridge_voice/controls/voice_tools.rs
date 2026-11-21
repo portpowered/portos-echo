@@ -419,6 +419,7 @@ where
                 let catalog = tokio::select! {
                     biased;
                     () = cancelled.as_mut() => return Err(Error::Control),
+                    () = crate::bridge_endpoint::voice::ending() => return Err(Error::Control),
                     result = tokio::time::timeout_at(options.deadline, tools.catalog()) => result.map_err(|_| Error::Deadline)??,
                 };
                 let trace = tools.trace.as_ref().ok_or(Error::Unavailable)?.clone();
@@ -427,6 +428,7 @@ where
                 tokio::select! {
                     biased;
                     () = cancelled.as_mut() => return Err(Error::Control),
+                    () = crate::bridge_endpoint::voice::ending() => return Err(Error::Control),
                     result = async {
                         call.start(&options.call, catalog.tools().to_vec(), options.deadline).await?;
                         crate::bridge_endpoint::remote_start::append(&mut call).await

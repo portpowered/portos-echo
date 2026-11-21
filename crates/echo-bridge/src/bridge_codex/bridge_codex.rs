@@ -27,7 +27,7 @@ use echo_codex::{
     codex_rpc::RpcError,
 };
 use serde_json::json;
-use std::{collections::VecDeque, future::Future};
+use std::collections::VecDeque;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     time::{Instant, timeout_at},

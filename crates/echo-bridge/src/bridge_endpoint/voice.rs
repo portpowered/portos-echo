@@ -158,6 +158,18 @@ impl Voice {
         self.finish(EndedReason::Error);
     }
 
+    pub(crate) fn close_requested(&self) -> bool {
+        self.state
+            .borrow()
+            .active
+            .as_ref()
+            .is_some_and(|session| session.ending)
+    }
+
+    pub(crate) fn close_finished(&self) {
+        self.finish(EndedReason::Completed);
+    }
+
     pub(crate) async fn start_waiting(&self) {
         loop {
             let notified = self.new_start.notified();
@@ -330,8 +342,12 @@ pub(crate) async fn ending() {
     if let Some(voice) = Voice::current() {
         voice.ending().await;
     } else {
-        std::future::pending::<()>().await
+        std::future::pending::<()>().await;
     }
+}
+
+pub(crate) fn close_requested() -> bool {
+    Voice::current().is_some_and(|voice| voice.close_requested())
 }
 
 pub(crate) async fn start_waiting() {

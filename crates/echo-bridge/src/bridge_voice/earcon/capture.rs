@@ -9,14 +9,14 @@ const MAX_BYTES: usize = 1_048_576;
 const MAX_FRAMES: usize = 1024;
 
 #[derive(Default)]
-pub(super) struct Capture {
+pub(in crate::bridge_voice) struct Capture {
     frames: VecDeque<MicFrame>,
     bytes: usize,
     ended: bool,
 }
 
 impl Capture {
-    fn push(&mut self, frame: Option<MicFrame>) -> Result<(), Error> {
+    pub(in crate::bridge_voice) fn push(&mut self, frame: Option<MicFrame>) -> Result<(), Error> {
         if let Some(frame) = frame {
             let bytes = self.bytes.checked_add(frame.payload.len()).ok_or(Error::Wyoming)?;
             if bytes > MAX_BYTES || self.frames.len() == MAX_FRAMES {
@@ -28,6 +28,16 @@ impl Capture {
             self.ended = true;
         }
         Ok(())
+    }
+
+    pub(in crate::bridge_voice) fn pop(&mut self) -> Option<MicFrame> {
+        let frame = self.frames.pop_front()?;
+        self.bytes -= frame.payload.len();
+        Some(frame)
+    }
+
+    pub(in crate::bridge_voice) fn ended(&self) -> bool {
+        self.ended
     }
 }
 
@@ -54,8 +64,7 @@ pub(in crate::bridge_voice) async fn recv(
 ) -> Result<Option<MicFrame>, echo_link::Error> {
     if let Some(context) = current() {
         let mut state = context.state();
-        if let Some(frame) = state.capture.frames.pop_front() {
-            state.capture.bytes -= frame.payload.len();
+        if let Some(frame) = state.capture.pop() {
             return Ok(Some(frame));
         }
         if state.capture.ended {
