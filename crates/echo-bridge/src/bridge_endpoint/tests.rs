@@ -19,9 +19,12 @@ use tokio::{
 };
 use tokio_tungstenite::{
     accept_hdr_async,
+    tungstenite::Message,
     tungstenite::handshake::server::{Request, Response},
 };
 
+#[path = "command_tests.rs"]
+mod command_tests;
 #[path = "setup_tests.rs"]
 mod setup_tests;
 
@@ -45,6 +48,7 @@ impl RouteResolver for Resolver {
 struct Gateway {
     template: String,
     received: mpsc::Receiver<GatewayEvent>,
+    frames: mpsc::Sender<Message>,
     task: JoinHandle<()>,
 }
 
@@ -62,10 +66,12 @@ impl Gateway {
             listener.local_addr().unwrap().port()
         );
         let (events, received) = mpsc::channel(8);
-        let task = tokio::spawn(gateway(listener, events));
+        let (frames, outgoing) = mpsc::channel(8);
+        let task = tokio::spawn(gateway(listener, events, outgoing));
         Self {
             template,
             received,
+            frames,
             task,
         }
     }
@@ -77,8 +83,8 @@ impl Drop for Gateway {
     }
 }
 
-async fn gateway(listener: TcpListener, events: mpsc::Sender<GatewayEvent>) {
-    use futures_util::StreamExt;
+async fn gateway(listener: TcpListener, events: mpsc::Sender<GatewayEvent>, mut frames: mpsc::Receiver<Message>) {
+    use futures_util::{SinkExt, StreamExt};
     while let Ok((stream, _)) = listener.accept().await {
         let Ok(mut socket) = accept_hdr_async(stream, |request: &Request, response: Response| {
             let bearer = request
@@ -105,7 +111,12 @@ async fn gateway(listener: TcpListener, events: mpsc::Sender<GatewayEvent>) {
         else {
             continue;
         };
-        while socket.next().await.is_some_and(|message| message.is_ok()) {}
+        loop {
+            tokio::select! {
+                message = socket.next() => if message.is_none_or(|frame| frame.is_err()) { break; },
+                Some(frame) = frames.recv() => if socket.send(frame).await.is_err() { break; },
+            }
+        }
         events.send(GatewayEvent::Disconnected).await.unwrap();
     }
 }

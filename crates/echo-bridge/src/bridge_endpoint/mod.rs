@@ -1,4 +1,5 @@
 //! Endpoint ownership is scoped to the configured Settings generation.
+mod commands;
 #[cfg(test)]
 mod tests;
 mod transport;

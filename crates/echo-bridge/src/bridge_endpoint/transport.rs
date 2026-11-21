@@ -1,11 +1,12 @@
-use super::Status;
+use super::{Status, commands::Receipts};
 use echo_contracts::endpoint::{AssistantState, ReportState, Uplink};
 use echo_mcp_auth::{EndpointTokenSource, new_request_id};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use reqwest::{Client, Url};
 use std::{fmt::Write as _, time::Duration};
 use tokio::{
     net::TcpStream,
+    sync::mpsc,
     time::{Instant, sleep_until, timeout, timeout_at},
 };
 use tokio_tungstenite::{
@@ -22,6 +23,8 @@ pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const REPLY_WINDOW: Duration = Duration::from_secs(10);
 const MAX_COMMAND: usize = 64 * 1024;
 const MAX_MESSAGE: usize = 8 * 1024 * 1024;
+const QUEUED_COMMANDS: usize = 32;
+const IN_FLIGHT_REPLIES: usize = 16;
 const PATH_MARKER: &str = "{authLinkId}";
 
 pub(super) struct Transport {
@@ -31,6 +34,11 @@ pub(super) struct Transport {
 }
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+struct Frame {
+    text: tokio_tungstenite::tungstenite::Utf8Bytes,
+    received: Instant,
+}
 
 impl Transport {
     pub(super) fn new(gateway: &str, api: &str, loopback: bool) -> Option<Self> {
@@ -102,13 +110,28 @@ impl Transport {
         tokens: &dyn EndpointTokenSource,
         state: &tokio::sync::watch::Sender<Status>,
     ) -> Status {
+        let (intake, frames) = mpsc::channel(QUEUED_COMMANDS);
+        tokio::select! {
+            status = self.gateway(auth_link, route, tokens, state, &intake) => status,
+            () = self.respond(frames, route, tokens) => Status::Unavailable,
+        }
+    }
+
+    async fn gateway(
+        &self,
+        auth_link: &str,
+        route: &str,
+        tokens: &dyn EndpointTokenSource,
+        state: &tokio::sync::watch::Sender<Status>,
+        intake: &mpsc::Sender<Frame>,
+    ) -> Status {
         let mut delay = Duration::from_secs(1);
         loop {
             match self.handshake(auth_link, tokens).await {
                 Ok(socket) => {
                     state.send_replace(Status::Connected);
                     delay = Duration::from_secs(1);
-                    self.connected(socket, route, tokens).await;
+                    self.connected(socket, route, tokens, intake).await;
                 }
                 Err(Status::Connecting) => {}
                 Err(terminal) => return terminal,
@@ -127,7 +150,13 @@ impl Transport {
         }
     }
 
-    async fn connected(&self, socket: Socket, route: &str, tokens: &dyn EndpointTokenSource) {
+    async fn connected(
+        &self,
+        socket: Socket,
+        route: &str,
+        tokens: &dyn EndpointTokenSource,
+        intake: &mpsc::Sender<Frame>,
+    ) {
         let report = Uplink::new(
             "report-state",
             route,
@@ -139,15 +168,15 @@ impl Transport {
                 muted: None,
             },
         );
-        let receive = Self::receive(socket);
+        let receive = Self::receive(socket, intake);
         tokio::pin!(receive);
         tokio::select! {
             () = &mut receive => {}
-            () = self.send(tokens, serde_json::to_vec(&report).ok()) => receive.await,
+            () = self.send(tokens, serde_json::to_vec(&report).ok(), Instant::now() + REPLY_WINDOW) => receive.await,
         }
     }
 
-    async fn receive(mut socket: Socket) {
+    async fn receive(mut socket: Socket, intake: &mpsc::Sender<Frame>) {
         while let Some(Ok(message)) = socket.next().await {
             match message {
                 Message::Close(_) => {
@@ -155,18 +184,40 @@ impl Transport {
                     break;
                 }
                 Message::Ping(_) if socket.flush().await.is_err() => break,
+                Message::Text(text) => {
+                    let _ = intake.try_send(Frame {
+                        text,
+                        received: Instant::now(),
+                    });
+                }
                 _ => {}
             }
         }
     }
 
-    async fn send(&self, tokens: &dyn EndpointTokenSource, body: Option<Vec<u8>>) {
+    async fn respond(&self, mut frames: mpsc::Receiver<Frame>, route: &str, tokens: &dyn EndpointTokenSource) {
+        let mut receipts = Receipts::default();
+        let mut replies = FuturesUnordered::new();
+        loop {
+            tokio::select! {
+                _ = replies.next(), if !replies.is_empty() => {}
+                frame = frames.recv(), if replies.len() < IN_FLIGHT_REPLIES => {
+                    let Some(frame) = frame else { return };
+                    let deadline = frame.received + REPLY_WINDOW;
+                    if let Some(body) = receipts.reply(route, &frame.text, frame.received, deadline) {
+                        replies.push(self.send(tokens, Some(body), deadline));
+                    }
+                }
+            }
+        }
+    }
+
+    async fn send(&self, tokens: &dyn EndpointTokenSource, body: Option<Vec<u8>>, deadline: Instant) {
         let Some(body) = body.filter(|bytes| bytes.len() <= MAX_MESSAGE) else {
             return;
         };
         let Ok(key) = new_request_id() else { return };
-        let deadline = Instant::now() + REPLY_WINDOW;
-        loop {
+        while Instant::now() < deadline {
             let attempt = async {
                 let Ok(token) = tokens.access_token().await else {
                     return false;
