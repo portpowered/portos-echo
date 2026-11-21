@@ -162,6 +162,10 @@ impl Controller {
         self.microphone_finished = true;
     }
 
+    pub fn microphone_started(&mut self) {
+        self.microphone_finished = false;
+    }
+
     pub fn microphone_finished(&self) -> bool {
         self.microphone_finished
     }

@@ -4,7 +4,7 @@ use crate::{
     wyoming_session::{self, Command},
 };
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
-use std::{future::Future, net::SocketAddr, time::Duration};
+use std::{future::Future, net::SocketAddr, sync::Weak, time::Duration};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -146,6 +146,16 @@ impl WyomingClient {
         self.request(Command::Register(data, tx), rx).await
     }
 
+    pub(crate) async fn request_remote_capture(
+        &self,
+        request_id: Weak<str>,
+        deadline: std::time::Instant,
+    ) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::RemoteCapture(request_id, deadline.into(), tx), rx)
+            .await
+    }
+
     /// Take the sole event receiver.
     /// # Errors
     /// Busy if the receiver has already been taken.
@@ -224,6 +234,11 @@ impl WyomingClient {
     pub async fn thinking(&self, on: bool) -> Result<(), Error> {
         let (tx, rx) = oneshot::channel();
         self.request(Command::Thinking(on, tx), rx).await
+    }
+
+    pub(crate) async fn send_speaker(&self, name: &'static str, data: serde_json::Value) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Speaker(name, data, tx), rx).await
     }
 
     /// Send one device-visible error through the session writer, keeping the connection.

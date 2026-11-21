@@ -13,6 +13,9 @@ fn request(header: &Value, claims: &Value, key: &SigningKey) -> Request {
         form: BTreeMap::new(),
         json: None,
         time: 0,
+        received: Instant::now(),
+        message_body: None,
+        status: None,
     }
 }
 
@@ -95,6 +98,9 @@ fn mock_refuses_truncated_or_missing_proofs() {
             form: BTreeMap::new(),
             json: None,
             time: 0,
+            received: Instant::now(),
+            message_body: None,
+            status: None,
         };
         assert!(!verify(&request, "http://127.0.0.1", &mut fixture_state()));
     }

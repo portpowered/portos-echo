@@ -657,6 +657,26 @@ Server-sent elicitation is deferred: Port OS MCP is stateless (POST only, no ses
 and no Port OS tool needs approval. Elicitation is tested only against the spoof MCP. Anything else this
 repository needs from Port OS is asked of the portos-backend coordinator, never worked around.
 
+### Echo endpoint registration (W6)
+
+The owner authorized one opt-in endpoint path in `el-w6-portos-endpoint-bridge` on 2026-11-21.
+Paired Settings v2 names and enables the installation. The existing Port OS link supplies one
+registered client, device-code approval and rotating DPoP-bound refresh token. Serialize refreshes
+through that grant owner and mint different MCP and endpoint access tokens. REST and the gateway
+share the endpoint token. Resolve the route after the install exchange and refresh both audiences
+for the auth-link claim before opening the gateway. Production activation requires an available
+endpoint issuer and authoritative route resolver.
+
+The endpoint uses the existing voice and device owners. Immediate decisions and text starts have one
+final reply within 1 s. Mic starts that wait for the device decide at the 2 s boundary and deliver one
+final reply by 2.5 s with a healthy uplink. Explicit end-session cancels a running delegation,
+stops speech and closes the mic run immediately. The device owns speaker acknowledgements, and the camera
+source owns the snapshot shutter. Workers exercise this path through local fakes.
+
+Remote microphone starts require explicit `portos_endpoint.remote_mic` capability configuration,
+off by default. The Wyoming request carries a fresh `requestId` echoed by the corresponding
+`run-pipeline`. Local wakes keep the same wire and cannot satisfy a remote reservation.
+
 ## 10. Phase F: the repository harness, before any crate
 
 Process and review trust CI alone, so the gates exist first. Each item's acceptance is: **the gate runs in CI, and
@@ -793,3 +813,5 @@ loopback (`docs/program/coordinator.md`), and fans out inside a phase only where
      credential file (shown on the device).
 
 Contract changes after W0 are their own pull request, made by the coordinator, never a side effect of a feature.
+The owner authorized `el-w6-portos-endpoint-bridge` to deliver the additive endpoint wire and Settings v2 leaves
+alongside their runtime consumers and tests in one pull request.

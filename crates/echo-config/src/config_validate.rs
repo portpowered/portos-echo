@@ -61,6 +61,7 @@ fn schema_field(path: &str, key: &str) -> bool {
             "agent",
             "muse",
             "mcp",
+            "portos_endpoint",
             "screen",
             "audit",
             "chatgpt_auth",
@@ -89,6 +90,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
         "agent" => &["max_tool_calls", "task_deadline_seconds", "daily_request_cap", "model"],
         "muse" => &["url", "ca_file", "credential_file"],
+        "portos_endpoint" => &["enabled", "device_name", "gateway_url", "api_base", "remote_mic"],
         "mcp" => &[
             "server",
             "state_dir",
@@ -127,6 +129,7 @@ pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
     crate::config_muse::validate(config)?;
     config.chatgpt_auth.validate()?;
     validate_mcp(&config.mcp)?;
+    config.portos_endpoint.validate()?;
     crate::config_clock::validate(&config.clock)?;
     if config.audio.reply_lead_ms == 0 || !config.audio.reply_lead_ms.is_multiple_of(20) {
         return Err(ConfigError::new(

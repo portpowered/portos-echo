@@ -1,6 +1,6 @@
 //! Keep capture and the run owned while a settled reply waits for activity.
 use super::{Error, Event, MediaEvent, Notice, Options, Source, VoicePort};
-use echo_link::{EchoLink, LinkEvent, LinkEvents};
+use echo_link::{EchoLink, LinkEvent, LinkEvents, ReplySink};
 use std::{future::Future, time::Duration};
 use tokio::time::Instant;
 
@@ -10,6 +10,22 @@ pub(super) async fn until(deadline: Option<Instant>) {
     } else {
         std::future::pending::<()>().await;
     }
+}
+
+pub(super) fn remote_cut(port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
+    source.session.request_end();
+    source.controller.cut();
+    port.retire_audio();
+    Err(Error::Control)
+}
+
+pub(super) async fn forward(sink: Option<&impl ReplySink>, pending: Option<&[u8]>) -> Result<(), Error> {
+    let sink = sink.ok_or(Error::Wyoming)?;
+    let frame = pending.ok_or(Error::Audio)?;
+    super::earcon::preempt();
+    super::earcon::idle().await?;
+    // Retain the single frame across cancelled bounded sends.
+    sink.send(frame.to_vec()).await.map_err(Error::from)
 }
 
 pub(super) async fn replies<L: EchoLink>(
@@ -75,11 +91,19 @@ pub(super) async fn replies<L: EchoLink>(
         source.answer_due = generation_options.response_deadline;
     }
     if source.session.ending() {
-        tokio::time::timeout(options.played_timeout, port.flush_session_answer())
+        tokio::time::timeout(options.played_timeout, flush_end(port))
             .await
             .map_err(|_| Error::Deadline)??;
     }
     Ok(())
+}
+
+async fn flush_end(port: &mut impl VoicePort) -> Result<(), Error> {
+    if crate::bridge_endpoint::voice::close_requested() {
+        port.end_remote().await
+    } else {
+        port.flush_session_answer().await
+    }
 }
 
 fn settle_cut(
@@ -114,7 +138,25 @@ async fn after_reply<L: EchoLink>(
     if source.session.ending() {
         return Ok(false);
     }
-    let followup = options.listen_timeout.is_some();
+    let mut followup = options.listen_timeout.is_some();
+    if followup && !source.delegation.waiting() && crate::bridge_endpoint::remote_start::take_followup() {
+        let deadline = (Instant::now() + Duration::from_secs(2)).min(source.run_ceiling.ok_or(Error::Deadline)?);
+        let next = super::remote_admission::followup(client, events, cancelled.as_mut(), deadline, |event| {
+            super::device(event, true, source, observe)
+        })
+        .await?;
+        if let Some(run) = next {
+            *microphone = run;
+            super::earcon::reset_capture();
+            source.controller.microphone_started();
+        } else {
+            followup = false;
+        }
+        if crate::bridge_endpoint::voice::close_requested() {
+            source.session.request_end();
+            return Ok(false);
+        }
+    }
     if !followup && !source.delegation.waiting() {
         return Ok(false);
     }
@@ -267,6 +309,11 @@ async fn listen<E: LinkEvents>(
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
+            () = crate::bridge_endpoint::voice::ending() => {
+                source.session.request_end();
+                port.retire_audio();
+                return Ok(false);
+            }
             // Playback has settled before entering listen. A running delegated
             // turn still owns this reply; finish it before admitting cleanup.
             () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),

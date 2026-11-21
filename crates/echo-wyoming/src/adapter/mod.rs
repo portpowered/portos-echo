@@ -3,7 +3,7 @@ use crate::{ClientOptions, EventStream, Run, WyomingClient};
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
 use echo_link::{
     CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
-    ReplySink, RunFailure, RunStats,
+    ReplySink, RunFailure, RunStats, SpeakerRequest,
 };
 use std::{net::SocketAddr, num::NonZeroUsize, time::Duration};
 use tokio::sync::mpsc;
@@ -97,8 +97,27 @@ impl EchoLink for WyomingClient {
     async fn enable_capture(&self, failsafe_seconds: u32) -> Result<(), Error> {
         self.run_satellite_with_failsafe(failsafe_seconds).await.map_err(error)
     }
+    async fn request_remote_capture(
+        &self,
+        request_id: std::sync::Weak<str>,
+        deadline: std::time::Instant,
+    ) -> Result<(), Error> {
+        Self::request_remote_capture(self, request_id, deadline)
+            .await
+            .map_err(error)
+    }
     async fn probe(&self) -> Result<(), Error> {
         self.describe().await.map(|_| ()).map_err(error)
+    }
+    async fn request_speaker(&self, request: SpeakerRequest) -> Result<(), Error> {
+        let (name, data) = match request {
+            SpeakerRequest::Volume(volume) if volume <= 100 => {
+                ("hassmic-set-volume", serde_json::json!({"volume":volume}))
+            }
+            SpeakerRequest::OutputMute(mute) => ("hassmic-set-output-mute", serde_json::json!({"mute":mute})),
+            SpeakerRequest::Volume(_) => return Err(Error::InvalidOptions),
+        };
+        self.send_speaker(name, data).await.map_err(error)
     }
     async fn play_with_timeout(
         &self,
@@ -152,3 +171,6 @@ mod echo_link_recovery;
 
 #[cfg(test)]
 mod mute_tests;
+
+#[cfg(test)]
+mod remote_capture_tests;

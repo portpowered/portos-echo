@@ -389,13 +389,7 @@ async fn pipeline_end_and_unscoped_microphone_do_not_mix_runs() {
     use crate::wyoming_route::Router;
     use serde_json::json;
     let (tx, mut rx) = crate::wyoming_events::channel(8);
-    let mut router = Router {
-        generation: std::sync::Arc::new(()),
-        muted: false,
-        current: None,
-        events: tx,
-        capacity: 2,
-    };
+    let mut router = Router::new(tx, 2);
     let chunk = || wyoming_peer::frame("audio-chunk", json!({"rate":16000,"width":2,"channels":1}), vec![1]);
     router.route(chunk()).unwrap();
     assert!(rx.recv().await.unwrap().run.is_none());

@@ -194,6 +194,30 @@ stay the same.
 | 2026-11-20 | **The no-answer window never ends a reply that is being spoken, and a breath does not leave `speaking`.** On the Echo a story longer than 60 s was cut mid-sentence with `run.ended` `no_response` and "Live unavailable": the window ran from the user's end of speech to the reply's end. It now restarts at each reply frame written while the reply is voiced, so it covers the wait for an answer and any quiet inside one: a reply of any length plays out, a reply that stalls ends 60 s after its last sound, and a silent model still ends 60 s after the user stops. The `speaking` state also flipped to `connected` and back within 20 to 250 ms at short quiet stretches. A quiet shorter than 300 ms now stays `speaking`: the close is held 300 ms while the reply may still bring audio, and is not held once every frame of the reply has been written, so the end of a reply is as prompt as before. Mid-reply pauses of 300 ms or more leave `speaking` 300 ms later than before. Not done: after a barge-in the model sometimes speaks a very short extra reply. | Coordinator (from the lip-sync device findings) | `voice_source.rs` `wrote`; `voice_mouth.rs` `GAP_HOLD`, `settle`; `no_answer_cases.rs` |
 | 2026-11-20 | **Codex realtime is pinned to `rust-v0.171.0` (`ccf9be8c`).** (Superseded 2026-11-21: no release is pinned.) The bridge omits the realtime model and omits the voice for the default selection. On the bridge's WebRTC backend call route, Codex requests `gpt-live-1.1-codex` and uses `cove` when there is no configured voice preference. The V3 frameless parser still drops speech-start. The repin preserves the existing barge-in and `end_session` behavior. | Owner and binding mailbox answer A | `codex.pin`; plan section 3.3; ADRs 0026–0028 |
 
+### Port OS endpoint (2026-11-21)
+
+The owner's B answer authorizes one feature PR for additive endpoint wire types, Settings v2
+name and opt-in leaves, endpoint lifecycle, and synthetic witnesses. The A answer sets one final
+reply within 1 s for immediate outcomes and text starts. A pending mic start decides at 2 s and
+delivers its final reply by 2.5 s with a healthy uplink.
+
+The final owner decision uses one Port OS link and one rotating DPoP-bound refresh token.
+The grant owner serializes refreshes and mints separate access tokens for MCP and for REST
+and the gateway, with the auth-link claim in both after pairing. The route comes from a
+post-exchange resolver and is persisted independently of the installation UUID. Production
+activation requires the endpoint issuer and route resolver.
+
+Explicit end-session cancels delegation, stops speech and closes the mic run in every active
+state. Reply idle within 1 s and report the remote end. Automatic idle and no-answer timeouts
+retain their protections for active work. See [program plan, section 9](plan.md#9-port-os-dependencies).
+
+The coordinator's remote-mic answer authorizes a UUID in `hassmic-start-run.data.requestId`
+and the same optional field in `run-pipeline.data`. Only a live matching reservation accepts
+the response. An untagged pipeline is a local wake. Drop and trace unmatched or expired IDs.
+The operator base switch `portos_endpoint.remote_mic` defaults to false. When false,
+a no-text start returns `NOT_READY` within the immediate reply bound. Native peer support
+belongs to EXT-HASSMIC.
+
 ## Open
 
 | Question | Recommendation | Decides |

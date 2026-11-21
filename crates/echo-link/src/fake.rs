@@ -1,7 +1,7 @@
 //! In-memory link with bounded reply flow and explicit acknowledgment/failure injection.
 use crate::{
     CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
-    ReplySink, RunFailure, RunStats,
+    ReplySink, RunFailure, RunStats, SpeakerRequest, SpeakerState,
 };
 use std::{
     collections::VecDeque,
@@ -11,6 +11,8 @@ use std::{
     task::{Poll, Waker},
     time::Duration,
 };
+
+mod device_state;
 
 fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
     value.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -30,6 +32,7 @@ pub enum Command {
     FailRun(RunFailure),
     Pause,
     Thinking(bool),
+    Speaker(SpeakerRequest),
     Close,
 }
 #[derive(Default)]
@@ -41,6 +44,8 @@ struct State {
     events: VecDeque<LinkEvent<FakeRun>>,
     event_waker: Option<Waker>,
     play_waker: Option<Waker>,
+    speaker: SpeakerState,
+    speaker_waker: Option<Waker>,
     outcome: Option<Result<(), Error>>,
     end_failure: Option<Error>,
     cut: bool,
@@ -80,19 +85,6 @@ impl Observer {
             observer: self.clone(),
             mute_end: None,
         }));
-        if let Some(waker) = state.event_waker.take() {
-            waker.wake();
-        }
-    }
-    /// Set the device state sampled by the next connection.
-    pub fn muted_at_connect(&self, muted: bool) {
-        lock(&self.0).initial_mute = muted.then_some(());
-    }
-    /// Script an idle mute transition in event order.
-    pub fn mute(&self, muted: bool) {
-        let mut state = lock(&self.0);
-        state.initial_mute = muted.then_some(());
-        state.events.push_back(LinkEvent::Mute(muted));
         if let Some(waker) = state.event_waker.take() {
             waker.wake();
         }
@@ -457,6 +449,15 @@ impl EchoLink for FakeLink {
         std::future::ready({
             lock(&self.observer.0).commands.push(Command::Pause);
             Ok(())
+        })
+    }
+    async fn speaker_changed(&self, previous: SpeakerState) -> SpeakerState {
+        self.observer.speaker_changed(previous).await
+    }
+    fn request_speaker(&self, request: SpeakerRequest) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        std::future::poll_fn(move |_| {
+            lock(&self.observer.0).commands.push(Command::Speaker(request));
+            Poll::Ready(Ok(()))
         })
     }
     fn thinking(&self, on: bool) -> impl std::future::Future<Output = Result<(), Error>> + Send {

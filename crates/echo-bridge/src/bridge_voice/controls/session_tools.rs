@@ -47,6 +47,10 @@ impl Grants {
         self.ending
     }
 
+    pub fn request_end(&mut self) {
+        self.ending = true;
+    }
+
     /// The configured listen window after a reply.
     pub fn listen(&self) -> Option<Duration> {
         self.listen

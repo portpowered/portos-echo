@@ -129,11 +129,12 @@ where
                 tokio::select! {
                     biased;
                     () = cancelled.as_mut() => return Err(Error::Control),
+                    () = crate::bridge_endpoint::voice::ending() => return Err(Error::Control),
                     result = async {
                         if Instant::now() >= options.deadline { return Err(Error::Deadline); }
                         validate(&options.session)?;
                         if let Some(trace) = trace { call.trace_setup(trace)?; }
-                        call.start(&options.call, options.tools, options.deadline).await
+                        crate::bridge_endpoint::remote_start::open(&mut call, &options.call, options.tools, options.deadline).await
                     } => result?,
                 }
                 Ok(())
@@ -359,6 +360,11 @@ async fn drive<L: EchoLink>(
             |notice| project_reply(notice, &mut options.muted, observe),
         )
         .await?;
+        if crate::bridge_endpoint::voice::close_requested() {
+            // A remote end retires the interrupted call before the next wake
+            // can borrow it or dispatch work from the old turn.
+            options.idle = Duration::ZERO;
+        }
         completed = completed.checked_add(1).ok_or(Error::Unavailable)?;
         observe(SessionNotice::MicrophoneCompleted(stats.clone()))?;
         if options.listen_timeout.is_none() {
@@ -426,6 +432,7 @@ async fn wait<E: LinkEvents>(
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
             () = crate::bridge_settings::settings_restart::requested() => return Ok(None),
+            () = crate::bridge_endpoint::voice::start_waiting() => return Ok(None),
             () = expiry(expires) => return Ok(None),
             result = idle_step(events, call, muted, observe) => {
                 if let Some(run) = result? { return Ok(Some(run)); }
@@ -447,6 +454,9 @@ async fn idle_step<E: LinkEvents>(
         event = events.recv() => match event?.ok_or(Error::Wyoming)? {
             LinkEvent::Wake(run) if !*muted => return Ok(Some(run)),
             LinkEvent::Wake(_) | LinkEvent::Played | LinkEvent::Other => (),
+            LinkEvent::StaleRemoteCapture | LinkEvent::RemoteCapture { .. } => {
+                observe(SessionNotice::Run(Notice::Device(LinkEvent::StaleRemoteCapture)))?;
+            }
             LinkEvent::Mute(value) => {
                 *muted = value;
                 observe(SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))))?;

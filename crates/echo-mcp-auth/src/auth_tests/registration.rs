@@ -1,11 +1,18 @@
 use super::*;
 use serde_json::{Value, json};
 
-const REGISTER: &str = "/custom/register";
-const EPOCH: u64 = 1_800_000_000;
+pub(super) const REGISTER: &str = "/custom/register";
+pub(super) const EPOCH: u64 = 1_800_000_000;
 const LEGACY_CLI: &str = "port1/systems/zero/oauth-clients/command-line-interface";
 
-async fn automatic(mock: &Mock, directory: &std::path::Path, epoch: u64) -> Arc<AuthClient> {
+pub(super) async fn linked_dcr(mock: &Mock, directory: &std::path::Path) -> Arc<AuthClient> {
+    offer_registration(mock);
+    let mcp = automatic(mock, directory, EPOCH).await;
+    approve(mock, mcp.clone(), &directory.join("grant.json")).await;
+    mcp
+}
+
+pub(super) async fn automatic(mock: &Mock, directory: &std::path::Path, epoch: u64) -> Arc<AuthClient> {
     let explicit = options(mock, directory);
     let options = AuthOptions {
         resource_url: explicit.resource_url,

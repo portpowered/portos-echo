@@ -81,13 +81,8 @@ impl Events {
             }
             return Ok(Some(LinkEvent::Mute(muted)));
         }
-        if let Some(run) = event.run {
-            // A registered peer may wake before the next idle describe probe.
-            // Once admitted, its completion must not be filtered as pre-Info noise.
-            self.barrier = false;
-            self.current = Some(run.queue.clone());
-            self.capture = if self.muted { Capture::Ended } else { Capture::Open };
-            return Ok(Some(LinkEvent::Wake(run)));
+        if matches!(event.event, WyomingEvent::RunPipeline(_)) {
+            return Ok(Some(self.pipeline(event.run)));
         }
         if matches!(event.event, WyomingEvent::AudioChunk(_))
             && (self.capture == Capture::Ended || !event.capture_active)
@@ -105,6 +100,25 @@ impl Events {
         } else {
             LinkEvent::Other
         }))
+    }
+
+    fn pipeline(&mut self, run: Option<Run>) -> LinkEvent<Run> {
+        let Some(run) = run else {
+            return LinkEvent::StaleRemoteCapture;
+        };
+        // A registered peer may wake before the next idle describe probe.
+        // Once admitted, its completion must not be filtered as pre-Info noise.
+        self.barrier = false;
+        self.current = Some(run.queue.clone());
+        self.capture = if self.muted { Capture::Ended } else { Capture::Open };
+        if let Some(request_id) = run.pipeline().extra.get("requestId").and_then(|id| id.as_str()) {
+            LinkEvent::RemoteCapture {
+                request_id: request_id.to_owned(),
+                run,
+            }
+        } else {
+            LinkEvent::Wake(run)
+        }
     }
 }
 impl LinkEvents for Events {

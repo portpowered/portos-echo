@@ -2,11 +2,12 @@ use crate::wyoming_events;
 use crate::{ClientOptions, CutStats, Error, PlayOutcome, wyoming_route::Router, wyoming_wire};
 use echo_contracts::wyoming::{AudioChunkData, AudioFormat, WyomingEvent};
 use serde_json::Value;
+use std::sync::Weak;
 use tokio::{
     io::{AsyncRead, AsyncWrite, BufReader},
     sync::{mpsc, oneshot, watch},
     task::JoinHandle,
-    time::timeout,
+    time::{Instant, timeout},
 };
 
 type Reply<T> = oneshot::Sender<Result<T, Error>>;
@@ -20,6 +21,7 @@ mod wyoming_cut_tests;
 pub(crate) enum Command {
     Describe(Reply<WyomingEvent>),
     Register(Value, Reply<()>),
+    RemoteCapture(Weak<str>, Instant, Reply<()>),
     Play(AudioFormat, mpsc::Receiver<Vec<u8>>, Reply<PlayOutcome>),
     // Retain the legacy internal command exercised by the unchanged W1 tests.
     #[cfg(test)]
@@ -29,6 +31,7 @@ pub(crate) enum Command {
     Error(String, String, Reply<()>),
     Pause(Reply<()>),
     Thinking(bool, Reply<()>),
+    Speaker(&'static str, Value, Reply<()>),
     Close(Reply<()>),
 }
 
@@ -89,13 +92,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     }));
     let mut session = Session {
         writer,
-        router: Router {
-            generation: std::sync::Arc::new(()),
-            muted: false,
-            current: None,
-            events,
-            capacity: opts.mic_capacity,
-        },
+        router: Router::new(events, opts.mic_capacity),
         opts,
         describe: None,
         play: None,
@@ -198,13 +195,13 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             return Ok(());
         }
         match self.router.route(frame)? {
-            WyomingEvent::RunPipeline(_) => self.run_open = Some(()),
-            event @ WyomingEvent::Info(_) => {
+            (WyomingEvent::RunPipeline(_), true) => self.run_open = Some(()),
+            (event @ WyomingEvent::Info(_), _) => {
                 if let Some(reply) = self.describe.take() {
                     let _ = reply.send(Ok(event));
                 }
             }
-            WyomingEvent::Played(_) if self.play.as_ref().is_some_and(|p| p.stopped) => {
+            (WyomingEvent::Played(_), _) if self.play.as_ref().is_some_and(|p| p.stopped) => {
                 if let Some(play) = self.play.take() {
                     let outcome = if play.cut {
                         PlayOutcome::Cut
@@ -235,14 +232,8 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 }
                 let _ = reply.send(Ok(()));
             }
-            Some(Command::Play(format, frames, reply)) => {
-                if self.play.is_some() {
-                    let _ = reply.send(Err(Error::Busy));
-                } else {
-                    self.play = Some(Playback::new(format.clone(), frames, reply, &self.opts));
-                    self.send(WyomingEvent::AudioStart(format), vec![]).await?;
-                }
-            }
+            Some(Command::RemoteCapture(id, deadline, reply)) => self.remote_capture(id, deadline, reply).await?,
+            Some(Command::Play(format, frames, reply)) => self.start_playback(format, frames, reply).await?,
             #[cfg(test)]
             Some(Command::Cut(reply)) => {
                 self.cut().await?;
@@ -257,6 +248,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 let _ = reply.send(Ok(()));
             }
             Some(Command::Thinking(on, reply)) => self.thinking(on, reply).await?,
+            Some(Command::Speaker(name, data, reply)) => self.speaker(name, data, reply).await?,
             Some(Command::EndRun(reply)) => self.end_run(reply).await?,
             Some(Command::Error(code, text, reply)) => {
                 self.fail_run(code, text, reply).await?;
@@ -276,11 +268,43 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         Ok(())
     }
 
+    async fn start_playback(
+        &mut self,
+        format: AudioFormat,
+        frames: mpsc::Receiver<Vec<u8>>,
+        reply: Reply<PlayOutcome>,
+    ) -> Result<(), Error> {
+        if self.play.is_some() {
+            let _ = reply.send(Err(Error::Busy));
+            return Ok(());
+        }
+        self.play = Some(Playback::new(format.clone(), frames, reply, &self.opts));
+        self.send(WyomingEvent::AudioStart(format), vec![]).await
+    }
+
     async fn register(&mut self, data: Value) -> Result<(), Error> {
         self.send(WyomingEvent::RunSatellite(data.clone()), vec![]).await?;
         self.registration = data;
         self.registered = true;
         self.paused = false;
+        Ok(())
+    }
+
+    async fn remote_capture(&mut self, id: Weak<str>, deadline: Instant, reply: Reply<()>) -> Result<(), Error> {
+        if reply.is_closed() {
+            return Ok(());
+        }
+        let request_id = id.upgrade().filter(|_| Instant::now() < deadline);
+        if let Some(request_id) = request_id.filter(|_| self.registered && !self.paused && !self.router.muted) {
+            let data = serde_json::json!({"requestId": &*request_id});
+            drop(request_id);
+            self.send(WyomingEvent::Other("hassmic-start-run".into(), data), vec![])
+                .await?;
+            self.router.reserve_remote(id, deadline);
+            let _ = reply.send(Ok(()));
+        } else {
+            let _ = reply.send(Err(Error::Closed));
+        }
         Ok(())
     }
 
@@ -293,6 +317,14 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         Ok(())
     }
 
+    async fn speaker(&mut self, name: &'static str, data: Value, reply: Reply<()>) -> Result<(), Error> {
+        if !reply.is_closed() {
+            self.send(WyomingEvent::Other(name.into(), data), vec![]).await?;
+            let _ = reply.send(Ok(()));
+        }
+        Ok(())
+    }
+
     async fn pause_capture(&mut self) -> Result<(), Error> {
         if !self.paused {
             self.retire_playback().await?;
@@ -300,6 +332,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             self.send(WyomingEvent::PauseSatellite(Value::Null), vec![]).await?;
             self.paused = true;
             self.registered = false;
+            self.router.clear_remote();
             self.router.end(Ok(()));
         }
         Ok(())

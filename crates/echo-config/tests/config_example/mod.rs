@@ -17,6 +17,7 @@ fn committed_example_loads_with_all_expected_values() {
         clock: echo_config::ClockConfig::default(),
         voice: echo_config::VoiceConfig::default(),
         trace: echo_config::TraceConfig::default(),
+        portos_endpoint: echo_config::PortosEndpoint::default(),
         echo: EchoConfig {
             host: "echo.example.invalid".into(),
             wyoming_port: 16700,

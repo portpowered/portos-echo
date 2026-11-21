@@ -85,6 +85,11 @@ impl<E: LinkEvents> LinkEvents for Events<E> {
         result.map(|event| {
             event.map(|event| match event {
                 LinkEvent::Wake(run) => LinkEvent::Wake(Run(run, self.1.clone())),
+                LinkEvent::RemoteCapture { request_id, run } => LinkEvent::RemoteCapture {
+                    request_id,
+                    run: Run(run, self.1.clone()),
+                },
+                LinkEvent::StaleRemoteCapture => LinkEvent::StaleRemoteCapture,
                 LinkEvent::Played => LinkEvent::Played,
                 LinkEvent::Mute(value) => LinkEvent::Mute(value),
                 LinkEvent::MicrophoneDropped(count) => LinkEvent::MicrophoneDropped(count),

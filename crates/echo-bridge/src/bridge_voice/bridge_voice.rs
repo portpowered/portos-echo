@@ -3,6 +3,8 @@
 mod earcon;
 #[path = "controls/prompts/prompts.rs"]
 pub(crate) mod prompts;
+#[path = "recovery/remote_admission.rs"]
+mod remote_admission;
 #[path = "recovery/retained_link.rs"]
 mod retained_link;
 #[path = "controls/session_controller.rs"]
@@ -14,11 +16,13 @@ mod tool_ledger;
 #[path = "controls/tool_policy.rs"]
 mod tool_policy;
 mod voice_admission;
+#[cfg(test)]
+pub(crate) use voice_admission::endpoint_fixture;
 #[path = "controls/voice_config.rs"]
 mod voice_config;
-pub(crate) use voice_config::wake_time_context;
 #[cfg(test)]
 pub(crate) use voice_config::{TEST_WAKE_TIME, call_instructions};
+pub(crate) use voice_config::{endpoint_timestamp, wake_time_context};
 #[path = "controls/voice_entry.rs"]
 pub(crate) mod voice_entry;
 mod voice_host;
@@ -78,6 +82,9 @@ pub trait VoicePort {
     fn flush_session_answer(&mut self) -> impl Future<Output = Result<(), Error>> {
         std::future::ready(Ok(()))
     }
+    fn end_remote(&mut self) -> impl Future<Output = Result<(), Error>> {
+        self.flush_session_answer()
+    }
     /// # Errors
     /// The call must be active and the bounded media sender available.
     fn send(&self, frame: PcmFrame) -> Result<(), Error>;
@@ -101,7 +108,6 @@ pub trait VoicePort {
         0
     }
 }
-
 pub enum Notice {
     EarconPlayed(Duration),
     Device(LinkEvent<()>),
@@ -338,6 +344,7 @@ async fn drive<L: EchoLink>(
         tokio::select! {
             // Timeouts cannot be starved by a continuously ready peer.
             biased;
+            () = crate::bridge_endpoint::voice::ending() => return voice_listen::remote_cut(port, source),
             duration = earcon::completed() => observe(Notice::EarconPlayed(duration))?,
             () = voice_listen::until(deadline) => voice_wait::expired(source, on_timeout)?,
             () = voice_listen::until(barge) => source.interrupt(port)?,
@@ -393,7 +400,7 @@ async fn step<E: LinkEvents>(
             *pending = frame;
             Ok(())
         },
-        result = forward(sink, pending.as_deref()), if pending.is_some() => {
+        result = voice_listen::forward(sink, pending.as_deref()), if pending.is_some() => {
             result.inspect_err(|_| { source.failure = "reply_send"; })?;
             if let Some(frame) = pending.take() {
                 source.wrote(&frame);
@@ -405,15 +412,6 @@ async fn step<E: LinkEvents>(
             Ok(())
         },
     }
-}
-
-async fn forward(sink: Option<&impl ReplySink>, pending: Option<&[u8]>) -> Result<(), Error> {
-    let sink = sink.ok_or(Error::Wyoming)?;
-    let frame = pending.ok_or(Error::Audio)?;
-    earcon::preempt();
-    earcon::idle().await?;
-    // Retain the single frame across cancelled bounded sends.
-    sink.send(frame.to_vec()).await.map_err(Error::from)
 }
 
 fn device<R>(
@@ -448,6 +446,8 @@ fn device<R>(
         }
         LinkEvent::MicrophoneDropped(count) => LinkEvent::MicrophoneDropped(*count),
         LinkEvent::Other => LinkEvent::Other,
+        LinkEvent::StaleRemoteCapture | LinkEvent::RemoteCapture { .. } => LinkEvent::StaleRemoteCapture,
+        LinkEvent::Wake(_) if crate::bridge_endpoint::remote_start::remote() => return Ok(()),
         LinkEvent::Wake(_) => {
             source.failure = "unexpected_wake";
             return Err(Error::Wyoming);

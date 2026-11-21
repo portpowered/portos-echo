@@ -136,7 +136,7 @@ fn validate(record: &Record, options: &AuthOptions<LinkClient>, issuer: &str) ->
     Ok(())
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AuthError> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AuthError> {
     let parent = path.parent().ok_or(AuthError::Storage)?;
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|_| AuthError::Storage)?;
     // NamedTempFile starts with mode 0600. Replacement never opens/truncates the old file.
@@ -151,7 +151,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AuthError> {
 }
 
 #[cfg(unix)]
-fn restrict_directory(path: &Path) -> Result<(), AuthError> {
+pub(crate) fn restrict_directory(path: &Path) -> Result<(), AuthError> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|_| AuthError::Storage)
 }

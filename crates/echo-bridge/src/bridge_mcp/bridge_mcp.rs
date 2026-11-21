@@ -49,6 +49,10 @@ struct ScopeStatus {
 }
 
 impl Grant {
+    pub(crate) fn endpoint_grant(&self, api_base: &str) -> Result<echo_mcp_auth::EndpointGrant<'_>, AuthError> {
+        self.client.endpoint_grant(api_base)
+    }
+
     fn now(&self) -> u64 {
         self.epoch.saturating_add(self.started.elapsed().as_secs())
     }

@@ -380,18 +380,7 @@ pub(crate) fn wake_time_context(zone: Option<&str>) -> Result<String, Error> {
 }
 
 fn time_context(label: &str, now: std::time::SystemTime, zone: Option<&str>) -> Result<String, Error> {
-    let seconds = match now.duration_since(std::time::UNIX_EPOCH) {
-        Ok(value) => i64::try_from(value.as_secs()).map_err(|_| Error::Input)?,
-        Err(value) => {
-            let value = value.duration();
-            -i64::try_from(value.as_secs()).map_err(|_| Error::Input)? - i64::from(value.subsec_nanos() != 0)
-        }
-    };
-    if !(-62_167_219_200..=253_402_300_799).contains(&seconds) {
-        return Err(Error::Input);
-    }
-    let days = seconds.div_euclid(86_400);
-    let time = seconds.rem_euclid(86_400);
+    let (days, time) = utc_parts(now)?;
     let (year, month, day) = calendar(days);
     let weekday = match (days + 4).rem_euclid(7) {
         0 => "Sunday",
@@ -412,6 +401,31 @@ fn time_context(label: &str, now: std::time::SystemTime, zone: Option<&str>) -> 
         time / 60 % 60,
         time % 60
     ))
+}
+
+pub(crate) fn endpoint_timestamp(now: std::time::SystemTime) -> Result<String, Error> {
+    let (days, time) = utc_parts(now)?;
+    let (year, month, day) = calendar(days);
+    Ok(format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        time / 3600,
+        time / 60 % 60,
+        time % 60
+    ))
+}
+
+fn utc_parts(now: std::time::SystemTime) -> Result<(i64, i64), Error> {
+    let seconds = match now.duration_since(std::time::UNIX_EPOCH) {
+        Ok(value) => i64::try_from(value.as_secs()).map_err(|_| Error::Input)?,
+        Err(value) => {
+            let value = value.duration();
+            -i64::try_from(value.as_secs()).map_err(|_| Error::Input)? - i64::from(value.subsec_nanos() != 0)
+        }
+    };
+    if !(-62_167_219_200..=253_402_300_799).contains(&seconds) {
+        return Err(Error::Input);
+    }
+    Ok((seconds.div_euclid(86_400), seconds.rem_euclid(86_400)))
 }
 
 // March-based Gregorian eras: each 400-year era contains exactly 146097 days.

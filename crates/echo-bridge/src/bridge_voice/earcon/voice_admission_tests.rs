@@ -300,7 +300,7 @@ async fn wake_earcon_enabled_service_refuses_muted_killed_and_unconfirmed_traffi
                 }
                 Ok(())
             },
-            (None, None, true, None),
+            (None, None, true, None, None),
         )
         .await;
         assert_eq!(result, Err(Error::Control));
@@ -370,4 +370,65 @@ async fn wake_earcon_admission_peer_deadline_cuts_without_success_or_connected()
             .count(),
         1
     );
+}
+
+#[cfg(test)]
+pub(crate) async fn endpoint_fixture(
+    connector: impl echo_link::LinkConnector,
+    stream: tokio::io::DuplexStream,
+    cancelled: impl Future<Output = ()>,
+    (ready, stale): (&tokio::sync::Notify, &tokio::sync::Notify),
+    home: &std::path::Path,
+) -> Result<(), Error> {
+    use echo_link::LinkConnector as _;
+    let mut config = echo_config::BridgeConfig::from_toml_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/bridge.example.toml"
+    )))
+    .unwrap();
+    config.mcp.server.clear();
+    config.audit.log_dir = home.join("audit");
+    let screen = crate::bridge_runtime::bridge_screen::Screen::bind(None).await.unwrap();
+    let mut trace = crate::bridge_trace::Trace::open(&home.join("voice-trace"), "api_key").unwrap();
+    let health = crate::bridge_health::Health::offline();
+    let mut presentation_trace = trace.clone();
+    let mut view = super::super::voice_view::View::new(&screen, &health, &mut presentation_trace);
+    let mut tools = super::super::voice_tools::Tools::new(&config, std::sync::Arc::new(|| 0));
+    tools.open(&config, &screen, &mut trace, None).await.unwrap();
+    let (read, write) = tokio::io::split(stream);
+    let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
+    let retained = super::super::retained_link::Retained::new(connector);
+    let mut link = retained.connect().await.unwrap();
+    link.enable_capture(30).await.unwrap();
+    let remote = remote_admission::Options::retained(true);
+    let kill = home.join("voice-disabled");
+    let mut configured = options();
+    configured.kill_path = Some(&kill);
+    configured.session.listen_timeout = Some(Duration::from_secs(8));
+    let result = service(
+        &mut link,
+        &mut io,
+        configured,
+        async || Ok(MemoryPeer),
+        cancelled,
+        |notice| {
+            let signal = match &notice {
+                ServeNotice::Ready => Some(ready),
+                ServeNotice::Device(LinkEvent::StaleRemoteCapture | LinkEvent::Mute(_))
+                | ServeNotice::Session(SessionNotice::Run(Notice::Device(LinkEvent::Mute(_)))) => Some(stale),
+                _ => None,
+            };
+            view.observe(notice)?;
+            if let Some(signal) = signal {
+                signal.notify_one();
+            }
+            Ok(())
+        },
+        (Some(&mut tools), Some(trace), false, None, Some(remote)),
+    )
+    .await;
+    tools.close().await;
+    retained.close().await;
+    health.close().await;
+    result
 }

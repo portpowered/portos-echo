@@ -1,10 +1,19 @@
 import {
+    endpointConnecting,
+    endpointMessages,
     operateAccount,
     readSettingsProgress,
     restartWarning,
+    validEndpointName,
 } from "../api-v2";
-import type { SnapshotV2 } from "../api";
-import { element } from "../forms";
+import type { PatchV2, SnapshotV2 } from "../api";
+import {
+    actions as formActions,
+    element,
+    field,
+    type Save,
+    type Track,
+} from "../forms";
 import type { PortosOperationV2 } from "../model";
 import {
     accountButtons,
@@ -45,6 +54,10 @@ export function mountPortos(
     let status = initial.portos;
     let waiting = initial.restart_pending;
     let restartFailed = initial.warnings.includes(restartWarning);
+    let endpointMessage = initial.warnings.find((warning) =>
+        endpointMessages.has(warning),
+    );
+    let endpointRefresh = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let read: AbortController | undefined;
     const linkStatus = element("p");
@@ -54,6 +67,8 @@ export function mountPortos(
     );
     const operationStatus = element("p");
     operationStatus.setAttribute("aria-live", "polite");
+    const endpointStatus = element("p");
+    endpointStatus.setAttribute("aria-live", "polite");
     const granted = element("p");
     const challenge = accountChallenge();
     const buttons = accountButtons(parent, "Port OS", start);
@@ -64,6 +79,7 @@ export function mountPortos(
         operationStatus,
         challenge.instruction,
         challenge.code,
+        endpointStatus,
     );
     permissions.prepend(granted);
 
@@ -88,6 +104,9 @@ export function mountPortos(
                     : "Linking is available after the bridge restarts."
                 : "");
         operationStatus.hidden = operationStatus.textContent === "";
+        if (endpointStatus.textContent !== (endpointMessage ?? ""))
+            endpointStatus.textContent = endpointMessage ?? "";
+        endpointStatus.hidden = !endpointMessage;
         challenge.render(status.challenge);
         buttons.render(
             !!status.server &&
@@ -110,7 +129,13 @@ export function mountPortos(
 
     function monitor() {
         if (timer || read) return;
-        if (active() || (waiting && !restartFailed))
+        const pairing = endpointMessage === endpointConnecting;
+        if (
+            endpointRefresh ||
+            pairing ||
+            active() ||
+            (waiting && !restartFailed)
+        )
             timer = setTimeout(() => void poll(), 500);
     }
 
@@ -119,6 +144,7 @@ export function mountPortos(
         const controller = new AbortController();
         read = controller;
         const deadline = setTimeout(() => controller.abort(), 10000);
+        endpointRefresh = false;
         try {
             const result = await readSettingsProgress(
                 actions,
@@ -128,6 +154,9 @@ export function mountPortos(
             if (!result || controller.signal.aborted || read !== controller)
                 return;
             status = result.portos;
+            endpointMessage = result.warnings.find((warning) =>
+                endpointMessages.has(warning),
+            );
             restartFailed = result.warnings.includes(restartWarning);
             if (waiting && restartFailed) updateRestart(restartWarning);
             if (waiting && !result.restart_pending) {
@@ -190,14 +219,89 @@ export function mountPortos(
     monitor();
     return {
         stop,
-        settingsSaved(scopesChanged: boolean) {
+        settingsSaved(
+            restarting: boolean,
+            scopesChanged: boolean,
+            endpointChanged: boolean,
+        ) {
             stop();
-            waiting = true;
-            restartFailed = false;
+            if (restarting) {
+                waiting = true;
+                restartFailed = false;
+            }
+            endpointRefresh = endpointChanged;
             if (scopesChanged)
                 status = { ...status, link_waiting_for_restart: true };
             render();
             monitor();
         },
     };
+}
+
+export function portosEndpointForm(
+    status: Portos,
+    save: Save<PatchV2>,
+    track: Track,
+) {
+    if (
+        status.endpoint_name === undefined ||
+        status.endpoint_enabled === undefined
+    )
+        return;
+    let acceptedName = status.endpoint_name;
+    let acceptedEnabled = status.endpoint_enabled;
+    const form = element("form");
+    const name = element("input");
+    name.value = acceptedName;
+    const enabled = element("input");
+    enabled.type = "checkbox";
+    enabled.checked = acceptedEnabled;
+    const nameRow = field("Name in Port OS", name);
+    const error = element("p");
+    error.id = name.id + "-error";
+    error.setAttribute("aria-live", "polite");
+    name.setAttribute("aria-describedby", error.id);
+    form.append(
+        nameRow,
+        error,
+        field("Connect this Echo to Port OS", enabled),
+        formActions(element("button", "Save Port OS endpoint")),
+    );
+
+    async function submit() {
+        const endpointName = name.value;
+        const endpointEnabled = enabled.checked;
+        if (!validEndpointName(endpointName)) {
+            name.setAttribute("aria-invalid", "true");
+            error.textContent =
+                "Enter 1 to 64 characters without control characters.";
+            name.focus();
+            return false;
+        }
+        name.removeAttribute("aria-invalid");
+        error.textContent = "";
+        const patch: NonNullable<PatchV2["portos"]> = {};
+        if (endpointName !== acceptedName) patch.endpoint_name = endpointName;
+        if (endpointEnabled !== acceptedEnabled)
+            patch.endpoint_enabled = endpointEnabled;
+        const saved = await save(
+            Object.keys(patch).length ? { portos: patch } : {},
+        );
+        if (saved) {
+            acceptedName = endpointName;
+            acceptedEnabled = endpointEnabled;
+        }
+        return saved;
+    }
+
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        void submit();
+    });
+    track({
+        dirty: () =>
+            name.value !== acceptedName || enabled.checked !== acceptedEnabled,
+        save: submit,
+    });
+    return form;
 }

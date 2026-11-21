@@ -1,5 +1,5 @@
 //! The screen's sparse, non-secret overlay. Never rewrites the operator's base.
-use crate::{AgentTools, BridgeConfig, ConfigError, McpAuth, WebSearch, config_decode::Fields};
+use crate::{AgentTools, BridgeConfig, ConfigError, McpAuth, SettingsEndpoint, WebSearch, config_decode::Fields};
 #[path = "config_settings/settings_muse.rs"]
 mod settings_muse;
 pub use settings_muse::SettingsMuse;
@@ -19,6 +19,7 @@ pub struct SettingsOverlay {
     tool_cap: Option<u32>,
     options: SettingsOptions,
     muse: Option<SettingsMuse>,
+    endpoint: SettingsEndpoint,
 }
 
 /// Additional sparse leaves admitted by Settings V2.
@@ -73,6 +74,7 @@ impl SettingsOverlay {
             tool_cap,
             options: SettingsOptions::default(),
             muse: None,
+            endpoint: SettingsEndpoint::default(),
         }
     }
 
@@ -85,6 +87,12 @@ impl SettingsOverlay {
     #[must_use]
     pub fn with_muse(mut self, muse: Option<SettingsMuse>) -> Self {
         self.muse = muse;
+        self
+    }
+
+    #[must_use]
+    pub fn with_endpoint(mut self, endpoint: SettingsEndpoint) -> Self {
+        self.endpoint = endpoint;
         self
     }
 
@@ -161,7 +169,15 @@ impl SettingsOverlay {
             muse.finish()?;
             result.muse = Some(SettingsMuse::from_fields(enabled, url, ca_file, credential_file)?);
         }
+        if let Some(mut endpoint) = fields.section("portos_endpoint")? {
+            result.endpoint.enabled = endpoint.optional("enabled")?;
+            result.endpoint.device_name = endpoint.optional("device_name")?;
+            endpoint.finish()?;
+        }
         fields.finish()?;
+        if let Some(name) = &result.endpoint.device_name {
+            crate::config_endpoint::validate_name(name)?;
+        }
         if let Some(value) = result.daily_cap {
             i64::try_from(value).map_err(|_| ConfigError::new("agent.daily_request_cap", "must fit a TOML integer"))?;
         }
@@ -200,6 +216,7 @@ impl SettingsOverlay {
             return Err(ConfigError::new("agent.max_tool_calls", "must be within 1..=32"));
         }
         self.options.apply_to(&mut config)?;
+        self.endpoint.apply_to(&mut config.portos_endpoint);
         if let Some(muse) = &self.muse {
             config.muse = muse.resolve(base.home.as_ref().map(|home| home.dir.as_path()))?;
         }
@@ -219,6 +236,7 @@ impl SettingsOverlay {
             tool_cap: patch.tool_cap.or(self.tool_cap),
             options: self.options.merge(&patch.options),
             muse: patch.muse.clone().or_else(|| self.muse.clone()),
+            endpoint: self.endpoint.merge(&patch.endpoint),
         }
     }
 
@@ -258,6 +276,7 @@ impl SettingsOverlay {
                 .insert("max_tool_calls", value.into());
         }
         self.options.encode(&mut tables)?;
+        self.endpoint.encode(&mut tables);
         if let Some(muse) = &self.muse {
             tables.insert("muse", muse.encode());
         }

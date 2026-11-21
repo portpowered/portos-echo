@@ -6,13 +6,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
     sync::Notify,
     task::JoinHandle,
     time::Instant,
 };
 
+#[path = "mock_http/mod.rs"]
+mod http;
 #[path = "mock_proofs.rs"]
 #[cfg(test)]
 mod tests;
@@ -25,6 +27,14 @@ pub struct Request {
     pub form: BTreeMap<String, String>,
     pub json: Option<Value>,
     pub time: u64,
+    pub received: Instant,
+    pub message_body: Option<Arc<[u8]>>,
+    pub status: Option<u16>,
+}
+
+pub enum MessageFault {
+    Disconnect,
+    Status(u16),
 }
 
 #[derive(Default)]
@@ -45,9 +55,21 @@ pub struct State {
     pub jtis: BTreeSet<String>,
     pub lifetime: u64,
     pub fault: Option<(String, u16, Value)>,
+    pub message_faults: BTreeMap<String, VecDeque<MessageFault>>,
     pub metadata: Option<Value>,
     pub hold: Option<String>,
     pub held: bool,
+    mcp_access: u64,
+    pub endpoint: EndpointState,
+}
+
+#[derive(Default)]
+pub struct EndpointState {
+    access: Option<u64>,
+    enabled: bool,
+    exchanges: BTreeMap<String, Option<Value>>,
+    pub mcp_claimed: bool,
+    pub endpoint_claimed: bool,
 }
 
 pub struct Mock {
@@ -89,6 +111,15 @@ impl Mock {
             release,
             task,
         })
+    }
+
+    /// Allow the same synthetic refresh grant to mint a second audience.
+    /// # Errors
+    /// Reports an unavailable mock state.
+    pub fn enable_endpoint_audience(&self) -> std::io::Result<()> {
+        let mut state = self.state.lock().map_err(|_| invalid())?;
+        state.endpoint.enabled = true;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -166,49 +197,6 @@ fn invalid() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid mock request")
 }
 
-async fn read(stream: &mut TcpStream, start: Instant) -> std::io::Result<Request> {
-    let mut bytes = Vec::new();
-    let end = loop {
-        let mut byte = [0];
-        stream.read_exact(&mut byte).await?;
-        bytes.push(byte[0]);
-        if bytes.ends_with(b"\r\n\r\n") {
-            break bytes.len();
-        }
-        if bytes.len() >= 16384 {
-            return Err(invalid());
-        }
-    };
-    let text = String::from_utf8(bytes).map_err(|_| invalid())?;
-    let mut lines = text.split("\r\n");
-    let mut line = lines.next().ok_or_else(invalid)?.split_whitespace();
-    let method = line.next().ok_or_else(invalid)?.into();
-    let path = line.next().ok_or_else(invalid)?.into();
-    let headers: BTreeMap<String, String> = lines
-        .filter_map(|line| line.split_once(':'))
-        .map(|(k, v)| (k.to_lowercase(), v.trim().into()))
-        .collect();
-    let length = headers
-        .get("content-length")
-        .map_or(Ok(0), |v| v.parse::<usize>().map_err(|_| invalid()))?;
-    if length > 65536 {
-        return Err(invalid());
-    }
-    let mut body = vec![0; length];
-    stream.read_exact(&mut body).await?;
-    if end >= 16384 {
-        return Err(invalid());
-    }
-    Ok(Request {
-        method,
-        path,
-        headers,
-        form: url::form_urlencoded::parse(&body).into_owned().collect(),
-        json: serde_json::from_slice(&body).ok(),
-        time: start.elapsed().as_secs(),
-    })
-}
-
 async fn handle(
     mut stream: TcpStream,
     base: &str,
@@ -216,17 +204,20 @@ async fn handle(
     release: &Notify,
     start: Instant,
 ) -> std::io::Result<()> {
-    let request = read(&mut stream, start).await?;
+    let mut request = http::read(&mut stream, start).await?;
     let (status, body, hold) = {
         let mut state = shared.lock().map_err(|_| invalid())?;
-        state.requests.push(request.clone());
         let hold = state.hold.as_ref() == Some(&request.path);
         if hold {
             state.held = true;
         }
         let (status, body) = route(&request, base, &mut state);
+        let status = message_status(&mut state, &request, status);
+        request.status = status;
+        state.requests.push(request);
         (status, body, hold)
     };
+    let Some(status) = status else { return Ok(()) };
     if hold {
         release.notified().await;
     }
@@ -236,6 +227,23 @@ async fn handle(
         body.len()
     );
     stream.write_all(response.as_bytes()).await
+}
+
+fn message_status(state: &mut State, request: &Request, status: u16) -> Option<u16> {
+    if request.path != "/messages" || status != 202 {
+        return Some(status);
+    }
+    let fault = request
+        .json
+        .as_ref()
+        .and_then(|body| body["payload"]["requestId"].as_str())
+        .and_then(|id| state.message_faults.get_mut(id))
+        .and_then(VecDeque::pop_front);
+    match fault {
+        Some(MessageFault::Disconnect) => None,
+        Some(MessageFault::Status(status)) => Some(status),
+        None => Some(status),
+    }
 }
 
 fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
@@ -250,16 +258,7 @@ fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
             json!({"resource":format!("{base}/mcp"),"authorization_servers":[base]}),
         ),
         "/.well-known/oauth-authorization-server" => (200, state.metadata.clone().unwrap_or_else(|| metadata(base))),
-        "/custom/link" | "/custom/token" => {
-            if !verify(request, base, state) {
-                return fail("invalid_dpop_proof");
-            }
-            if request.path == "/custom/link" {
-                device(request, base, state)
-            } else {
-                token(request, state)
-            }
-        }
+        "/custom/link" | "/custom/token" => oauth(request, base, state),
         "/custom/end" => {
             if request.form.get("token") == Some(&format!("refresh-{}", state.generation)) {
                 state.revoked = true;
@@ -269,10 +268,64 @@ fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
         "/mcp" => {
             let allowed = !state.revoked
                 && state.bound
-                && request.headers.get("authorization") == Some(&format!("Bearer access-{}", state.generation));
+                && state.mcp_access != 0
+                && request.headers.get("authorization") == Some(&format!("Bearer access-{}", state.mcp_access));
             (if allowed { 200 } else { 401 }, json!({}))
         }
+        "/plugin-auth-code-exchanges" | "/messages" if state.endpoint.enabled => endpoint_api(request, state),
         _ => (404, json!({})),
+    }
+}
+
+fn endpoint_api(request: &Request, state: &mut State) -> (u16, Value) {
+    let Some(access) = state.endpoint.access else {
+        return (401, json!({}));
+    };
+    if state.revoked
+        || request.headers.get("authorization") != Some(&format!("Bearer endpoint-access-{access}"))
+        || request.headers.contains_key("dpop")
+    {
+        return (401, json!({}));
+    }
+    if request.path == "/messages" {
+        return if state.endpoint.endpoint_claimed {
+            (202, json!({"receiptId":"synthetic-receipt"}))
+        } else {
+            (401, json!({}))
+        };
+    }
+    let auth_link_id = "loopback link/%";
+    let is_rename = request
+        .json
+        .as_ref()
+        .and_then(|value| value.get("authLinkId"))
+        .and_then(Value::as_str)
+        == Some(auth_link_id);
+    let Some(key) = request.headers.get("idempotency-key") else {
+        return (400, json!({}));
+    };
+    if let Some(prior) = state.endpoint.exchanges.get(key) {
+        if prior != &request.json {
+            return (409, json!({}));
+        }
+    } else if !state.endpoint.exchanges.is_empty() && !is_rename {
+        return (409, json!({}));
+    }
+    state.endpoint.exchanges.insert(key.clone(), request.json.clone());
+    (
+        201,
+        json!({"authLinkId": auth_link_id,"id":"synthetic-install","etag":"synthetic-etag","status":"SUCCEEDED"}),
+    )
+}
+
+fn oauth(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
+    if !verify(request, base, state) {
+        return fail("invalid_dpop_proof");
+    }
+    if request.path == "/custom/link" {
+        device(request, base, state)
+    } else {
+        token(request, base, state)
     }
 }
 
@@ -307,11 +360,16 @@ fn device(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
     )
 }
 
-fn token(request: &Request, state: &mut State) -> (u16, Value) {
+fn token(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
     if state.revoked {
         return fail("invalid_grant");
     }
-    if request.form.get("grant_type").is_some_and(|g| g == "refresh_token") {
+    let refresh = request.form.get("grant_type").is_some_and(|g| g == "refresh_token");
+    let endpoint = refresh && state.endpoint.enabled && request.form.get("resource").is_some_and(|r| r == base);
+    if refresh {
+        if state.endpoint.enabled && !endpoint && request.form.get("resource") != Some(&format!("{base}/mcp")) {
+            return fail("invalid_target");
+        }
         if request.form.get("refresh_token") != Some(&format!("refresh-{}", state.generation)) {
             state.revoked = true;
             return fail("invalid_grant");
@@ -320,9 +378,19 @@ fn token(request: &Request, state: &mut State) -> (u16, Value) {
         return fail(&error);
     }
     state.generation += 1;
+    let installed = !state.endpoint.exchanges.is_empty();
+    let audience = if endpoint {
+        state.endpoint.access = Some(state.generation);
+        state.endpoint.endpoint_claimed = installed;
+        "endpoint-"
+    } else {
+        state.mcp_access = state.generation;
+        state.endpoint.mcp_claimed = installed;
+        ""
+    };
     (
         200,
-        json!({"access_token":format!("access-{}",state.generation),"refresh_token":format!("refresh-{}",state.generation),
+        json!({"access_token":format!("{audience}access-{}",state.generation),"refresh_token":format!("refresh-{}",state.generation),
         "token_type":"Bearer","expires_in":state.lifetime,"scope":"endpoint:read"}),
     )
 }

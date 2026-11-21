@@ -1,5 +1,6 @@
 //! A scoped, bounded speaker owner, independent of reply audio and mouth state.
 mod capture;
+pub(super) use capture::Capture as BufferedCapture;
 #[cfg(test)]
 mod discovery_tests;
 #[cfg(test)]
@@ -76,6 +77,12 @@ fn current() -> Option<Context> {
 
 pub(super) fn active() -> bool {
     current().is_some_and(|context| context.state().phase == Phase::Active)
+}
+
+pub(super) fn reset_capture() {
+    if let Some(context) = current() {
+        context.state().capture = capture::Capture::default();
+    }
 }
 
 pub(super) fn start() -> Result<(), Error> {
@@ -167,6 +174,8 @@ pub(super) async fn negotiating<E: LinkEvents, T>(
                     LinkEvent::Mute(value) => LinkEvent::Mute(value),
                     LinkEvent::MicrophoneDropped(count) => LinkEvent::MicrophoneDropped(count),
                     LinkEvent::Other => LinkEvent::Other,
+                    LinkEvent::StaleRemoteCapture | LinkEvent::RemoteCapture { .. } => LinkEvent::StaleRemoteCapture,
+                    LinkEvent::Wake(_) if crate::bridge_endpoint::remote_start::remote() => continue,
                     LinkEvent::Wake(_) | LinkEvent::Played => return Err(Error::Wyoming),
                 };
                 let muted = matches!(event, LinkEvent::Mute(true));

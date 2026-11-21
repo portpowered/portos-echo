@@ -426,7 +426,10 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
                             termination.observe(&notice);
                             view.observe(notice)
                         };
-                        let context = (tools.as_mut(), Some(setup_trace), earcon, Some(&termination));
+                        let remote = super::remote_admission::Options::retained(
+                            options.delegation.is_some_and(|config| config.portos_endpoint.remote_mic),
+                        );
+                        let context = (tools.as_mut(), Some(setup_trace), earcon, Some(&termination), Some(remote));
                         super::voice_admission::service(client, io, voice, peer, stopped(stopping), observe, context).await
                     }
                     Err(error) => Err(error),
@@ -461,7 +464,11 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
     }
 
     fn device(&mut self, event: echo_link::LinkEvent<()>) {
-        let _ = self.view.observe(super::ServeNotice::Device(event));
+        let notice = super::ServeNotice::Device(event);
+        if let Some(endpoint) = crate::bridge_endpoint::voice::Voice::current() {
+            let _ = endpoint.observe(&notice);
+        }
+        let _ = self.view.observe(notice);
     }
 }
 

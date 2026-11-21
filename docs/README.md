@@ -100,6 +100,7 @@ Add each new tracked documentation page to this index in the same change.
 - [Frame-based Codex media peer](adr/0027-echo-media.md)
 - [Screen-pack archive decoding](adr/0029-screen-pack-archives.md)
 - [Vendored Port OS design tokens](adr/0031-portos-tokens.md)
+- [Port OS endpoint WebSocket transport](adr/0032-portos-endpoint-websocket.md)
 
 ## Linux hosts
 
