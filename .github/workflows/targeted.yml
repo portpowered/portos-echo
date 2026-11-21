@@ -1,164 +1,109 @@
 name: Targeted
 on:
   workflow_dispatch:
-    inputs:
-      nextest_filter:
-        description: Optional nextest -E expression
-        type: string
-        required: false
-        default: ''
-      scenarios:
-        description: Optional space-separated scenario stems or .yaml filenames
-        type: string
-        required: false
-        default: ''
-      repeat:
-        description: Number of executions, integer 1-10
-        type: number
-        required: false
-        default: 1
-      ignored:
-        description: Include ignored tests in the filter selection
-        type: boolean
-        required: false
-        default: true
-      release_bundle:
-        description: Build and verify the distributable release bundle
-        type: boolean
-        required: false
-        default: false
 permissions:
   contents: read
 jobs:
-  targeted:
-    if: ${{ !inputs.release_bundle || inputs.nextest_filter != '' || inputs.scenarios != '' }}
+  config:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: test-sim
-          sim: 'true'
-      - name: Execute requested selections
-        id: selections
-        shell: sh
-        env:
-          TARGETED_FILTER: ${{ inputs.nextest_filter }}
-          TARGETED_SCENARIOS: ${{ inputs.scenarios }}
-          TARGETED_REPEAT: ${{ inputs.repeat }}
-          TARGETED_IGNORED: ${{ inputs.ignored }}
+      - name: Observe supported configuration against the verified 0.171.0 asset
         run: |
-          python - <<'PY'
+          pin=$(sh scripts/codex-app-server.sh)
+          export WITNESS_PIN="$pin"
+          export PYTHONPATH="crates/echo-lab/src/lab_run/sim/session/catalog_measurement:crates/echo-bridge/tests/pinned_media"
+          curl --fail --silent --show-error --location https://raw.githubusercontent.com/openai/codex/ccf9be8cc458bd6b8336fe84d68d8893f2691a5e/codex-rs/models-manager/models.json -o "$RUNNER_TEMP/models.json"
+          python3 - <<'PY'
+          from copy import deepcopy
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+          import json
           import os
-          import re
-          import subprocess
-          import tempfile
           from pathlib import Path
-          selection = os.environ["TARGETED_FILTER"].strip()
-          names = os.environ["TARGETED_SCENARIOS"].split()
-          count = os.environ["TARGETED_REPEAT"]
-          ignored = os.environ["TARGETED_IGNORED"]
-          if not re.fullmatch(r"(?:[1-9]|10)", count) or ignored not in ("true", "false"):
-              raise SystemExit("targeted: repeat must be 1-10 and ignored must be boolean")
-          if not selection and not names:
-              raise SystemExit("targeted: provide nextest_filter or scenarios")
-          paths = []
-          for name in names:
-              if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\.yaml)?", name):
-                  raise SystemExit("targeted: use scenario names within tests/scenarios")
-              path = Path("tests/scenarios") / (name if name.endswith(".yaml") else name + ".yaml")
-              if not path.is_file() or path.resolve().parent != Path("tests/scenarios").resolve():
-                  raise SystemExit("targeted: missing or unsafe scenario")
-              paths.append(path)
-          subprocess.run(["cargo", "build", "--locked", "-p", "echo-lab", "-p", "echo-bridge",
-                          "-p", "echo-muse-bridge", "--bins"], check=True)
-          report_root = Path(tempfile.mkdtemp(prefix="targeted-reports-", dir=os.environ["RUNNER_TEMP"])).resolve()
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              print(f"report_root={report_root}", file=output)
-          failed = False
-          for number in range(1, int(count) + 1):
-              code = 0
-              if selection:
-                  command = ["cargo", "nextest", "run", "--locked", "--workspace", "--all-targets",
-                             "--config-file", ".github/nextest.toml", "--profile", "ci",
-                             "--no-tests", "fail", "-E", selection]
-                  if ignored == "true":
-                      command += ["--run-ignored", "all"]
-                  code = subprocess.run(command).returncode
-              for index, path in enumerate(paths):
-                  parent = report_root / ("repeat-" + str(number))
-                  parent.mkdir(parents=True, exist_ok=True)
-                  destination = parent / (str(index) + "-" + path.stem)
-                  result = subprocess.run(["target/debug/echo-lab", "run", str(path),
-                                           "--driver", "sim", "--out", str(destination)]).returncode
-                  if result and not code:
-                      code = result
-              print(f"TARGETED_RESULT repeat={number} exit={code}", flush=True)
-              failed = failed or code != 0
-          raise SystemExit(1 if failed else 0)
+          from queue import Queue
+          import tempfile
+          from threading import Thread
+
+          from replay import app_settings, pin, thread_settings
+          from tools_provider import Delegation
+
+          bodies = Queue()
+
+          class Observer(BaseHTTPRequestHandler):
+              def do_POST(self):
+                  body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                  if self.path == '/v1/responses':
+                      bodies.put(body)
+                      self.send_error(400)
+                  else:
+                      self.send_error(403)
+
+              def log_message(self, *args):
+                  pass
+
+          tools = [{'name': 'end_session', 'description': 'End the fixture session.',
+                    'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}}]
+          expected = [{'type': 'function', 'name': t['name'], 'description': t['description'],
+                       'parameters': t['inputSchema'], 'strict': False} for t in tools]
+          model = 'gpt-6.1-sol'
+          with ThreadingHTTPServer(('127.0.0.1', 0), Observer) as peer:
+              task = Thread(target=peer.serve_forever, daemon=True)
+              task.start()
+              origin = f'http://127.0.0.1:{peer.server_port}'
+
+              def observe(name, cli=(), file='', override=None, metadata=None, write=False):
+                  with tempfile.TemporaryDirectory() as temp:
+                      home = Path(temp)
+                      (home / 'config.toml').write_text(file)
+                      args = app_settings(origin) + list(cli)
+                      if metadata is not None:
+                          catalog = json.loads((Path(os.environ['RUNNER_TEMP']) / 'models.json').read_text())
+                          for entry in catalog['models']:
+                              if entry['slug'] == model:
+                                  entry.update(metadata)
+                          (home / 'models.json').write_text(json.dumps(catalog))
+                          args.append(f'model_catalog_json="{home}/models.json"')
+                      with pin(Path(os.environ['WITNESS_PIN']), args, home, origin) as rpc:
+                          rpc.request('initialize', {'clientInfo': {'name': 'echo-lab', 'version': '0.1.0'},
+                                                     'capabilities': {'experimentalApi': True}})
+                          rpc.send({'method': 'initialized'})
+                          if write:
+                              rpc.request('config/value/write', {'keyPath': 'tools.experimental_request_user_input.enabled',
+                                                                 'value': True, 'mergeStrategy': 'replace'})
+                          params = thread_settings(tools, 'flat', model, home)
+                          params['config']['features.view_image'] = False
+                          for key, val in (override or {}).items():
+                              if val is None:
+                                  params['config'].pop(key)
+                              else:
+                                  params['config'][key] = val
+                          thread = rpc.request('thread/start', params)['thread']['id']
+                          rpc.request('turn/start', {'threadId': thread, 'input': [{'type':'text', 'text':'Fixture only'}]})
+                          body = bodies.get(timeout=8)
+                          print(f'VARIANT {name}', flush=True)
+                          try:
+                              Delegation(tools, False, model=model, web_search='disabled').check_tools(body, expected)
+                          except AssertionError as error:
+                              print(f'CATALOG_REFUSED {name} {error}', flush=True)
+                          else:
+                              print(f'CATALOG_MATCH {name}', flush=True)
+
+              input_key = 'tools.experimental_request_user_input.enabled'
+              observe('bridge-current')
+              observe('home-async', file='[tools.experimental_request_user_input]\nenabled = true\n', override={input_key: None})
+              observe('cli-async', cli=[f'{input_key}=true'], override={input_key: None})
+              observe('config-write-async', write=True, override={input_key: None})
+              observe('thread-async', override={input_key: True, 'features.default_mode_request_user_input': False})
+              observe('deprecated-patch-feature', override={'features.apply_patch_freeform': False})
+              observe('namespace-exclude', override={'features.code_mode.excluded_tool_namespaces': ['functions']})
+              observe('namespace-reroute', override={'features.code_mode.direct_only_tool_namespaces': ['web']})
+              observe('feature-code-mode-off', override={'features.code_mode': False, 'features.code_mode_only': False})
+              observe('catalog-no-patch', override={input_key: True}, metadata={'apply_patch_tool_type': None})
+              observe('catalog-code-mode', override={input_key: True}, metadata={'apply_patch_tool_type': None, 'tool_mode': 'code_mode'})
+              observe('catalog-code-mode-fail-closed', override={input_key: True, 'code_mode_host.disable_in_process_fallback': True},
+                      metadata={'apply_patch_tool_type': None, 'tool_mode': 'code_mode'})
+              peer.shutdown()
           PY
-      - name: Upload echo-lab reports
-        if: always() && steps.selections.outputs.report_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-reports-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.selections.outputs.report_root }}
-          if-no-files-found: ignore
-          retention-days: 3
-  release-bundle:
-    if: ${{ inputs.release_bundle }}
-    runs-on: ubuntu-24.04
-    # Existing standalone Codex job allows 180 minutes for a cold build.
-    timeout-minutes: 240
-    env:
-      CARGO_BUILD_JOBS: '4'
-      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Focused wrapper and packaging tests
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          python3 tests/test_release_kit.py
-          python3 tests/test_release_redirects.py
-      - uses: ./.github/actions/setup
-        with:
-          target: build-echo
-      - name: Provision release tools
-        shell: sh
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3 gcc-mingw-w64-x86-64-posix
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "platforms;android-34" "build-tools;35.0.0"
-          rustup target add --toolchain 1.100.0 armv7-linux-androideabi x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: Cheap release checks
-        run: |
-          actionlint .github/workflows/release.yml .github/workflows/targeted.yml
-          python3 tests/test_release_kit.py --configure-native
-      - name: Build and verify release bundle
-        run: |
-          make dist
-          python3 tests/test_release_kit.py --assets dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-release-${{ github.sha }}
-          path: |
-            dist/echo-*-armv7.tar.gz
-            dist/default-*.screenpack.tar.gz
-            dist/companion-0.2.1.screenpack.tar.gz
-            dist/echo-setup-*-linux-x86_64
-            dist/echo-setup-*-windows-x86_64.exe
-            dist/install.sh
-            dist/install.ps1
-            dist/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 7
