@@ -114,6 +114,15 @@ async function packPage(t, pack = manifest, vp9 = true) {
                             return this.dataset.src;
                         },
                     });
+                    // A pack stylesheet is never fetched from the network.
+                    Object.defineProperty(HTMLLinkElement.prototype, "href", {
+                        set(value) {
+                            this.dataset.href = value;
+                        },
+                        get() {
+                            return this.dataset.href;
+                        },
+                    });
                     HTMLImageElement.prototype.decode = () =>
                         window.pauseDecode
                             ? new Promise((resolve) => {
@@ -406,6 +415,52 @@ test("pack page: MP4 capability fallback, idle/rest, character-only, and reduced
     assert.equal(
         await page.locator("video:not([hidden]):not([data-leaving])").count(),
         0,
+    );
+});
+
+test("pack page: the stylesheet link and clock stay in place across state changes", async (t) => {
+    const page = await packPage(t, {
+        ...manifest,
+        layout: { ...layout, css: "style.css" },
+    });
+    await page.locator(".screen-pack").waitFor();
+    await send(page, 1, { state: "ready", message: "Ready" });
+    await page.evaluate(() => {
+        // Moving a stylesheet link loads it again, so count every time a
+        // persistent node leaves or enters the presentation.
+        const host = document.querySelector(".screen-pack");
+        window.packNodes = [
+            host.querySelector(':scope > link[rel="stylesheet"]'),
+            host.querySelector(":scope > .pack-clock"),
+            host.querySelector(":scope > .pack-stage"),
+        ];
+        window.packMoves = 0;
+        new MutationObserver((records) => {
+            for (const record of records)
+                for (const node of [
+                    ...record.addedNodes,
+                    ...record.removedNodes,
+                ])
+                    if (window.packNodes.includes(node)) window.packMoves++;
+        }).observe(host, { childList: true });
+    });
+    await send(page, 2, { state: "listening" });
+    await send(page, 3, { state: "speaking" });
+    await send(page, 4, { state: "ready", message: "Ready" });
+    assert.deepEqual(
+        await page.evaluate(() => {
+            const host = document.querySelector(".screen-pack");
+            return {
+                same:
+                    window.packNodes.length === 3 &&
+                    window.packNodes.every(
+                        (node) => node && node.parentNode === host,
+                    ),
+                links: host.querySelectorAll("link").length,
+                moves: window.packMoves,
+            };
+        }),
+        { same: true, links: 1, moves: 0 },
     );
 });
 
