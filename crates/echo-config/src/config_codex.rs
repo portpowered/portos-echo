@@ -266,14 +266,14 @@ mod tests {
     use super::*;
 
     const EXAMPLE: &str = include_str!("../../../examples/bridge.example.toml");
-    // The shipped default prompt files; voice.md adds the web-search note.
+    // The shipped default prompt files extend the built-in texts with later notes.
     const VOICE: &str = include_str!("../../../examples/prompts/voice.md");
     const RUNNER: &str = include_str!("../../../examples/prompts/runner.md");
 
     #[test]
     fn agent_home_builtin_prompts_match_the_admitted_text() {
         assert_eq!(VOICE.split("\n\nWhen current facts").next(), Some(LIVE_INSTRUCTIONS));
-        assert_eq!(RUNNER.trim_end(), RUNNER_INSTRUCTIONS);
+        assert!(RUNNER.starts_with(&format!("{RUNNER_INSTRUCTIONS}\n\n")));
         // The goodbye guidance is the bridge's own, never part of a base prompt.
         for base in [LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS] {
             assert!(!base.contains("end_session") && !base.contains("farewell"));
