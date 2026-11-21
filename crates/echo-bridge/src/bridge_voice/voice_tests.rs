@@ -215,7 +215,7 @@ async fn voice_short_or_empty_reply_waits_for_played_without_early_mouth_open() 
         let expected = if count == 0 {
             vec![]
         } else {
-            vec![(Duration::from_millis(200), true), (Duration::from_millis(220), false)]
+            vec![(Duration::from_millis(80), true), (Duration::from_millis(100), false)]
         };
         assert_eq!(*transitions.borrow(), expected);
     }

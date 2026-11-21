@@ -1,6 +1,6 @@
 //! T1: lip sync from the production hand-off (`Mouth::wrote`) on a paused
 //! clock. The screen is a recording sink: taking, stalled, busy or absent.
-use super::{LipSink, LipStats, Lips, scope, settle};
+use super::{LipSink, LipStats, Lips, cut, scope, settle};
 use crate::{bridge_runtime::bridge_pacing::LeadPacer, bridge_voice::voice_source::Mouth};
 use echo_audio::FrameQueue;
 use echo_screen_contract::mouth::MouthBatch;
@@ -152,6 +152,44 @@ async fn samples_already_heard_when_the_reply_settles_are_dropped_not_sent_late(
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_cut_drops_what_is_pending_and_shuts_the_mouth_now() {
+    let (lips, sent) = lips(Some(true), true, 200);
+    let stats = scope(Some(lips), async {
+        advance(Duration::from_secs(1)).await;
+        let mut mouth = Mouth::default();
+        // Five samples leave; two more are pending when the reply is cut.
+        speak(&mut mouth, &[8000; 7]).await;
+        cut(Instant::now());
+        settle(Instant::now())
+    })
+    .await;
+    let timeline = timeline(&sent);
+    assert_eq!(timeline.len(), 2);
+    assert_eq!(timeline[0].1.len(), 5);
+    // The shut sample is due at the cut, before samples the page still holds.
+    assert_eq!(timeline[1], (1140, vec![(1140, 0)]));
+    assert_eq!((stats.batches, stats.samples, stats.late), (2, 6, 0));
+}
+
+#[tokio::test(start_paused = true)]
+async fn samples_left_by_a_window_that_never_settled_do_not_leave_with_the_next_reply() {
+    let (lips, sent) = lips(Some(true), true, 200);
+    scope(Some(lips), async {
+        let mut mouth = Mouth::default();
+        // Two samples stay pending: the reply ends without a settle.
+        speak(&mut mouth, &[8000; 2]).await;
+        advance(Duration::from_secs(60)).await;
+        let mut mouth = Mouth::default();
+        speak(&mut mouth, &[8000; 5]).await;
+        settle(Instant::now())
+    })
+    .await;
+    let timeline = timeline(&sent);
+    assert_eq!(timeline.len(), 1);
+    assert!(timeline[0].1.iter().all(|(due, _)| *due >= 60_000), "{timeline:?}");
+}
+
+#[tokio::test(start_paused = true)]
 async fn nothing_is_analysed_or_sent_for_a_screen_that_did_not_ask() {
     for wanted in [Some(false), None] {
         let (lips, sent) = lips(wanted, true, 200);
@@ -200,8 +238,8 @@ async fn handed(lips: Option<Lips>) -> (Vec<Duration>, Option<Duration>, LipStat
 async fn audio_hand_off_timing_is_the_same_with_the_screen_taking_stalled_busy_or_absent() {
     let (alone, end, none) = handed(None).await;
     // The last audible frame is the 55th: it starts 1080 ms into the Echo's
-    // queue and is heard 200 ms later, for 20 ms.
-    assert_eq!(end, Some(Duration::from_millis(1300)));
+    // queue and is heard 80 ms later, for 20 ms.
+    assert_eq!(end, Some(Duration::from_millis(1180)));
     // Ten frames of opening credit, then one every 20 ms.
     assert_eq!(alone.len(), 60);
     assert_eq!(alone[9], Duration::ZERO);

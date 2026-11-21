@@ -215,7 +215,7 @@ mouth_delay_ms={value}"
             ),
         )
     };
-    assert_eq!(BridgeConfig::from_toml_str(MINIMAL).unwrap().screen.mouth_delay_ms, 200);
+    assert_eq!(BridgeConfig::from_toml_str(MINIMAL).unwrap().screen.mouth_delay_ms, 40);
     for value in [0, 120, 1000] {
         let config = BridgeConfig::from_toml_str(&with(&value.to_string())).unwrap();
         assert_eq!(config.screen.mouth_delay_ms, value);

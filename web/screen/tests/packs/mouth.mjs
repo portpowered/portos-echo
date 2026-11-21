@@ -224,6 +224,29 @@ test("pack mouth: samples move the mouth only while the pack is speaking", () =>
     assert.equal(shown.length, 8);
 });
 
+test("pack mouth: a cut reply shuts the mouth at once and its queued samples never show", () => {
+    const { lips, shown, advance } = harness();
+    lips.state("speaking");
+    // Sent at 1000 for 1100 to 1180; the reply is cut at 1130.
+    lips.receive(
+        batch(1000, [
+            [1100, 60],
+            [1120, 60],
+            [1140, 60],
+            [1160, 20],
+            [1180, 60],
+        ]),
+    );
+    advance(130);
+    assert.deepEqual(shown, [[1100, "open"]]);
+    lips.receive(batch(1130, [[1130, 0]]));
+    advance(500);
+    assert.deepEqual(shown, [
+        [1100, "open"],
+        [1130, "closed"],
+    ]);
+});
+
 test("pack mouth: a restarted sender clock is learnt again", () => {
     const { lips, shown, advance } = harness();
     lips.state("speaking");

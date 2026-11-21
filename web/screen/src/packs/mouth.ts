@@ -87,11 +87,17 @@ export class Lips {
         if (jumped) this.queue = [];
         if (this.offset === undefined || jumped || transit < this.offset)
             this.offset = transit;
-        for (const sample of batch.samples)
-            this.queue.push({
-                due: Number(sample.at_ms) + this.offset,
-                sample,
-            });
+        for (const sample of batch.samples) {
+            const due = Number(sample.at_ms) + this.offset;
+            // A sample due before ones already held replaces them: the
+            // reply was cut, and their sound will never be heard.
+            while (
+                this.queue.length &&
+                this.queue[this.queue.length - 1]!.due >= due
+            )
+                this.queue.pop();
+            this.queue.push({ due, sample });
+        }
         this.queue.splice(0, this.queue.length - QUEUE_MAX);
         this.arm();
     }

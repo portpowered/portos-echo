@@ -268,6 +268,7 @@ impl Source {
         self.fresh_reply()?;
         self.delegation = Delegation::default();
         self.mouth = Mouth::default();
+        crate::bridge_runtime::bridge_pacing::reply_lips::cut(Instant::now());
         self.controller.cut();
         Ok(())
     }

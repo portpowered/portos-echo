@@ -10,8 +10,9 @@ pub struct ScreenPackDownload {
     pub sha256: String,
 }
 
-/// The Echo's measured output delay: 0.07 to 0.24 s, typically 0.22 s.
-const MOUTH_DELAY_MS: u16 = 200;
+/// Measured on the real Echo: sound is heard 60 to 80 ms after a frame's place
+/// in the queue, and the page draws a still about 35 ms after it is due.
+const MOUTH_DELAY_MS: u16 = 40;
 const MOUTH_DELAY_MAX_MS: u16 = 1000;
 
 pub(super) fn decode(value: Value<'_>) -> Result<ScreenConfig, ConfigError> {
