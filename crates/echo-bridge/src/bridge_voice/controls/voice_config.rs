@@ -342,7 +342,7 @@ impl Configured {
 /// so a prompt file that predates a tool cannot leave that tool unused. The
 /// voice's guidance leads its prompt: placed after a base prompt that says to
 /// avoid hand-offs, the Live model on the Echo answered every goodbye with a
-/// farewell and never handed it off, so end_session was never called.
+/// farewell and never handed it off, so `end_session` was never called.
 pub(super) fn session_guidance((runner, voice): (String, String), advertised: bool) -> (String, String) {
     if !advertised {
         return (runner, voice);
