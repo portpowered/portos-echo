@@ -82,9 +82,11 @@ class Script:
             # transcript, never a request the voice model wrote.
             request = steps[0]['request']
             instructions, delegated = body.get('instructions', ''), json.dumps(body['input'])
-            if native:
-                # Responses Lite: the base instructions are the first developer
-                # message and the hand-off is the last user message.
+            if native or 'instructions' not in body:
+                # The base instructions are the first developer message and the
+                # hand-off is the last user message: always for Responses Lite,
+                # and for every model since Codex stopped sending `instructions`
+                # (observed at rust-v0.171.0).
                 messages = [item for item in body['input'] if item.get('type') == 'message']
                 assert [messages[0]['role'], messages[-1]['role']] == ['developer', 'user'], 'native input shape'
                 instructions, delegated = messages[0]['content'][0]['text'], json.dumps(messages[-1])
