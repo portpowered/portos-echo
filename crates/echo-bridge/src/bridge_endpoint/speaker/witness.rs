@@ -91,6 +91,7 @@ async fn t3_endpoint_speaker_uses_reported_volume_and_independent_mic_privacy() 
             ordered.notified().await;
             let report = projected_report(&mock, "/assistant/state", &json!("MUTED")).await;
             assert_speaker(&report, Some(&json!({"volume":90,"muted":true})));
+            assert!(report.get("requestId").is_none(), "a speaker effect is plain state");
             assert_eq!(receipts(&mock).len(), 0);
             assert_no_refusals(&mock);
             assert_eq!(

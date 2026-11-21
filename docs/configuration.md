@@ -101,7 +101,11 @@ For that API the WSS template defaults to
 `wss://devices.portoperatingsystem.com/devices/{authLinkId}`; any other API base needs
 `gateway_url`, which ends in `/devices/{authLinkId}`. Omit inline credentials, queries, fragments
 and other substitutions from both. Commands and reports address the Echo by its `deviceId`; the
-bridge reads its route back (`GET /routes?owner=~caller`) for display and logs only.
+bridge reads its route back (`GET /routes?owner=~caller`, following `nextToken` pages) for
+display and logs only. The bridge sends a text `ping` on the gateway every 45 seconds. Close 4000
+reconnects at once, 4503 backs off with the same token, 4401 retries with a refreshed token up to
+three times, 4403 stops after one refreshed retry, and 4409 stops. Snapshot replies are always
+inline base64 JPEG stamped with the capture time.
 
 Remote and wake sessions share one voice slot. A text start can speak a reply without opening
 device capture. Set `remote_mic = true` only for a Wyoming peer that acknowledges the correlated

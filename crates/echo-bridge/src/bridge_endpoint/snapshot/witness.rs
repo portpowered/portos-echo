@@ -32,6 +32,8 @@ enum Capture {
     Ready,
     Error,
     Oversize,
+    /// A capture time Port OS would refuse: 301 s before now.
+    Stale,
     Held,
 }
 
@@ -75,7 +77,7 @@ impl CameraSource for CameraPeer {
             self.entered.notify_one();
             let mode = *self.mode.lock().unwrap();
             let jpeg = match mode {
-                Capture::Ready => STANDARD.decode(JPEG).unwrap(),
+                Capture::Ready | Capture::Stale => STANDARD.decode(JPEG).unwrap(),
                 Capture::Error => return None,
                 // The base64 fits by itself. Envelope overhead exceeds the cap.
                 Capture::Oversize => vec![0; echo_contracts::endpoint::MAX_SNAPSHOT_BYTES + 1],
@@ -85,7 +87,11 @@ impl CameraSource for CameraPeer {
                 jpeg,
                 width: 2,
                 height: 1,
-                sampled_at: sampled_at(),
+                sampled_at: if matches!(mode, Capture::Stale) {
+                    sampled_at() - Duration::from_secs(301)
+                } else {
+                    sampled_at()
+                },
             })
         })
     }
@@ -166,14 +172,18 @@ async fn refusals_before_capture(gateway: &Gateway, mock: &Mock, camera: &Camera
 }
 
 async fn capture_failures(gateway: &Gateway, mock: &Mock, camera: &CameraPeer) {
-    for (mode, id) in [(Capture::Error, "error"), (Capture::Oversize, "oversize")] {
+    for (mode, id) in [
+        (Capture::Error, "error"),
+        (Capture::Oversize, "oversize"),
+        (Capture::Stale, "stale"),
+    ] {
         camera.mode(mode);
         send(gateway, &snapshot_request(id, "BASE64")).await;
         assert_reply(mock, id, "CAMERA_ERROR").await;
     }
     camera.mode(Capture::Held);
     send(gateway, &snapshot_request("timeout", "BASE64")).await;
-    camera.started(5).await;
+    camera.started(6).await;
     send(gateway, &snapshot_request("busy", "BASE64")).await;
     assert_reply(mock, "busy", "CAMERA_BUSY").await;
     advance(Duration::from_secs(5)).await;
@@ -182,21 +192,28 @@ async fn capture_failures(gateway: &Gateway, mock: &Mock, camera: &CameraPeer) {
 
 async fn assert_snapshot_race(gateway: &Gateway, mock: &Mock, camera: &CameraPeer) {
     send(gateway, &snapshot_request("race", "BASE64")).await;
-    camera.started(6).await;
+    camera.started(7).await;
     camera.shutter.send_replace(true);
     camera.shutter.send_replace(false);
     assert_reply(mock, "race", "SHUTTERED").await;
     camera.mode(Capture::Ready);
     assert_jpeg(gateway, mock, "recovered").await;
-    camera.started(7).await;
+    camera.started(8).await;
 }
 
 fn snapshot_request(id: &str, format: &str) -> Value {
     command("get-snapshot", id, DEVICE, &json!({"responseFormat":format}))
 }
 
+/// Whatever `responseFormat` asks for (URL, BASE64 or nothing), the reply is
+/// the inline base64 JPEG stamped with its capture time.
 async fn assert_jpeg(gateway: &Gateway, mock: &Mock, id: &str) {
-    send(gateway, &snapshot_request(id, "URL")).await;
+    let body = match id {
+        "unmuted" => json!({"responseFormat":"URL"}),
+        "muted" => json!({"responseFormat":"BASE64"}),
+        _ => json!({}),
+    };
+    send(gateway, &command("get-snapshot", id, DEVICE, &body)).await;
     assert_eq!(
         outcome(mock, id).await,
         json!({"snapshot":{"width":2,"height":1,"data":JPEG}})

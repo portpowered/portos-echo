@@ -1,6 +1,8 @@
 //! The endpoint T3 device gateway, as the live gateway README describes it:
 //! any upgrade with a Bearer is accepted, and a token without the auth-link
-//! claim (or no longer current) is closed at once with 4403.
+//! claim (or no longer current) is closed at once with 4403. The device's text
+//! `ping` is answered with `pong`, and every synchronous command frame sent to
+//! the device opens one `requestId` that a single report may answer.
 use echo_mcp_auth::mock::{Mock, State};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::{
@@ -24,9 +26,13 @@ pub(super) struct Gateway {
     pub(super) template: String,
     pub(super) received: mpsc::Receiver<GatewayEvent>,
     pub(super) frames: mpsc::Sender<Message>,
+    /// When each keepalive `ping` arrived.
+    pub(super) pings: Pings,
     failures: Arc<AtomicUsize>,
     task: JoinHandle<()>,
 }
+
+pub(super) type Pings = Arc<Mutex<Vec<Instant>>>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum GatewayEvent {
@@ -49,16 +55,19 @@ impl Gateway {
         let (events, received) = mpsc::channel(8);
         let (frames, outgoing) = mpsc::channel(8);
         let failures = Arc::new(AtomicUsize::new(0));
+        let pings = Pings::default();
         let peer = Peer {
             events,
             failures: failures.clone(),
             issuer: mock.state.clone(),
+            pings: pings.clone(),
         };
         let task = tokio::spawn(peer.serve(listener, outgoing));
         Self {
             template,
             received,
             frames,
+            pings,
             failures,
             task,
         }
@@ -80,9 +89,14 @@ impl Gateway {
 
     /// End the connection's hour: close 4000 (CYCLE).
     pub(super) async fn cycle(&self) {
+        self.close(4000).await;
+    }
+
+    /// Close the live connection with a gateway close code.
+    pub(super) async fn close(&self, code: u16) {
         let close = CloseFrame {
-            code: CloseCode::from(4000),
-            reason: "cycle".into(),
+            code: CloseCode::from(code),
+            reason: "synthetic".into(),
         };
         self.frames.send(Message::Close(Some(close))).await.unwrap();
     }
@@ -98,6 +112,7 @@ struct Peer {
     events: mpsc::Sender<GatewayEvent>,
     failures: Arc<AtomicUsize>,
     issuer: Arc<Mutex<State>>,
+    pings: Pings,
 }
 
 impl Peer {
@@ -125,26 +140,50 @@ impl Peer {
                 .send(GatewayEvent::Upgrade(path, bearer, proof))
                 .await
                 .unwrap();
-            connected(&mut socket, &mut frames).await;
+            self.connected(&mut socket, &mut frames).await;
             self.events.send(GatewayEvent::Disconnected).await.unwrap();
         }
     }
 }
 
-async fn connected<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>, frames: &mut mpsc::Receiver<Message>)
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    loop {
-        tokio::select! {
-            message = socket.next() => match message {
-                Some(Ok(Message::Text(text))) if text.as_str() == "ping" => {
-                    if socket.send(Message::text("pong")).await.is_err() { break; }
+impl Peer {
+    async fn connected<S>(
+        &self,
+        socket: &mut tokio_tungstenite::WebSocketStream<S>,
+        frames: &mut mpsc::Receiver<Message>,
+    ) where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        loop {
+            tokio::select! {
+                message = socket.next() => match message {
+                    Some(Ok(Message::Text(text))) if text.as_str() == "ping" => {
+                        self.pings.lock().unwrap().push(Instant::now());
+                        if socket.send(Message::text("pong")).await.is_err() { break; }
+                    }
+                    Some(Ok(_)) => {}
+                    _ => break,
+                },
+                Some(frame) = frames.recv() => {
+                    self.open_request(&frame);
+                    if socket.send(frame).await.is_err() { break; }
                 }
-                Some(Ok(_)) => {}
-                _ => break,
-            },
-            Some(frame) = frames.recv() => if socket.send(frame).await.is_err() { break; },
+            }
+        }
+    }
+
+    /// Speaker commands are fire-and-forget; every other command id may be
+    /// answered once.
+    fn open_request(&self, frame: &Message) {
+        let Message::Text(text) = frame else { return };
+        let Ok(command) = serde_json::from_str::<serde_json::Value>(text.as_str()) else {
+            return;
+        };
+        let speaker = command["header"]["namespace"]
+            .as_str()
+            .is_some_and(|namespace| namespace.ends_with("/speaker"));
+        if let (false, Some(id)) = (speaker, command["header"]["id"].as_str()) {
+            self.issuer.lock().unwrap().endpoint.open_requests.insert(id.into());
         }
     }
 }

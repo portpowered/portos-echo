@@ -27,7 +27,7 @@ const DISCOVERY_DELAYS: [u64; 6] = [0, 5, 30, 120, 600, 1800];
 
 pub(crate) const UNAVAILABLE: &str = "Port OS endpoint connection is unavailable.";
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Status {
     Off,
     Connecting,

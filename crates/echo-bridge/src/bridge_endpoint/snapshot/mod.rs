@@ -15,6 +15,8 @@ use tokio::{
 };
 
 const CAPTURE_WINDOW: Duration = Duration::from_secs(5);
+/// Port OS refuses a `sampledAtMs` more than 300 s from its own clock.
+const SAMPLE_SKEW: Duration = Duration::from_secs(300);
 
 pub(super) struct Sample {
     pub jpeg: Vec<u8>,
@@ -39,7 +41,9 @@ pub(super) struct Camera {
 
 impl Camera {
     /// Capture one JPEG for a `get-snapshot` command. Refused only while the
-    /// shutter is closed, or when the camera cannot provide one.
+    /// shutter is closed, or when the camera cannot provide one. The reply is
+    /// always inline base64, whatever `responseFormat` asks for, and carries
+    /// the capture time.
     pub(super) async fn reply(&self, body: Value, received: Instant) -> Result<(SnapshotReply, i64), Reply> {
         if !body.is_object() || serde_json::from_value::<GetSnapshot>(body).is_err() {
             return Err(invalid());
@@ -71,6 +75,14 @@ impl Camera {
 impl Sample {
     fn encode(self) -> Result<(SnapshotReply, i64), Reply> {
         if self.width == 0 || self.height == 0 || self.jpeg.is_empty() || self.jpeg.len() > MAX_SNAPSHOT_BYTES {
+            return Err(camera_error());
+        }
+        let now = crate::bridge_time::now();
+        let skew = now
+            .duration_since(self.sampled_at)
+            .or_else(|_| self.sampled_at.duration_since(now))
+            .map_err(|_| camera_error())?;
+        if skew > SAMPLE_SKEW {
             return Err(camera_error());
         }
         let sampled_at_ms = self

@@ -329,3 +329,116 @@ fn assert_refreshes(mock: &Mock, expected: &[(&str, &str)]) {
         assert!(!request.headers.contains_key("authorization"));
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn t3_route_read_back_follows_next_token_unchanged() {
+    let mock = Mock::start().await;
+    mock.set_epoch(EPOCH);
+    mock.enable_endpoint_audience().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let owner = linked(&mock, home.path(), &SCOPES).await;
+    let tokens = owner.endpoint_grant(&mock.base).unwrap();
+    let exchange = crate::EndpointExchange::loopback(&mock.base, Duration::from_secs(2)).unwrap();
+    {
+        let mut state = mock.state.lock().unwrap();
+        state.endpoint.device_id = Some("synthetic-echo-device".into());
+        state.endpoint.route_padding = 150;
+    }
+    let found = drive(exchange.endpoint_id(&tokens, "synthetic-echo-device")).await;
+    assert_eq!(found.unwrap().as_deref(), Some(mock::ECHO_ENDPOINT_ID));
+    let absent = drive(exchange.endpoint_id(&tokens, "synthetic-absent-device")).await;
+    assert_eq!(absent.unwrap(), None);
+    let state = mock.state.lock().unwrap();
+    let reads: Vec<_> = state.requests.iter().filter(|r| r.path == "/routes").collect();
+    assert_eq!(reads.len(), 4, "two pages per read-back");
+    for (read, next) in reads.iter().zip([None, Some("100"), None, Some("100")]) {
+        assert_eq!(read.query["owner"], "~caller");
+        assert_eq!(read.query["maxResults"], "100");
+        let expected = next.map(|start| format!("{}{start}", mock::ROUTE_TOKEN));
+        assert_eq!(read.query.get("nextToken"), expected.as_ref());
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_route_pages_default_to_ten_and_cap_at_one_hundred() {
+    let mock = Mock::start().await;
+    mock.set_epoch(EPOCH);
+    mock.enable_endpoint_audience().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let owner = linked(&mock, home.path(), &SCOPES).await;
+    let rest = drive(owner.endpoint_grant(&mock.base).unwrap().access_token())
+        .await
+        .unwrap();
+    mock.state.lock().unwrap().endpoint.route_padding = 24;
+    let page = |query: &'static str| {
+        let request = reqwest::Client::new()
+            .get(format!("{}/routes?owner=~caller{query}", mock.base))
+            .bearer_auth(rest.expose())
+            .send();
+        async move {
+            let response = request.await.unwrap();
+            let status = response.status().as_u16();
+            (status, response.json::<Value>().await.unwrap_or_default())
+        }
+    };
+    let (status, first) = drive(page("")).await;
+    assert_eq!(status, 200);
+    assert_eq!(first["results"].as_array().unwrap().len(), 10);
+    assert_eq!(first["nextToken"], format!("{}10", mock::ROUTE_TOKEN));
+    let (_, last) = drive(page("&maxResults=100")).await;
+    assert_eq!(last["results"].as_array().unwrap().len(), 25);
+    assert!(last.get("nextToken").is_none());
+    assert_eq!(drive(page("&maxResults=101")).await.0, 400);
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_reports_with_a_request_id_answer_only_open_commands() {
+    let mock = Mock::start().await;
+    mock.set_epoch(EPOCH);
+    mock.enable_endpoint_audience().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let owner = linked(&mock, home.path(), &SCOPES).await;
+    let rest = drive(owner.endpoint_grant(&mock.base).unwrap().access_token())
+        .await
+        .unwrap();
+    {
+        let mut state = mock.state.lock().unwrap();
+        state.endpoint.device_id = Some("synthetic-echo-device".into());
+        state.endpoint.claimed.insert(rest.expose().clone());
+        state.endpoint.open_requests.insert("open-command".into());
+    }
+    let now_ms = i64::try_from(EPOCH).unwrap() * 1000;
+    let report = |payload: Value| {
+        json!({
+            "header":{"namespace":"port1/systems/zero/plugins/echo-show","name":"report-state","version":"1.0"},
+            "target":{"type":"ROUTE","value":"synthetic-echo-device"},
+            "payload":payload
+        })
+    };
+    let speaker = report(json!({"sampledAtMs":now_ms,"speaker":{"volume":40,"muted":false}}));
+    let answered =
+        report(json!({"sampledAtMs":now_ms,"speaker":{"volume":40,"muted":false},"requestId":"set-volume-1"}));
+    let reply = report(json!({"requestId":"open-command","error":{"code":"NOT_FOUND"}}));
+    let post = |body: &Value, key: &'static str| {
+        let request = reqwest::Client::new()
+            .post(format!("{}/messages", mock.base))
+            .bearer_auth(rest.expose())
+            .header("Idempotency-Key", key)
+            .json(body)
+            .send();
+        async move { request.await.unwrap().status().as_u16() }
+    };
+    assert_eq!(
+        drive(post(&speaker, "key-1")).await,
+        202,
+        "plain state needs no request"
+    );
+    assert_eq!(
+        drive(post(&answered, "key-2")).await,
+        404,
+        "a fire-and-forget command is never answered"
+    );
+    assert_eq!(drive(post(&reply, "key-3")).await, 202);
+    assert_eq!(drive(post(&reply, "key-3")).await, 202, "a retried key is idempotent");
+    assert_eq!(drive(post(&reply, "key-4")).await, 404, "one reply per command");
+}

@@ -15,6 +15,11 @@ const AUTH_LINK: &str = "loopback link/%";
 pub const ECHO_ENDPOINT_ID: &str = "synthetic-echo-endpoint";
 /// Another owner device whose route `/routes` also lists.
 pub const OTHER_DEVICE: &str = "synthetic-other-device";
+/// `/routes` page sizes: the default and the largest `maxResults`.
+const ROUTE_PAGE: usize = 10;
+const MAX_ROUTE_PAGE: usize = 100;
+/// The opaque continuation prefix; it needs query encoding on purpose.
+pub const ROUTE_TOKEN: &str = "synthetic+token/=";
 
 /// Remember the scope a DCR registration asked for; the fault answers it.
 pub(super) fn observe_registration(request: &Request, state: &mut State) {
@@ -201,21 +206,63 @@ fn exchange(request: &Request, state: &mut State) -> (u16, Value) {
     )
 }
 
+/// One page of the caller's routes: `maxResults` (default 10, at most 100)
+/// and an opaque `nextToken` that must come back unchanged.
 fn routes(request: &Request, state: &mut State) -> (u16, Value) {
     if request.query.get("owner").map(String::as_str) != Some("~caller") {
         return (400, json!({}));
     }
-    let mut results = vec![
-        json!({"id":"synthetic-other-route","associatedPluginRouteId":OTHER_DEVICE,
-        "associatedEndpointId":"synthetic-other-endpoint","associatedAuthLinkId":"synthetic-other-link","externalId":""}),
-    ];
+    let size = match request.query.get("maxResults").map(|size| size.parse::<usize>()) {
+        None => ROUTE_PAGE,
+        Some(Ok(size)) if (1..=MAX_ROUTE_PAGE).contains(&size) => size,
+        Some(_) => return (400, json!({})),
+    };
+    let start = match request.query.get("nextToken") {
+        None => 0,
+        Some(token) => match token
+            .strip_prefix(ROUTE_TOKEN)
+            .and_then(|start| start.parse::<usize>().ok())
+        {
+            Some(start) => start,
+            None => return (400, json!({})),
+        },
+    };
+    let all = owner_routes(state, start == 0);
+    let end = all.len().min(start.saturating_add(size));
+    let results = all.get(start..end).unwrap_or_default();
+    let mut page = json!({"results":results});
+    if end < all.len() {
+        page["nextToken"] = json!(format!("{ROUTE_TOKEN}{end}"));
+    }
+    (200, page)
+}
+
+/// The padding routes, another device, then the Echo once discovery caught up.
+fn owner_routes(state: &mut State, first_page: bool) -> Vec<Value> {
+    let other = |index: usize, device: &str| {
+        json!({"id":format!("synthetic-other-route-{index}"),"associatedPluginRouteId":device,
+        "associatedEndpointId":"synthetic-other-endpoint","associatedAuthLinkId":"synthetic-other-link","externalId":""})
+    };
+    let mut results: Vec<_> = (0..state.endpoint.route_padding)
+        .map(|index| other(index, &format!("synthetic-padding-{index}")))
+        .collect();
+    results.push(other(state.endpoint.route_padding, OTHER_DEVICE));
     if state.endpoint.route_delay > 0 {
-        state.endpoint.route_delay -= 1;
+        if first_page {
+            state.endpoint.route_delay -= 1;
+        }
     } else if let Some(device) = &state.endpoint.device_id {
         results.push(json!({"id":"synthetic-echo-route","associatedPluginRouteId":device,
             "associatedEndpointId":ECHO_ENDPOINT_ID,"associatedAuthLinkId":AUTH_LINK,"externalId":""}));
     }
-    (200, json!({"results":results}))
+    results
+}
+
+fn request_id(request: &Request) -> Option<&str> {
+    request
+        .json
+        .as_ref()
+        .and_then(|body| body["payload"]["requestId"].as_str())
 }
 
 fn messages(request: &Request, state: &mut State) -> (u16, Value) {
@@ -233,6 +280,12 @@ fn messages(request: &Request, state: &mut State) -> (u16, Value) {
     if state.endpoint.report_keys.contains(&key) {
         return (202, json!({}));
     }
+    // A report without `requestId` is plain state. One with it must answer an
+    // open synchronous command, once; fire-and-forget commands open none.
+    if request_id(request).is_some_and(|id| !state.endpoint.open_requests.contains(id)) {
+        state.endpoint.refusals.push("requestId answers no open command".into());
+        return (404, json!({"code":"NOT_FOUND"}));
+    }
     let now_ms = wall_now(state)
         .ok()
         .and_then(|now| i64::try_from(now).ok())
@@ -245,6 +298,9 @@ fn messages(request: &Request, state: &mut State) -> (u16, Value) {
         .and_then(|body| envelope(body, &device, now_ms))
     {
         Ok(()) => {
+            if let Some(id) = request_id(request) {
+                state.endpoint.open_requests.remove(id);
+            }
             state.endpoint.report_keys.insert(key);
             (202, json!({}))
         }

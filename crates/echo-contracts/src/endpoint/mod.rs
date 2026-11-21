@@ -332,9 +332,13 @@ enum InstallStatus {
 
 /// One `GET /routes?owner=~caller` page. Only the fields the bridge reads.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RoutePage {
     #[serde(default)]
     pub results: Vec<RouteRecord>,
+    /// The opaque continuation, passed back unchanged; absent on the last page.
+    #[serde(default)]
+    pub next_token: Option<String>,
 }
 
 #[derive(Deserialize)]

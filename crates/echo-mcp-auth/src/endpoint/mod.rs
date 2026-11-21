@@ -14,6 +14,8 @@ const EXCHANGE_PATH: &str = "/plugin-auth-code-exchanges";
 const MAX_EXCHANGE_RESPONSE: usize = 16_384;
 const ROUTES_PATH: &str = "/routes";
 const MAX_ROUTES_RESPONSE: usize = 1024 * 1024;
+/// Route pages read before giving up on one discovery attempt.
+const MAX_ROUTE_PAGES: usize = 100;
 
 /// Provides only an endpoint-audience bearer for service REST and gateway.
 pub trait EndpointTokenSource: Send + Sync {
@@ -150,6 +152,7 @@ impl EndpointExchange {
 impl EndpointExchange {
     /// Read back the caller's routes and return the endpoint id of the one
     /// whose plugin route id is this `deviceId`. `None` while discovery lags.
+    /// Pages follow `nextToken` until it is absent or the route is found.
     /// The id is for display and logs; nothing is derived from it.
     ///
     /// # Errors
@@ -160,10 +163,30 @@ impl EndpointExchange {
         device_id: &str,
     ) -> Result<Option<String>, ExchangeError> {
         let token = tokens.access_token().await.map_err(|_| ExchangeError::Grant)?;
+        let mut next: Option<String> = None;
+        for _ in 0..MAX_ROUTE_PAGES {
+            let mut url = self.routes.clone();
+            if let Some(next) = &next {
+                url.query_pairs_mut().append_pair("nextToken", next);
+            }
+            let page = self.route_page(url, token.expose()).await?;
+            if let Some(endpoint) = page.endpoint_for(device_id) {
+                return Ok(Some(endpoint.to_owned()));
+            }
+            match page.next_token.filter(|token| !token.is_empty()) {
+                None => return Ok(None),
+                Some(token) if next.as_ref() == Some(&token) => return Err(ExchangeError::Protocol),
+                Some(token) => next = Some(token),
+            }
+        }
+        Err(ExchangeError::Protocol)
+    }
+
+    async fn route_page(&self, url: Url, token: &str) -> Result<RoutePage, ExchangeError> {
         let response = self
             .client
-            .get(self.routes.clone())
-            .bearer_auth(token.expose())
+            .get(url)
+            .bearer_auth(token)
             .send()
             .await
             .map_err(|_| ExchangeError::Transport)?;
@@ -174,8 +197,7 @@ impl EndpointExchange {
         if !status.is_success() {
             return Err(ExchangeError::Rejected);
         }
-        let page: RoutePage = read_json(response, MAX_ROUTES_RESPONSE).await?;
-        Ok(page.endpoint_for(device_id).map(str::to_owned))
+        read_json(response, MAX_ROUTES_RESPONSE).await
     }
 }
 
