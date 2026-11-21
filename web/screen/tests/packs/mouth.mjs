@@ -450,6 +450,7 @@ test("pack page: a mouth set covers the speaking clip with the still for the sam
     // Listening shuts her mouth at once, over the speaking clip, until the
     // listening clip shows.
     await send(page, 4, { state: "speaking" });
+    await tick(page, 100);
     await loaded(page);
     await lipSync(page, run(90, "none", 20));
     await tick(page, 20);
