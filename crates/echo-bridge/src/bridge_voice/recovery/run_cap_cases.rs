@@ -199,7 +199,11 @@ async fn barge_then_transcribed_speech_that_never_ends_holds_the_reply_to_the_ru
     let ended = ended.unwrap();
     assert_eq!(ended.result.as_ref().map(|_| ()), Err(&Error::SessionCeiling));
     let cap = CAP + SPEECH_START_EXPIRY;
-    assert!(ended.at > CAP && ended.at <= cap + Duration::from_secs(1), "ended at {:?}", ended.at);
+    assert!(
+        ended.at > CAP && ended.at <= cap + Duration::from_secs(1),
+        "ended at {:?}",
+        ended.at
+    );
     assert_eq!(ended.capped(), ["reply"]);
     let open = ended.latched("run_end");
     assert_eq!(open.len(), 1, "the latch still open at the cap is reported");
