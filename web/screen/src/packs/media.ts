@@ -224,9 +224,9 @@ export function mediaStage(
         video.onerror = () => {
             if (valid()) failed();
         };
-        // A loop replays itself on its seam, without loading the clip again.
-        video.loop = playback.clip.mode === "loop";
-        video.src = fetched.get(path) || asset(path);
+        // The clip's own URL names it, whichever copy of its bytes plays.
+        video.dataset.clip = asset(path);
+        video.src = fetched.get(path) || video.dataset.clip;
         warm(path);
         video.load();
         cancel = () => {

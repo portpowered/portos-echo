@@ -53,11 +53,14 @@ async function settledArt(page) {
     });
 }
 
-export async function visibleCharacterBoxes(page) {
-    return page.locator(".screen-pack .pack-stage").evaluate(captureStage);
+// With rows, the boxes cover only the character's pixels in those CSS rows.
+export async function visibleCharacterBoxes(page, rows) {
+    return page
+        .locator(".screen-pack .pack-stage")
+        .evaluate(captureStage, { rows });
 }
 
-function captureStage(stage, { active, clips, handoffs } = {}) {
+function captureStage(stage, { active, clips, handoffs, rows: band } = {}) {
     const host = stage.closest(".screen-pack");
     const videos = [...stage.querySelectorAll("video")];
     const canvas = document.createElement("canvas");
@@ -65,7 +68,8 @@ function captureStage(stage, { active, clips, handoffs } = {}) {
     const visible = (video) => !video.hidden && video.readyState >= 2;
     const front = (video) =>
         visible(video) && !video.hasAttribute("data-leaving");
-    const basename = (video) => new URL(video.src).pathname.split("/").at(-1);
+    const basename = (video) =>
+        new URL(video.dataset.clip).pathname.split("/").at(-1);
 
     function bounds(video, clip) {
         // Project decoded VP9 art through object-fit: contain into CSS pixels.
@@ -73,12 +77,12 @@ function captureStage(stage, { active, clips, handoffs } = {}) {
         const stageBox = stage.getBoundingClientRect();
         const hostBox = host.getBoundingClientRect();
         const leftEdge = Math.max(stageBox.left, hostBox.left, 0);
-        const topEdge = Math.max(stageBox.top, hostBox.top, 0);
+        const topEdge = Math.max(stageBox.top, hostBox.top, band?.top ?? 0);
         const rightEdge = Math.min(stageBox.right, hostBox.right, innerWidth);
         const bottomEdge = Math.min(
             stageBox.bottom,
             hostBox.bottom,
-            innerHeight,
+            band?.bottom ?? innerHeight,
         );
         const box = video.getBoundingClientRect();
         const { videoWidth: width, videoHeight: height } = video;
@@ -297,11 +301,15 @@ function diagnostic(row) {
     );
 }
 
+// Beside a card the character stands 110 clip pixels left of centre; the clip
+// is 720 pixels tall and fills the display's height.
+const cardCenter = viewport.width / 2 - (110 * viewport.height) / 720;
+
 function checkGeometry(sample, expectedCenter, card) {
     const { width, height } = viewport;
     const { art, center, heightPercent, slots, intersections } = sample;
     assert.ok(
-        art && heightPercent >= 75 && heightPercent <= 85,
+        art && heightPercent >= 94 && heightPercent <= 100,
         diagnostic(sample),
     );
     assert.ok(
@@ -315,7 +323,13 @@ function checkGeometry(sample, expectedCenter, card) {
     assert.equal(Boolean(slots.status), card);
     assert.equal(Boolean(slots.card), card);
     for (const [name, slot] of Object.entries(slots)) {
-        assert.equal(intersections[name], 0, `${name}: ${diagnostic(sample)}`);
+        // Time and date are drawn over the character, bottom right.
+        if (!["clock", "date"].includes(name))
+            assert.equal(
+                intersections[name],
+                0,
+                `${name}: ${diagnostic(sample)}`,
+            );
         if (!slot) continue;
         assert.ok(slot.text && slot.width > 0 && slot.height > 0, name);
         assert.ok(slot.left >= 0 && slot.top >= 0, name);
@@ -388,15 +402,14 @@ export async function checkHeldLinkCode(f) {
     assert.deepEqual(f.outside, []);
     // Collect both complete replay traces before reporting a center excursion.
     const excursions = rows.filter(
-        ({ center }) => Math.abs(center - viewport.width / 3) > 32,
+        ({ center }) => Math.abs(center - cardCenter) > 32,
     );
     assert.equal(
         excursions.length,
         0,
-        `held Link Code center excursions beyond 426.67 ±32 CSS px: ${excursions.map(({ replay, center }) => `${replay}/${center?.toFixed(2)}`).join(", ")}`,
+        `held Link Code center excursions beyond ${cardCenter.toFixed(2)} ±32 CSS px: ${excursions.map(({ replay, center }) => `${replay}/${center?.toFixed(2)}`).join(", ")}`,
     );
-    for (const sample of samples)
-        checkGeometry(sample, viewport.width / 3, true);
+    for (const sample of samples) checkGeometry(sample, cardCenter, true);
 }
 
 async function checkEntry(f, frame) {
@@ -410,8 +423,8 @@ async function checkEntry(f, frame) {
     const { rows, samples } = await playbackTrace(entry);
     for (const row of rows) console.log(`LINK_ENTRY ${diagnostic(row)}`);
     checkHandoffs(rows, ["setup-enter.webm", "setup.webm"]);
-    checkGeometry(rows.at(-2), viewport.width / 3, true);
-    checkGeometry(rows.at(-1), viewport.width / 3, true);
+    checkGeometry(rows.at(-2), cardCenter, true);
+    checkGeometry(rows.at(-1), cardCenter, true);
     assert.ok(
         Math.abs(rows[0].center - viewport.width / 2) <= 32,
         diagnostic(rows[0]),
@@ -434,30 +447,26 @@ async function checkReturnHome(f, screenshots) {
     });
 }
 
-async function checkInterruptedEntry(f) {
+// Clips are fetched ahead and replay from memory, so an entry clip can only
+// be pending while its first fetch is: hold that from before the pack is used.
+export async function checkInterruptedEntry(f, select) {
     const { page } = f;
     const entry = (url) => url.pathname.endsWith("/setup-enter.webm");
     const pending = Promise.withResolvers();
     const release = Promise.withResolvers();
-    const complete = Promise.withResolvers();
-    void complete.promise.catch(() => {});
-    await page.route(
-        entry,
-        async (route) => {
-            pending.resolve();
-            await release.promise;
-            complete.resolve(route.continue());
-        },
-        { times: 1 },
-    );
+    await page.route(entry, async (route) => {
+        if (route.request().resourceType() === "media") pending.resolve();
+        await release.promise;
+        await route.continue().catch(() => {});
+    });
     try {
+        await select();
         await f.update(link.frame);
         await pending.promise;
         await f.update(thinking);
         await playing(page, "thinking.webm", id);
         const observer = await armPlayback(page, ["thinking.webm"], 1);
         release.resolve();
-        await complete.promise;
         const { seen } = await playbackTrace(observer);
         assert.deepEqual(seen, ["thinking.webm"]);
         assert.equal(
@@ -470,6 +479,7 @@ async function checkInterruptedEntry(f) {
     } finally {
         release.resolve();
     }
+    assert.deepEqual(f.outside, []);
 }
 
 export async function checkCompanionDisplay(f) {
@@ -484,7 +494,7 @@ export async function checkCompanionDisplay(f) {
         console.log(`B6 state=${frame.state} ${diagnostic(art)}`);
         checkGeometry(
             art,
-            viewport.width / (presentation.text ? 3 : 2),
+            presentation.text ? cardCenter : viewport.width / 2,
             Boolean(presentation.text),
         );
         await checkNative(f.page, presentation);
@@ -495,6 +505,5 @@ export async function checkCompanionDisplay(f) {
         }
         if (presentation === link) await checkReturnHome(f, screenshots);
     }
-    await checkInterruptedEntry(f);
     assert.deepEqual(f.outside, []);
 }

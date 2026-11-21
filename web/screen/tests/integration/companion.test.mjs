@@ -8,6 +8,7 @@ import {
     checkCompanionDisplay,
     checkHandoffs,
     checkHeldLinkCode,
+    checkInterruptedEntry,
     playbackTrace,
     visibleCharacterBoxes,
     viewport as displayViewport,
@@ -116,6 +117,13 @@ async function geometry(page, state) {
     const art = await visibleCharacterBoxes(page);
     assert.ok(art.length, `${state}: decoded character is visible`);
     const characters = art.map((box) => ({ label: "character", ...box }));
+    // The character fills the display's height, with text beside her head and
+    // shoulders: each box is checked against her pixels in its own rows.
+    const beside = async ({ top, bottom }) =>
+        (await visibleCharacterBoxes(page, { top, bottom })).map((box) => ({
+            label: "character",
+            ...box,
+        }));
     const { slots, buttons } = await page.evaluate(() => {
         const visible = (selector) =>
             [...document.querySelectorAll(selector)]
@@ -146,8 +154,10 @@ async function geometry(page, state) {
         (button) => state !== "ready" || button.label !== "home-tap",
     );
     for (const [i, a] of slots.entries()) {
+        // Time and date are drawn over the character, bottom right.
+        const over = ["pack-clock", "pack-date"].includes(a.label);
         for (const b of [
-            ...characters,
+            ...(over ? [] : await beside(a)),
             ...slots.slice(i + 1),
             ...paintedButtons,
         ]) {
@@ -167,15 +177,17 @@ async function geometry(page, state) {
     }
     for (const button of paintedButtons)
         assert.ok(
-            characters.every((character) => !overlap(button, character)),
+            (await beside(button)).every(
+                (character) => !overlap(button, character),
+            ),
             `${state}: ${button.label} overlaps character`,
         );
     if (["ready", "connected"].includes(state)) {
         for (const label of ["pack-clock", "pack-date"]) {
             const box = slots.find((slot) => slot.label === label);
             assert.ok(
-                box.top >= 480 &&
-                    Math.abs((box.left + box.right) / 2 - 480) <= 42,
+                box.top >= 0.7 * height &&
+                    Math.abs(box.right - 0.96 * width) <= 2,
                 `${state}: ${label} box=${JSON.stringify(box)}`,
             );
         }
@@ -491,6 +503,12 @@ test(
     "T3 Companion visible art fills the display while leaving room for native content",
     withSelected(checkCompanionDisplay),
 );
+
+test("T3 Companion drops a pending entry clip when the state moves on", async (t) => {
+    const f = await openCompanion(t, displayViewport);
+    await installCompanion(f);
+    await checkInterruptedEntry(f, () => useCompanion(f.page));
+});
 
 test(
     "T3 Companion Link Code stays centered through natural replays",

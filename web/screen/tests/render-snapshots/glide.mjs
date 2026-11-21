@@ -47,7 +47,9 @@ function sample(page) {
                         points.push([
                             (sx / n) * scale + shift.e,
                             (sy / n) * scale + shift.f,
-                            new URL(video.src).pathname.split("/").at(-1),
+                            new URL(video.dataset.clip).pathname
+                                .split("/")
+                                .at(-1),
                         ]);
                     if (performance.now() - started < 700)
                         requestAnimationFrame(step);

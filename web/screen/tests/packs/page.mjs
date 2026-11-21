@@ -237,7 +237,7 @@ test("pack page: covered presentation coalesces reloads without racing settings 
     );
 });
 
-test("pack page: clips are fetched ahead once, replay from memory and loop on their seam", async (t) => {
+test("pack page: clips are fetched ahead once and replay from memory under their own name", async (t) => {
     const page = await packPage(t);
     await page.locator(".screen-pack").waitFor();
     await page.evaluate(() => {
@@ -263,10 +263,13 @@ test("pack page: clips are fetched ahead once, replay from memory and loop on th
         const video = [...document.querySelectorAll("video")].find(
             (v) => v.hidden && v.dataset.src,
         );
-        return { src: video.dataset.src, loop: video.loop };
+        return { src: video.dataset.src, clip: video.dataset.clip };
     });
     assert.match(next.src, /^blob:/);
-    assert.equal(next.loop, true);
+    assert.equal(
+        new URL(next.clip).pathname.split("/").at(-1),
+        "listening.webm",
+    );
     await loaded(page);
     await send(page, 3, { state: "ready", message: "Ready" });
     await loaded(page);

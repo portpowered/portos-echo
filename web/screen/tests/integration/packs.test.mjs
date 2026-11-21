@@ -71,8 +71,8 @@ async function open(
                         "F25 final media:",
                         await page.locator("video").evaluateAll((videos) =>
                             videos.map((video) => ({
-                                file: video.src
-                                    ? new URL(video.src).pathname
+                                file: video.dataset.clip
+                                    ? new URL(video.dataset.clip).pathname
                                           .split("/")
                                           .at(-1)
                                     : null,
@@ -196,14 +196,16 @@ async function playing(page, name) {
         );
         return (
             video &&
-            new URL(video.src).pathname.endsWith(`/${name}`) &&
+            new URL(video.dataset.clip).pathname.endsWith(`/${name}`) &&
             video.readyState >= 2 &&
             video.getVideoPlaybackQuality().totalVideoFrames > 0
         );
     }, name);
     return page
         .locator("video:not([hidden]):not([data-leaving])")
-        .evaluate((node) => new URL(node.src).pathname.split("/").at(-1));
+        .evaluate((node) =>
+            new URL(node.dataset.clip).pathname.split("/").at(-1),
+        );
 }
 
 async function reloads(page, revision) {
@@ -396,7 +398,7 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
     await page.waitForFunction(() =>
         document
             .querySelector("video:not([hidden]):not([data-leaving])")
-            ?.src.includes("revision=4"),
+            ?.dataset.clip.includes("revision=4"),
     );
     await mkdir("test-results/screenshots", { recursive: true });
     for (const viewport of [

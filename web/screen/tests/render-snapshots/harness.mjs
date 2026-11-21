@@ -157,7 +157,7 @@ export async function hold(page, clip, frame = 0) {
                 ),
             ].some(
                 (video) =>
-                    new URL(video.src).pathname.endsWith(`/${clip}`) &&
+                    new URL(video.dataset.clip).pathname.endsWith(`/${clip}`) &&
                     video.readyState >= 2,
             ),
         clip,
