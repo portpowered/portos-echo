@@ -22,7 +22,7 @@ pub(crate) async fn scope<T>(expiry: Duration, work: impl Future<Output = T>) ->
     EXPIRY.scope(expiry, work).await
 }
 
-fn expiry() -> Duration {
+pub(super) fn expiry() -> Duration {
     EXPIRY.try_with(|expiry| *expiry).unwrap_or(SPEECH_START_EXPIRY)
 }
 

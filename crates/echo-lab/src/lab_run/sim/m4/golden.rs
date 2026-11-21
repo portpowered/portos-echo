@@ -69,10 +69,15 @@ pub fn normalize(trace: &Trace) -> Result<Vec<String>, String> {
     let mut names = Names::default();
     milestone_records(trace)
         .iter()
-        // Reply quality and the bridge's `timing` samples are measurements with
-        // their own budgets, not steps: their values follow the run's pace.
+        // Reply quality, the bridge's `timing` samples and how long a speech
+        // start was latched (`speech.latched`) are measurements, not steps:
+        // their values follow the run's pace.
         .filter(|record| {
-            !incidental_probe(record) && !matches!(record["event"].as_str(), Some("reply.quality" | "timing"))
+            !incidental_probe(record)
+                && !matches!(
+                    record["event"].as_str(),
+                    Some("reply.quality" | "timing" | "speech.latched")
+                )
         })
         .map(|record| {
             let mut record = record.clone();

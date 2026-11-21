@@ -15,9 +15,9 @@ pub(super) const HANDBACK_GRACE: Duration = Duration::from_secs(20);
 /// from the user's last end of speech, never while they are still speaking,
 /// and again from the last reply audio written while the reply is voiced: a
 /// reply of any length plays to its end, and one that stalls still ends.
-/// The user's speech never holds the run past its cap: the pinned V3 session
-/// forwards no speech-stopped, so a speech start it never transcribes would
-/// otherwise leave the reply waiting with no deadline at all.
+/// The user's speech holds the run's cap only for one speech-start expiry:
+/// a sentence that crosses the cap is heard to its end, but the pinned V3
+/// session forwards no speech-stopped, so speech must never hold it forever.
 /// A latched speech start with no transcript text expires first: its expiry
 /// is a wake-up that clears the latch, never an end of the run.
 pub(super) fn deadline(source: &Source, played: Option<Instant>) -> (Option<Instant>, Error) {
@@ -39,13 +39,23 @@ fn reply_deadline(source: &Source, played: Option<Instant>) -> (Option<Instant>,
         let answering = source.mouth.voiced() || (source.controller.speaking() && !source.delegation.held());
         return match source.delegation.resolved().filter(|_| !speaking && !answering) {
             Some(resolved) => (Some(owed(source, resolved)), Error::NoResponse),
-            None => (source.run_ceiling.filter(|_| !answering), Error::SessionCeiling),
+            None => (run_cap(source).filter(|_| !answering), Error::SessionCeiling),
         };
     }
     if speaking {
-        return (source.run_ceiling, Error::SessionCeiling);
+        return (run_cap(source), Error::SessionCeiling);
     }
     (Some(source.answer_due), Error::NoResponse)
+}
+
+/// The run's ceiling, deferred while the user is speaking by at most one
+/// speech-start expiry: their end of speech brings a passed ceiling back at once.
+fn run_cap(source: &Source) -> Option<Instant> {
+    let ceiling = source.run_ceiling?;
+    if source.user_speech != UserSpeech::Active {
+        return Some(ceiling);
+    }
+    Some(ceiling.checked_add(run_marks::expiry()).unwrap_or(ceiling))
 }
 
 /// A resolved hand-off holds the run for its answer: to the end of the
@@ -59,7 +69,7 @@ fn owed(source: &Source, resolved: Instant) -> Instant {
 /// The wait between replies and what its expiry returns: a running turn has
 /// the run ceiling, a resolved one its answer's grace, the rest the listen window.
 /// Speech renews the listen window and defers a resolved turn's grace, but
-/// neither outlasts the run ceiling: a capped listen closes as idle does.
+/// neither outlasts the run's cap: a capped listen closes as idle does.
 pub(super) fn listening(source: &Source, idle: Instant) -> (Option<Instant>, Result<bool, Error>) {
     let (due, expiry) = listen_deadline(source, idle);
     (earliest(due, source.latch_expiry()), expiry)
@@ -67,15 +77,12 @@ pub(super) fn listening(source: &Source, idle: Instant) -> (Option<Instant>, Res
 
 fn listen_deadline(source: &Source, idle: Instant) -> (Option<Instant>, Result<bool, Error>) {
     if !source.delegation.waiting() {
-        return (
-            Some(source.run_ceiling.map_or(idle, |ceiling| idle.min(ceiling))),
-            Ok(false),
-        );
+        return (Some(run_cap(source).map_or(idle, |cap| idle.min(cap))), Ok(false));
     }
     let quiet = source.user_speech == UserSpeech::Quiet;
     match source.delegation.resolved().filter(|_| quiet) {
         Some(resolved) => (Some(owed(source, resolved)), Err(Error::NoResponse)),
-        None => (source.run_ceiling, Err(Error::SessionCeiling)),
+        None => (run_cap(source), Err(Error::SessionCeiling)),
     }
 }
 
@@ -285,8 +292,9 @@ mod tests {
         source.delegation.started();
         source.user_speech = UserSpeech::Active;
         tokio::time::advance(Duration::from_secs(30)).await;
-        // Speech defers the answer's wait, never the run's ceiling.
-        assert_eq!(deadline(&source, None), (Some(ceiling), Error::SessionCeiling));
+        // Speech defers the answer's wait, and the ceiling by one expiry at most.
+        let deferred = ceiling + run_marks::SPEECH_START_EXPIRY;
+        assert_eq!(deadline(&source, None), (Some(deferred), Error::SessionCeiling));
         source.user_speech = UserSpeech::Quiet;
         source.spoke();
         assert_eq!(deadline(&source, None).0, None);
@@ -340,6 +348,23 @@ mod tests {
         assert!(!source.delegation.waiting());
         assert_eq!(deadline(&source, None), (Some(source.answer_due), Error::NoResponse));
         assert_eq!(listening(&source, idle), (Some(idle), Ok(false)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_sentence_across_the_ceiling_is_heard_to_its_end() {
+        let (mut source, ceiling) = admitted(Instant::now());
+        source.delegation.started();
+        tokio::time::advance(Duration::from_secs(599)).await;
+        source.user_active(true);
+        // Its text renews the latch past the ceiling; the cap waits one expiry.
+        tokio::time::advance(Duration::from_secs(6)).await;
+        source.user_active(true);
+        let idle = Instant::now() + Duration::from_secs(15);
+        let deferred = ceiling + run_marks::SPEECH_START_EXPIRY;
+        assert_eq!(deadline(&source, None), (Some(deferred), Error::SessionCeiling));
+        assert_eq!(listening(&source, idle), (Some(deferred), Err(Error::SessionCeiling)));
+        source.user_quiet();
+        assert_eq!(deadline(&source, None), (Some(ceiling), Error::SessionCeiling));
     }
 
     #[tokio::test(start_paused = true)]
