@@ -44,7 +44,7 @@ async fn t3_default_registration_commits_identity_and_reuses_it_after_reopen() {
     mock.state.lock().unwrap().metadata = None;
     let next = automatic(&mock, directory.path(), EPOCH + 5).await;
     assert!(next.has_grant());
-    assert_eq!(approve(&mock, next, &path).await, key);
+    assert_ne!(approve(&mock, next, &path).await, key, "a relink signs with a new key");
     assert_eq!(mock.count(REGISTER), 1);
     assert_eq!(mock.count("/custom/link"), 2);
     assert_eq!(mock.count("/custom/token"), 2);
@@ -106,7 +106,7 @@ fn assert_requests(mock: &Mock) {
         };
         assert_eq!(request.form, expected.into_iter().map(|(k, v)| (k.into(), v)).collect());
     }
-    assert_eq!(state.jtis.len(), 4); // The mock verifies signatures against one pinned public key.
+    assert_eq!(state.jtis.len(), 4); // The mock pins each grant to the key of its device authorization.
 }
 
 #[tokio::test(start_paused = true)]
@@ -160,7 +160,7 @@ async fn t3_legacy_grant_survives_refresh_and_denial_then_switches_on_approved_r
     drive(task).await.unwrap().unwrap();
     let current = stored(&path);
     assert_eq!(current["client_id"], "dcr_synthetic");
-    assert_eq!(current["private_key_jwk"], *key);
+    assert_ne!(current["private_key_jwk"], *key);
     assert_eq!(current["grant"]["refresh_token"], "refresh-3");
     assert_eq!(mock.count(REGISTER), 2);
     assert_eq!(mock.state.lock().unwrap().jtis.len(), 7);
@@ -405,4 +405,43 @@ async fn t3_device_authorization_and_token_refusals_name_their_own_step() {
         "a new attempt clears the last failure"
     );
     assert!(!client.has_grant());
+}
+
+// Port OS refuses a second device authorization from a key with
+// `invalid_dpop_proof`. Unlink keeps the stored key, so a relink needs its own.
+#[tokio::test(start_paused = true)]
+async fn t3_relink_after_unlink_signs_with_a_new_key_the_server_accepts() {
+    let mock = Mock::start().await;
+    mock.set_epoch(EPOCH);
+    offer_registration(&mock);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("grant.json");
+    let client = automatic(&mock, directory.path(), EPOCH).await;
+    let first = approve(&mock, client.clone(), &path).await;
+    drive(client.revoke()).await.unwrap();
+    let unlinked = stored(&path);
+    assert_eq!(unlinked["grant"], Value::Null);
+    assert_eq!(unlinked["private_key_jwk"], first);
+
+    let reused = drive(wire::post::<Value>(
+        &client.http,
+        &client.metadata.device_authorization_endpoint,
+        &[("client_id", "dcr_synthetic")],
+        Some(drive(client.state.lock()).await.record.private_key_jwk.expose()),
+        client.now(),
+    ))
+    .await;
+    let (failure, error) = reused.err().unwrap().at("device_authorization");
+    assert_eq!(error, AuthError::Protocol);
+    assert_eq!(failure.http_status, Some(400));
+    assert_eq!(failure.oauth_error.as_deref(), Some("invalid_dpop_proof"));
+
+    let reopened = automatic(&mock, directory.path(), EPOCH + 5).await;
+    let second = approve(&mock, reopened.clone(), &path).await;
+    assert_ne!(second, first);
+    assert_eq!(reopened.take_link_failure(), None);
+    assert_eq!(mock.count(REGISTER), 1);
+    let access = drive(reopened.force_refresh()).await.unwrap();
+    assert_eq!(stored(&path)["private_key_jwk"], second);
+    assert_eq!(drive(mock.resource(access.expose())).await, 200);
 }

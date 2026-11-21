@@ -1,7 +1,7 @@
 use crate::{
     AuthError, AuthOptions, LinkClient, LinkFailure, TokenFuture, TokenProvider,
     discovery::{self, Metadata},
-    proof::PrivateJwk,
+    proof::{self, PrivateJwk},
     store::{Grant, Record, Registration, Store},
     wire::{self, Pair, Refusal, Reply},
 };
@@ -206,11 +206,15 @@ impl AuthClient {
         self.epoch.saturating_add(self.started.elapsed().as_secs())
     }
 
+    /// Port OS accepts one device authorization per `DPoP` key, so every link
+    /// signs with a new key. The committed grant keeps its own key until an
+    /// approval replaces the grant and the key together.
     /// # Errors
     /// Returns an OAuth or transport failure; never includes server diagnostics.
     pub async fn begin_link(&self) -> Result<LinkInstructions, AuthError> {
         let state = self.state.lock().await;
         self.note(None);
+        let key = Arc::new(proof::generate());
         let scope = self.options.scopes.join(" ");
         let identity = self.link_identity(&state.record, &scope).await?;
         let form = [
@@ -222,7 +226,7 @@ impl AuthClient {
             &self.http,
             &self.metadata.device_authorization_endpoint,
             &form,
-            Some(state.record.private_key_jwk.expose()),
+            Some(key.expose()),
             self.now(),
         )
         .await
@@ -246,7 +250,7 @@ impl AuthClient {
             interval: link.interval,
             created: Instant::now(),
             identity,
-            key: state.record.private_key_jwk.clone(),
+            key,
         })
     }
 
@@ -295,9 +299,6 @@ impl AuthClient {
             }
             tokio::time::sleep_until(next).await;
             let mut state = self.state.lock().await;
-            if !Arc::ptr_eq(&link.key, &state.record.private_key_jwk) {
-                return Err(AuthError::Protocol);
-            }
             let form = [
                 ("grant_type", wire::DEVICE_GRANT),
                 ("device_code", link.device_code.expose().as_str()),
@@ -322,7 +323,8 @@ impl AuthClient {
                     interval = interval.checked_add(5).ok_or(AuthError::Protocol)?;
                 }
                 Reply::Value(pair) => {
-                    self.publish(&mut state, Some(pair.grant(self.now())?), Some(link.identity))?;
+                    let linked = Some((link.identity, link.key));
+                    self.publish(&mut state, Some(pair.grant(self.now())?), linked)?;
                     return Ok(());
                 }
             }
@@ -333,14 +335,18 @@ impl AuthClient {
         &self,
         state: &mut State,
         grant: Option<Secret<Grant>>,
-        identity: Option<LinkIdentity>,
+        linked: Option<(LinkIdentity, Arc<Secret<PrivateJwk>>)>,
     ) -> Result<(), AuthError> {
         self.linked.store(false, Ordering::Release);
         state.uncertain = true;
         let current = &state.record;
-        let (client_id, registration) = match identity {
-            Some(identity) => (Some(identity.client_id), identity.registration),
-            None => (current.client_id.clone(), current.registration.clone()),
+        let (client_id, registration, key) = match linked {
+            Some((identity, key)) => (Some(identity.client_id), identity.registration, key),
+            None => (
+                current.client_id.clone(),
+                current.registration.clone(),
+                current.private_key_jwk.clone(),
+            ),
         };
         let record = Record {
             version: current.version,
@@ -348,7 +354,7 @@ impl AuthClient {
             resource: current.resource.clone(),
             client_id,
             registration,
-            private_key_jwk: current.private_key_jwk.clone(),
+            private_key_jwk: key,
             grant,
         };
         self.store.save(&record)?;
