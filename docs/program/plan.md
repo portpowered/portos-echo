@@ -204,7 +204,7 @@ need, since the Echo's disk is small.
   disabled adds neither. Both use provider search with no local fetch, process or file authority. Exact dynamic
   catalogs and native wrappers remain required.
   Every other built-in effect stays off. Codex's local tools are off: `features.shell_tool=false`,
-  `features.unified_exec=false`, empty `environments`, no MCP
+  `features.unified_exec=false`, `features.view_image=false`, empty `environments`, no MCP
   servers in Codex's config, `approvalPolicy: never` with a read-only sandbox. The result goes back as
   `delegation.context.append` without bridge code. The bridge stops waiting and interrupts a stalled turn when the run reaches
   its session ceiling (600 s by default). Ordinary unanswered Live runs use a separate 60 s response window.
