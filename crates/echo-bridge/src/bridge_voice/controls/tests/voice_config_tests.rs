@@ -116,7 +116,7 @@ async fn configured_call_options_include_context_and_preserve_policy() {
             .voice
             .call
             .prompt
-            .contains("Keep replies brief and conversational")
+            .contains("Waiting and ending are background-agent tasks")
     );
     assert_eq!(options.voice.call.prompt, echo_config::LIVE_INSTRUCTIONS);
     assert_eq!(
