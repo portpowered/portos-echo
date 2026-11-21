@@ -39,6 +39,15 @@ The settings panel scrolls independently while Back and status stay visible
 at both 1280x800 and 1280x774. Pages without the capability retain the original
 presentation and full-page snapshots.
 
+Settings wears the Port OS look. The page links `tokens.css`, which the screen
+server emits from the vendored `portos-tokens` crate with the dark scheme forced;
+the Settings rules in `src/screen.css` take every colour, space, radius, border
+and font from those custom properties. Manrope is served from this origin at
+`fonts/manrope-latin-wght-normal.woff2` (SIL OFL 1.1, `src/fonts/OFL.txt`).
+`tools/tokens.mjs` rebuilds the same sheet into `dist/tokens.css` for the page's
+tests, and the server integration test compares the two byte for byte. Home,
+state pages and screen packs keep their own colours and the system font.
+
 The Echo shows the page at 960x600 CSS px and has no system keyboard. The open
 panel has a title row with Back at the top right, in the gear's corner, and the
 fields take the rest of the height with the label left of its control. Whole

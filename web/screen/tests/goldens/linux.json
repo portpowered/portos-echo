@@ -12,11 +12,11 @@
   "approval": "5ad3f4f761ded00736978e90ed3e2cb8cc94ada2dbafc7f80535129d09929cee",
   "error-true": "9629b9fd3277b2b48db63bcc23ce642b0994fa8d63500ca7c49811f0ab76d3f2",
   "error-false": "731091ddbead8015c3e7e49cea2ed5ea27b48faf5976166bdb0b0f3e0f70a35b",
-  "settings-v2-960x480": "12e9c9438a25402158ac6ccec17353b876388595ba154c4a03187491e16a7196",
-  "settings-v2-portos-960x480": "4b708e0fb4ffcb4571dacb4d950d0cc9f64e9449de250ef48a44006a894d1ef7",
-  "settings-accounts-960x600": "f0049866ffd5129056988c33acf21dfc997afc34a3fd96d7b202312917347d7c",
-  "settings-portos-linked": "28b8f08659a88188299ec1a61eb76350980c044c7388ad47a893a2a008aa1b59",
-  "settings-portos-unlinked": "e164274b95be2dc859ec82d40bf8f76d7d0a62f933112e3051c181b4ea8b14bd",
-  "settings-portos-link-required": "6fa14a09537a0b7c1f9ba7fadcfffe1f6ccde62e7c9fef748a014040f19a0512",
-  "packs-carousel-1280x800": "de906951abbaceadb98945056d455baa7ade6a14a1b992d68ee15eaf64ac39dc"
+  "settings-v2-960x480": "7df993cdb1c36b6199c213672eb03124793b65e763e1bcf2bef1c1fc43ca68ad",
+  "settings-v2-portos-960x480": "260de6399409cab74ec9de8022d3edb12e2ba8c5a33e3fbe8d62ea04aaa8e79a",
+  "settings-accounts-960x600": "49cbffd87e493f08afe64709789ad03dd5bc02e3798f9242b6885c58c233b665",
+  "settings-portos-linked": "fed59ef9771e196543d93309fba24d8a5512036e2a0c9941346088c10d0be307",
+  "settings-portos-unlinked": "cf9865c6205e3922e1f192e7b4392d885131552a0e24994474e33b12feb5392b",
+  "settings-portos-link-required": "3f647a6f77927efa1ef2518c595be4eca2803a69cbfad5507fdbf9ebf19c9e6a",
+  "packs-carousel-1280x800": "00b7c15cd08dad5e68be7d0902f0865106efdec4f604b3c5189346b68ca0bfe6"
 }

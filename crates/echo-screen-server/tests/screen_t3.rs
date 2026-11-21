@@ -274,7 +274,25 @@ async fn t3_stream_capacity_assets_and_cleanup() -> Result {
     ] {
         assert_eq!(request(addr, "GET", path, "", "").await?, (200, source.into()));
     }
-    for path in ["/missing", "/../Cargo.toml", "/src/index.html"] {
+    let (status, tokens) = request(addr, "GET", "/tokens.css", "", "").await?;
+    assert_eq!(status, 200);
+    assert!(tokens.starts_with(portos_tokens::CSS));
+    let forced = format!(
+        "
+:root {{
+    color-scheme: dark;
+    --portos-control-muted: {};
+",
+        portos_tokens::color::dark::PORTOS_CONTROL_MUTED.hex
+    );
+    assert_eq!(tokens[portos_tokens::CSS.len()..].matches(&forced).count(), 1);
+    for path in [
+        "/missing",
+        "/../Cargo.toml",
+        "/src/index.html",
+        "/fonts/OFL.txt",
+        "/fonts/manrope.woff2",
+    ] {
         assert_eq!(request(addr, "GET", path, "", "").await?.0, 404);
     }
     assert_eq!(request(addr, "POST", "/", "", "").await?.0, 405);

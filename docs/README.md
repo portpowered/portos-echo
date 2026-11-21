@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 18
+last modified: 2026, november, 20
 status: active; documentation index
 ---
 
@@ -99,6 +99,7 @@ Add each new tracked documentation page to this index in the same change.
 - [Codex local fake: S5](spikes/codex-local-fake.md)
 - [Frame-based Codex media peer](adr/0027-echo-media.md)
 - [Screen-pack archive decoding](adr/0029-screen-pack-archives.md)
+- [Vendored Port OS design tokens](adr/0031-portos-tokens.md)
 
 ## Linux hosts
 

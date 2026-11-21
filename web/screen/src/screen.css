@@ -194,9 +194,23 @@ button:disabled {
 .corner-control:active {
     opacity: 1;
 }
+/* Settings wears the Port OS look. Every colour, space, radius, border and
+   font below is a custom property from /tokens.css, which the screen server
+   emits from the vendored portos-tokens crate with the dark scheme forced.
+   Sizes stay at the Echo's touch scale: 64 px controls read at arm's length.
+   Manrope is the one Port OS face, served from this origin (SIL OFL 1.1). */
+@font-face {
+    font-family: Manrope;
+    font-weight: 200 800;
+    font-display: swap;
+    src: url("fonts/manrope-latin-wght-normal.woff2") format("woff2");
+}
 main.settings-open {
-    padding: var(--corner-top) var(--corner-right) 8px;
+    padding: var(--corner-top) var(--corner-right) var(--space-2);
     justify-content: flex-start;
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
 }
 .settings-panel {
     flex: 1 1 0;
@@ -211,17 +225,38 @@ main.settings-open {
     min-height: var(--corner-size);
     padding-right: calc(var(--corner-size) + var(--corner-gap));
 }
+.settings-panel .corner-control {
+    color: var(--color-foreground);
+}
 .settings-panel h1 {
-    font-size: 32px;
     margin: 0;
+    font-size: var(--text-page-title-size);
+    font-weight: var(--text-page-title-weight);
+    line-height: var(--text-page-title-leading);
+    letter-spacing: var(--text-page-title-tracking);
 }
 .settings-panel p {
     font-size: 22px;
-    margin: 4px 0;
+    margin: var(--space-1) 0;
+}
+.settings-panel > [role="status"] {
+    color: var(--color-primary);
 }
 .settings-panel > [role="status"]:empty {
     min-height: 0;
     margin: 0;
+}
+/* Port OS actions are pills: secondary by default, the brand primary for a
+   section's save. Back keeps the corner control's bare icon. */
+.settings-panel :where(button:not(.corner-control)) {
+    border: var(--portos-control-border-size) solid transparent;
+    border-radius: var(--radius-pill);
+    background: var(--color-secondary);
+    color: var(--color-secondary-foreground);
+    font-weight: var(--font-weight-semibold);
+}
+.settings-panel :focus-visible {
+    outline-color: var(--color-ring);
 }
 /* Settings is one column: from the title's left edge to Back's right edge.
    The scroll area bleeds to the screen edges so focus rings and the open
@@ -231,7 +266,7 @@ main.settings-open {
     overflow: auto;
     min-height: 0;
     margin-inline: calc(-1 * var(--corner-right));
-    padding: 8px var(--corner-right);
+    padding: var(--space-2) var(--corner-right);
     /* Text ink that spills a pixel left of the column repaints with the
        fields, never as a stale dot when they scroll. */
     will-change: scroll-position;
@@ -246,21 +281,23 @@ main.settings-open {
     max-height: none;
 }
 .settings-section {
-    border-bottom: 1px solid #566c90;
+    border-bottom: var(--portos-control-border-size) solid var(--color-border);
 }
 .settings-section summary {
     min-height: 64px;
     margin-inline: calc(-1 * var(--corner-right));
-    padding: 16px var(--corner-right);
+    padding: var(--space-4) var(--corner-right);
     font-size: 26px;
-    font-weight: 600;
+    font-weight: var(--text-section-heading-weight);
+    letter-spacing: var(--text-section-heading-tracking);
     cursor: pointer;
     touch-action: manipulation;
     /* The open band is the tap's feedback; no fading highlight over it. */
     -webkit-tap-highlight-color: transparent;
 }
 .settings-section[open] summary {
-    background: #243b61;
+    background: var(--color-secondary);
+    color: var(--color-secondary-foreground);
 }
 .settings-section summary:focus-visible {
     outline-offset: -6px;
@@ -274,18 +311,18 @@ main.settings-open {
     border: 0;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 8px;
+    gap: var(--space-2);
     min-width: 0;
 }
 .settings-choices legend {
     padding: 0;
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
     font-size: 24px;
 }
 .settings-choices label {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--space-3);
     min-height: 64px;
     overflow-wrap: anywhere;
     cursor: pointer;
@@ -294,28 +331,45 @@ main.settings-open {
     flex-shrink: 0;
 }
 .settings-fields form {
-    border-bottom: 1px solid #c4d5ff;
-    padding-bottom: 16px;
-    margin-bottom: 16px;
+    border-bottom: var(--portos-control-border-size) solid var(--color-border);
+    padding-bottom: var(--space-4);
+    margin-bottom: var(--space-4);
 }
 .settings-fields h2 {
-    margin: 8px 0;
+    margin: var(--space-2) 0;
+    font-weight: var(--text-section-heading-weight);
+    letter-spacing: var(--text-section-heading-tracking);
+}
+.settings-fields h3 {
+    font-weight: var(--text-subsection-heading-weight);
 }
 .settings-row {
     display: grid;
     grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
     align-items: center;
-    gap: 8px 24px;
-    margin: 12px 0;
+    gap: var(--space-2) var(--space-6);
+    margin: var(--space-3) 0;
     font-size: 24px;
 }
+.settings-row > label {
+    font-weight: var(--text-label-weight);
+}
 /* A section's actions: its save button on the column's right edge, any
-   secondary action to its left. */
+   secondary action to its left. The right-most answer is the primary one. */
 .settings-actions {
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;
-    gap: 0 16px;
+    gap: 0 var(--space-4);
+}
+.settings-panel .settings-actions > button:last-child {
+    background: var(--color-primary);
+    color: var(--color-primary-foreground);
+}
+/* A disabled action takes the muted surface and text, the primary included. */
+.settings-panel button:disabled:not(.corner-control) {
+    background: var(--color-muted);
+    color: var(--color-muted-foreground);
 }
 /* The unsaved-changes question covers Settings, Back included; a tap outside
    its box cancels. */
@@ -326,22 +380,21 @@ main.settings-open {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 24px;
-    background: rgb(16 24 39 / 0.85);
+    padding: var(--space-6);
+    background: var(--color-overlay);
 }
 .settings-leave > div {
     width: min(100%, 720px);
-    padding: 16px 24px;
-    border: 2px solid #c4d5ff;
-    background: #101827;
+    padding: var(--spacing-card-padding-compact) var(--spacing-card-padding);
+    border: var(--portos-control-border-size) solid var(--color-border);
+    border-radius: var(--radius-card);
+    background: var(--color-popover);
+    color: var(--color-popover-foreground);
+    box-shadow: var(--shadow-modal);
 }
 .settings-leave p {
-    margin: 8px 0;
+    margin: var(--space-2) 0;
     font-size: 28px;
-}
-.settings-leave button:last-child {
-    background: #c4d5ff;
-    color: #101827;
 }
 .settings-row-wide {
     grid-template-columns: minmax(0, 1fr);
@@ -351,12 +404,12 @@ main.settings-open {
 .settings-fields textarea {
     width: 100%;
     min-height: 64px;
-    padding: 12px;
+    padding: var(--space-3);
     font: inherit;
-    color: #f4f7ff;
-    background: #101827;
-    border: 2px solid #c4d5ff;
-    border-radius: 0;
+    color: var(--color-foreground);
+    background: var(--color-background);
+    border: var(--portos-control-border-size) solid var(--color-input);
+    border-radius: var(--radius-md);
 }
 /* Every Settings select draws its arrow like a stepper button: a 72 px box at
    the right edge, button fill, a white chevron of the +/− glyphs' weight. The
@@ -367,16 +420,20 @@ main.settings-open {
     background:
         url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 8l8 8 8-8' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='square'/%3E%3C/svg%3E")
             right 20px center / 28px 28px no-repeat,
-        linear-gradient(#c4d5ff, #c4d5ff) right 70px top 0 / 2px 100% no-repeat,
-        linear-gradient(#243b61, #243b61) right 0 top 0 / 70px 100% no-repeat,
-        #101827;
+        linear-gradient(var(--color-input), var(--color-input)) right
+            calc(72px - var(--portos-control-border-size)) top 0 /
+            var(--portos-control-border-size) 100% no-repeat,
+        linear-gradient(var(--color-secondary), var(--color-secondary)) right 0
+            top 0 / calc(72px - var(--portos-control-border-size)) 100%
+            no-repeat,
+        var(--color-background);
     cursor: pointer;
 }
 .settings-fields input[type="checkbox"] {
     width: 64px;
     height: 64px;
     margin: 0;
-    accent-color: #c4d5ff;
+    accent-color: var(--color-primary);
 }
 .settings-row > input[type="checkbox"] {
     justify-self: end;
@@ -389,7 +446,7 @@ main.settings-open {
 }
 .settings-stepper {
     display: flex;
-    gap: 8px;
+    gap: var(--space-2);
 }
 .settings-stepper input {
     flex: 1 1 0;
@@ -402,6 +459,7 @@ main.settings-open {
     min-height: 64px;
     margin: 0;
     padding: 0;
+    border-radius: var(--radius-md);
     font-size: 36px;
     touch-action: none;
     user-select: none;
@@ -411,7 +469,7 @@ main.settings-open {
     flex-direction: column;
     flex-shrink: 0;
     gap: 6px;
-    padding-top: 8px;
+    padding-top: var(--space-2);
     user-select: none;
 }
 .settings-keyboard > div {
@@ -426,6 +484,7 @@ main.settings-open {
     margin: 0;
     padding: 0;
     overflow: hidden;
+    border-radius: var(--radius-md);
     font-size: 26px;
     touch-action: manipulation;
 }
@@ -438,16 +497,16 @@ main.settings-open {
     font-size: 20px;
 }
 .settings-keyboard [aria-pressed="true"] {
-    background: #c4d5ff;
-    color: #101827;
+    background: var(--color-primary);
+    color: var(--color-primary-foreground);
 }
 .settings-fields :focus-visible {
-    outline: 4px solid #ffdb70;
+    outline: 4px solid var(--color-ring);
     outline-offset: 2px;
 }
 .settings-accounts > section {
-    padding: 4px 0;
-    margin-bottom: 8px;
+    padding: var(--space-1) 0;
+    margin-bottom: var(--space-2);
 }
 .settings-accounts > section > p {
     margin: 0;
@@ -458,7 +517,7 @@ main.settings-open {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
+    gap: var(--space-4);
     min-height: 72px;
 }
 .settings-item-header > h3 {
@@ -471,25 +530,25 @@ main.settings-open {
     width: var(--account-action-width);
     min-width: 0;
     min-height: 64px;
-    margin: 4px 0;
-    padding: 8px 24px;
+    margin: var(--space-1) 0;
+    padding: var(--space-2) var(--space-6);
 }
 .settings-account-confirm {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0 16px;
+    gap: 0 var(--space-4);
 }
 .settings-account-confirm > p {
     flex-basis: 100%;
 }
 .settings-account-confirm > button {
     min-height: 64px;
-    margin: 4px 0;
+    margin: var(--space-1) 0;
 }
 .settings-packs .pack-rail {
     --pack-card-width: 48%;
-    --pack-gap: 12px;
+    --pack-gap: var(--space-3);
     display: flex;
     gap: var(--pack-gap);
     overflow-x: auto;
@@ -503,22 +562,29 @@ main.settings-open {
     content: "";
     flex: 0 0 calc((100% - var(--pack-card-width)) / 2 - var(--pack-gap));
 }
+/* A pack is a Port OS card; the selected one carries the brand edge. */
 .settings-packs .pack-card {
     flex: 0 0 var(--pack-card-width);
     display: grid;
     justify-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     min-width: 0;
     max-height: none;
     margin: 0;
-    padding: 12px;
+    padding: var(--spacing-card-padding-compact);
+    border-color: var(--color-border);
+    border-radius: var(--radius-card);
+    background: var(--color-card);
+    color: var(--color-card-foreground);
     scroll-snap-align: center;
 }
 .settings-packs .pack-card:focus-visible {
     outline-offset: -6px;
 }
 .settings-packs .pack-card[aria-pressed="true"] {
-    border-color: #ffdb70;
+    border-color: var(--color-primary);
+    box-shadow: inset 0 0 0 var(--portos-control-border-size)
+        var(--color-primary);
 }
 .settings-packs .pack-preview {
     display: grid;
@@ -526,7 +592,7 @@ main.settings-open {
     width: 100%;
     min-height: 160px;
     font-size: 20px;
-    background: #101827;
+    background: var(--color-card);
 }
 .settings-packs .pack-preview img {
     display: block;
@@ -538,22 +604,24 @@ main.settings-open {
 .settings-packs .pack-marker {
     visibility: hidden;
     font-size: 20px;
+    color: var(--color-primary);
 }
 .settings-packs .pack-card[aria-pressed="true"] .pack-marker {
     visibility: visible;
 }
 .settings-packs .pack-navigation {
     display: flex;
-    gap: 12px;
+    gap: var(--space-3);
     justify-content: space-between;
 }
 .settings-packs .pack-navigation button {
     min-width: 64px;
     min-height: 64px;
-    padding: 12px 16px;
+    padding: var(--space-3) var(--space-4);
 }
 .settings-packs .pack-navigation button[aria-disabled="true"] {
-    background: #35445b;
+    background: var(--color-muted);
+    color: var(--color-muted-foreground);
 }
 .screen-pack {
     position: fixed;

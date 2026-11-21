@@ -1,0 +1,10 @@
+Port OS design tokens (portos-tokens)
+
+Cargo.toml, LICENSE, README.md and src/lib.rs in this directory are vendored byte for byte from
+https://github.com/portpowered/portos-ui-rust, licensed under the Apache License 2.0 (LICENSE). The crate is
+generated there; it is never edited here. scripts/sync-portos-tokens.sh fetches a tag or commit of that
+repository and records the commit and each file's SHA-256 in vendor.sha256; `sh scripts/sync-portos-tokens.sh
+--check` (part of `make lint-self-tests`) fails when a vendored file differs from that record.
+
+The Manrope font the tokens name is vendored separately at web/screen/src/fonts, from @fontsource-variable/manrope
+5.3.0, under the SIL Open Font License 1.1 (web/screen/src/fonts/OFL.txt).
