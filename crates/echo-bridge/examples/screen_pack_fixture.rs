@@ -16,7 +16,7 @@ use tokio::{
 
 type Result<T = ()> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 type Input = tokio::io::Lines<BufReader<tokio::io::Stdin>>;
-const BASE: &str = "[echo]\nhost='127.0.0.1'\n[live]\nvoice='alloy'\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n";
+const BASE: &str = "[echo]\nhost='127.0.0.1'\n[live]\nvoice='ember'\ncredential_file='absent/live'\n[agent]\n[mcp]\n[screen]\npairing_token_file='absent/pairing'\n[audit]\nlog_dir='absent/logs'\n";
 
 fn emit(value: &Value) -> Result {
     let mut output = std::io::stdout().lock();
