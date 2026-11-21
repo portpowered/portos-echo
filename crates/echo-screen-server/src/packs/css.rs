@@ -50,6 +50,7 @@ fn declaration_value(key: &str, value: &str, files: &BTreeMap<String, Vec<u8>>) 
         "text-align" if ["left", "center", "right"].contains(&value) => (),
         "opacity" => number(value, 0.0, 1.0)?,
         "font-size" | "border-radius" | "border-width" | "padding" | "gap" => dimension(value)?,
+        "text-shadow" => shadows(value)?,
         _ => return Err(Error::Css),
     }
     Ok(())
@@ -69,6 +70,66 @@ fn dimension(value: &str) -> Result<(), Error> {
         .find_map(|unit| value.strip_suffix(unit))
         .ok_or(Error::Css)?;
     number(raw, 0.0, 100.0)
+}
+
+/// One or two shadows: `<x>px <y>px [<blur>px] <colour>`, lengths within 16 px,
+/// the colour `#rrggbb` or `rgba(r, g, b, a)`.
+fn shadows(value: &str) -> Result<(), Error> {
+    // The only commas outside a colour separate the shadows.
+    let (mut parts, mut start, mut inside) = (Vec::new(), 0, false);
+    for (index, byte) in value.bytes().enumerate() {
+        match byte {
+            b'(' if !inside => inside = true,
+            b')' if inside => inside = false,
+            b'(' | b')' => return Err(Error::Css),
+            b',' if !inside => {
+                parts.push(&value[start..index]);
+                start = index + 1;
+            }
+            _ => (),
+        }
+    }
+    parts.push(&value[start..]);
+    if inside || parts.len() > 2 {
+        return Err(Error::Css);
+    }
+    for part in parts {
+        let part = part.trim();
+        let (lengths, colour) = match part.find("rgba(") {
+            Some(index) => part.split_at(index),
+            None => part.rsplit_once(' ').ok_or(Error::Css)?,
+        };
+        shadow_colour(colour.trim())?;
+        let lengths = lengths.split_ascii_whitespace().collect::<Vec<_>>();
+        if !(2..=3).contains(&lengths.len()) {
+            return Err(Error::Css);
+        }
+        for (index, length) in lengths.into_iter().enumerate() {
+            let raw = length.strip_suffix("px").ok_or(Error::Css)?;
+            // Offsets may point either way; a blur radius is never negative.
+            number(raw, if index < 2 { -16.0 } else { 0.0 }, 16.0)?;
+        }
+    }
+    Ok(())
+}
+
+fn shadow_colour(value: &str) -> Result<(), Error> {
+    if let Some(channels) = value.strip_prefix("rgba(").and_then(|v| v.strip_suffix(')')) {
+        let channels = channels.split(',').map(str::trim).collect::<Vec<_>>();
+        if channels.len() != 4 {
+            return Err(Error::Css);
+        }
+        for channel in &channels[..3] {
+            if !channel.bytes().all(|b| b.is_ascii_digit()) || channel.parse::<u8>().is_err() {
+                return Err(Error::Css);
+            }
+        }
+        return number(channels[3], 0.0, 1.0);
+    }
+    if value.len() != 7 || !value.starts_with('#') || !value[1..].bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::Css);
+    }
+    Ok(())
 }
 
 fn image(value: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<(), Error> {

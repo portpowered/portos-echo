@@ -30,8 +30,8 @@ VARIANTS = ("mouth-half", "mouth-open", "blink", "listening", "connecting",
 # Poses shown next to a card stand left of centre, clear of the card.
 CARD_SHIFT = {"setup": -110, "approval": -110, "error": -110}
 # One colour grade for every frame, from -1 (cool) to 1 (warm): red gains and
-# blue loses a fifth of it. Set by the build's --warmth option.
-WARMTH = 0.0
+# blue loses a fifth of it. The build's --warmth option overrides it.
+WARMTH = -0.25
 
 # Unequal held mouth shapes, from the first frame after the neutral one. The
 # runs never repeat as a shorter regular speech cycle.
@@ -224,7 +224,7 @@ def encode(pack, raw, role, count):
          str(pack / f"{role}.mp4")])
 
 
-def render(pack, work, warmth=0.0):
+def render(pack, work, warmth=WARMTH):
     global WARMTH
     WARMTH = warmth
     frames = keyframes()

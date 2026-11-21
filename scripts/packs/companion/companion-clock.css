@@ -1,6 +1,7 @@
 .pack-clock,
 .pack-date {
     text-align: right;
+    text-shadow: 0px 2px 8px rgba(0, 0, 0, 0.75), 0px 0px 2px rgba(0, 0, 0, 0.6);
 }
 .pack-clock {
     font-size: 72px;

@@ -405,6 +405,51 @@ fn pack_css_accepts_only_documented_selectors_declarations_and_local_files() {
 }
 
 #[test]
+fn pack_css_text_shadow_is_bounded() {
+    let files = BTreeMap::new();
+    for value in [
+        "0px 2px #000000",
+        "0px 2px 6px #101827",
+        "-16px 16px 16px rgba(0, 0, 0, 0.7)",
+        "0px 1px 2px rgba(0,0,0,1), 0px 0px 12px #000000",
+        "1.5px 1.5px 0px rgba(255, 255, 255, 0)",
+    ] {
+        let css = format!(".pack-clock, .pack-date {{ text-shadow: {value}; }}");
+        assert_eq!(css::validate(&css, &files), Ok(()), "{value}");
+    }
+    for value in [
+        "",
+        "none",
+        "#000000",
+        "2px #000000",
+        "0px 2px 6px",
+        "0px 2px 6px 1px #000000",
+        "0px 17px 6px #000000",
+        "-17px 0px #000000",
+        "0px 2px 16.5px #000000",
+        "0px 2px -1px #000000",
+        "0 2px 6px #000000",
+        "0em 2px 6px #000000",
+        "0px 2px 6px #000",
+        "0px 2px 6px black",
+        "0px 2px 6px rgb(0, 0, 0)",
+        "0px 2px 6px rgba(0, 0, 0)",
+        "0px 2px 6px rgba(256, 0, 0, 0.5)",
+        "0px 2px 6px rgba(0, 0, 0, 1.5)",
+        "0px 2px 6px rgba(0, 0, 0, 0.5",
+        "0px 2px 6px rgba(0, 0, 0, 0.5))",
+        "0px 2px 6px rgba(0, 0, var(--x), 0.5)",
+        "0px 2px 6px rgba(0, 0, 0, 0.5) url(rest.png)",
+        "#000000 0px 2px 6px",
+        "0px 2px #000000, 0px 2px #000000, 0px 2px #000000",
+        "0px 2px #000000,",
+    ] {
+        let css = format!(".pack-clock {{ text-shadow: {value}; }}");
+        assert_eq!(css::validate(&css, &files), Err(Error::Css), "{value}");
+    }
+}
+
+#[test]
 fn pack_install_cancelled_preparation_and_publication_leave_no_identity() {
     let root = tempfile::tempdir().unwrap();
     let bytes = archive(&valid_files());

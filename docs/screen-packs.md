@@ -124,8 +124,11 @@ The CSS grammar accepts only `.pack-clock`, `.pack-date`, `.pack-status`,
 comma-separated lists. Allowed declarations are six-digit hex `color`,
 `background-color`, `border-color`; `background-image: url(local.png)` (or WebP);
 `font-weight` (normal, bold, 400–700 in hundreds); `text-align` (left/center/right);
-`opacity` (0–1); and `font-size`, `border-radius`, `border-width`, `padding`, `gap`
-(one nonnegative value up to 100 with px/rem/em/%). Unsupported properties,
+`opacity` (0–1); `font-size`, `border-radius`, `border-width`, `padding`, `gap`
+(one nonnegative value up to 100 with px/rem/em/%); and `text-shadow` (one or two
+comma-separated shadows, each `<x>px <y>px [<blur>px] <colour>` with offsets from
+-16 to 16, blur from 0 to 16 and the colour `#RRGGBB` or `rgba(r, g, b, a)`).
+Unsupported properties,
 selectors, comments, escapes, at-rules, expressions and remote/data URLs fail
 closed. All CSS files are checked, including unreferenced ones. Serving will
 scope selectors and rewrite validated URLs with pairing admission; raw pack CSS

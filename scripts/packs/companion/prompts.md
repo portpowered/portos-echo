@@ -22,12 +22,19 @@ earlier edit of reference.png and is no longer kept.
 
 ## The mouth shapes, the blink and the state frames
 
-Each is a separate edit of neutral.png with the same prompt and one change.
+Each is a separate edit of neutral.png with the same prompt and one change. The
+five vowel mouths (a, i, u, e, o) are stills for audio-driven lip sync; the
+builder does not use them yet.
 
 > Edit this animation frame of an original anime character to make the next frame of the same animation. Keep the image IDENTICAL everywhere except the change described below: the same adult woman, same portrait 2:3 canvas, same framing, scale and position with her hair crown just under the top edge and her body cut at the bottom edge, same outlines, colours and cel shading, same indigo wavy bob with mint hair clip, same teal and cream high-collar jacket with every fold and seam where it is, same actual transparent background with true alpha. Nothing may be moved, resized, re-posed, restyled, mirrored or added. THE ONLY CHANGE: (the change below) No glow, shadow, text, border or backdrop.
 
 - mouth-half.png: her lips are slightly parted in mid speech, showing a small dark gap and a hint of upper teeth, about one third open. Eyes, brows, nose, jaw and face outline stay exactly as they are.
-- mouth-open.png: her mouth is open in a rounded speaking shape (an 'ah' vowel), clearly taller than a slightly parted mouth, showing upper teeth and tongue. Eyes, brows, nose, jaw and face outline stay exactly as they are.
+- mouth-open.png: her mouth is open in a relaxed speaking shape, moderately open: no wider than her closed smile and about half as tall as it is wide, showing the edge of the upper teeth and a little tongue. A calm talking mouth, not a shout or a laugh. Only the mouth changes; eyes, brows, nose, cheeks, head position and face outline stay exactly as they are.
+- mouth-a.png: her mouth says the vowel 'a' (as in 'father'): a relaxed open oval no wider than her closed smile, the jaw lowered just a little, the edge of the upper teeth visible and the tongue low. A calm speaking mouth, not a shout or a laugh. Only the mouth changes; eyes, brows, nose, cheeks, head position and face outline stay exactly as they are.
+- mouth-i.png: her mouth says the vowel 'i' (as in 'see'): lips stretched slightly sideways with a narrow opening, teeth nearly together and showing as a thin light strip. Only the mouth changes; eyes, brows, nose, cheeks, head position and face outline stay exactly as they are.
+- mouth-u.png: her mouth says the vowel 'u' (as in 'blue'): lips rounded and gently pursed into a small pucker with a small round dark opening, no teeth showing. Only the mouth changes; eyes, brows, nose, cheeks, head position and face outline stay exactly as they are.
+- mouth-e.png: her mouth says the vowel 'e' (as in 'bed'): mouth half open with the lips a little wide, the upper teeth visible, the opening clearly shorter than a full 'a'. Only the mouth changes; eyes, brows, nose, cheeks, head position and face outline stay exactly as they are.
+- mouth-o.png: her mouth says the vowel 'o' (as in 'go'): lips rounded into a medium round opening, narrower than her smile, the jaw lowered just a little, no teeth showing. Only the mouth changes; eyes, brows, nose, cheeks, head position and face outline stay exactly as they are.
 - blink.png: both eyelids are softly closed in a natural blink, drawn as two calm downward-curved lash lines where the eyes were. Brows, nose, closed smiling mouth and face outline stay exactly as they are.
 - listening.png: her HEAD is tilted about 8 degrees toward viewer-right in a curious, attentive listening tilt, with brows raised and eyes slightly wider, looking at the viewer, lips closed in a soft smile. Only the head, hair and face change; the neck, collar, shoulders, arms and whole jacket stay exactly where they are.
 - connecting.png: her eyes glance toward viewer-left, as if waiting for something off screen, with her head turned very slightly that way, brows relaxed and lips closed in a small calm smile. Only the head, hair and face change; the neck, collar, shoulders, arms and whole jacket stay exactly where they are.

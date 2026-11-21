@@ -12,7 +12,7 @@ import sys
 import tarfile
 import tempfile
 
-from render import BACKGROUND, FRAMES, render
+from render import BACKGROUND, FRAMES, WARMTH, render
 
 MIB = 1024 ** 2
 DIAGNOSTIC = "screenpack: generation failed; output was not published"
@@ -76,7 +76,7 @@ def archive_pack(pack, archive):
     archive.with_suffix(".gz.sha256").write_text(f"{digest}  {archive.name}\n", encoding="ascii")
 
 
-def build(version, out, warmth=0.0):
+def build(version, out, warmth=WARMTH):
     if sys.platform != "linux" or out.exists() or out.is_symlink():
         raise ValueError("Linux and an unused output path are required")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -102,7 +102,7 @@ def main():
     parser = argparse.ArgumentParser(description="Build Companion screen-pack data (Linux only).")
     parser.add_argument("--version", required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--warmth", type=float, default=0.0,
+    parser.add_argument("--warmth", type=float, default=WARMTH,
                         help="colour grade of every frame, -1 (cool) to 1 (warm)")
     args = parser.parse_args()
     if not -1 <= args.warmth <= 1:
