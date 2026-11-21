@@ -312,13 +312,45 @@ async fn t3_link_failure_names_only_the_step_status_and_oauth_code() {
     assert_eq!(client.take_link_failure(), None);
     let private = json!("private detail");
     for (path, step, status, code, expected, seen) in [
-        (REGISTER, "registration", 400, json!("invalid_redirect_uri"), AuthError::Protocol, Some("invalid_redirect_uri")),
-        (REGISTER, "registration", 400, json!("invalid_client_metadata"), AuthError::RegistrationRefused, Some("invalid_client_metadata")),
-        (REGISTER, "registration", 400, json!("Bearer synthetic.secret"), AuthError::Protocol, Some("unrecognized")),
-        (REGISTER, "registration", 429, private.clone(), AuthError::Transport, None),
+        (
+            REGISTER,
+            "registration",
+            400,
+            json!("invalid_redirect_uri"),
+            AuthError::Protocol,
+            Some("invalid_redirect_uri"),
+        ),
+        (
+            REGISTER,
+            "registration",
+            400,
+            json!("invalid_client_metadata"),
+            AuthError::RegistrationRefused,
+            Some("invalid_client_metadata"),
+        ),
+        (
+            REGISTER,
+            "registration",
+            400,
+            json!("Bearer synthetic.secret"),
+            AuthError::Protocol,
+            Some("unrecognized"),
+        ),
+        (
+            REGISTER,
+            "registration",
+            429,
+            private.clone(),
+            AuthError::Transport,
+            None,
+        ),
         (REGISTER, "registration", 201, json!(7), AuthError::Protocol, None),
     ] {
-        mock.fault(path, status, json!({"error":code,"client_id":" ","error_description":"private detail"}));
+        mock.fault(
+            path,
+            status,
+            json!({"error":code,"client_id":" ","error_description":"private detail"}),
+        );
         error(drive(client.begin_link()).await, expected);
         let failure = LinkFailure {
             step,
@@ -352,7 +384,11 @@ async fn t3_device_authorization_and_token_refusals_name_their_own_step() {
     };
     assert_eq!(client.take_link_failure(), Some(token));
 
-    mock.fault("/custom/link", 400, json!({"error":"invalid_dpop_proof","error_description":"private detail"}));
+    mock.fault(
+        "/custom/link",
+        400,
+        json!({"error":"invalid_dpop_proof","error_description":"private detail"}),
+    );
     error(drive(client.begin_link()).await, AuthError::Protocol);
     let device = LinkFailure {
         step: "device_authorization",
@@ -363,6 +399,10 @@ async fn t3_device_authorization_and_token_refusals_name_their_own_step() {
     error(drive(client.begin_link()).await, AuthError::Protocol);
     mock.state.lock().unwrap().fault = None;
     drive(client.begin_link()).await.unwrap();
-    assert_eq!(client.take_link_failure(), None, "a new attempt clears the last failure");
+    assert_eq!(
+        client.take_link_failure(),
+        None,
+        "a new attempt clears the last failure"
+    );
     assert!(!client.has_grant());
 }

@@ -7,12 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
-pub(crate) async fn register(
-    client: &Client,
-    endpoint: url::Url,
-    name: &str,
-    scope: &str,
-) -> Result<String, Refusal> {
+pub(crate) async fn register(client: &Client, endpoint: url::Url, name: &str, scope: &str) -> Result<String, Refusal> {
     #[derive(Deserialize)]
     struct RegistrationReply {
         client_id: String,
