@@ -164,12 +164,14 @@ test("restart: a page shows the frames of a bridge that restarted and counts fro
     await page.goto(`${origin}/?events=%2Fevents&actions=%2Factions`);
     await page.locator('[data-ui-state="listening"]').waitFor();
     assert.deepEqual(await shown(), ["listening", "41"]);
-    // It restarts: the new process numbers its first frame one.
-    const checks = bridge.checks;
+    // A settings save restarts it in place with the same page build: no
+    // reload, and the new process numbers its first frame one.
+    const { checks, documents } = bridge;
     Object.assign(bridge, { seq: 0, state: "speaking" });
     await restart(checks + 1);
     await page.locator('[data-ui-state="speaking"]').waitFor();
     assert.deepEqual(await shown(), ["speaking", "1"]);
+    assert.equal(bridge.documents, documents);
     // On that connection frames are ordered by number as before.
     const [stream] = streams;
     const send = (seq, state) =>
