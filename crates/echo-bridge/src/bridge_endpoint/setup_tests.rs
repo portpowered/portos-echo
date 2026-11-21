@@ -80,12 +80,20 @@ async fn t3_endpoint_pair_resumes_route_lookup_without_a_new_exchange() {
 }
 
 async fn wait_unavailable(settings: &Settings) {
+    wait_warning(settings, UNAVAILABLE).await;
+}
+
+pub(super) async fn wait_warning(settings: &Settings, warning: &str) -> Value {
+    let expected = json!([warning]);
     for _ in 0..50 {
-        if settings.snapshot().await["warnings"] == json!([UNAVAILABLE]) {
-            return;
+        let snapshot = settings.snapshot().await;
+        if snapshot["warnings"] == expected {
+            return snapshot;
         }
     }
-    panic!("endpoint route refusal was not shown in Settings");
+    let snapshot = settings.snapshot().await;
+    assert_eq!(snapshot["warnings"], expected);
+    snapshot
 }
 
 #[tokio::test(start_paused = true)]
@@ -173,24 +181,22 @@ async fn t3_endpoint_pair_requires_the_existing_port_os_link() {
         let mut gateway = Gateway::open().await;
         let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
         settings.save(true, "Hall Echo").await;
-        for _ in 0..50 {
-            let state = settings.snapshot().await;
-            if state["warnings"] == json!(["Link this Echo with its own Port OS client to connect the endpoint."]) {
-                assert_eq!(state["portos"]["challenge"], Value::Null);
-                assert_eq!(state["portos"]["link_status"], "link_required");
-                assert!(gateway.received.try_recv().is_err());
-                assert!(!mock.state.lock().unwrap().requests.iter().any(|request| {
-                    matches!(
-                        request.path.as_str(),
-                        "/custom/link" | "/custom/token" | "/plugin-auth-code-exchanges"
-                    )
-                }));
-                settings.close().await;
-                grant.close().await;
-                return;
-            }
-        }
-        panic!("endpoint did not ask the operator to link Port OS");
+        let state = wait_warning(
+            &settings,
+            "Link this Echo with its own Port OS client to connect the endpoint.",
+        )
+        .await;
+        assert_eq!(state["portos"]["challenge"], Value::Null);
+        assert_eq!(state["portos"]["link_status"], "link_required");
+        assert!(gateway.received.try_recv().is_err());
+        assert!(!mock.state.lock().unwrap().requests.iter().any(|request| {
+            matches!(
+                request.path.as_str(),
+                "/custom/link" | "/custom/token" | "/plugin-auth-code-exchanges"
+            )
+        }));
+        settings.close().await;
+        grant.close().await;
     })
     .await;
 }

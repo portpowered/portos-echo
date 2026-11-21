@@ -45,13 +45,13 @@ impl Transport {
         let mut messages = Url::parse(api).ok()?;
         let gateway = gateway.strip_suffix(PATH_MARKER)?;
         let url = Url::parse(gateway).ok()?;
-        if !matches!((messages.scheme(), url.scheme()), ("https", "wss"))
-            && !(loopback
-                && messages.scheme() == "http"
-                && url.scheme() == "ws"
-                && messages.host_str() == Some("127.0.0.1")
-                && url.host_str() == Some("127.0.0.1"))
-        {
+        let schemes = (messages.scheme(), url.scheme());
+        let encrypted = schemes == ("https", "wss");
+        let synthetic = loopback
+            && schemes == ("http", "ws")
+            && messages.host_str() == Some("127.0.0.1")
+            && url.host_str() == Some("127.0.0.1");
+        if !(encrypted || synthetic) {
             return None;
         }
         if [&url, &messages].into_iter().any(|url| {

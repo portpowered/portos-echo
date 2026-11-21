@@ -1,5 +1,6 @@
 use super::*;
 use echo_mcp_auth::mock::Request as HttpRequest;
+use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test(start_paused = true)]
 async fn t3_endpoint_command_replies_are_correlated_and_deduplicated_across_reconnect() {
@@ -18,7 +19,7 @@ async fn t3_endpoint_command_replies_are_correlated_and_deduplicated_across_reco
             "start-session",
             "first",
             ROUTE,
-            json!({"reason":"synthetic","initialText":"hello"}),
+            &json!({"reason":"synthetic","initialText":"hello"}),
         );
         let opened = Instant::now();
         send(&gateway, &start).await;
@@ -35,38 +36,17 @@ async fn t3_endpoint_command_replies_are_correlated_and_deduplicated_across_reco
 
         gateway.frames.send(Message::Close(None)).await.unwrap();
         gateway.assert_disconnect().await;
+        setup_tests::wait_warning(&settings, "Connecting this Echo to Port OS.").await;
         advance(Duration::from_secs(2)).await;
         gateway.assert_upgrade(4).await;
         send(&gateway, &start).await;
         assert_unsupported_command(&gateway, &mock).await;
-        send(
-            &gateway,
-            &command("end-session", "last", ROUTE, json!({"sessionId":"missing"})),
-        )
-        .await;
-        assert_reply(
-            &mock,
-            "last",
-            "end-session",
-            "NOT_FOUND",
-            "The voice session was not found.",
-        )
-        .await;
+        assert_unknown_end(&gateway, &mock).await;
 
         settings.close().await;
         gateway.assert_disconnect().await;
         grant.close().await;
-        let mut ids: Vec<_> = receipts(&mock)
-            .into_iter()
-            .map(|request| {
-                request.json.unwrap()["payload"]["requestId"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned()
-            })
-            .collect();
-        ids.sort_unstable();
-        assert_eq!(ids, ["first", "invalid", "last", "unknown"]);
+        assert_unique_replies(&mock);
     })
     .await;
 }
@@ -74,10 +54,10 @@ async fn t3_endpoint_command_replies_are_correlated_and_deduplicated_across_reco
 async fn assert_invalid_routing(gateway: &Gateway, mock: &Mock) {
     send(
         gateway,
-        &command("start-session", "wrong", "other-route", json!({"reason":"synthetic"})),
+        &command("start-session", "wrong", "other-route", &json!({"reason":"synthetic"})),
     )
     .await;
-    send(gateway, &command("end-session", "invalid", ROUTE, json!([]))).await;
+    send(gateway, &command("end-session", "invalid", ROUTE, &json!([]))).await;
     assert_reply(
         mock,
         "invalid",
@@ -89,7 +69,7 @@ async fn assert_invalid_routing(gateway: &Gateway, mock: &Mock) {
 }
 
 async fn assert_unsupported_command(gateway: &Gateway, mock: &Mock) {
-    send(gateway, &command("future", "unknown", ROUTE, json!({}))).await;
+    send(gateway, &command("future", "unknown", ROUTE, &json!({}))).await;
     assert_reply(
         mock,
         "unknown",
@@ -100,7 +80,37 @@ async fn assert_unsupported_command(gateway: &Gateway, mock: &Mock) {
     .await;
 }
 
-fn command(name: &str, id: &str, route: &str, payload: Value) -> Value {
+async fn assert_unknown_end(gateway: &Gateway, mock: &Mock) {
+    send(
+        gateway,
+        &command("end-session", "last", ROUTE, &json!({"sessionId":"missing"})),
+    )
+    .await;
+    assert_reply(
+        mock,
+        "last",
+        "end-session",
+        "NOT_FOUND",
+        "The voice session was not found.",
+    )
+    .await;
+}
+
+fn assert_unique_replies(mock: &Mock) {
+    let mut ids: Vec<_> = receipts(mock)
+        .into_iter()
+        .map(|request| {
+            request.json.unwrap()["payload"]["requestId"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["first", "invalid", "last", "unknown"]);
+}
+
+fn command(name: &str, id: &str, route: &str, payload: &Value) -> Value {
     json!({
         "header":{"namespace":"assistant-session","name":name,"version":"1.0","messageId":id},
         "target":{"type":"ROUTE","value":route},

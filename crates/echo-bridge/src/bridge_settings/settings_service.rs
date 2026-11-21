@@ -147,7 +147,7 @@ impl SettingsService {
     ) -> (T, SettingsCompletion) {
         if let Some((runtime, control)) = self.endpoint.take() {
             let settings = self.serve_inbox(work, link_status, &current_grant, Some(&control));
-            return runtime.scope(settings, &current_grant).await;
+            return Box::pin(runtime.scope(settings, &current_grant)).await;
         }
         self.serve_inbox(work, link_status, &current_grant, None).await
     }
@@ -197,13 +197,8 @@ impl SettingsService {
                                     let same_owner = grant.as_ref().zip(current.as_ref())
                                         .is_some_and(|(before, now)| Arc::ptr_eq(before, now));
                                     let view = if same_owner { view } else { GrantView::default() };
-                                    let before = endpoint.map(|_| host.effective().portos_endpoint.clone());
-                                    let unlink = matches!(&operation, SettingsOperation::PortosV2(PortosOperationV2::Unlink { .. }));
-                                    let mut reply = commit(&mut host, &restart, trace.as_mut(), operation, (link_status(), view, current.as_deref()));
-                                    if let Some((control, before)) = endpoint.zip(before) {
-                                        endpoint_commit(control, &before, &host.effective().portos_endpoint, unlink, &mut reply);
-                                    }
-                                    reply
+                                    commit_with_endpoint(&mut host, &restart, trace.as_mut(), operation,
+                                        (link_status(), view, current.as_deref()), endpoint)
                                 }).await;
                             };
                             // Work may itself hold the grant lock during refresh.
@@ -227,6 +222,26 @@ impl SettingsService {
             },
         )
     }
+}
+
+fn commit_with_endpoint(
+    host: &mut SettingsHost,
+    restart: &Restart,
+    trace: Option<&mut crate::bridge_trace::Trace>,
+    operation: SettingsOperation,
+    grant: (LinkStatusV1, GrantView, Option<&Grant>),
+    endpoint: Option<&bridge_endpoint::Control>,
+) -> SettingsReply {
+    let before = endpoint.map(|_| host.effective().portos_endpoint.clone());
+    let unlink = matches!(
+        &operation,
+        SettingsOperation::PortosV2(PortosOperationV2::Unlink { .. })
+    );
+    let mut reply = commit(host, restart, trace, operation, grant);
+    if let Some((control, before)) = endpoint.zip(before) {
+        endpoint_commit(control, &before, &host.effective().portos_endpoint, unlink, &mut reply);
+    }
+    reply
 }
 
 fn endpoint_commit(

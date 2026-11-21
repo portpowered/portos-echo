@@ -5,26 +5,23 @@ use crate::{
     bridge_settings::{SettingsHost, SettingsService},
     bridge_trace::Trace,
 };
-use echo_config::{HomeConfig, McpAuth, McpServer, SettingsOverlay};
+use echo_config::{AgentTools, HomeConfig, McpAuth, McpServer, SettingsOverlay};
 use echo_contracts::secret::Secret;
 use echo_mcp_auth::{AuthOptions, LinkClient, mock::Mock};
 use echo_screen_contract::settings_v1::PromptTextsV1;
+use gateway_test_peer::Gateway;
 use serde_json::{Value, json};
 use std::{fs, path::Path};
 use tokio::{
-    net::TcpListener,
     sync::{mpsc, oneshot},
     task::JoinHandle,
     time::{Instant, advance},
 };
-use tokio_tungstenite::{
-    accept_hdr_async,
-    tungstenite::Message,
-    tungstenite::handshake::server::{Request, Response},
-};
 
 #[path = "command_tests.rs"]
 mod command_tests;
+#[path = "gateway_test_peer.rs"]
+mod gateway_test_peer;
 #[path = "setup_tests.rs"]
 mod setup_tests;
 
@@ -42,82 +39,6 @@ impl RouteResolver for Resolver {
             assert_eq!(tokens.access_token().await.unwrap().expose(), "endpoint-access-2");
             Some(ROUTE.into())
         })
-    }
-}
-
-struct Gateway {
-    template: String,
-    received: mpsc::Receiver<GatewayEvent>,
-    frames: mpsc::Sender<Message>,
-    task: JoinHandle<()>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum GatewayEvent {
-    Upgrade(String, String, bool),
-    Disconnected,
-}
-
-impl Gateway {
-    async fn open() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let template = format!(
-            "ws://127.0.0.1:{}/devices/{{authLinkId}}", // lint-rules: allow-literal port interpolated from the loopback listener
-            listener.local_addr().unwrap().port()
-        );
-        let (events, received) = mpsc::channel(8);
-        let (frames, outgoing) = mpsc::channel(8);
-        let task = tokio::spawn(gateway(listener, events, outgoing));
-        Self {
-            template,
-            received,
-            frames,
-            task,
-        }
-    }
-}
-
-impl Drop for Gateway {
-    fn drop(&mut self) {
-        self.task.abort();
-    }
-}
-
-async fn gateway(listener: TcpListener, events: mpsc::Sender<GatewayEvent>, mut frames: mpsc::Receiver<Message>) {
-    use futures_util::{SinkExt, StreamExt};
-    while let Ok((stream, _)) = listener.accept().await {
-        let Ok(mut socket) = accept_hdr_async(stream, |request: &Request, response: Response| {
-            let bearer = request
-                .headers()
-                .get("Authorization")
-                .and_then(|header| header.to_str().ok())
-                .unwrap_or_default()
-                .to_owned();
-            if !bearer.starts_with("Bearer endpoint-access-") {
-                let mut refused = tokio_tungstenite::tungstenite::http::Response::new(None);
-                *refused.status_mut() = tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED;
-                return Err(refused);
-            }
-            events
-                .try_send(GatewayEvent::Upgrade(
-                    request.uri().path().into(),
-                    bearer,
-                    request.headers().contains_key("DPoP"),
-                ))
-                .unwrap();
-            Ok(response)
-        })
-        .await
-        else {
-            continue;
-        };
-        loop {
-            tokio::select! {
-                message = socket.next() => if message.is_none_or(|frame| frame.is_err()) { break; },
-                Some(frame) = frames.recv() => if socket.send(frame).await.is_err() { break; },
-            }
-        }
-        events.send(GatewayEvent::Disconnected).await.unwrap();
     }
 }
 
@@ -289,7 +210,7 @@ fn settings_owner(home: &Path, mock: &Mock, base_enabled: bool) -> (SettingsHost
     let mut config = BridgeConfig::from_toml_str(include_str!("../../../../examples/bridge.echo.toml")).unwrap();
     config.home = Some(HomeConfig {
         dir: home.join("settings"),
-        agent_tools: Default::default(),
+        agent_tools: AgentTools::default(),
     });
     config.mcp.scopes = vec!["endpoint:read".into()];
     config.portos_endpoint.api_base = Some(mock.base.replacen("http://", "https://", 1));
@@ -305,10 +226,14 @@ fn settings_owner(home: &Path, mock: &Mock, base_enabled: bool) -> (SettingsHost
         bearer_file: None,
         allow_tools: vec![],
     }];
-    let overlay = match fs::read_to_string(home.join("settings/settings.toml")) {
-        Ok(text) => SettingsOverlay::from_toml_str(&text).unwrap(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => SettingsOverlay::default(),
-        Err(error) => panic!("failed to load fixture overlay: {error}"),
+    let text = fs::read_to_string(home.join("settings/settings.toml"));
+    let overlay = if text
+        .as_ref()
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        SettingsOverlay::default()
+    } else {
+        SettingsOverlay::from_toml_str(&text.unwrap()).unwrap()
     };
     let desired = overlay.apply_to(&config).unwrap().portos_endpoint;
     let owner = SettingsHost::open(
@@ -326,7 +251,7 @@ fn settings_owner(home: &Path, mock: &Mock, base_enabled: bool) -> (SettingsHost
 
 #[tokio::test(start_paused = true)]
 async fn t3_endpoint_pair_settings_to_gateway_and_report() {
-    bridge_mcp::bridge_component::drive(async {
+    Box::pin(bridge_mcp::bridge_component::drive(async {
         let home = tempfile::tempdir().unwrap();
         let started = Instant::now();
         let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
@@ -351,23 +276,8 @@ async fn t3_endpoint_pair_settings_to_gateway_and_report() {
         setup_tests::assert_wrong_gateway_audience(&gateway).await;
         settings.close().await;
         grant.close().await;
-    })
+    }))
     .await;
-}
-
-impl Gateway {
-    async fn assert_upgrade(&mut self, generation: usize) {
-        let wanted = GatewayEvent::Upgrade(
-            "/devices/loopback%20link%2F%25".into(),
-            format!("Bearer endpoint-access-{generation}"),
-            false,
-        );
-        assert_eq!(self.received.recv().await, Some(wanted));
-    }
-
-    async fn assert_disconnect(&mut self) {
-        assert_eq!(self.received.recv().await, Some(GatewayEvent::Disconnected));
-    }
 }
 
 async fn restart_and_rename(
@@ -397,6 +307,11 @@ async fn restart_and_rename(
     let reopened = Settings::open(home, mock, gateway, grant.grant.clone()).await;
     gateway.assert_upgrade(6).await;
     assert_eq!(reopened.snapshot().await["portos"]["endpoint_name"], "Kitchen");
+    assert_rename(home, mock);
+    reopened
+}
+
+fn assert_rename(home: &Path, mock: &Mock) {
     let stored = read_install(home);
     let state = mock.state.lock().unwrap();
     let exchanges: Vec<_> = state
@@ -421,7 +336,6 @@ async fn restart_and_rename(
             .count(),
         1
     );
-    reopened
 }
 
 async fn assert_unlinked(home: &Path, settings: &Settings, device_id: Value) {
@@ -432,7 +346,7 @@ async fn assert_unlinked(home: &Path, settings: &Settings, device_id: Value) {
             return;
         }
     }
-    panic!("MCP unlink never settled");
+    assert_eq!(settings.snapshot().await["portos"]["link_status"], "link_required");
 }
 
 fn read_install(home: &Path) -> Value {
@@ -447,6 +361,11 @@ async fn assert_installed(home: &Path, mock: &Mock) {
     assert_eq!(install.device_name, "Hall Echo");
     let stored = read_install(home);
     assert_ne!(stored["deviceId"], ROUTE);
+    assert_initial_report(mock).await;
+    assert_install_exchange(mock, &stored);
+}
+
+async fn assert_initial_report(mock: &Mock) {
     let report = loop {
         if let Some(report) = mock
             .state
@@ -471,6 +390,9 @@ async fn assert_installed(home: &Path, mock: &Mock) {
             "payload":{"state":"idle","sessionId":null,"origin":null,"volume":null,"muted":null}
         })
     );
+}
+
+fn assert_install_exchange(mock: &Mock, stored: &Value) {
     let state = mock.state.lock().unwrap();
     assert!(state.endpoint.mcp_claimed);
     assert!(state.endpoint.endpoint_claimed);
