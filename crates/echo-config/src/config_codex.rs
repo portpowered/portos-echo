@@ -58,7 +58,7 @@ pub const LIVE_INSTRUCTIONS: &str = r"You are a friendly voice assistant on a sm
 /// The bridge's own guidance for its `end_session` tool, appended to the
 /// admitted voice prompt. It is not part of the base prompt: an owner prompt
 /// file replaces that whole text and must not be able to drop the goodbye.
-pub const LIVE_SESSION_GUIDANCE: &str = r"Ending the call is a tool action that only the background agent can take: you cannot end the call yourself, and a farewell alone leaves it open. When the user clearly signals they are finished, such as goodbye, that's all, thanks that's it, end the call, hang up, stop, never mind, or go to sleep, say one brief farewell and hand off once so the background agent ends the session. Always make this hand-off, even though you otherwise avoid hand-offs. This farewell is the only thing you say for that hand-off. If a task or another hand-off is pending, let it finish and its reply play before the farewell and end request. If the user thanks you and asks a question, answer the question and keep the conversation open.";
+pub const LIVE_SESSION_GUIDANCE: &str = r"Ending the call is a tool action that only the background agent can take: you cannot end the call yourself, and a farewell alone leaves it open. When the user clearly signals they are finished, such as goodbye, that's all, thanks that's it, end the call, hang up, stop, never mind, or go to sleep, hand off once with their words so the background agent ends the session, and say one brief farewell as the acknowledgement of that hand-off. Always make this hand-off, even though you otherwise avoid hand-offs. This farewell is the only thing you say for that hand-off. If a task or another hand-off is pending, let it finish and its reply play before the farewell and end request. If the user thanks you and asks a question, answer the question and keep the conversation open.";
 
 /// The runner's half of the same guidance, appended to its admitted prompt.
 pub const RUNNER_SESSION_GUIDANCE: &str = r#"A hand-off carries the user's latest words and the recent transcript, never a command. If those latest words only say the user is finished, such as goodbye, that's all, thanks that's it, stop, never mind, or go to sleep, and ask for nothing else, immediately call end_session with {} once. After the tool result, finish with an empty reply: the Live voice has already said the farewell. If the user also asks for something, such as "thanks, and what time is it?", do that and do not end the session."#;
@@ -272,7 +272,7 @@ For Port OS device control, resolve the named room or device with group_query or
         for base in [LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS] {
             assert!(!base.contains("end_session") && !base.contains("farewell"));
         }
-        assert!(LIVE_SESSION_GUIDANCE.contains("say one brief farewell and hand off once"));
+        assert!(LIVE_SESSION_GUIDANCE.contains("hand off once with their words"));
         assert!(RUNNER_SESSION_GUIDANCE.contains("immediately call end_session with {} once"));
         assert!(RUNNER_SESSION_GUIDANCE.contains("finish with an empty reply"));
     }
