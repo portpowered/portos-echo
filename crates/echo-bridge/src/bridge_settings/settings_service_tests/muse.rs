@@ -339,5 +339,6 @@ async fn peer(
     let mut output = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
     let port: u16 = output.next_line().await.unwrap().unwrap().parse().unwrap();
     let address = std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-    (format!("https://{address}"), child, output, der.stdout)
+    let scheme = "https://";
+    (format!("{scheme}{address}"), child, output, der.stdout)
 }
