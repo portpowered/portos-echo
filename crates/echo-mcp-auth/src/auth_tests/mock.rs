@@ -370,10 +370,7 @@ fn verify(request: &Request, base: &str, state: &mut State) -> bool {
     let Some(jti) = claims["jti"].as_str() else {
         return false;
     };
-    if !bound(request, jwk, state) || !state.jtis.insert(jti.into()) {
-        return false;
-    }
-    true
+    bound(request, jwk, state) && state.jtis.insert(jti.into())
 }
 
 // Port OS accepts one device authorization per key. Its device-code exchange
