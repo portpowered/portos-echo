@@ -174,9 +174,12 @@ codex_source
         return self.call('''
 codex_prerequisites() { compiler='rustc controlled'; tools=/ndk/bin; ndk=/ndk; }
 codex_source() {
-  mkdir -p "$work/source"
+  mkdir -p "$work/source/codex-rs"
   printf license > "$work/source/LICENSE"
   printf notice > "$work/source/NOTICE"
+  printf '[workspace.package]\nversion = "0.171.0"\n' > "$work/source/codex-rs/Cargo.toml"
+  printf '[[package]]\nname = "codex-test"\nversion = "%s"\n' "${TEST_LOCK_VERSION:-0.171.0}" \
+    > "$work/source/codex-rs/Cargo.lock"
 }
 codex_ca() { printf ca > "$stage/cacert.pem"; }
 codex_pagable() { :; }
@@ -186,6 +189,19 @@ codex_inspect() {
   digest=$(sha256sum "$stage/codex-app-server"); digest=${digest%% *}
 }
 ''' + override + '\ncodex_main')
+
+    def test_bad_local_lock_stops_before_cargo_and_publication(self):
+        for version in ("0.0.0", "0.160.0"):
+            with self.subTest(version=version):
+                result = self.pipeline(f'''
+TEST_LOCK_VERSION={version}
+codex_build() {{ touch "$work/cargo-entered"; }}
+''')
+                self.assert_failed(result, f"local package codex-test is locked at {version}; expected 0.171.0")
+                self.assertFalse((self.work / "cargo-entered").exists())
+                self.assertFalse(self.output.exists())
+                self.assertEqual(list(self.root.glob("*.staging.*")), [])
+                self.work = self.root / "second work"
 
     def test_success_publishes_exact_bundle_and_records(self):
         result = self.pipeline()

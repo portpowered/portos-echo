@@ -1,28 +1,69 @@
-Why: coordinator mailbox answer 2 (2026-11-16) authorizes lossless integer
-widening only. In codex-rs/exec-server/src/no_follow/unix.rs:220/221/228/229
-and :313/314/320, rustix Stat.st_mode is u32 on armv7 Android, while libc's
-mode_t/S_IF* constants are u16. u32::from preserves every bit, also on hosts
-where these constants already are u32. Keep the mask, comparison operands,
-symlink rejection, directory/regular-file decisions and removal unchanged.
-No narrowing, branch, cfg, feature, dependency or syscall changes.
+Widen libc mode constants losslessly for the statx, fstatat and removal
+paths. ARMv7 Android libc mode constants are u16 while rustix mode masks
+use u32. The mask, syscall choices and symlink rejection are unchanged.
 
+diff --git a/codex-rs/exec-server/src/no_follow/unix.rs b/codex-rs/exec-server/src/no_follow/unix.rs
+index 24d5feb9..1c3fe85d 100644
 --- a/codex-rs/exec-server/src/no_follow/unix.rs
 +++ b/codex-rs/exec-server/src/no_follow/unix.rs
-@@ -220,2 +220,2 @@
--    let kind = metadata.st_mode & libc::S_IFMT;
+@@ -297,8 +297,8 @@ fn metadata_sync(path: &Path) -> io::Result<FileMetadata> {
+
+ #[cfg(target_os = "linux")]
+ fn file_metadata_linux(metadata: Statx) -> io::Result<FileMetadata> {
+-    let kind = u32::from(metadata.stx_mode) & libc::S_IFMT;
 -    if kind == libc::S_IFLNK {
-+    let kind = metadata.st_mode & u32::from(libc::S_IFMT);
++    let kind = u32::from(metadata.stx_mode) & u32::from(libc::S_IFMT);
 +    if kind == u32::from(libc::S_IFLNK) {
-@@ -228,2 +228,2 @@
+         return Err(io::Error::new(
+             io::ErrorKind::InvalidInput,
+             "path contains a symbolic link",
+@@ -310,8 +310,8 @@ fn file_metadata_linux(metadata: Statx) -> io::Result<FileMetadata> {
+         unix_time_ms(metadata.stx_btime.tv_sec, metadata.stx_btime.tv_nsec)
+     };
+     Ok(FileMetadata {
 -        is_directory: kind == libc::S_IFDIR,
 -        is_file: kind == libc::S_IFREG,
 +        is_directory: kind == u32::from(libc::S_IFDIR),
 +        is_file: kind == u32::from(libc::S_IFREG),
-@@ -313,2 +313,2 @@
+         is_symlink: false,
+         size: metadata.stx_size,
+         created_at_ms,
+@@ -320,16 +320,16 @@ fn file_metadata_linux(metadata: Statx) -> io::Result<FileMetadata> {
+ }
+
+ fn file_metadata(metadata: Stat, created_at_ms: i64) -> io::Result<FileMetadata> {
+-    let kind = metadata.st_mode & libc::S_IFMT;
+-    if kind == libc::S_IFLNK {
++    let kind = metadata.st_mode & u32::from(libc::S_IFMT);
++    if kind == u32::from(libc::S_IFLNK) {
+         return Err(io::Error::new(
+             io::ErrorKind::InvalidInput,
+             "path contains a symbolic link",
+         ));
+     }
+     Ok(FileMetadata {
+-        is_directory: kind == libc::S_IFDIR,
+-        is_file: kind == libc::S_IFREG,
++        is_directory: kind == u32::from(libc::S_IFDIR),
++        is_file: kind == u32::from(libc::S_IFREG),
+         is_symlink: false,
+         size: u64::try_from(metadata.st_size).unwrap_or(0),
+         created_at_ms,
+@@ -413,14 +413,14 @@ pub(super) async fn remove(path: PathBuf, recursive: bool, force: bool) -> io::R
+             Err(error) if force && error == rustix::io::Errno::NOENT => return Ok(()),
+             Err(error) => return Err(io::Error::from(error)),
+         };
 -        let kind = metadata.st_mode & libc::S_IFMT;
 -        if kind == libc::S_IFLNK {
 +        let kind = metadata.st_mode & u32::from(libc::S_IFMT);
 +        if kind == u32::from(libc::S_IFLNK) {
-@@ -320 +320 @@
+             return Err(io::Error::new(
+                 io::ErrorKind::InvalidInput,
+                 "path contains a symbolic link",
+             ));
+         }
 -        let flags = if kind == libc::S_IFDIR {
 +        let flags = if kind == u32::from(libc::S_IFDIR) {
+             AtFlags::REMOVEDIR
+         } else {
+             AtFlags::empty()

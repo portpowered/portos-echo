@@ -196,7 +196,7 @@ fn validate_home(value: &Value, journey: Journey, fault: Option<HomeFault>) -> R
     ).collect();
     let expected = json!({"event":"provider.snapshot","calls":[{
         "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-        "model":"gpt-live-1-codex","alpha":"quicksilver=v2"}],"sidebands":1,"external":0,
+        "model":"gpt-live-1.1-codex","alpha":"quicksilver=v2"}],"sidebands":1,"external":0,
         "delegations":["m5-home"],"appends":["m5-home"],"models":models,
         "transcripts":[{"role":"user","text":"Computer, turn off twin room lights"},{"role":"assistant","text":reply}]});
     if value != &expected {
@@ -216,7 +216,7 @@ fn validate(value: &Value) -> Result<(), String> {
     } else {
         json!([{
         "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-        "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}])
+        "model":"gpt-live-1.1-codex", "alpha":"quicksilver=v2"}])
     };
     let models = (0..ids.len() * 2)
         .map(|index| json!({"tools":["test_echo","extend_session","end_session"],"outputs":index.div_ceil(2)}))

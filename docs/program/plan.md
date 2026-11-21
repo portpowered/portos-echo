@@ -173,7 +173,7 @@ server instead of our own GPT-Live client, and build it for armv7 too. Reuse is 
 encode the undocumented parts (endpoints, headers, the V3 events, the sideband's reconnects). Expose only what we
 need, since the Echo's disk is small.
 
-- **Pin.** Release `rust-v0.160.0` (commit `a956835d020762cb2b570053af06f643a11c0ecc`), Apache-2.0 with a NOTICE that
+- **Pin.** Release `rust-v0.171.0` (commit `ccf9be8cc458bd6b8336fe84d68d8893f2691a5e`), Apache-2.0 with a NOTICE that
   any redistributed build or adapted file keeps. The Linux host uses the published `x86_64-unknown-linux-musl`
   binary, checked against a pinned SHA-256 by `scripts/codex-app-server.sh`; the Echo uses our
   own armv7 build of the same commit. Moving the pin is a coordinator PR, like `hassmic.pin`.

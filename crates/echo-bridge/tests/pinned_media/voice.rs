@@ -65,7 +65,7 @@ async fn exercise(ending: Ending) {
         snapshot,
         json!({"calls":[{
         "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-        "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}],"sidebands":1,"external":0})
+        "model":"gpt-live-1.1-codex", "alpha":"quicksilver=v2"}],"sidebands":1,"external":0})
     );
     input.write_all(b"{\"transcript_count\":true}\n").await.unwrap();
     let observed: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
