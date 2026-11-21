@@ -19,12 +19,15 @@ async fn t3_endpoint_speaker_wyoming_refuses_unacknowledged_controls() {
             let mut grant = registered(&mock, home.path()).await;
             let mut gateway = Gateway::open().await;
             let Fixture {
-                settings, mut device, ..
+                settings,
+                mut device,
+                app: _app,
+                ..
             } = fixture(home.path(), &mock, &gateway, grant.grant.clone()).await;
             settings.save(true, "Hall Echo").await;
             gateway.assert_upgrade(4).await;
             let report = message(&mock, "report-state", "state", &json!("idle")).await;
-            assert_speaker(&report, Value::Null, Value::Null);
+            assert_speaker(&report, &Value::Null, &Value::Null);
 
             for (name, id, payload, event) in [
                 ("set-volume", "volume", json!({"volume":40}), "hassmic-set-volume"),
@@ -41,7 +44,7 @@ async fn t3_endpoint_speaker_wyoming_refuses_unacknowledged_controls() {
 
             assert_eq!(receipts(&mock).len(), 5);
             for report in reports(&mock) {
-                assert_speaker(&report, Value::Null, Value::Null);
+                assert_speaker(&report, &Value::Null, &Value::Null);
                 assert_eq!(report["state"], "idle");
             }
             settings.close().await;
@@ -77,18 +80,16 @@ async fn t3_endpoint_speaker_uses_reported_volume_and_independent_mic_privacy() 
                 volume: Some(90),
                 muted: Some(true),
             });
-            advance(Duration::from_millis(250)).await;
-            let report = message(&mock, "report-state", "volume", &json!(90)).await;
-            assert_speaker(&report, json!(90), json!(true));
+            let report = projected_report(&mock, "volume", &json!(90)).await;
+            assert_speaker(&report, &json!(90), &json!(true));
             assert_eq!(report["state"], "idle");
 
             send_control(&gateway, "adjust-volume", "relative", &json!({"delta":20})).await;
             unsupported(&mock, "relative", "adjust-volume").await;
             observer.mute(true);
             ordered.notified().await;
-            advance(Duration::from_millis(250)).await;
-            let report = message(&mock, "report-state", "state", &json!("muted")).await;
-            assert_speaker(&report, json!(90), json!(true));
+            let report = projected_report(&mock, "state", &json!("muted")).await;
+            assert_speaker(&report, &json!(90), &json!(true));
             assert_eq!(receipts(&mock).len(), 1);
             assert_eq!(
                 observer
@@ -137,7 +138,7 @@ async fn assert_control(device: &mut Device, name: &str, payload: &Value) {
         }
         assert_eq!(frame.header.r#type, name);
         assert_eq!(frame.header.data.or(frame.data).as_ref(), Some(payload));
-        assert!(frame.payload.is_empty());
+        assert_eq!(frame.payload, Vec::<u8>::new());
         return;
     }
 }
@@ -165,7 +166,20 @@ fn reports(mock: &Mock) -> Vec<Value> {
         .collect()
 }
 
-fn assert_speaker(report: &Value, volume: Value, muted: Value) {
-    assert_eq!(report.get("volume"), Some(&volume));
-    assert_eq!(report.get("muted"), Some(&muted));
+async fn projected_report(mock: &Mock, field: &str, expected: &Value) -> Value {
+    let finish = Instant::now() + Duration::from_secs(5);
+    let drive_clock = async {
+        while Instant::now() < finish {
+            advance(Duration::from_millis(1)).await;
+        }
+    };
+    tokio::select! {
+        report = message(mock, "report-state", field, expected) => report,
+        () = drive_clock => panic!("missing speaker projection {field}={expected}"),
+    }
+}
+
+fn assert_speaker(report: &Value, volume: &Value, muted: &Value) {
+    assert_eq!(report.get("volume"), Some(volume));
+    assert_eq!(report.get("muted"), Some(muted));
 }

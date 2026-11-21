@@ -233,14 +233,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 let _ = reply.send(Ok(()));
             }
             Some(Command::RemoteCapture(id, deadline, reply)) => self.remote_capture(id, deadline, reply).await?,
-            Some(Command::Play(format, frames, reply)) => {
-                if self.play.is_some() {
-                    let _ = reply.send(Err(Error::Busy));
-                } else {
-                    self.play = Some(Playback::new(format.clone(), frames, reply, &self.opts));
-                    self.send(WyomingEvent::AudioStart(format), vec![]).await?;
-                }
-            }
+            Some(Command::Play(format, frames, reply)) => self.start_playback(format, frames, reply).await?,
             #[cfg(test)]
             Some(Command::Cut(reply)) => {
                 self.cut().await?;
@@ -273,6 +266,20 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             }
         }
         Ok(())
+    }
+
+    async fn start_playback(
+        &mut self,
+        format: AudioFormat,
+        frames: mpsc::Receiver<Vec<u8>>,
+        reply: Reply<PlayOutcome>,
+    ) -> Result<(), Error> {
+        if self.play.is_some() {
+            let _ = reply.send(Err(Error::Busy));
+            return Ok(());
+        }
+        self.play = Some(Playback::new(format.clone(), frames, reply, &self.opts));
+        self.send(WyomingEvent::AudioStart(format), vec![]).await
     }
 
     async fn register(&mut self, data: Value) -> Result<(), Error> {

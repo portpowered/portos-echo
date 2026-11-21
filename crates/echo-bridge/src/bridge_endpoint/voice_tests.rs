@@ -47,7 +47,7 @@ async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
 pub(super) struct Fixture {
     pub(super) settings: Settings,
     pub(super) device: Device,
-    app: BufReader<DuplexStream>,
+    pub(super) app: BufReader<DuplexStream>,
     stale: Arc<Notify>,
 }
 
