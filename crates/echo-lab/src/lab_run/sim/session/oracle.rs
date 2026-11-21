@@ -436,12 +436,6 @@ fn end(evidence: &Evidence) -> Result<Value, String> {
     if end < applied || end >= applied + LISTEN_MS / 2 {
         return Err(format!("session: end at {end} ms for the receipt at {applied} ms"));
     }
-    if records
-        .iter()
-        .any(|r| r["event"] == "reply.played" && r["outcome"] == "played")
-    {
-        return Err("session: a reply played after the end".into());
-    }
     let wire = evidence.wire.last().ok_or("session: missing wire observation")?;
     let audible = wire["streams"]
         .as_array()

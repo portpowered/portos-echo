@@ -244,13 +244,15 @@ impl World {
         self.wait(
             "runner tool response",
             |world| {
-                world.provider.observed.borrow()["models"]
+                (world.provider.observed.borrow()["models"]
                     .as_array()
                     .is_some_and(|models| {
                         models
                             .iter()
                             .any(|model| model["turn"] == turn && model["outputs"] != json!([]))
                     })
+                    // Or the end's interrupt stopped the turn first.
+                    || world.count("turn.interrupted") > 0)
                     && world.count("delegation.resolved") >= if reply == 1 && world.run_id == "run-1" { 2 } else { 1 }
             },
             20,
