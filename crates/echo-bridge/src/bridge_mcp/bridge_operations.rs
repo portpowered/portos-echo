@@ -214,6 +214,9 @@ async fn execute(
         }
     };
     let result = result.and_then(|()| grant.check().map_err(|_| AuthError::Storage));
+    if let (Operation::Link, Err(error)) = (operation, &result) {
+        grant.link_failed(id, error);
+    }
     if let Err(error) = &result {
         if *error == AuthError::RelinkRequired {
             grant.reject(RELINK);

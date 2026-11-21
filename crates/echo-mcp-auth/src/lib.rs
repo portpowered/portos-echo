@@ -8,6 +8,7 @@
 mod auth;
 mod discovery;
 mod proof;
+mod refusal;
 mod store;
 mod wire;
 
@@ -18,6 +19,7 @@ pub mod mock;
 
 pub use auth::{AuthClient, GrantStatus, LinkInstructions};
 use echo_contracts::secret::Secret;
+pub use refusal::LinkFailure;
 use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};
 
 pub type TokenFuture<'a> = Pin<Box<dyn Future<Output = Result<Secret<String>, AuthError>> + Send + 'a>>;

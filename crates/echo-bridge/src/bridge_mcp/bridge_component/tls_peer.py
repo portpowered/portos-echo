@@ -1,6 +1,7 @@
 import base64, http.server, json, ssl, sys, threading, urllib.parse
 counts = dict(link=0, token=0, catalog=0, query=0)
 key = None
+linked = []
 release = threading.Event()
 requested_scopes = sys.argv[1]
 tools = ("control", "endpoint_show", "endpoint_query") if sys.argv[2] == "full" else ("endpoint_query",)
@@ -30,7 +31,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         assert header['alg'] == 'ES256' and header['typ'] == 'dpop+jwt'
         assert claims['htm'] == 'POST' and claims['htu'] == base+self.path
         assert 'ath' not in claims
-        if key is not None: assert header['jwk'] == key
+        # Port OS accepts one device authorization per key; the grant keeps that key.
+        if self.path == '/link':
+            assert header['jwk'] not in linked
+            linked.append(header['jwk'])
+        elif key is not None: assert header['jwk'] == key
         key = header['jwk']
     def do_POST(self):
         data = self.rfile.read(int(self.headers['Content-Length']))

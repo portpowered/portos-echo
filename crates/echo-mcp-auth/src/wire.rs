@@ -1,3 +1,4 @@
+pub(crate) use crate::refusal::Refusal;
 use crate::{AuthError, proof, store::Grant};
 use echo_contracts::secret::Secret;
 use reqwest::{Client, StatusCode};
@@ -6,12 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
-pub(crate) async fn register(
-    client: &Client,
-    endpoint: url::Url,
-    name: &str,
-    scope: &str,
-) -> Result<String, AuthError> {
+pub(crate) async fn register(client: &Client, endpoint: url::Url, name: &str, scope: &str) -> Result<String, Refusal> {
     #[derive(Deserialize)]
     struct RegistrationReply {
         client_id: String,
@@ -26,25 +22,28 @@ pub(crate) async fn register(
         }))
         .send()
         .await
-        .map_err(|_| AuthError::Transport)?;
-    match response.status() {
+        .map_err(|_| Refusal::unsent(AuthError::Transport))?;
+    let status = response.status();
+    match status {
         StatusCode::CREATED => {
-            let result: RegistrationReply = response.json().await.map_err(|_| AuthError::Protocol)?;
-            if crate::valid_text(&result.client_id) {
-                Ok(result.client_id)
-            } else {
-                Err(AuthError::Protocol)
-            }
+            let result: Option<RegistrationReply> = response.json().await.ok();
+            result
+                .map(|reply| reply.client_id)
+                .filter(|id| crate::valid_text(id))
+                .ok_or_else(|| Refusal::status(AuthError::Protocol, status))
         }
         StatusCode::BAD_REQUEST => {
-            let failure: Failure = response.json().await.map_err(|_| AuthError::Protocol)?;
-            if failure.error == "invalid_client_metadata" {
-                Err(AuthError::RegistrationRefused)
+            let Ok(failure) = response.json::<Failure>().await else {
+                return Err(Refusal::status(AuthError::Protocol, status));
+            };
+            let error = if failure.error == "invalid_client_metadata" {
+                AuthError::RegistrationRefused
             } else {
-                Err(AuthError::Protocol)
-            }
+                AuthError::Protocol
+            };
+            Err(Refusal::coded(error, status, &failure.error))
         }
-        _ => Err(AuthError::Transport),
+        _ => Err(Refusal::status(AuthError::Transport, status)),
     }
 }
 
@@ -92,28 +91,36 @@ pub(crate) async fn post<T: serde::de::DeserializeOwned>(
     form: &[(&str, &str)],
     key: Option<&proof::PrivateJwk>,
     now: u64,
-) -> Result<Reply<T>, AuthError> {
+) -> Result<Reply<T>, Refusal> {
     let mut request = client.post(endpoint).form(form);
     if let Some(key) = key {
-        let proof = proof::sign(key, endpoint, now)?;
+        let proof = proof::sign(key, endpoint, now).map_err(Refusal::unsent)?;
         request = request.header("DPoP", proof.expose());
     }
-    let reply = request.send().await.map_err(|_| AuthError::Transport)?;
-    if reply.status().is_success() {
-        return reply.json().await.map(Reply::Value).map_err(|_| AuthError::Protocol);
+    let reply = request
+        .send()
+        .await
+        .map_err(|_| Refusal::unsent(AuthError::Transport))?;
+    let status = reply.status();
+    if status.is_success() {
+        let value = reply.json().await.map(Reply::Value);
+        return value.map_err(|_| Refusal::status(AuthError::Protocol, status));
     }
-    if reply.status().as_u16() != 400 {
-        return Err(AuthError::Transport);
+    if status != StatusCode::BAD_REQUEST {
+        return Err(Refusal::status(AuthError::Transport, status));
     }
-    let failure: Failure = reply.json().await.map_err(|_| AuthError::Protocol)?;
-    match failure.error.as_str() {
-        "authorization_pending" => Ok(Reply::Pending),
-        "slow_down" => Ok(Reply::SlowDown),
-        "access_denied" => Err(AuthError::AccessDenied),
-        "expired_token" => Err(AuthError::Expired),
-        "invalid_grant" => Err(AuthError::RelinkRequired),
-        _ => Err(AuthError::Protocol),
-    }
+    let Ok(failure) = reply.json::<Failure>().await else {
+        return Err(Refusal::status(AuthError::Protocol, status));
+    };
+    let error = match failure.error.as_str() {
+        "authorization_pending" => return Ok(Reply::Pending),
+        "slow_down" => return Ok(Reply::SlowDown),
+        "access_denied" => AuthError::AccessDenied,
+        "expired_token" => AuthError::Expired,
+        "invalid_grant" => AuthError::RelinkRequired,
+        _ => AuthError::Protocol,
+    };
+    Err(Refusal::coded(error, status, &failure.error))
 }
 
 pub(crate) fn unix_now() -> Result<u64, AuthError> {

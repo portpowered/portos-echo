@@ -98,8 +98,8 @@ fn options(mock: &Mock, directory: &std::path::Path) -> AuthOptions {
     }
 }
 
-fn error<T>(result: Result<T, AuthError>, expected: AuthError) {
-    assert_eq!(result.err(), Some(expected));
+fn error<T, E: Into<AuthError>>(result: Result<T, E>, expected: AuthError) {
+    assert_eq!(result.err().map(Into::into), Some(expected));
 }
 
 // Acknowledge the first poll only after await_approval registers its sleep.

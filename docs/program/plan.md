@@ -617,7 +617,10 @@ What PR 2731 gives the bridge, once it is deployed:
   `/.well-known/oauth-protected-resource` (the server's `/mcp` URL). Any other value answers 400 `invalid_target`.
   Without `resource` the grant mints an old first-party token, which `/mcp` refuses with 401, so `echo-mcp-auth`
   always sends it and a T1 test asserts so. The request carries a DPoP proof: this is where the bridge's key is
-  registered.
+  registered. Port OS accepts one device authorization per key; a second one from the same key answers 400
+  `invalid_dpop_proof`. So every link signs with a new key, and the committed grant keeps its own key until an
+  approval replaces the grant and the key together. A failed link records `mcp.link.failed` in the trace with
+  the step, the HTTP status and the OAuth error code only.
 - **Token.** The `device_code` grant at `/auth/token`, with a DPoP proof from the same key, returns the same
   resource-bound pair as the browser code
   grant: an access token (`aud` = the resource, `token_use=access`, a `grant_id`, the scopes the owner granted;

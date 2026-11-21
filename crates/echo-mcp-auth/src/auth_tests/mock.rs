@@ -38,6 +38,10 @@ pub struct State {
     pub revoked: bool,
     pub bound: bool,
     pub key: Option<Value>,
+    /// The key of the device authorization whose approval is still awaited.
+    pub pending: Option<Value>,
+    /// Every key that has started a device authorization.
+    pub linked: BTreeSet<String>,
     pub jtis: BTreeSet<String>,
     pub lifetime: u64,
     pub fault: Option<(String, u16, Value)>,
@@ -288,6 +292,13 @@ fn device(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
     if resource.is_some_and(|r| r != &format!("{base}/mcp")) {
         return fail("invalid_target");
     }
+    let Some(jwk) = proof_key(request) else {
+        return fail("invalid_dpop_proof");
+    };
+    if !state.linked.insert(jwk.to_string()) {
+        return fail("invalid_dpop_proof");
+    }
+    state.pending = Some(jwk);
     state.bound = resource.is_some();
     state.revoked = false;
     (
@@ -356,17 +367,35 @@ fn verify(request: &Request, base: &str, state: &mut State) -> bool {
     }) {
         return false;
     }
-    if state.key.as_ref().is_some_and(|key| key != jwk) {
-        return false;
-    }
     let Some(jti) = claims["jti"].as_str() else {
         return false;
     };
-    if !state.jtis.insert(jti.into()) {
+    bound(request, jwk, state) && state.jtis.insert(jti.into())
+}
+
+// Port OS accepts one device authorization per key. Its device-code exchange
+// must use that key, which then binds the grant for every refresh.
+fn bound(request: &Request, jwk: &Value, state: &mut State) -> bool {
+    if request.path == "/custom/link" {
+        // `device` records the key once the request itself is acceptable.
+        return true;
+    }
+    let exchange = request
+        .form
+        .get("grant_type")
+        .is_some_and(|grant| grant.ends_with("device_code"));
+    let expected = if exchange { state.pending.as_ref() } else { None };
+    if expected.or(state.key.as_ref()).is_some_and(|key| key != jwk) {
         return false;
     }
     state.key = Some(jwk.clone());
     true
+}
+
+fn proof_key(request: &Request) -> Option<Value> {
+    let header = request.headers.get("dpop")?.split('.').next()?;
+    let header: Value = serde_json::from_slice(&B64.decode(header).ok()?).ok()?;
+    Some(header["jwk"].clone())
 }
 
 fn verifying_key(jwk: &Value) -> Option<VerifyingKey> {
