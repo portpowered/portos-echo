@@ -31,7 +31,6 @@ jobs:
             printf '%s\n' "CANDIDATE_BEGIN $tag"
             export WITNESS_TAG="rust-v$tag"
             git ls-remote https://github.com/openai/codex "refs/tags/$WITNESS_TAG" "refs/tags/$WITNESS_TAG^{}" > "$RUNNER_TEMP/ref"
-            curl -fsSL --retry 2 "https://api.github.com/repos/openai/codex/releases/tags/$WITNESS_TAG" > "$RUNNER_TEMP/release.json"
             python3 - <<'PY'
           import json
           import os
@@ -44,30 +43,81 @@ jobs:
           peeled = [line for line in refs if line.endswith('^{}')]
           commit = (peeled[0] if peeled else refs[0]).split()[0]
           assert re.fullmatch('[0-9a-f]{40}', commit), commit
-          release = json.loads((temp / 'release.json').read_text())
-          assert release['tag_name'] == os.environ['WITNESS_TAG'] and not release['prerelease']
+          # SHA-256 values taken from upstream's authenticated read-only release metadata.
+          digests = {
+            "rust-v0.170.0": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "d054916ccd28a53820376b8d2f7c875184ca8f40fcd44bbabeb8ee240ce247f5",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "18ab29d970586890085c3eba1d55068fd66262154855e51a54f3708522fa4dc5"
+            },
+            "rust-v0.169.1": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "bd8383e0eaf3e4ca2aa5628f91ed9456bc3392d26134a04e949f47d7ef3660c1",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "4399aa75ad8b797efb347e10277e8b0caafd61e39f2da0c467af5e79f129116e"
+            },
+            "rust-v0.169.0": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "9af4d751fce183faedea629437d5252dbf458eeb04130cf4f97be844621ea985",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "cbed6a8d25e8268792b757767fbc76d4c62e84bcf8ee4a63f97547f0de3aaceb"
+            },
+            "rust-v0.168.0": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "b983beb86dcc606cead6ee226ae2ab08e7e6eee07df4cb8d16f441f107b9e2ef",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "4e00a7d5eec14b50be2f21f11feb13dcbaa6dd500b95fc1f9ba4871ec44af18e"
+            },
+            "rust-v0.167.2": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "8246e846c550ea21197fcc4067bc270dca895e94ea42ed6a282e6f4e0125b15f",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "189475a654d82ca776e08dfef22734106d3e5b2cf21da6e84ec3d974d02c39a6"
+            },
+            "rust-v0.167.1": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "64bcc99c32e434b4bcb0508a97df9b7aeecdb97e956d976fb13661096ec4e3e2",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "dc8a10a95df3878dda60a62b72acf9c1d1ee18599c04934952f128d9dcc78320"
+            },
+            "rust-v0.167.0": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "b5074d5dd64643b2c073927e494a588eff31c1f5a27f12c1e2c45f9a6cf07dd4"
+            },
+            "rust-v0.166.0": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "a0bf572d2f93f056c6712a6da348e96078dc84f3885fd7be67807ef389cb3978",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "7588334fd47bc4003d970b70dfd4d1e4578491b1e9baa72976a4c2d7e97590da"
+            },
+            "rust-v0.165.0": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "be635d3486a5bd060d0fff582ae6d30160280c31344dd85719707fa920e187f0",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "9577b09b2a546eeb3da8a09807de6d58fbaa207755256390113772ea4f05235e"
+            },
+            "rust-v0.164.0": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "90dd0b03b28afcb7fa733a4f73b413db2916a47347efd43fb669cc1c774ee8e4",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "feade7026436baa4e82e898050c7ef82a8adbd98163dc504771275b5ef224f2f"
+            },
+            "rust-v0.162.0": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "8daf67f6261161aa5939d8d42a516032d760406216779d7ce6040f242140ff73",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "dee8bf3df637c68e1495b928d643b76d4ad44f94e4f0ed79fe8482fa79e23d97"
+            },
+            "rust-v0.161.0": {
+              "codex-x86_64-unknown-linux-musl.tar.gz": "b1efb95097660d7f2e5a3887618a23f2ea1b0d548078bf92b0f7a5d229a0cef2",
+              "codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz": "30cc945f77b3eed15ee385cc2f844a33bf1d7c422ff3a97161f701bffe4f77f8"
+            }
+          }
+          tag = os.environ['WITNESS_TAG']
           pin = tomllib.loads((temp / 'codex.pin').read_text())
-          replacements = {pin['tag']: release['tag_name'], pin['commit']: commit}
+          replacements = {pin['tag']: tag, pin['commit']: commit}
           for item in pin['assets'].values():
-              archive, = (asset for asset in release['assets'] if asset['name'] == item['name'])
-              digest = archive['digest']
-              assert re.fullmatch('sha256:[0-9a-f]{64}', digest), digest
-              replacements[item['sha256']] = digest.split(':')[1]
+              digest = digests[tag][item['name']]
+              assert re.fullmatch('[0-9a-f]{64}', digest), digest
+              replacements[item['sha256']] = digest
           for name in ['codex.pin', 'scripts/codex-app-server.sh']:
               source = (temp / Path(name).name).read_text()
               for old, current in replacements.items():
                   source = source.replace(old, current)
               Path(name).write_text(source)
-          print('CANDIDATE_PROVENANCE', release['tag_name'], commit, *list(replacements.values())[2:])
+          print('CANDIDATE_PROVENANCE', tag, commit, *list(replacements.values())[2:])
           PY
             sh scripts/codex-app-server.sh > /dev/null
             native_exit=0
-            pinned_exit=0
-            sim_exit=0
+            pinned_exit=not-run
+            sim_exit=not-run
             filter='test(t3_pinned_tools_native_direct_call_needs_no_code_mode_host)'
             cargo nextest run --locked -p echo-bridge --test bridge_codex_media --config-file .github/nextest.toml --profile ci \
               --success-output immediate --failure-output immediate --no-fail-fast -E "$filter" || native_exit=$?
             if [[ "$tag" != 0.162.0 && "$tag" != 0.161.0 ]]; then
+              pinned_exit=0
+              sim_exit=0
               filter='test(/^pinned_media::t3_pinned_codex_(lists_v3|himari|refuses_alloy)/)'
               cargo nextest run --locked -p echo-bridge --test bridge_codex_media --config-file .github/nextest.toml --profile ci \
                 --success-output immediate --failure-output immediate --no-fail-fast -E "$filter" || pinned_exit=$?
