@@ -133,13 +133,10 @@ export function startPage(root: HTMLElement, href: string): () => void {
         expiryTimer = undefined;
         const state = frame.state;
         const idle = state.state === "ready" || state.state === "connected";
-        // A pack's own nodes stay where they are: moving its stylesheet link
-        // would load the sheet again and restyle the clock for a moment.
-        for (const node of [...content.childNodes])
-            if (!(
-                node instanceof HTMLElement && "packPersistent" in node.dataset
-            ))
-                node.remove();
+        const retained = content.querySelectorAll(
+            ":scope > [data-pack-persistent]",
+        );
+        content.replaceChildren(...retained);
         content.dataset.uiState = state.state;
         // A pack's face shows the state itself; only prompts keep a heading.
         const face =
