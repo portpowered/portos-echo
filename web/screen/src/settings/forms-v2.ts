@@ -1,5 +1,6 @@
 import { groups, searchModes } from "./api-v2";
-import { element, field } from "./forms";
+import { actions, element, field } from "./forms";
+import type { Save, Track } from "./forms";
 import type { PatchV2, SnapshotV2 } from "./api";
 
 function choices<T extends string>(
@@ -73,7 +74,8 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
 
 export function portosForm(
     status: SnapshotV2["portos"],
-    save: (patch: PatchV2) => void,
+    save: Save<PatchV2>,
+    track: Track,
 ) {
     const section = element("section");
     const server = status.server;
@@ -94,7 +96,7 @@ export function portosForm(
         element("p", server.url),
         scopes.fieldset,
         tools.fieldset,
-        element("button", "Save Port OS permissions"),
+        actions(element("button", "Save Port OS permissions")),
     );
     for (const [label, current, full] of [
         [
@@ -110,12 +112,19 @@ export function portosForm(
         if (custom.length)
             form.append(element("p", label + ": " + custom.join(", ")));
     }
-    form.addEventListener("submit", (event) => {
-        event.preventDefault();
+    function submit() {
         const patch: NonNullable<PatchV2["portos"]> = {};
         if (scopes.changed()) patch.scopes = scopes.selected();
         if (tools.changed()) patch.allow_tools = tools.selected();
-        save(Object.keys(patch).length ? { portos: patch } : {});
+        return save(Object.keys(patch).length ? { portos: patch } : {});
+    }
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        void submit();
+    });
+    track({
+        dirty: () => scopes.changed() || tools.changed(),
+        save: submit,
     });
     section.append(form);
     return section;

@@ -285,6 +285,8 @@ test("render: keyboard Settings keeps status above Accounts and returns to the l
 
     await page.clock.runFor(56000);
     await page.keyboard.press("Escape");
+    // The pack selection was never saved, so leaving asks; this visit drops it.
+    await page.getByRole("button", { name: "Don't save" }).click();
     assert.equal(
         await gear.evaluate((node) => node === document.activeElement),
         true,

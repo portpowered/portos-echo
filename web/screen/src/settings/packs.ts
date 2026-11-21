@@ -1,5 +1,6 @@
 import { decodeSaved } from "./api";
-import { element } from "./forms";
+import { actions as actionRow, element } from "./forms";
+import type { Section, Track } from "./forms";
 import {
     decodeJob,
     decodePacks,
@@ -17,7 +18,7 @@ const isDefault = (name: string) => DEFAULT_NAMES.includes(name);
 type Perform = (
     work: (signal: AbortSignal) => Promise<string>,
     message?: string,
-) => Promise<void>;
+) => Promise<boolean>;
 
 type Pack = PackSnapshot["installed"][number];
 
@@ -135,7 +136,11 @@ function mountCarousel(
 
 // Uses the settings panel's one pending request, cancellation and focus owner.
 // Explicit refresh avoids an unbounded polling task when settings are hidden.
-export function packControls(actions: string, perform: Perform): HTMLElement {
+export function packControls(
+    actions: string,
+    perform: Perform,
+    track: Track,
+): HTMLElement {
     const section = element("section");
     section.className = "settings-packs";
     section.setAttribute("aria-label", "Presentation");
@@ -143,6 +148,12 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
     const refresh = element("button", "Load screen packs");
     refresh.type = "button";
     section.append(element("h2", "Presentation"), refresh, catalog);
+    // Every render builds a new selection; the panel tracks the current one.
+    let selection: Section | undefined;
+    track({
+        dirty: () => selection?.dirty() ?? false,
+        save: async () => (await selection?.save()) ?? true,
+    });
     const load = async (signal: AbortSignal) => {
         const data = decodePacks(
             await packRequest(actions, "", signal),
@@ -197,22 +208,30 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
                 : (data.active ?? "");
         const save = element("button", "Use screen pack");
         const form = element("form");
-        form.append(label, select, save);
-        form.addEventListener("submit", (event) => {
-            event.preventDefault();
-            const selection = select.value;
-            if (select.selectedOptions[0]?.disabled) return;
-            void perform(async (signal) => {
+        form.append(label, select, actionRow(save));
+        const loaded = select.value;
+        const usable = () => !select.selectedOptions[0]?.disabled;
+        function submit() {
+            const chosen = select.value;
+            return perform(async (signal) => {
                 decodeSaved(
                     await packRequest(actions, "/selection", signal, {
                         version: 1,
-                        screen_pack: selection,
+                        screen_pack: chosen,
                     }),
                 );
                 await load(signal);
                 return "Screen pack saved. Appearance updates without restarting the bridge.";
             }, "Saving screen pack…");
+        }
+        form.addEventListener("submit", (event) => {
+            event.preventDefault();
+            if (usable()) void submit();
         });
+        selection = {
+            dirty: () => select.value !== loaded && usable(),
+            save: submit,
+        };
         if (!installed.length)
             catalog.append(element("p", "No screen packs installed"));
         if (data.warning)

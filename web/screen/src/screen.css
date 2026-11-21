@@ -309,6 +309,40 @@ main.settings-open {
     margin: 12px 0;
     font-size: 24px;
 }
+/* A section's actions: its save button on the column's right edge, any
+   secondary action to its left. */
+.settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0 16px;
+}
+/* The unsaved-changes question covers Settings, Back included; a tap outside
+   its box cancels. */
+.settings-leave {
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgb(16 24 39 / 0.85);
+}
+.settings-leave > div {
+    width: min(100%, 720px);
+    padding: 16px 24px;
+    border: 2px solid #c4d5ff;
+    background: #101827;
+}
+.settings-leave p {
+    margin: 8px 0;
+    font-size: 28px;
+}
+.settings-leave button:last-child {
+    background: #c4d5ff;
+    color: #101827;
+}
 .settings-row-wide {
     grid-template-columns: minmax(0, 1fr);
 }

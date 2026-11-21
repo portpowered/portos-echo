@@ -6,7 +6,8 @@ import {
     type Snapshot,
     type SnapshotV2,
 } from "./api";
-import { element, promptForm, settingsForm } from "./forms";
+import { element, promptForm, settingsForm, type Section } from "./forms";
+import { leavePrompt } from "./guard/leave";
 import { mountKeyboard } from "./keyboard";
 import type { UiState } from "../model";
 import { packControls } from "./packs";
@@ -81,6 +82,16 @@ export function mountSettings(
     let portos: ReturnType<typeof mountPortos> | undefined;
     let openai: ReturnType<typeof mountOpenAI> | undefined;
     let fading: ReturnType<typeof setTimeout> | undefined;
+    // The sections of this load; each knows its unsaved edits and its save.
+    const sections: Section[] = [];
+    const track = (section: Section) => void sections.push(section);
+    let leaving = false;
+    const question = leavePrompt({
+        save: () => void saveAndClose(),
+        discard: close,
+        cancel: () => back.focus(),
+    });
+    panel.append(question.element);
 
     // Every status write goes through here, so a new message, close and
     // dispose all cancel the pending clear of a transient result.
@@ -116,6 +127,30 @@ export function mountSettings(
         settle();
         gear.focus();
     }
+    // Back and Escape: closes at once unless a section holds unsaved edits.
+    function leave() {
+        if (leaving || question.open) return;
+        if (!sections.some((section) => section.dirty())) return close();
+        keyboard.close();
+        question.ask();
+    }
+    // Each edited section saves through its own request, in order. A refused
+    // save stops here: Settings stays open with that save's error shown.
+    async function saveAndClose() {
+        back.focus();
+        if (pending) {
+            show("Another request is still running. Try again when it ends.");
+            return;
+        }
+        leaving = true;
+        try {
+            for (const section of sections.filter((item) => item.dirty()))
+                if (!(await section.save())) return;
+        } finally {
+            leaving = false;
+        }
+        if (!disposed && !panel.hidden) close();
+    }
     function busy(value: boolean) {
         fields.setAttribute("aria-busy", String(value));
         for (const control of fields.querySelectorAll<
@@ -127,13 +162,14 @@ export function mountSettings(
             control.disabled = value;
     }
     // A successful result is transient unless `keep` says it is information
-    // the owner still needs (a pending restart); errors always stay.
+    // the owner still needs (a pending restart); errors always stay. Resolves
+    // true only when the work ran to its end.
     async function perform(
         work: (signal: AbortSignal) => Promise<string>,
         message = "Loading…",
         keep = false,
     ) {
-        if (pending || disposed || panel.hidden) return;
+        if (pending || disposed || panel.hidden) return false;
         const controller = new AbortController();
         const focused = document.activeElement;
         pending = controller;
@@ -143,6 +179,7 @@ export function mountSettings(
         try {
             const message = await work(controller.signal);
             if (!controller.signal.aborted && !disposed) show(message, !keep);
+            return !controller.signal.aborted;
         } catch (error) {
             if (!panel.hidden && !disposed && pending === controller)
                 show(
@@ -150,24 +187,20 @@ export function mountSettings(
                         ? "Request could not be confirmed. Reopen Settings to check before saving again."
                         : error.message,
                 );
+            return false;
         } finally {
             if (pending === controller) {
                 clearTimeout(timeout);
                 pending = undefined;
                 busy(false);
-                if (
+                // An open question keeps the focus on its answers.
+                const restore =
                     !disposed &&
                     !panel.hidden &&
-                    focused instanceof HTMLElement &&
-                    focused.isConnected
-                )
-                    focused.focus();
-                else if (
-                    !disposed &&
-                    !panel.hidden &&
-                    focused instanceof HTMLElement &&
-                    !focused.isConnected
-                )
+                    !question.open &&
+                    focused instanceof HTMLElement;
+                if (restore && focused.isConnected) focused.focus();
+                else if (restore)
                     fields
                         .querySelector<HTMLButtonElement>(
                             ".settings-packs > button",
@@ -177,7 +210,7 @@ export function mountSettings(
         }
     }
     function save(suffix: string, body: unknown, accepted: () => void) {
-        void perform(async (signal) => {
+        return perform(async (signal) => {
             const restarting = decodeSaved(
                 await request(settingsUrl(actions, suffix), signal, body),
             );
@@ -198,25 +231,29 @@ export function mountSettings(
     function renderShared(data: Snapshot | SnapshotV2) {
         for (const kind of ["voice", "runner"] as const)
             fields.append(
-                promptForm(kind, data.prompts[kind], (text) => {
-                    save(`/prompts/${kind}`, { version: 1, text }, () => {
-                        data.prompts[kind] = text;
-                    });
-                }),
+                promptForm(
+                    kind,
+                    data.prompts[kind],
+                    (text) =>
+                        save(`/prompts/${kind}`, { version: 1, text }, () => {
+                            data.prompts[kind] = text;
+                        }),
+                    track,
+                ),
             );
     }
     function renderV2(data: SnapshotV2) {
-        const permissions = portosForm(data.portos, saveV2);
-        function saveV2(patch: PatchV2) {
+        const permissions = portosForm(data.portos, saveV2, track);
+        async function saveV2(patch: PatchV2) {
             if (!Object.keys(patch).length) {
                 show("No settings changed", true);
-                return;
+                return false;
             }
             if (patch.portos?.scopes?.length === 0) {
                 show("Select at least one requested scope.");
-                return;
+                return false;
             }
-            void perform(async (signal) => {
+            return perform(async (signal) => {
                 const restarting = decodeSaved(
                     await saveSettingsV2(actions, signal, patch),
                     2,
@@ -276,10 +313,10 @@ export function mountSettings(
         );
         fields.append(
             accounts,
-            packControls(actions, perform),
+            packControls(actions, perform, track),
             settingsSection(
                 "OpenAI",
-                settingsForm(data, saveV2, openAIOptions(data.settings)),
+                settingsForm(data, saveV2, track, openAIOptions(data.settings)),
             ),
             settingsSection("Port OS permissions", permissions),
         );
@@ -287,21 +324,25 @@ export function mountSettings(
         fields.append(element("p", "Version: " + data.bridge_version));
     }
     function renderV1(data: Snapshot) {
-        const form = settingsForm(data, (patch) => {
-            if (!Object.keys(patch).length) {
-                show("No settings changed", true);
-                return;
-            }
-            save("", { version: 1, settings: patch }, () => {
-                if (patch.voice)
-                    Object.assign(data.settings.voice, patch.voice);
-                if (patch.codex)
-                    Object.assign(data.settings.codex, patch.codex);
-                if (patch.agent)
-                    Object.assign(data.settings.agent, patch.agent);
-            });
-        });
-        fields.append(form, packControls(actions, perform));
+        const form = settingsForm(
+            data,
+            async (patch) => {
+                if (!Object.keys(patch).length) {
+                    show("No settings changed", true);
+                    return false;
+                }
+                return save("", { version: 1, settings: patch }, () => {
+                    if (patch.voice)
+                        Object.assign(data.settings.voice, patch.voice);
+                    if (patch.codex)
+                        Object.assign(data.settings.codex, patch.codex);
+                    if (patch.agent)
+                        Object.assign(data.settings.agent, patch.agent);
+                });
+            },
+            track,
+        );
+        fields.append(form, packControls(actions, perform, track));
         renderShared(data);
         fields.append(
             element("h2", "Bridge"),
@@ -335,6 +376,7 @@ export function mountSettings(
         gear.hidden = true;
         gear.setAttribute("aria-expanded", "true");
         fields.replaceChildren();
+        sections.length = 0;
         back.focus();
         void perform(
             async (signal) => {
@@ -351,9 +393,9 @@ export function mountSettings(
             true,
         );
     });
-    back.addEventListener("click", close);
+    back.addEventListener("click", leave);
     panel.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") close();
+        if (event.key === "Escape") leave();
     });
     return {
         update(state: UiState) {

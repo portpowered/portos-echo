@@ -250,7 +250,8 @@ async function chooseDefault(page, section, catalog) {
 }
 
 // Settings at 960x600 is one column: text starts on the title's left edge and
-// every right-side control ends on Back's right edge.
+// every right-side control, each section's save button included, ends on
+// Back's right edge.
 for (const [state, portos, label, action] of [
     ["linked", "linked", "Linked", "Remove Port OS link"],
     ["unlinked", "unconfigured", "Unconfigured", "Link Port OS"],
@@ -305,9 +306,9 @@ async function columnEdges(page) {
     const text =
         ".settings-panel :is(h1, h2, h3, p, legend, .settings-row > label)";
     const blocks =
-        ":is(section, form, fieldset, .settings-row, textarea, button:not(.settings-item-header > *, .settings-stepper > *))";
+        ":is(section, form, fieldset, .settings-row, .settings-actions, textarea, button:not(.settings-item-header > *, .settings-stepper > *, .settings-actions > *))";
     const ends =
-        ":is(section, .settings-row, .settings-row > :last-child, .settings-item-header > button, select, textarea, input:not([type=checkbox], .settings-stepper > *))";
+        ":is(section, .settings-row, .settings-row > :last-child, .settings-item-header > button, .settings-actions > :last-child, select, textarea, input:not([type=checkbox], .settings-stepper > *))";
     const controls =
         ".settings-row:not(.settings-row-wide) > :last-child:not([type=checkbox])";
     return {
