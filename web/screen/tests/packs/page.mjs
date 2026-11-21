@@ -62,7 +62,18 @@ async function packPage(t, pack = manifest, vp9 = true) {
                     window.packActive = "sample@1.0.0";
                     window.packStatus = 200;
                     window.packRequests = [];
+                    // Clip bytes are fetched ahead. Unless a test serves
+                    // them, each clip keeps loading from its own URL.
+                    window.clipRequests = [];
                     window.fetch = async (url, options) => {
+                        if (/\.(webm|mp4)\?/.test(url)) {
+                            window.clipRequests.push(
+                                new URL(url).pathname.split("/").at(-1),
+                            );
+                            return window.serveClips
+                                ? { status: 200, blob: async () => new Blob() }
+                                : { status: 404 };
+                        }
                         window.packRequests.push({
                             url,
                             cache: options.cache,
@@ -157,6 +168,16 @@ const end = (page) =>
             .querySelector("video:not([hidden]):not([data-leaving])")
             .dispatchEvent(new Event("ended")),
     );
+const hiddenSource = (page) =>
+    page.evaluate(() =>
+        new URL(
+            [...document.querySelectorAll("video")].find(
+                (v) => v.hidden && v.dataset.src,
+            ).dataset.src,
+        ).pathname
+            .split("/")
+            .at(-1),
+    );
 const visible = (page) =>
     page
         .locator("video:not([hidden]):not([data-leaving])")
@@ -205,6 +226,42 @@ test("pack page: covered presentation coalesces reloads without racing settings 
         await page.evaluate(() => window.packRequests.length),
         count + 2,
     );
+});
+
+test("pack page: clips are fetched ahead once, replay from memory and loop on their seam", async (t) => {
+    const page = await packPage(t);
+    await page.locator(".screen-pack").waitFor();
+    await page.evaluate(() => {
+        window.serveClips = true;
+    });
+    await send(page, 1, { state: "ready", message: "Ready" });
+    // The first clip still loads from its URL; every clip is fetched once,
+    // the states of a reply first.
+    assert.equal(await hiddenSource(page), "idle.webm");
+    await loaded(page);
+    await page.waitForFunction(() => window.clipRequests.length === 7);
+    assert.deepEqual(await page.evaluate(() => window.clipRequests), [
+        "speaking.webm",
+        "idle.webm",
+        "listening.webm",
+        "thinking.webm",
+        "error.webm",
+        "approval.webm",
+        "wave.webm",
+    ]);
+    await send(page, 2, { state: "listening" });
+    const next = await page.evaluate(() => {
+        const video = [...document.querySelectorAll("video")].find(
+            (v) => v.hidden && v.dataset.src,
+        );
+        return { src: video.dataset.src, loop: video.loop };
+    });
+    assert.match(next.src, /^blob:/);
+    assert.equal(next.loop, true);
+    await loaded(page);
+    await send(page, 3, { state: "ready", message: "Ready" });
+    await loaded(page);
+    assert.equal(await page.evaluate(() => window.clipRequests.length), 7);
 });
 
 test("pack page: state src sequence, first-frame handoff, urgent cuts and Emotion fallbacks", async (t) => {

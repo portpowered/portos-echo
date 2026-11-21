@@ -81,6 +81,31 @@ export function mediaStage(
     let settle: (() => void) | undefined;
     const motion = matchMedia("(prefers-reduced-motion: reduce)");
     let current: Playback | undefined;
+    // Clip bytes are fetched once, one at a time, and replayed from memory:
+    // a state change then never waits for the network or the pack's reader.
+    const fetched = new Map<string, string>();
+    let fetching = Promise.resolve();
+
+    function warm(path: string): void {
+        if (fetched.has(path)) return;
+        fetched.set(path, "");
+        fetching = fetching.then(async () => {
+            try {
+                if (stopped) return;
+                const response = await fetch(asset(path), {
+                    cache: "no-store",
+                    credentials: "omit",
+                    referrerPolicy: "no-referrer",
+                });
+                if (response.status !== 200) throw new Error("Unavailable");
+                const url = URL.createObjectURL(await response.blob());
+                if (stopped) URL.revokeObjectURL(url);
+                else fetched.set(path, url);
+            } catch {
+                fetched.delete(path);
+            }
+        });
+    }
 
     // The still is visible only while no clip is: it never sits under a clip.
     function rest(): void {
@@ -153,10 +178,12 @@ export function mediaStage(
         }
         const index = front === 0 ? 1 : 0;
         const video = videos[index]!;
-        const path = source(
-            playback.clip,
-            !!video.canPlayType('video/webm; codecs="vp9"'),
-        );
+        const vp9 = !!video.canPlayType('video/webm; codecs="vp9"');
+        const path = source(playback.clip, vp9);
+        for (const clip of playback.warm ?? []) {
+            const ahead = source(clip, vp9);
+            if (ahead) warm(ahead);
+        }
         if (!path) {
             failed();
             return;
@@ -197,7 +224,10 @@ export function mediaStage(
         video.onerror = () => {
             if (valid()) failed();
         };
-        video.src = asset(path);
+        // A loop replays itself on its seam, without loading the clip again.
+        video.loop = playback.clip.mode === "loop";
+        video.src = fetched.get(path) || asset(path);
+        warm(path);
         video.load();
         cancel = () => {
             video.onloadeddata = video.onended = video.onerror = null;
@@ -221,6 +251,9 @@ export function mediaStage(
                 video.removeAttribute("src");
                 video.load();
             }
+            for (const url of fetched.values())
+                if (url) URL.revokeObjectURL(url);
+            fetched.clear();
             still.onerror = null;
             stage.remove();
         },

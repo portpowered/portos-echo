@@ -33,16 +33,18 @@ def manifest(version):
         "layout": {
             "safe_area": {"x": 0, "y": 0, "width": 100, "height": 100},
             "slots": {
-                "clock": {"x": 96, "y": 14},
-                "date": {"x": 96, "y": 31},
-                "status": {"x": 60, "y": 41, "font_scale": 1},
-                "link_code": {"x": 60, "y": 50},
-                "approval": {"x": 60, "y": 50},
-                "error": {"x": 60, "y": 50},
+                # Time and date sit bottom right, drawn over the stage. Their
+                # size and place come from these slots alone, so they hold
+                # still whatever the page reloads.
+                "clock": {"x": 72, "y": 70, "font_scale": 2},
+                "date": {"x": 72, "y": 84, "font_scale": 1.25},
+                "status": {"x": 62, "y": 14, "font_scale": 1},
+                "link_code": {"x": 62, "y": 24},
+                "approval": {"x": 62, "y": 24},
+                "error": {"x": 62, "y": 24},
             },
-            "stage": {"anchor": {"x": 31, "y": 50}, "scale": 2,
+            "stage": {"anchor": {"x": 50, "y": 50}, "scale": 2,
                       "background": BACKGROUND},
-            "css": "companion-clock.css",
         },
         "character": {
             "rest": "rest.png",
@@ -84,8 +86,6 @@ def build(version, out):
         pack = payload / f"companion@{version}"
         pack.mkdir(parents=True)
         render(pack, stage)
-        stylesheet = Path(__file__).with_name("companion-clock.css")
-        (pack / stylesheet.name).write_bytes(stylesheet.read_bytes())
         (pack / "pack.json").write_text(json.dumps(manifest(version), indent=2) + "\n",
                                        encoding="utf-8")
         archive_pack(pack, payload / f"companion-{version}.screenpack.tar.gz")

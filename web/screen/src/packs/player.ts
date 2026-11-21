@@ -19,6 +19,8 @@ export interface Playback {
     clip: Clip | undefined;
     // A ticket admits only completion of the currently requested clip.
     ticket: number;
+    // Clips to fetch ahead, so a later state change never waits for one.
+    warm?: Clip[];
 }
 export type Schedule = (run: () => void, ms: number) => () => void;
 
@@ -68,6 +70,7 @@ export class Player {
     private completion: (() => void) | undefined;
     private emote = false;
     private pending: (() => void) | undefined;
+    private warmed = false;
 
     constructor(
         private character: Character,
@@ -164,9 +167,29 @@ export class Player {
         });
     }
 
+    // The states a reply moves through come first: they must not lag audio.
+    private all(): Clip[] {
+        const states = this.character.states ?? {};
+        const first = ["speaking", "wake", "idle", "listening", "thinking"];
+        const names = [
+            ...first.filter((name) => own(states, name)),
+            ...Object.keys(states).filter((name) => !first.includes(name)),
+        ];
+        return [
+            ...names.flatMap((name) => {
+                const { clip, enter, exit } = states[name]!;
+                return [clip, enter, exit].filter((c) => c !== undefined);
+            }),
+            ...Object.values(this.character.emotes ?? {}),
+        ];
+    }
+
     private play(clip: Clip | undefined, completion?: () => void): void {
         this.completion = completion;
-        this.show({ clip, ticket: ++this.ticket });
+        const playback: Playback = { clip, ticket: ++this.ticket };
+        if (!this.warmed) playback.warm = this.all();
+        this.warmed = true;
+        this.show(playback);
     }
 }
 

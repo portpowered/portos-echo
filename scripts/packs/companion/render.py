@@ -22,48 +22,51 @@ BOB = 10
 
 # Artwork rectangles (x, y, w, h), with atlas gutters removed. Every pose is
 # scaled to POSE_HEIGHT, so each rectangle is a bust of the same proportion.
-NEUTRAL = ("poses", (97, 11, 327, 488))
+# The neutral frame and its variants are whole generated images of one size
+# and framing. They share one rectangle, so they register with each other;
+# the renderer only places, sequences and cross-fades them.
+MASTER = (0, 6, 1024, 1530)
+VARIANTS = ("mouth-half", "mouth-open", "blink", "listening")
 POSES = {
     "connecting": ("poses", (634, 12, 287, 487)),
-    "listening": ("listening", (191, 150, 614, 1045)),
     "thinking": ("poses", (113, 524, 309, 487)),
     "error": ("poses", (613, 523, 320, 488)),
     "happy": ("poses", (1159, 524, 264, 487)),
     "setup": ("cards", (103, 18, 610, 847)),
     "approval": ("cards", (1068, 16, 525, 851)),
 }
-
-# Mouth shapes from the expression sheet. Each head on that sheet was
-# registered to the neutral pose by correlating its eyes and nose (not its
-# mouth) with the pose at a third of a pixel: the same 0.4304 x 0.4310 scale
-# fits every head, and the second pair is where the sheet's origin lands in
-# poses.png. The rectangle is the mouth, from under the nostrils to the chin.
-EXPRESSION_SCALE = (0.4304, 0.4310)
-MOUTHS = {
-    "half": ((1323, 406, 118, 70), (-331.373, -15.386)),
-    "open": ((1865, 406, 118, 72), (-565.034, -15.354)),
-}
+# Poses shown next to a card stand left of centre, clear of the card.
+CARD_SHIFT = {"setup": -110, "approval": -110, "error": -110}
 
 # Unequal held mouth shapes, from the first frame after the neutral one. The
 # runs never repeat as a shorter regular speech cycle.
-SPEECH = (("half", 2), ("open", 4), ("half", 2), ("neutral", 2),
-          ("half", 2), ("open", 3), ("half", 3),
-          ("open", 4), ("half", 2), ("neutral", 3),
-          ("half", 3), ("open", 5), ("half", 2), ("neutral", 1),
-          ("open", 3), ("half", 2), ("open", 4), ("half", 3), ("neutral", 4),
-          ("half", 2), ("open", 4), ("half", 2), ("neutral", 2),
-          ("half", 3), ("open", 3), ("half", 2),
-          ("open", 5), ("half", 3), ("neutral", 3),
-          ("half", 2), ("open", 4), ("half", 4), ("neutral", 5))
+SPEECH = (("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 2), ("neutral", 2),
+          ("mouth-half", 2), ("mouth-open", 3), ("mouth-half", 3),
+          ("mouth-open", 4), ("mouth-half", 2), ("neutral", 3),
+          ("mouth-half", 3), ("mouth-open", 5), ("mouth-half", 2), ("neutral", 2),
+          ("mouth-open", 3), ("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 3),
+          ("neutral", 4),
+          ("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 2), ("neutral", 2),
+          ("mouth-half", 3), ("mouth-open", 3), ("mouth-half", 2),
+          ("mouth-open", 5), ("mouth-half", 3), ("neutral", 3),
+          ("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 4), ("neutral", 4))
+# The idle loop is three breaths long, so the blinks in it come at unequal
+# gaps: 3.7 s, 3.2 s and, across the loop's seam, 5.1 s. A blink is four
+# frames: closing, closed twice, opening.
+BREATH = 120
+BLINKS = (42, 153, 249)
 # A state loop returns to the neutral frame only where it joins, so the held
 # poses use long loops.
-FRAMES = {"idle": 121, "connecting": 150, "listening": 240, "thinking": 240,
+FRAMES = {"idle": 3 * BREATH + 1, "connecting": 150, "listening": 240, "thinking": 240,
           "speaking": 100, "muted": 30, "setup": 60, "setup-enter": 16, "approval": 300,
           "error": 300, "happy": 45}
 TRANSITION = 10
 # These clips are the neutral frame with a bob or a mouth, or a held card
 # pose: there is nothing to blend.
 UNBLENDED = ("idle", "speaking", "muted", "setup")
+# Whole generated frames differ a little everywhere, which lossless coding
+# cannot keep small. These clips are coded at a visually lossless quality.
+LOSSY = ("idle", "speaking")
 
 
 def run(args, data=None):
@@ -102,51 +105,19 @@ def raster(sheet, rect, drop=0):
         f"scale={WIDTH}:{HEIGHT}:flags=area"))
 
 
-def blend_patch(frame, pixels, x, y, width, height):
-    pose = bytearray(frame)
-
-    def offsets(row, column):
-        return (row * width + column) * 4, ((y + row) * WIDTH + x + column) * 4
-
-    # The two sheets shade the skin a little differently. Match the patch to
-    # the face where they meet: its outer ring holds only skin in both.
-    ring = [offsets(row, column) for row in range(height) for column in range(width)
-            if min(row, height - 1 - row, column, width - 1 - column) < 3]
-    tone = [sum(pose[j + channel] - pixels[i + channel] for i, j in ring) / len(ring)
-            for channel in range(3)]
-    for row in range(height):
-        for column in range(width):
-            i, j = offsets(row, column)
-            # Fade the rectangle's border into the face around it.
-            edge = (min(1, min(column, width - 1 - column) / 12)
-                    * min(1, min(row, height - 1 - row) / 8))
-            alpha = edge * edge * (3 - 2 * edge) * (pixels[i + 3] / 255)
-            for channel in range(3):
-                color = min(255, max(0, pixels[i + channel] + tone[channel]))
-                pose[j + channel] = round(pose[j + channel] * (1 - alpha) + color * alpha)
-    return bytes(pose)
-
-
-def mouth_frame(neutral, source, origin):
-    rect = NEUTRAL[1]
-    scale = POSE_HEIGHT / rect[3]
-    x, y, width, height = source
-    # Expression sheet -> poses.png -> the frame.
-    x = (CENTER - pose_width(rect) // 2
-         + (origin[0] + x * EXPRESSION_SCALE[0] - rect[0]) * scale)
-    y = POSE_TOP + (origin[1] + y * EXPRESSION_SCALE[1] - rect[1]) * scale
-    size = (round(width * EXPRESSION_SCALE[0] * scale),
-            round(height * EXPRESSION_SCALE[1] * scale))
-    pixels = cutout("expression", source, f"scale={size[0]}:{size[1]}:flags=lanczos")
-    return blend_patch(neutral, pixels, round(x), round(y), *size)
+def mix(first, second):
+    """The halfway frame of a cross-fade between two registered frames."""
+    return bytes(map(lambda a, b: (a + b + 1) >> 1, first, second))
 
 
 def keyframes():
     frames = {name: raster(sheet, rect) for name, (sheet, rect) in POSES.items()}
-    frames["bob"] = [raster(*NEUTRAL, drop) for drop in range(BOB * SUBPIXEL + 1)]
+    for name, x in CARD_SHIFT.items():
+        frames[name] = shift(frames[name], x, 0)
+    for name in VARIANTS:
+        frames[name] = raster(name, MASTER)
+    frames["bob"] = [raster("neutral", MASTER, drop) for drop in range(BOB * SUBPIXEL + 1)]
     frames["neutral"] = frames["bob"][0]
-    for name, (source, origin) in MOUTHS.items():
-        frames[name] = mouth_frame(frames["neutral"], source, origin)
     return frames
 
 
@@ -165,21 +136,53 @@ def shift(frame, x, y):
     return b"".join(rows)
 
 
+def bob(index):
+    """Quarter pixels below the neutral frame: one slow breath per BREATH."""
+    return round(BOB * SUBPIXEL * (1 - math.cos(math.tau * index / BREATH)) / 2)
+
+
+def idle(frames):
+    for index in range(FRAMES["idle"]):
+        drop = bob(index)
+        frame = frames["bob"][drop]
+        step = min((index - start for start in BLINKS if 0 <= index - start < 4), default=None)
+        if step is not None:
+            # The closed eyes ride the same breath as the frame they replace.
+            closed = raster("blink", MASTER, drop)
+            frame = closed if step in (1, 2) else mix(frame, closed)
+        yield frame
+
+
+def speaking(frames):
+    # The body is the neutral frame; only the mouth changes. Each new mouth
+    # shape is entered through the halfway frame of a cross-fade.
+    shapes = [pose for pose, run_length in SPEECH for _ in range(run_length)]
+    assert len(shapes) == FRAMES["speaking"] - 2
+    shapes = ["neutral", *shapes, "neutral"]
+    mixed = {}
+    for index, shape in enumerate(shapes):
+        last = shapes[index - 1] if index else shape
+        if last == shape:
+            yield frames[shape]
+            continue
+        pair = tuple(sorted((last, shape)))
+        if pair not in mixed:
+            mixed[pair] = mix(frames[pair[0]], frames[pair[1]])
+        yield mixed[pair]
+
+
 def timeline(role, frames):
+    if role == "idle":
+        yield from idle(frames)
+        return
+    if role == "speaking":
+        yield from speaking(frames)
+        return
     length = FRAMES[role]
-    speech = tuple(pose for pose, run_length in SPEECH for _ in range(run_length))
-    assert len(speech) == FRAMES["speaking"] - 2
-    neutral = frames["neutral"]
     for index in range(length):
         phase = index / (length - 1)
-        if role == "idle":
-            # One slow breath: down from the neutral frame and back to it.
-            yield frames["bob"][round(BOB * SUBPIXEL * (1 - math.cos(math.tau * phase)) / 2)]
-        elif role == "speaking":
-            # The body is the neutral frame; only the mouth changes.
-            yield frames[speech[index - 1]] if 0 < index < length - 1 else neutral
-        elif role == "muted":
-            yield neutral
+        if role == "muted":
+            yield frames["neutral"]
         elif role == "happy":
             yield shift(frames[role], 0, -round(8 * math.sin(math.pi * phase) ** 2))
         elif role == "setup-enter":
@@ -216,10 +219,12 @@ def encode(pack, raw, role, count):
     # Encode the held frame identically, even across the first keyframe.
     gop = ["-g", "1"] if role == "muted" else []
     h264_quality = ["-qp", "18"] if role == "muted" else ["-crf", "18"]
+    vp9_quality = (["-crf", "10", "-b:v", "0", "-cpu-used", "2"] if role in LOSSY
+                   else ["-lossless", "1", "-cpu-used", "4"])
     run(["-loop", "1", "-framerate", str(FPS), "-i", str(pack / "rest.png"),
          *raw_input(raw), "-filter_complex", graph,
          "-map", "[webm]", *fixed, *gop, "-c:v", "libvpx-vp9",
-         "-auto-alt-ref", "0", "-lossless", "1", "-cpu-used", "4", str(pack / f"{role}.webm"),
+         "-auto-alt-ref", "0", *vp9_quality, str(pack / f"{role}.webm"),
          "-map", "[mp4]", *fixed, *gop, "-c:v", "libx264", *h264_quality, "-preset", "fast",
          "-x264-params", "aq-mode=0:mbtree=0", "-movflags", "+faststart",
          str(pack / f"{role}.mp4")])
