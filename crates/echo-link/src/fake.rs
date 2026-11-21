@@ -454,9 +454,11 @@ impl EchoLink for FakeLink {
     async fn speaker_changed(&self, previous: SpeakerState) -> SpeakerState {
         self.observer.speaker_changed(previous).await
     }
-    async fn request_speaker(&self, request: SpeakerRequest) -> Result<(), Error> {
-        lock(&self.observer.0).commands.push(Command::Speaker(request));
-        Ok(())
+    fn request_speaker(&self, request: SpeakerRequest) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        std::future::poll_fn(move |_| {
+            lock(&self.observer.0).commands.push(Command::Speaker(request));
+            Poll::Ready(Ok(()))
+        })
     }
     fn thinking(&self, on: bool) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         std::future::ready({
