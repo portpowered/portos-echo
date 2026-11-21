@@ -233,6 +233,13 @@ impl Tools {
         self.muse.is_some()
     }
 
+    fn muse_for_call(&self) -> Option<crate::bridge_codex::MuseTool> {
+        Some(crate::bridge_codex::MuseTool::new(
+            self.muse.clone()?,
+            self.trace.clone()?,
+        ))
+    }
+
     pub(super) fn with_muse(mut self, config: &BridgeConfig, local: bool) -> Self {
         self.muse = config
             .muse
@@ -461,16 +468,7 @@ where
                 catalog,
                 tools.budget.clone(),
             ),
-            Some((
-                receiver,
-                run,
-                tools.skills.is_enabled(),
-                tools
-                    .muse
-                    .clone()
-                    .zip(tools.trace.clone())
-                    .map(|(backend, trace)| crate::bridge_codex::MuseTool::new(backend, trace)),
-            )),
+            Some((receiver, run, tools.skills.is_enabled(), tools.muse_for_call())),
             (options.session, opened),
             cancelled.as_mut(),
             &mut observe,

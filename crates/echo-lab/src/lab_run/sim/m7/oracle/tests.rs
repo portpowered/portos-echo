@@ -77,7 +77,7 @@ fn m7_success_and_deadline_join_exact_raw_observations() {
 #[test]
 fn m7_identity_and_duplicate_diagnostics_name_expected_and_observed() {
     let mut wrong = world(false);
-    wrong.trace.records[2]["task_id"] = json!("another");
+    wrong.trace.records[3]["task_id"] = json!("another");
     assert_eq!(
         observe(&wrong, false).unwrap_err(),
         "m7 raw task ID: expected \"t-1\"; observed \"another\""
@@ -105,7 +105,7 @@ fn m7_wrong_missing_or_stale_identity_and_extra_outcomes_are_rejected() {
                 wrong.trace.records.remove(1);
             }
             1 => {
-                wrong.trace.records[2]["task_id"] = json!("another");
+                wrong.trace.records[3]["task_id"] = json!("another");
             }
             2 => {
                 wrong.trace.records[3]["delegation_id"] = json!("another");

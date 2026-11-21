@@ -301,7 +301,6 @@
               "completed_count",
               "failed_count",
               "spoken_reply_count",
-              "commentary_count",
               "gadget_submit_count",
               "report_accepted_count",
               "report_attempt_count",
@@ -333,21 +332,44 @@
               "failed_count": {"type": "integer", "minimum": 0, "maximum": 1},
               "spoken_reply_count": {"const": 1},
               "commentary_count": {"const": 1},
+              "native_tool_call_count": {"const": 1},
+              "native_append_count": {"const": 1},
+              "legacy_dispatch_count": {"const": 0},
+              "model_tool_output": {"type": "string", "minLength": 1},
               "gadget_submit_count": {"const": 1},
               "report_accepted_count": {"type": "integer", "minimum": 0, "maximum": 1},
               "report_attempt_count": {"type": "integer", "minimum": 0, "maximum": 1},
               "reply_pcm_bytes": {"const": 9600},
               "client_tool_call_count": {"const": 0},
-              "responses_request_count": {"const": 0},
+              "responses_request_count": {"enum": [0, 2]},
               "retryable": {
                 "type": [
                   "boolean",
                   "null"
                 ]
               },
-              "deadline_seconds": {"type": "integer", "minimum": 5, "maximum": 600}
+              "deadline_seconds": {"type": "integer", "minimum": 1, "maximum": 600}
             },
             "allOf": [
+              {
+                "if": {"required": ["commentary_count"]},
+                "then": {
+                  "properties": {
+                    "responses_request_count": {"const": 0},
+                    "deadline_seconds": {"minimum": 5},
+                    "native_tool_call_count": false,
+                    "native_append_count": false,
+                    "legacy_dispatch_count": false,
+                    "model_tool_output": false
+                  }
+                },
+                "else": {
+                  "required": ["native_tool_call_count", "native_append_count", "legacy_dispatch_count", "model_tool_output"],
+                  "properties": {
+                    "responses_request_count": {"const": 2}
+                  }
+                }
+              },
               {
                 "if": {
                   "properties": {
