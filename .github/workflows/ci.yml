@@ -42,6 +42,10 @@ jobs:
       - name: Enable isolated Codex network namespace
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: test-unit-rust
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODEX_RELEASE: ${{ steps.codex.outputs.tag }}
+          ECHO_CODEX_OFFLINE: '1'
         run: make test-unit-rust NEXTEST_PARTITION=count:${{ matrix.shard }}/4
   test-unit-screen:
     name: test-unit-screen
