@@ -258,10 +258,7 @@ impl Source {
     /// once, as a barge-in cut does. A reply already audible is the Live
     /// voice's farewell for the end's hand-off: it plays out, and the run ends
     /// at its playback boundary. Between replies there is nothing to stop.
-    ///
-    /// True when that farewell is already done and was only held open for
-    /// the delegated answer: the caller finishes it after the audio that has
-    /// arrived. Otherwise its own done finishes it.
+    /// True when that farewell is done and only held for the delegated answer.
     pub fn end_if_ended(&mut self, port: &mut impl VoicePort) -> Result<bool, Error> {
         if !self.session.ending() || self.controller.cutting() || self.controller.closing() {
             return Ok(false);
