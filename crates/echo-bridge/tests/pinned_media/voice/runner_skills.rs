@@ -367,7 +367,7 @@ fn check_thread(observed: &Value, context: &str, tools: &[Value], enabled: bool)
                     "features.view_image":false,"features.shell_tool":false,"features.unified_exec":false,"features.multi_agent":false,
                     "features.multi_agent_v2":false,"agents.enabled":false,"features.goals":false,
                     "tools.experimental_request_user_input.enabled":false,"tools.update_plan.enabled":false,
-                    "features.code_mode.direct_only_tool_namespaces":["web","functions"],"web_search":"disabled",
+                    "features.code_mode.direct_only_tool_namespaces":["functions"],"web_search":"disabled",
                     "mcp_servers":{},"skills.include_instructions":false
                 },
                 "model":MODEL,"serviceTier":null,"baseInstructions":runner,"dynamicTools":tools
