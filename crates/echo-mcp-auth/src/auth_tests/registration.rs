@@ -12,7 +12,7 @@ pub(super) async fn linked_dcr(mock: &Mock, directory: &std::path::Path) -> Arc<
     mcp
 }
 
-async fn automatic(mock: &Mock, directory: &std::path::Path, epoch: u64) -> Arc<AuthClient> {
+pub(super) async fn automatic(mock: &Mock, directory: &std::path::Path, epoch: u64) -> Arc<AuthClient> {
     let explicit = options(mock, directory);
     let options = AuthOptions {
         resource_url: explicit.resource_url,

@@ -6,10 +6,8 @@ use reqwest::{Client, StatusCode, redirect::Policy};
 use std::time::Duration;
 use url::Url;
 
-mod grant;
 mod registration;
 
-pub use grant::{EndpointApproval, EndpointGrant};
 pub use registration::{EndpointInstall, EndpointInstallExchange, EndpointRegistration, new_request_id};
 
 const EXCHANGE_PATH: &str = "/plugin-auth-code-exchanges";

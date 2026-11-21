@@ -5,10 +5,7 @@ mod transport;
 
 use crate::bridge_mcp::Grant;
 use echo_config::BridgeConfig;
-use echo_mcp_auth::{
-    AuthError, EndpointExchange, EndpointGrant, EndpointRegistration, EndpointTokenSource, ExchangeError,
-};
-use echo_screen_contract::settings_v2::PortosChallengeV2;
+use echo_mcp_auth::{AuthError, EndpointExchange, EndpointRegistration, EndpointTokenSource, ExchangeError};
 use std::{
     future::{Future, pending},
     path::PathBuf,
@@ -31,14 +28,10 @@ pub(crate) const UNAVAILABLE: &str = "Port OS endpoint connection is unavailable
 enum Status {
     Off,
     Connecting,
-    Approval(PortosChallengeV2),
     Connected,
     Unavailable,
     Relink,
-    ApprovalRequired,
     ClearFailed,
-    Denied,
-    Expired,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -77,21 +70,10 @@ impl Control {
         let warning = match &*status {
             Status::Off => return,
             Status::Connecting => "Connecting this Echo to Port OS.",
-            Status::Approval(challenge) => {
-                if snapshot.portos.operation_state == echo_screen_contract::settings_v2::PortosOperationStateV2::Idle {
-                    snapshot.portos.challenge = Some(challenge.clone());
-                }
-                "Approve this Echo's Port OS endpoint connection."
-            }
             Status::Connected => "This Echo is connected to Port OS.",
             Status::Unavailable => UNAVAILABLE,
             Status::Relink => "Link this Echo with its own Port OS client to connect the endpoint.",
-            Status::ApprovalRequired => {
-                "Port OS endpoint approval is required again. Turn the connection off and back on."
-            }
             Status::ClearFailed => "Port OS endpoint data could not be cleared.",
-            Status::Denied => "Port OS denied the endpoint connection.",
-            Status::Expired => "The Port OS endpoint approval expired.",
         };
         snapshot.warnings.push(warning.into());
     }
@@ -99,6 +81,7 @@ impl Control {
 
 pub(crate) struct Runtime {
     home: PathBuf,
+    api_base: String,
     resolver: Arc<dyn RouteResolver>,
     exchange: EndpointExchange,
     transport: Transport,
@@ -119,11 +102,19 @@ impl Runtime {
         let exchange = EndpointExchange::open(api, REQUEST_TIMEOUT).ok()?;
         let transport = Transport::new(gateway, api, false)?;
         let home = config.mcp.state_dir.clone()?;
-        Some(Self::new(home, resolver, exchange, transport, &config.portos_endpoint))
+        Some(Self::new(
+            home,
+            api.into(),
+            resolver,
+            exchange,
+            transport,
+            &config.portos_endpoint,
+        ))
     }
 
     fn new(
         home: PathBuf,
+        api_base: String,
         resolver: Arc<dyn RouteResolver>,
         exchange: EndpointExchange,
         transport: Transport,
@@ -143,6 +134,7 @@ impl Runtime {
         (
             Self {
                 home,
+                api_base,
                 resolver,
                 exchange,
                 transport,
@@ -239,9 +231,8 @@ impl Runtime {
         store: &Arc<EndpointRegistration>,
         current_grant: &impl Fn() -> Option<Arc<Grant>>,
     ) -> Result<Status, AuthError> {
-        let owner = linked_owner(current_grant).await;
-        let tokens = owner.endpoint_grant(store.clone()).await?;
-        self.approve(&tokens).await?;
+        let owner = linked_owner(current_grant, &self.status).await;
+        let tokens = owner.endpoint_grant(&self.api_base)?;
         // A pending request may refer to the previous name. An accepted rename
         // follows that checkpoint rather than altering the old key's body.
         while let Some(exchange) = store.exchange(name).await? {
@@ -249,7 +240,7 @@ impl Runtime {
             match result {
                 Ok(result) => store.complete_exchange(exchange, result.auth_link_id).await?,
                 Err(ExchangeError::Transport) => sleep(Duration::from_secs(1)).await,
-                Err(ExchangeError::Grant) => return Ok(Status::ApprovalRequired),
+                Err(ExchangeError::Grant) if owner.health_status() == "unlinked" => return Ok(Status::Relink),
                 Err(_) => return Ok(Status::Unavailable),
             }
         }
@@ -265,42 +256,27 @@ impl Runtime {
             store.resolve(&install.auth_link_id, route.clone()).await?;
             route
         };
-        if tokens.refresh_installation().await.is_err() {
-            return Ok(Status::ApprovalRequired);
-        }
+        tokens.refresh_installation().await?;
         Ok(self
             .transport
             .serve(&install.auth_link_id, &route, &tokens, &self.status)
             .await)
     }
-
-    async fn approve(&self, tokens: &EndpointGrant) -> Result<(), AuthError> {
-        if tokens.has_grant().await {
-            return Ok(());
-        }
-        let approval = tokens.begin_approval().await?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| AuthError::Protocol)?
-            .as_secs();
-        self.status.send_replace(Status::Approval(PortosChallengeV2 {
-            verification_uri: approval.verification_uri().into(),
-            user_code: approval.user_code().into(),
-            expires_at_unix: now.saturating_add(approval.expires_in()),
-        }));
-        tokens.await_approval(approval).await?;
-        self.status.send_replace(Status::Connecting);
-        Ok(())
-    }
 }
 
-async fn linked_owner(current_grant: &impl Fn() -> Option<Arc<Grant>>) -> Arc<Grant> {
+async fn linked_owner(current_grant: &impl Fn() -> Option<Arc<Grant>>, status: &watch::Sender<Status>) -> Arc<Grant> {
     loop {
         if let Some(owner) = current_grant()
             && owner.link_status() == echo_screen_contract::settings_v1::LinkStatusV1::Linked
         {
+            status.send_replace(Status::Connecting);
             return owner;
         }
+        status.send_if_modified(|value| {
+            let changed = !matches!(value, Status::Relink);
+            *value = Status::Relink;
+            changed
+        });
         sleep(Duration::from_millis(250)).await;
     }
 }
@@ -308,8 +284,6 @@ async fn linked_owner(current_grant: &impl Fn() -> Option<Arc<Grant>>) -> Arc<Gr
 fn auth_status(error: &AuthError) -> Status {
     match error {
         AuthError::RelinkRequired => Status::Relink,
-        AuthError::AccessDenied => Status::Denied,
-        AuthError::Expired => Status::Expired,
         _ => Status::Unavailable,
     }
 }

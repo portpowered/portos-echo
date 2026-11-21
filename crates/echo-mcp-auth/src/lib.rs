@@ -18,11 +18,11 @@ mod wire;
 #[path = "auth_tests/mock.rs"]
 pub mod mock;
 
-pub use auth::{AuthClient, GrantStatus, LinkInstructions};
+pub use auth::{AuthClient, EndpointGrant, GrantStatus, LinkInstructions};
 use echo_contracts::secret::Secret;
 pub use endpoint::{
-    EndpointApproval, EndpointExchange, EndpointGrant, EndpointInstall, EndpointInstallExchange, EndpointRegistration,
-    EndpointTokenSource, ExchangeError, new_request_id,
+    EndpointExchange, EndpointInstall, EndpointInstallExchange, EndpointRegistration, EndpointTokenSource,
+    ExchangeError, new_request_id,
 };
 pub use refusal::LinkFailure;
 use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};

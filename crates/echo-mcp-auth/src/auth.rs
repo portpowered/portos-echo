@@ -17,8 +17,9 @@ use std::{
 };
 use tokio::{sync::Mutex, time::Instant};
 
-#[path = "endpoint/dcr.rs"]
+#[path = "endpoint/grant.rs"]
 mod endpoint;
+pub use endpoint::EndpointGrant;
 
 #[cfg(test)]
 #[path = "auth_tests/mod.rs"]
@@ -72,6 +73,7 @@ fn default_interval() -> u64 {
 struct State {
     record: Record,
     uncertain: bool,
+    endpoint: Option<endpoint::Access>,
 }
 
 /// Public presentation facts from one usable committed grant.
@@ -157,6 +159,7 @@ impl AuthClient {
             state: Mutex::new(State {
                 record,
                 uncertain: false,
+                endpoint: None,
             }),
             generation: AtomicU64::new(0),
             epoch: match epoch {
@@ -350,6 +353,7 @@ impl AuthClient {
         self.linked.store(false, Ordering::Release);
         state.uncertain = true;
         let current = &state.record;
+        let reset_endpoint = linked.is_some() || grant.is_none();
         let (client_id, registration, key) = match linked {
             Some((identity, key)) => (Some(identity.client_id), identity.registration, key),
             None => (
@@ -369,6 +373,9 @@ impl AuthClient {
         };
         self.store.save(&record)?;
         state.record = record;
+        if reset_endpoint {
+            state.endpoint = None;
+        }
         state.uncertain = false;
         self.linked.store(state.record.grant.is_some(), Ordering::Release);
         self.generation.fetch_add(1, Ordering::Release);
@@ -376,41 +383,12 @@ impl AuthClient {
     }
 
     async fn rotate(&self, state: &mut State) -> Result<(), AuthError> {
-        if state.uncertain {
-            return Err(AuthError::RelinkRequired);
+        let resource = state.record.resource.clone();
+        let grant = self.redeem_refresh(state, &resource).await?;
+        if state.endpoint.as_ref().is_some_and(|access| access.matches(&grant)) {
+            return Err(AuthError::Protocol);
         }
-        let grant = state.record.grant.as_ref().ok_or(AuthError::RelinkRequired)?;
-        let form = [
-            ("grant_type", "refresh_token"),
-            ("refresh_token", grant.expose().refresh_token.as_str()),
-            (
-                "client_id",
-                state.record.client_id.as_deref().ok_or(AuthError::Storage)?,
-            ),
-            ("resource", state.record.resource.as_str()),
-        ];
-        // Mark before the request: cancellation/transport failure can mean the
-        // server rotated. Never replay an ambiguous refresh in this process.
-        self.linked.store(false, Ordering::Release);
-        state.uncertain = true;
-        match wire::post::<Pair>(
-            &self.http,
-            &self.metadata.token_endpoint,
-            &form,
-            Some(state.record.private_key_jwk.expose()),
-            self.now(),
-        )
-        .await
-        .map_err(AuthError::from)
-        {
-            Ok(Reply::Value(pair)) => self.publish(state, Some(pair.grant(self.now())?), None),
-            Err(AuthError::RelinkRequired) => {
-                self.publish(state, None, None)?;
-                Err(AuthError::RelinkRequired)
-            }
-            Err(error) => Err(error),
-            Ok(_) => Err(AuthError::Protocol),
-        }
+        self.publish(state, Some(grant), None)
     }
 
     /// # Errors

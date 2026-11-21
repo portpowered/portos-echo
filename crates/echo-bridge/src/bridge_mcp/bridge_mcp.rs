@@ -49,11 +49,8 @@ struct ScopeStatus {
 }
 
 impl Grant {
-    pub(crate) async fn endpoint_grant(
-        &self,
-        registration: Arc<echo_mcp_auth::EndpointRegistration>,
-    ) -> Result<echo_mcp_auth::EndpointGrant, AuthError> {
-        self.client.endpoint_grant(registration).await
+    pub(crate) fn endpoint_grant(&self, api_base: &str) -> Result<echo_mcp_auth::EndpointGrant<'_>, AuthError> {
+        self.client.endpoint_grant(api_base)
     }
 
     fn now(&self) -> u64 {

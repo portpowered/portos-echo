@@ -47,18 +47,12 @@ export const restartWarning =
 export const endpointUnavailable =
     "Port OS endpoint connection is unavailable.";
 export const endpointConnecting = "Connecting this Echo to Port OS.";
-export const endpointApproval =
-    "Approve this Echo's Port OS endpoint connection.";
 export const endpointMessages: ReadonlySet<string> = new Set([
     endpointUnavailable,
     endpointConnecting,
-    endpointApproval,
     "This Echo is connected to Port OS.",
     "Link this Echo with its own Port OS client to connect the endpoint.",
-    "Port OS endpoint approval is required again. Turn the connection off and back on.",
     "Port OS endpoint data could not be cleared.",
-    "Port OS denied the endpoint connection.",
-    "The Port OS endpoint approval expired.",
 ]);
 
 export function validEndpointName(name: string) {

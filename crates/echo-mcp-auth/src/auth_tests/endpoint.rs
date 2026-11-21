@@ -1,93 +1,96 @@
 use super::{
-    registration::{EPOCH, REGISTER, linked_dcr},
+    registration::{EPOCH, REGISTER, automatic, linked_dcr},
     *,
 };
+use crate::EndpointTokenSource;
 
 #[tokio::test(start_paused = true)]
-async fn t3_endpoint_grant_keeps_dcr_identity_but_uses_an_independent_audience() {
-    use crate::EndpointTokenSource;
-
-    let mock = Mock::start().await;
-    mock.set_epoch(EPOCH);
-    mock.enable_endpoint_audience().unwrap();
-    let directory = tempfile::tempdir().unwrap();
-    let mcp_path = directory.path().join("grant.json");
-    let mcp = linked_dcr(&mock, directory.path()).await;
-    let original = std::fs::read(&mcp_path).unwrap();
-    let endpoint = approve_endpoint(&mcp, directory.path()).await;
-    drive(endpoint.refresh_installation()).await.unwrap();
-    let endpoint_bearer = drive(endpoint.access_token()).await.unwrap();
-    let mcp_bearer = drive(mcp.access_token()).await.unwrap();
-    assert!(endpoint_bearer.expose() == "endpoint-access-2");
-    assert!(mcp_bearer.expose() == "access-1");
-    assert_eq!(drive(mock.resource(mcp_bearer.expose())).await, 200);
-    assert_eq!(drive(mock.resource(endpoint_bearer.expose())).await, 401);
-    assert_eq!(std::fs::read(mcp_path).unwrap(), original);
-    assert_unbound_forms(&mock);
-}
-
-#[tokio::test(start_paused = true)]
-async fn t3_endpoint_grant_serializes_rotation_and_never_replays_a_spent_refresh_after_restart() {
-    use crate::{EndpointRegistration, EndpointTokenSource};
-
+async fn t3_endpoint_grant_reuses_one_dcr_approval_and_keeps_the_audiences_separate() {
     let mock = Mock::start().await;
     mock.set_epoch(EPOCH);
     mock.enable_endpoint_audience().unwrap();
     let home = tempfile::tempdir().unwrap();
     let mcp = linked_dcr(&mock, home.path()).await;
-    let endpoint = Arc::new(approve_endpoint(&mcp, home.path()).await);
-    advance(Duration::from_secs(3_301)).await;
+    let endpoint = mcp.endpoint_grant(&mock.base).unwrap();
     let (gateway, api) = drive(async { tokio::join!(endpoint.access_token(), endpoint.access_token()) }).await;
-    assert!(gateway.unwrap().expose() == "endpoint-access-2");
-    assert!(api.unwrap().expose() == "endpoint-access-2");
-    assert_eq!(mock.refreshes(), 1);
-    lose_refresh_response(&mock, endpoint).await;
-    assert_eq!(mock.refreshes(), 2);
+    assert_eq!(gateway.unwrap().expose(), "endpoint-access-2");
+    let api = api.unwrap();
+    assert_eq!(api.expose(), "endpoint-access-2");
+    let mcp_bearer = drive(mcp.access_token()).await.unwrap();
+    assert_eq!(mcp_bearer.expose(), "access-1");
+    assert_eq!(drive(mock.resource(mcp_bearer.expose())).await, 200);
+    assert_eq!(drive(mock.resource(api.expose())).await, 401);
+    assert_eq!(mock.count(REGISTER), 1);
+    assert_eq!(mock.count("/custom/link"), 1);
+    assert_eq!(mock.count("/custom/token"), 2);
+    assert_refreshes(&mock, &[(&mock.base, "refresh-1")]);
+}
 
-    let store = Arc::new(EndpointRegistration::open(home.path()).unwrap());
-    let reopened = drive(mcp.endpoint_grant(store)).await.unwrap();
+#[tokio::test(start_paused = true)]
+async fn t3_endpoint_grant_serializes_both_audiences_and_never_replays_after_restart() {
+    let mock = Mock::start().await;
+    mock.set_epoch(EPOCH);
+    mock.enable_endpoint_audience().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let mcp = linked_dcr(&mock, home.path()).await;
+    let endpoint = mcp.endpoint_grant(&mock.base).unwrap();
+    assert_eq!(
+        drive(endpoint.access_token()).await.unwrap().expose(),
+        "endpoint-access-2"
+    );
+    advance(Duration::from_secs(3_301)).await;
+    let (tool, gateway) = drive(async { tokio::join!(mcp.access_token(), endpoint.access_token()) }).await;
+    assert_eq!(tool.unwrap().expose(), "access-3");
+    assert_eq!(gateway.unwrap().expose(), "endpoint-access-4");
+    let mcp_resource = format!("{}/mcp", mock.base);
+    let path = home.path().join("grant.json");
+    let durable: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(durable["grant"]["refresh_token"], "refresh-4");
+    assert_eq!(durable["grant"]["access_token"], "access-3");
+    assert_refreshes(
+        &mock,
+        &[
+            (&mock.base, "refresh-1"),
+            (&mcp_resource, "refresh-2"),
+            (&mock.base, "refresh-3"),
+        ],
+    );
+
+    advance(Duration::from_secs(3_301)).await;
+    lose_refresh_response(&mock, mcp.clone()).await;
+    error(drive(mcp.access_token()).await, AuthError::RelinkRequired);
+    let reopened = automatic(&mock, home.path(), EPOCH).await;
+    let endpoint = reopened.endpoint_grant(&mock.base).unwrap();
+    error(drive(endpoint.access_token()).await, AuthError::RelinkRequired);
     error(drive(reopened.access_token()).await, AuthError::RelinkRequired);
-    assert_eq!(mock.refreshes(), 2);
-    assert!(mcp.has_grant());
+    assert_eq!(mock.refreshes(), 4);
+    assert!(!reopened.has_grant());
 }
 
-async fn approve_endpoint(mcp: &AuthClient, home: &std::path::Path) -> crate::EndpointGrant {
-    let registration = Arc::new(crate::EndpointRegistration::open(home).unwrap());
-    let endpoint = drive(mcp.endpoint_grant(registration)).await.unwrap();
-    let challenge = drive(endpoint.begin_approval()).await.unwrap();
-    assert_eq!(challenge.user_code(), "TEST-CODE");
-    let (approved, ()) =
-        drive(async { tokio::join!(endpoint.await_approval(challenge), advance(Duration::from_secs(5))) }).await;
-    approved.unwrap();
-    endpoint
-}
-
-async fn lose_refresh_response(mock: &Mock, endpoint: Arc<crate::EndpointGrant>) {
+async fn lose_refresh_response(mock: &Mock, owner: Arc<AuthClient>) {
     mock.state.lock().unwrap().hold = Some("/custom/token".into());
-    let refresh = tokio::spawn(async move { endpoint.refresh_installation().await });
+    let resource = mock.base.clone();
+    let refresh = tokio::spawn(async move { owner.endpoint_grant(&resource).unwrap().access_token().await });
     until(|| mock.state.lock().unwrap().held).await;
     refresh.abort();
-    assert!(refresh.await.unwrap_err().is_cancelled());
+    assert!(refresh.await.err().unwrap().is_cancelled());
     mock.release.notify_one();
 }
 
-fn assert_unbound_forms(mock: &Mock) {
+fn assert_refreshes(mock: &Mock, expected: &[(&str, &str)]) {
     let state = mock.state.lock().unwrap();
-    let expected = [
-        ("/custom/link", vec!["client_id", "scope"]),
-        ("/custom/token", vec!["client_id", "device_code", "grant_type"]),
-        ("/custom/token", vec!["client_id", "grant_type", "refresh_token"]),
-    ];
-    for (request, (path, fields)) in state.requests.iter().skip(5).take(3).zip(expected) {
-        assert_eq!(request.path, path);
+    let refreshes: Vec<_> = state
+        .requests
+        .iter()
+        .filter(|req| req.form.get("grant_type").is_some_and(|grant| grant == "refresh_token"))
+        .collect();
+    assert_eq!(refreshes.len(), expected.len());
+    for (request, (resource, refresh)) in refreshes.into_iter().zip(expected) {
+        assert_eq!(request.path, "/custom/token");
         assert_eq!(request.form["client_id"], "dcr_synthetic");
-        assert_eq!(request.form.keys().map(String::as_str).collect::<Vec<_>>(), fields);
+        assert_eq!(request.form["resource"], *resource);
+        assert_eq!(request.form["refresh_token"], *refresh);
         assert!(request.headers.contains_key("dpop"));
         assert!(!request.headers.contains_key("authorization"));
     }
-    assert_eq!(state.requests.iter().filter(|req| req.path == REGISTER).count(), 1);
-    assert_eq!(
-        state.requests.iter().filter(|req| req.path == "/custom/token").count(),
-        3
-    );
 }

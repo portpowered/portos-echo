@@ -660,14 +660,17 @@ repository needs from Port OS is asked of the portos-backend coordinator, never 
 ### Echo endpoint registration (W6)
 
 The owner authorized one opt-in endpoint path in `el-w6-portos-endpoint-bridge` on 2026-11-21.
-Paired Settings v2 names and enables the installation. Its separate device-code grant reuses the
-installation's registered client and serves REST and the gateway through one endpoint audience.
-Resolve the route after the install exchange and refresh for the auth-link claim before opening
-the gateway. Production activation requires an available endpoint issuer and authoritative route resolver.
+Paired Settings v2 names and enables the installation. The existing Port OS link supplies one
+registered client, device-code approval and rotating DPoP-bound refresh token. Serialize refreshes
+through that grant owner and mint different MCP and endpoint access tokens. REST and the gateway
+share the endpoint token. Resolve the route after the install exchange and refresh both audiences
+for the auth-link claim before opening the gateway. Production activation requires an available
+endpoint issuer and authoritative route resolver.
 
 The endpoint uses the existing voice and device owners. Immediate decisions and text starts have one
 final reply within 1 s. Mic starts that wait for the device decide at the 2 s boundary and deliver one
-final reply by 2.5 s with a healthy uplink. The device owns speaker acknowledgements, and the camera
+final reply by 2.5 s with a healthy uplink. Explicit end-session cancels a running delegation,
+stops speech and closes the mic run immediately. The device owns speaker acknowledgements, and the camera
 source owns the snapshot shutter. Workers exercise this path through local fakes.
 
 ## 10. Phase F: the repository harness, before any crate

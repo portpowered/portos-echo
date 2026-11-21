@@ -79,6 +79,8 @@ The endpoint preference defaults to off with the name **Echo Show**. From paired
 **Port OS**, edit **Name in Port OS** or **Connect this Echo to Port OS**, and save. Names must
 contain 1 to 64 Unicode characters, including at least one non-whitespace character and no control
 characters. The bridge saves these preferences without restarting a conversation.
+Use the existing **Port OS** link to approve the Echo once. Both MCP and the endpoint use
+that sign-in. The bridge requests a separate access token for each audience.
 
 ```toml
 [portos_endpoint]

@@ -1,5 +1,4 @@
 import {
-    endpointApproval,
     endpointConnecting,
     endpointMessages,
     operateAccount,
@@ -130,9 +129,7 @@ export function mountPortos(
 
     function monitor() {
         if (timer || read) return;
-        const pairing =
-            endpointMessage === endpointConnecting ||
-            endpointMessage === endpointApproval;
+        const pairing = endpointMessage === endpointConnecting;
         if (
             endpointRefresh ||
             pairing ||

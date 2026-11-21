@@ -1,4 +1,3 @@
-use super::grant::SavedGrant;
 use crate::{AuthError, store, valid_text};
 use echo_contracts::{endpoint::InstallRequest, secret::Secret};
 use rand_core::{OsRng, RngCore};
@@ -6,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 use tokio::sync::Mutex;
 
@@ -34,19 +32,15 @@ pub(super) struct Record {
     version: u8,
     device_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) endpoint_grant: Option<SavedGrant>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     installation: Option<EndpointInstall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pending_exchange: Option<PendingExchange>,
 }
 
-/// One private record shared by the endpoint install and its independent grant.
+/// The private record for the endpoint installation and its pending exchange.
 pub struct EndpointRegistration {
     path: PathBuf,
     pub(super) record: Mutex<Record>,
-    pub(super) generation: AtomicU64,
-    pub(super) rotations: AtomicU64,
 }
 
 impl EndpointRegistration {
@@ -71,7 +65,6 @@ impl EndpointRegistration {
                 Record {
                     version: 1,
                     device_id: new_request_id()?,
-                    endpoint_grant: None,
                     installation: None,
                     pending_exchange: None,
                 },
@@ -83,8 +76,6 @@ impl EndpointRegistration {
         let registration = Self {
             path,
             record: Mutex::new(record),
-            generation: AtomicU64::new(0),
-            rotations: AtomicU64::new(0),
         };
         if fresh {
             let guard = registration.record.try_lock().map_err(|_| AuthError::Storage)?;
@@ -200,14 +191,12 @@ impl EndpointRegistration {
         Ok(())
     }
 
-    /// Remove the grant and installation while retaining the stable UUID.
+    /// Remove the installation while retaining the stable UUID.
     ///
     /// # Errors
     /// Reports failed local persistence.
     pub async fn unlink(&self) -> Result<(), AuthError> {
         let mut record = self.record.lock().await;
-        self.generation.fetch_add(1, Ordering::Release);
-        record.endpoint_grant = None;
         record.installation = None;
         record.pending_exchange = None;
         self.save(&record)

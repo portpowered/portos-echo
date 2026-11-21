@@ -201,10 +201,15 @@ name and opt-in leaves, endpoint lifecycle, and synthetic witnesses. The A answe
 reply within 1 s for immediate outcomes and text starts. A pending mic start decides at 2 s and
 delivers its final reply by 2.5 s with a healthy uplink.
 
-The follow-up keeps the two-grant implementation behind an endpoint token source. REST and the
-gateway use the same endpoint audience. The route comes from a post-exchange resolver and is
-persisted independently of the installation UUID. Production activation requires the endpoint
-issuer and route resolver. See [program plan, section 9](plan.md#9-port-os-dependencies).
+The final owner decision uses one Port OS link and one rotating DPoP-bound refresh token.
+The grant owner serializes refreshes and mints separate access tokens for MCP and for REST
+and the gateway, with the auth-link claim in both after pairing. The route comes from a
+post-exchange resolver and is persisted independently of the installation UUID. Production
+activation requires the endpoint issuer and route resolver.
+
+Explicit end-session cancels delegation, stops speech and closes the mic run in every active
+state. Reply idle within 1 s and report the remote end. Automatic idle and no-answer timeouts
+retain their protections for active work. See [program plan, section 9](plan.md#9-port-os-dependencies).
 
 ## Open
 

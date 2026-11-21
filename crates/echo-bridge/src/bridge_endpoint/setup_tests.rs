@@ -26,8 +26,6 @@ async fn t3_endpoint_pair_resumes_route_lookup_without_a_new_exchange() {
         let settings =
             Settings::with_resolver(home.path(), &mock, &gateway, grant.grant.clone(), resolver.clone()).await;
         settings.save(true, "Hall Echo").await;
-        wait_approval(&settings).await;
-        advance(Duration::from_secs(5)).await;
         wait_unavailable(&settings).await;
         let retained = read_install(home.path());
         assert_eq!(
@@ -39,7 +37,7 @@ async fn t3_endpoint_pair_resumes_route_lookup_without_a_new_exchange() {
         settings.save(false, "Hall Echo").await;
         resolver.0.store(true, Ordering::Release);
         settings.save(true, "Hall Echo").await;
-        gateway.assert_upgrade(2).await;
+        gateway.assert_upgrade(4).await;
         assert_installed(home.path(), &mock).await;
         let install_requests = mock
             .state
@@ -63,6 +61,86 @@ async fn wait_unavailable(settings: &Settings) {
         }
     }
     panic!("endpoint route refusal was not shown in Settings");
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_endpoint_pair_retries_the_committed_exchange_after_losing_its_response() {
+    bridge_mcp::bridge_component::drive(async {
+        let home = tempfile::tempdir().unwrap();
+        let mock = Mock::bind().await.unwrap();
+        mock.enable_endpoint_audience().unwrap();
+        let mut grant = registered(&mock, home.path()).await;
+        let mut gateway = Gateway::open().await;
+        let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
+        mock.state.lock().unwrap().hold = Some("/plugin-auth-code-exchanges".into());
+        settings.save(true, "Hall Echo").await;
+        while !mock.state.lock().unwrap().held {
+            tokio::task::yield_now().await;
+        }
+        let checkpoint = read_install(home.path());
+        assert_eq!(checkpoint["pendingExchange"]["deviceName"], "Hall Echo");
+        assert_eq!(checkpoint["installation"], Value::Null);
+        assert!(gateway.received.try_recv().is_err());
+
+        settings.close().await;
+        mock.state.lock().unwrap().hold = None;
+        mock.release.notify_one();
+        let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
+        gateway.assert_upgrade(4).await;
+        assert_installed(home.path(), &mock).await;
+        assert_eq!(read_install(home.path())["pendingExchange"], Value::Null);
+        {
+            let state = mock.state.lock().unwrap();
+            let attempts: Vec<_> = state
+                .requests
+                .iter()
+                .filter(|request| request.path == "/plugin-auth-code-exchanges")
+                .collect();
+            assert_eq!(attempts.len(), 2);
+            assert_eq!(attempts[0].json, attempts[1].json);
+            for attempt in attempts {
+                assert_eq!(
+                    attempt.headers["idempotency-key"],
+                    checkpoint["pendingExchange"]["idempotencyKey"]
+                );
+            }
+        }
+        settings.close().await;
+        grant.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_endpoint_pair_requires_the_existing_port_os_link() {
+    bridge_mcp::bridge_component::drive(async {
+        let home = tempfile::tempdir().unwrap();
+        let mock = Mock::bind().await.unwrap();
+        mock.enable_endpoint_audience().unwrap();
+        let mut grant = grant_owner(&mock, home.path()).await;
+        let mut gateway = Gateway::open().await;
+        let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
+        settings.save(true, "Hall Echo").await;
+        for _ in 0..50 {
+            let state = settings.snapshot().await;
+            if state["warnings"] == json!(["Link this Echo with its own Port OS client to connect the endpoint."]) {
+                assert_eq!(state["portos"]["challenge"], Value::Null);
+                assert_eq!(state["portos"]["link_status"], "link_required");
+                assert!(gateway.received.try_recv().is_err());
+                assert!(!mock.state.lock().unwrap().requests.iter().any(|request| {
+                    matches!(
+                        request.path.as_str(),
+                        "/custom/link" | "/custom/token" | "/plugin-auth-code-exchanges"
+                    )
+                }));
+                settings.close().await;
+                grant.close().await;
+                return;
+            }
+        }
+        panic!("endpoint did not ask the operator to link Port OS");
+    })
+    .await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -103,4 +181,39 @@ async fn t3_endpoint_pair_without_a_production_resolver_keeps_settings_and_mcp_a
         grant.close().await;
     })
     .await;
+}
+
+pub(super) async fn assert_rest_audiences(mock: &Mock) {
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for route in ["/plugin-auth-code-exchanges", "/messages"] {
+        let response = client
+            .post(format!("{}{route}", mock.base))
+            .bearer_auth("access-3")
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 401);
+    }
+    for (token, status) in [("access-3", 200), ("endpoint-access-4", 401)] {
+        let response = client
+            .post(format!("{}/mcp", mock.base))
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+    }
+}
+
+pub(super) async fn assert_wrong_gateway_audience(gateway: &Gateway) {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let address = gateway.template.replace("{authLinkId}", "loopback%20link%2F%25");
+    let mut handshake = address.into_client_request().unwrap();
+    handshake
+        .headers_mut()
+        .insert("Authorization", "Bearer access-3".parse().unwrap());
+    let error = tokio_tungstenite::connect_async(handshake).await.unwrap_err();
+    assert!(matches!(error, tokio_tungstenite::tungstenite::Error::Http(reply) if reply.status() == 401));
 }

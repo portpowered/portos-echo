@@ -73,9 +73,12 @@ impl Transport {
     async fn handshake(&self, auth_link: &str, tokens: &dyn EndpointTokenSource) -> Result<Socket, Status> {
         let url = addressed(&self.gateway, auth_link);
         let mut request = url.into_client_request().map_err(|_| Status::Unavailable)?;
-        let token = tokens.access_token().await.map_err(|_| Status::ApprovalRequired)?;
+        let token = tokens
+            .access_token()
+            .await
+            .map_err(|error| super::auth_status(&error))?;
         let mut bearer =
-            HeaderValue::from_str(&format!("Bearer {}", token.expose())).map_err(|_| Status::ApprovalRequired)?;
+            HeaderValue::from_str(&format!("Bearer {}", token.expose())).map_err(|_| Status::Unavailable)?;
         bearer.set_sensitive(true);
         request.headers_mut().insert(AUTHORIZATION, bearer);
         let config = WebSocketConfig::default()

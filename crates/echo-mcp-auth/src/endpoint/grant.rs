@@ -1,267 +1,161 @@
-use super::{EndpointRegistration, EndpointTokenSource};
+use super::{AuthClient, State};
 use crate::{
-    AuthError, TokenFuture,
-    auth::DeviceChallenge,
-    discovery::Metadata,
-    proof::{self, PrivateJwk},
+    AuthError, TokenFuture, discovery,
+    endpoint::EndpointTokenSource,
     store::Grant,
     valid_text,
     wire::{self, Pair, Reply},
 };
 use echo_contracts::secret::Secret;
-use reqwest::Client;
-use serde::{Deserialize, Serialize, Serializer};
-use std::{
-    sync::{Arc, atomic::Ordering},
-    time::Duration,
-};
-use tokio::time::{Instant, sleep_until, timeout_at};
+use std::sync::atomic::Ordering;
 
-/// Public device-code instructions and the private, single-use poll context.
-pub struct EndpointApproval {
-    challenge: DeviceChallenge,
-    key: Secret<PrivateJwk>,
-    expires: Instant,
-    generation: u64,
+pub(super) struct Access {
+    resource: String,
+    token: Secret<String>,
+    expires: u64,
+    claimed: bool,
 }
 
-impl EndpointApproval {
-    #[must_use]
-    pub fn user_code(&self) -> &str {
-        &self.challenge.user_code
-    }
-
-    #[must_use]
-    pub fn verification_uri(&self) -> &str {
-        &self.challenge.verification_uri
-    }
-
-    #[must_use]
-    pub fn expires_in(&self) -> u64 {
-        self.challenge.expires_in
+impl Access {
+    pub(super) fn matches(&self, grant: &Secret<Grant>) -> bool {
+        self.token.expose() == &grant.expose().access_token
     }
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct SavedGrant {
-    issuer: String,
-    client_id: String,
-    #[serde(serialize_with = "serialize_secret")]
-    private_key_jwk: Secret<PrivateJwk>,
-    #[serde(serialize_with = "serialize_secret")]
-    access_token: Secret<String>,
-    #[serde(serialize_with = "serialize_secret")]
-    refresh_token: Secret<String>,
-    expires_at_unix: u64,
-    scope: String,
+/// An audience view of the existing registered Port OS grant.
+pub struct EndpointGrant<'a> {
+    owner: &'a AuthClient,
+    resource: String,
 }
 
-fn serialize_secret<S: Serializer, T: Serialize>(value: &Secret<T>, serializer: S) -> Result<S::Ok, S::Error> {
-    value.expose().serialize(serializer)
-}
-
-/// An unbound device-code grant, using the registered client's issuer and its own key.
-pub struct EndpointGrant {
-    registration: Arc<EndpointRegistration>,
-    metadata: Metadata,
-    http: Client,
-    client_id: String,
-    scope: String,
-    epoch: u64,
-    started: Instant,
-}
-
-impl EndpointGrant {
-    pub(crate) async fn open(
-        registration: Arc<EndpointRegistration>,
-        metadata: Metadata,
-        http: Client,
-        client_id: String,
-        scope: String,
-        epoch: u64,
-    ) -> Result<Self, AuthError> {
-        let grant = Self {
-            registration,
-            metadata,
-            http,
-            client_id,
-            scope,
-            epoch,
-            started: Instant::now(),
-        };
-        if let Some(saved) = &grant.registration.record.lock().await.endpoint_grant {
-            if saved.issuer != grant.metadata.issuer || saved.client_id != grant.client_id {
-                return Err(AuthError::RelinkRequired);
-            }
-            proof::signing_key(saved.private_key_jwk.expose())?;
-            if !valid_text(saved.access_token.expose()) || !valid_text(saved.refresh_token.expose()) {
-                return Err(AuthError::Storage);
-            }
-        }
-        Ok(grant)
-    }
-
-    fn now(&self) -> u64 {
-        self.epoch.saturating_add(self.started.elapsed().as_secs())
-    }
-
-    /// True when a committed endpoint grant exists.
-    pub async fn has_grant(&self) -> bool {
-        self.registration.record.lock().await.endpoint_grant.is_some()
-    }
-
-    /// Request approval without a protected-resource audience.
+impl AuthClient {
+    /// Use the configured endpoint API origin as its resource indicator.
     ///
     /// # Errors
-    /// Returns safe approval, protocol or transport categories.
-    pub async fn begin_approval(&self) -> Result<EndpointApproval, AuthError> {
-        let generation = self.registration.generation.load(Ordering::Acquire);
-        let key = proof::generate();
-        let form = [("client_id", self.client_id.as_str()), ("scope", &self.scope)];
-        let Reply::Value(challenge) = wire::post::<DeviceChallenge>(
-            &self.http,
-            &self.metadata.device_authorization_endpoint,
-            &form,
-            Some(key.expose()),
-            self.now(),
-        )
-        .await
-        .map_err(AuthError::from)?
-        else {
+    /// Refuses invalid destinations and the MCP resource's own origin audience.
+    pub fn endpoint_grant(&self, api_base: &str) -> Result<EndpointGrant<'_>, AuthError> {
+        let resource = discovery::safe_url(api_base)?.origin().ascii_serialization();
+        if self.options.resource_url.trim_end_matches('/') == resource {
             return Err(AuthError::Protocol);
-        };
-        challenge.validate()?;
-        let expires = Instant::now()
-            .checked_add(Duration::from_secs(challenge.expires_in))
-            .ok_or(AuthError::Protocol)?;
-        Ok(EndpointApproval {
-            challenge,
-            key,
-            expires,
-            generation,
-        })
-    }
-
-    /// Poll until approved and publish only after durable storage.
-    ///
-    /// # Errors
-    /// Reports denial, expiry, invalidated approval, protocol or storage failure.
-    pub async fn await_approval(&self, approval: EndpointApproval) -> Result<(), AuthError> {
-        let mut interval = approval.challenge.interval;
-        let form = [
-            ("grant_type", wire::DEVICE_GRANT),
-            ("device_code", approval.challenge.device_code.expose().as_str()),
-            ("client_id", self.client_id.as_str()),
-        ];
-        loop {
-            let next = Instant::now()
-                .checked_add(Duration::from_secs(interval))
-                .ok_or(AuthError::Protocol)?;
-            if next >= approval.expires {
-                sleep_until(approval.expires).await;
-                return Err(AuthError::Expired);
-            }
-            sleep_until(next).await;
-            let mut record = self.registration.record.lock().await;
-            if approval.generation != self.registration.generation.load(Ordering::Acquire) {
-                return Err(AuthError::RelinkRequired);
-            }
-            let reply = timeout_at(approval.expires, self.redeem(&form, &approval.key))
-                .await
-                .map_err(|_| AuthError::Expired)??;
-            match reply {
-                Reply::Pending => {}
-                Reply::SlowDown => interval = interval.checked_add(5).ok_or(AuthError::Protocol)?,
-                Reply::Value(pair) => {
-                    let saved = self.saved_grant(pair, approval.key)?;
-                    return self.publish(&mut record, saved);
-                }
-            }
         }
+        Ok(EndpointGrant { owner: self, resource })
     }
 
-    /// Refresh once after resolving the installation to obtain its new access claims.
-    ///
-    /// # Errors
-    /// Reports safe relink, protocol, transport or storage categories.
-    pub async fn refresh_installation(&self) -> Result<(), AuthError> {
-        let mut record = self.registration.record.lock().await;
-        self.rotate(&mut record).await
-    }
-
-    async fn redeem(&self, form: &[(&str, &str)], key: &Secret<PrivateJwk>) -> Result<Reply<Pair>, AuthError> {
-        wire::post(
+    pub(super) async fn redeem_refresh(&self, state: &mut State, resource: &str) -> Result<Secret<Grant>, AuthError> {
+        if state.uncertain || state.record.grant.is_none() {
+            return Err(AuthError::RelinkRequired);
+        }
+        self.linked.store(false, Ordering::Release);
+        state.uncertain = true;
+        if state.record.registration.is_some() {
+            // The shared DCR refresh may be spent even if this process stops
+            // before receiving the response. Neither audience can replay it.
+            let grant = state.record.grant.take();
+            let saved = self.store.save(&state.record);
+            state.record.grant = grant;
+            saved?;
+        }
+        let grant = state.record.grant.as_ref().ok_or(AuthError::RelinkRequired)?;
+        let form = [
+            ("grant_type", "refresh_token"),
+            ("refresh_token", grant.expose().refresh_token.as_str()),
+            (
+                "client_id",
+                state.record.client_id.as_deref().ok_or(AuthError::Storage)?,
+            ),
+            ("resource", resource),
+        ];
+        let result = wire::post::<Pair>(
             &self.http,
             &self.metadata.token_endpoint,
-            form,
-            Some(key.expose()),
+            &form,
+            Some(state.record.private_key_jwk.expose()),
             self.now(),
         )
         .await
-        .map_err(AuthError::from)
-    }
-
-    fn saved_grant(&self, pair: Pair, key: Secret<PrivateJwk>) -> Result<SavedGrant, AuthError> {
-        SavedGrant::from_pair(self, pair.grant(self.now())?.expose(), key)
-    }
-
-    fn publish(&self, record: &mut super::registration::Record, saved: SavedGrant) -> Result<(), AuthError> {
-        record.endpoint_grant = Some(saved);
-        if let Err(error) = self.registration.save(record) {
-            record.endpoint_grant = None;
-            return Err(error);
+        .map_err(AuthError::from);
+        match result {
+            Ok(Reply::Value(pair)) => pair.grant(self.now()),
+            Err(AuthError::RelinkRequired) => {
+                self.publish(state, None, None)?;
+                Err(AuthError::RelinkRequired)
+            }
+            Err(error) => Err(error),
+            Ok(_) => Err(AuthError::Protocol),
         }
-        self.registration.rotations.fetch_add(1, Ordering::Release);
+    }
+}
+
+impl EndpointGrant<'_> {
+    /// Refresh both audience tokens once the installation can supply its claim.
+    ///
+    /// # Errors
+    /// Reports relinking, protocol, transport or storage failure.
+    pub async fn refresh_installation(&self) -> Result<(), AuthError> {
+        let mut state = self.owner.state.lock().await;
+        self.require_registered(&state)?;
+        if self.cached(&state).is_some_and(|access| access.claimed) {
+            return Ok(());
+        }
+        self.owner.rotate(&mut state).await?;
+        self.rotate(&mut state, true).await
+    }
+
+    fn require_registered(&self, state: &State) -> Result<(), AuthError> {
+        if state.uncertain || state.record.registration.is_none() || state.record.grant.is_none() {
+            return Err(AuthError::RelinkRequired);
+        }
         Ok(())
     }
 
-    async fn rotate(&self, record: &mut super::registration::Record) -> Result<(), AuthError> {
-        let saved = record.endpoint_grant.take().ok_or(AuthError::RelinkRequired)?;
-        // Persist the removal before sending a token that the issuer may consume.
-        // A lost response, task cancellation or restart then requires fresh approval.
-        self.registration.save(record)?;
-        let form = [
-            ("grant_type", "refresh_token"),
-            ("refresh_token", saved.refresh_token.expose().as_str()),
-            ("client_id", self.client_id.as_str()),
-        ];
-        let Reply::Value(pair) = self.redeem(&form, &saved.private_key_jwk).await? else {
-            return Err(AuthError::Protocol);
-        };
-        self.publish(record, self.saved_grant(pair, saved.private_key_jwk)?)
+    fn cached<'a>(&self, state: &'a State) -> Option<&'a Access> {
+        state
+            .endpoint
+            .as_ref()
+            .filter(|access| access.resource == self.resource)
     }
-}
 
-impl SavedGrant {
-    fn from_pair(client: &EndpointGrant, grant: &Grant, key: Secret<PrivateJwk>) -> Result<Self, AuthError> {
-        if !valid_text(&grant.access_token) || !valid_text(&grant.refresh_token) {
+    async fn rotate(&self, state: &mut State, claimed: bool) -> Result<(), AuthError> {
+        let minted = self.owner.redeem_refresh(state, &self.resource).await?;
+        let minted = minted.expose();
+        let mcp = state.record.grant.as_ref().ok_or(AuthError::RelinkRequired)?.expose();
+        if !valid_text(&minted.access_token)
+            || !valid_text(&minted.refresh_token)
+            || minted.access_token == mcp.access_token
+        {
             return Err(AuthError::Protocol);
         }
-        Ok(Self {
-            issuer: client.metadata.issuer.clone(),
-            client_id: client.client_id.clone(),
-            private_key_jwk: key,
-            access_token: Secret::new(grant.access_token.clone()),
-            refresh_token: Secret::new(grant.refresh_token.clone()),
-            expires_at_unix: grant.expires_at_unix,
-            scope: grant.scope.clone(),
-        })
+        state.record.grant = Some(Secret::new(Grant {
+            access_token: mcp.access_token.clone(),
+            expires_at_unix: mcp.expires_at_unix,
+            scope: mcp.scope.clone(),
+            refresh_token: minted.refresh_token.clone(),
+        }));
+        self.owner.store.save(&state.record)?;
+        state.endpoint = Some(Access {
+            resource: self.resource.clone(),
+            token: Secret::new(minted.access_token.clone()),
+            expires: minted.expires_at_unix,
+            claimed,
+        });
+        state.uncertain = false;
+        self.owner.linked.store(true, Ordering::Release);
+        Ok(())
     }
 }
 
-impl EndpointTokenSource for EndpointGrant {
+impl EndpointTokenSource for EndpointGrant<'_> {
     fn access_token(&self) -> TokenFuture<'_> {
         Box::pin(async move {
-            let observed = self.registration.rotations.load(Ordering::Acquire);
-            let mut record = self.registration.record.lock().await;
-            let saved = record.endpoint_grant.as_ref().ok_or(AuthError::RelinkRequired)?;
-            let expiring = saved.expires_at_unix <= self.now().saturating_add(300);
-            if expiring && observed == self.registration.rotations.load(Ordering::Acquire) {
-                self.rotate(&mut record).await?;
+            let mut state = self.owner.state.lock().await;
+            self.require_registered(&state)?;
+            let cached = self.cached(&state);
+            if cached.is_none_or(|access| access.expires <= self.owner.now().saturating_add(300)) {
+                let claimed = cached.is_some_and(|access| access.claimed);
+                self.rotate(&mut state, claimed).await?;
             }
-            let saved = record.endpoint_grant.as_ref().ok_or(AuthError::RelinkRequired)?;
-            Ok(Secret::new(saved.access_token.expose().clone()))
+            let access = self.cached(&state).ok_or(AuthError::RelinkRequired)?;
+            Ok(Secret::new(access.token.expose().clone()))
         })
     }
 }
