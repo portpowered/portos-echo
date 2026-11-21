@@ -374,6 +374,16 @@ test("pack page: a mouth set covers the speaking clip with the still for the sam
         stills: 4,
         shown: null,
     });
+    // A still shown again is drawn with the frame that hides the clip under
+    // it: it decodes with that frame, so the stage is never empty between.
+    assert.deepEqual(
+        await page.evaluate(() =>
+            [...document.querySelectorAll(".pack-mouth")].map(
+                (still) => still.decoding,
+            ),
+        ),
+        ["sync", "sync", "sync", "sync"],
+    );
     // Samples outside speaking move nothing.
     await send(page, 1, { state: "ready", message: "Ready" });
     await lipSync(page, [[0, 90, "none"]]);
@@ -440,6 +450,7 @@ test("pack page: a mouth set covers the speaking clip with the still for the sam
     // Listening shuts her mouth at once, over the speaking clip, until the
     // listening clip shows.
     await send(page, 4, { state: "speaking" });
+    await loaded(page);
     await lipSync(page, run(90, "none", 20));
     await tick(page, 20);
     assert.equal((await mouth(page)).shown, "mouth-open.png");

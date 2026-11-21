@@ -200,6 +200,10 @@ export async function mouthStills(
             still.className = "pack-mouth";
             still.alt = "";
             still.referrerPolicy = "no-referrer";
+            // A hidden still's decoded pixels may be dropped. Shown again, it
+            // is drawn in the same frame that hides the clip under it, never
+            // a frame later with the stage empty in between.
+            still.decoding = "sync";
             still.src = asset(file);
             try {
                 await still.decode();

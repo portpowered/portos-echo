@@ -139,6 +139,41 @@ test("pack player: the mouth moves through short reply gaps and closes once afte
     assert.equal(shown(), "idle.webm");
 });
 
+test("pack player: an open session shows listening whenever she is not speaking", () => {
+    // A pack with no wake clip, as Companion.
+    const { player, calls, shown, advance } = harness({
+        rest: "rest.png",
+        states: states(["idle", "listening", "thinking", "speaking"]),
+    });
+    player.update({ state: "ready" });
+    assert.equal(shown(), "idle.webm");
+    // First turn: the wake, then the call connects while she still listens.
+    player.update({ state: "listening" });
+    assert.equal(shown(), "listening.webm");
+    const listening = calls.length;
+    player.update({ state: "connected" });
+    assert.equal(calls.length, listening, "the listening clip plays on");
+    player.update({ state: "speaking" });
+    advance(SPEAK_START_MS);
+    assert.equal(shown(), "speaking.webm");
+    // The reply ends and the session waits for the next utterance.
+    player.update({ state: "connected" });
+    advance(SPEAK_HOLD_MS);
+    assert.equal(shown(), "listening.webm");
+    // Second turn, with a delegated task in it.
+    player.update({ state: "thinking" });
+    assert.equal(shown(), "thinking.webm");
+    player.update({ state: "speaking" });
+    advance(SPEAK_START_MS);
+    assert.equal(shown(), "speaking.webm");
+    player.update({ state: "connected" });
+    advance(SPEAK_HOLD_MS);
+    assert.equal(shown(), "listening.webm");
+    // The session closes.
+    player.update({ state: "ready" });
+    assert.equal(shown(), "idle.webm");
+});
+
 test("pack player: emote once, unknown frames fallback, idle/rest fallback and once state", () => {
     const { player, calls, end, shown } = harness({
         rest: "rest.png",
@@ -147,7 +182,7 @@ test("pack player: emote once, unknown frames fallback, idle/rest fallback and o
     });
     player.update({ state: "muted" });
     assert.equal(shown(), "idle.webm");
-    // Packs without a wake clip keep the idle loop running for Connected.
+    // A pack with neither a wake nor a listening clip keeps idle for Connected.
     const count = calls.length;
     player.update({ state: "connected" });
     assert.equal(calls.length, count);
@@ -206,7 +241,7 @@ test("pack player: enter/exit once, stale completion refused and reduced-motion 
     player.update({ state: "speaking" }, true);
     assert.equal(shown(), "speaking.webm");
     player.update({ state: "connected" }, true);
-    assert.equal(shown(), "idle.webm");
+    assert.equal(shown(), "listening-enter.webm");
     assert.equal(source(clip("idle"), true), "idle.webm");
     assert.equal(source(clip("idle"), false), "idle.mp4");
     assert.equal(source({ mp4: "only.mp4", mode: "loop" }, true), "only.mp4");

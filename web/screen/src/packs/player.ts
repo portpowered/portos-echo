@@ -44,8 +44,8 @@ export function stateName(state: UiState): string {
     switch (state.state) {
         case "ready":
             return "idle";
-        // Connected is the awake face between turns: the pack's `wake` clip,
-        // or idle for packs without one.
+        // Connected is the open session while she is not speaking: the
+        // pack's `wake` clip, or its listening clip for packs without one.
         case "connected":
             return "wake";
         case "link_code":
@@ -137,6 +137,10 @@ export class Player {
     private clips(name: string): StateClip | undefined {
         return (
             own(this.character.states, name) ??
+            // An open session is listening whenever she is not speaking.
+            (name === "wake"
+                ? own(this.character.states, "listening")
+                : undefined) ??
             own(this.character.states, "idle")
         );
     }
