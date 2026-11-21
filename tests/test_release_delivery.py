@@ -244,14 +244,18 @@ def fake_tool(base, label, args):
         require(args == ["-z", "-w", "5", "chatgpt.com", "443"], "unexpected egress probe")
     elif label == "df":
         print("Filesystem blocks used available mount\nfixture 524288 0 524288 /fixture")
-    elif label == "pm" and args[:3] == ["list", "packages", "org.portos.echoscreen"]:
+    elif label == "pm" and args == ["list", "packages", "--show-versioncode", "org.portos.echoscreen"]:
         if (base / "apk-present").exists():
-            print("package:org.portos.echoscreen")
+            print("package:org.portos.echoscreen versionCode:2")
     elif label == "pm" and args[:2] == ["install", "-r"]:
         require(Path(args[2]).is_file(), "installed APK absent")
         (base / "apk-present").touch()
+    elif label == "pm" and args == ["grant", "org.portos.echoscreen", "android.permission.CAMERA"]:
+        require((base / "apk-present").is_file(), "permission grant preceded APK installation")
+        (base / "apk-camera-granted").touch()
     else:
         require(label == "am" and args == ["start", "-n", "org.portos.echoscreen/.MainActivity"], "Android call differs")
+        require((base / "apk-camera-granted").is_file(), "activity launch preceded camera grant")
     return 0
 
 

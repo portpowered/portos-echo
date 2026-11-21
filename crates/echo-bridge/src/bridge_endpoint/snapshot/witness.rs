@@ -4,10 +4,9 @@ use super::{
     voice_tests::{Fixture, fixture_with_camera, outcome},
     *,
 };
-use crate::bridge_endpoint::snapshot::{CameraSource, Sample};
+use crate::bridge_endpoint::snapshot::{Camera, CameraSource, CaptureError, CaptureFuture, Sample, Shutter};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{
-    pin::Pin,
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -16,6 +15,8 @@ use std::{
 };
 use tokio::sync::Notify;
 
+#[path = "http_peer.rs"]
+mod http_peer;
 #[path = "journey.rs"]
 mod integrated;
 
@@ -31,6 +32,9 @@ enum Capture {
     #[default]
     Ready,
     Error,
+    PermissionDenied,
+    Busy,
+    Empty,
     Oversize,
     /// A capture time Port OS would refuse: 301 s before now.
     Stale,
@@ -38,19 +42,21 @@ enum Capture {
 }
 
 struct CameraPeer {
-    shutter: watch::Sender<bool>,
+    shutter: watch::Sender<Shutter>,
     mode: Mutex<Capture>,
     captures: AtomicUsize,
     entered: Notify,
+    exchange: Option<echo_screen_server::Camera>,
 }
 
 impl CameraPeer {
     fn open() -> Arc<Self> {
         Arc::new(Self {
-            shutter: watch::channel(false).0,
+            shutter: watch::channel(Shutter::Open).0,
             mode: Mutex::default(),
             captures: AtomicUsize::new(0),
             entered: Notify::new(),
+            exchange: None,
         })
     }
 
@@ -67,23 +73,42 @@ impl CameraPeer {
 }
 
 impl CameraSource for CameraPeer {
-    fn shutter(&self) -> watch::Receiver<bool> {
+    fn available(&self) -> bool {
+        self.exchange.as_ref().is_none_or(echo_screen_server::Camera::connected)
+    }
+
+    fn shutter(&self) -> watch::Receiver<Shutter> {
         self.shutter.subscribe()
     }
 
-    fn capture(&self) -> Pin<Box<dyn Future<Output = Option<Sample>> + Send + '_>> {
+    fn shutter_now(&self) -> Shutter {
+        *self.shutter.borrow()
+    }
+
+    fn capture(&self, deadline: Instant) -> CaptureFuture<'_> {
         Box::pin(async move {
             self.captures.fetch_add(1, Ordering::SeqCst);
             self.entered.notify_one();
+            if let Some(exchange) = &self.exchange {
+                let sample = exchange.capture("0", deadline).await?;
+                return Ok(Sample {
+                    jpeg: sample.jpeg,
+                    width: sample.width,
+                    height: sample.height,
+                    sampled_at: sample.sampled_at,
+                });
+            }
             let mode = *self.mode.lock().unwrap();
             let jpeg = match mode {
                 Capture::Ready | Capture::Stale => STANDARD.decode(JPEG).unwrap(),
-                Capture::Error => return None,
-                // The base64 fits by itself. Envelope overhead exceeds the cap.
+                Capture::Error => return Err(CaptureError::Camera),
+                Capture::PermissionDenied => return Err(CaptureError::PermissionDenied),
+                Capture::Busy => return Err(CaptureError::Busy),
+                Capture::Empty => Vec::new(),
                 Capture::Oversize => vec![0; echo_contracts::endpoint::MAX_SNAPSHOT_BYTES + 1],
                 Capture::Held => return pending().await,
             };
-            Some(Sample {
+            Ok(Sample {
                 jpeg,
                 width: 2,
                 height: 1,
@@ -106,6 +131,26 @@ fn sampled_at() -> SystemTime {
 fn sampled_at_ms() -> i64 {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     i64::try_from(now.as_millis()).unwrap() / 1000 * 1000 + 125
+}
+
+#[tokio::test(start_paused = true)]
+async fn snapshot_rechecks_shutter_after_preparing_the_report() {
+    let source = CameraPeer::open();
+    let mut camera = Camera::default();
+    camera.source = Some(source.clone());
+    let result = camera
+        .reply(json!({}), Instant::now(), None, |snapshot, _| {
+            assert_eq!(snapshot.data, JPEG);
+            source.shutter.send_replace(Shutter::Closed);
+            source.shutter.send_replace(Shutter::Open);
+        })
+        .await;
+    assert_eq!(result.unwrap_err().code(), "SHUTTERED");
+    let recovered = camera
+        .reply(json!({}), Instant::now(), None, |snapshot, _| snapshot)
+        .await
+        .unwrap();
+    assert_eq!(recovered.data, JPEG);
 }
 
 #[tokio::test(start_paused = true)]
@@ -154,6 +199,8 @@ async fn t3_endpoint_snapshot_obeys_shutter_and_recovers_from_failures() {
             camera.started(2).await;
             capture_failures(&gateway, &mock, &camera).await;
             assert_snapshot_race(&gateway, &mock, &camera).await;
+            let trace = std::fs::read_to_string(home.path().join("settings-trace")).unwrap();
+            assert_eq!(trace.matches("camera permission denied").count(), 1);
             settings.close().await;
             gateway.assert_disconnect().await;
             grant.close().await;
@@ -164,16 +211,20 @@ async fn t3_endpoint_snapshot_obeys_shutter_and_recovers_from_failures() {
 async fn refusals_before_capture(gateway: &Gateway, mock: &Mock, camera: &CameraPeer) {
     send(gateway, &snapshot_request("invalid", "GIF")).await;
     assert_reply(mock, "invalid", "INVALID_REQUEST").await;
-    camera.shutter.send_replace(true);
+    camera.shutter.send_replace(Shutter::Closed);
     send(gateway, &snapshot_request("closed", "BASE64")).await;
     assert_reply(mock, "closed", "SHUTTERED").await;
+    camera.shutter.send_replace(Shutter::Unknown);
+    send(gateway, &snapshot_request("unknown-shutter", "BASE64")).await;
+    assert_reply(mock, "unknown-shutter", "CAMERA_ERROR").await;
     assert_eq!(camera.captures.load(Ordering::SeqCst), 0);
-    camera.shutter.send_replace(false);
+    camera.shutter.send_replace(Shutter::Open);
 }
 
 async fn capture_failures(gateway: &Gateway, mock: &Mock, camera: &CameraPeer) {
     for (mode, id) in [
         (Capture::Error, "error"),
+        (Capture::Empty, "empty"),
         (Capture::Oversize, "oversize"),
         (Capture::Stale, "stale"),
     ] {
@@ -181,24 +232,35 @@ async fn capture_failures(gateway: &Gateway, mock: &Mock, camera: &CameraPeer) {
         send(gateway, &snapshot_request(id, "BASE64")).await;
         assert_reply(mock, id, "CAMERA_ERROR").await;
     }
+    camera.mode(Capture::PermissionDenied);
+    send(gateway, &snapshot_request("permission", "BASE64")).await;
+    assert_reply(mock, "permission", "CAMERA_ERROR").await;
+    camera.mode(Capture::Busy);
+    send(gateway, &snapshot_request("os-busy", "BASE64")).await;
+    assert_reply(mock, "os-busy", "CAMERA_BUSY").await;
     camera.mode(Capture::Held);
     send(gateway, &snapshot_request("timeout", "BASE64")).await;
-    camera.started(6).await;
+    camera.started(9).await;
     send(gateway, &snapshot_request("busy", "BASE64")).await;
     assert_reply(mock, "busy", "CAMERA_BUSY").await;
-    advance(Duration::from_secs(5)).await;
+    advance(Duration::from_secs(3)).await;
     assert_reply(mock, "timeout", "TIMEOUT").await;
 }
 
 async fn assert_snapshot_race(gateway: &Gateway, mock: &Mock, camera: &CameraPeer) {
     send(gateway, &snapshot_request("race", "BASE64")).await;
-    camera.started(7).await;
-    camera.shutter.send_replace(true);
-    camera.shutter.send_replace(false);
+    camera.started(10).await;
+    camera.shutter.send_replace(Shutter::Closed);
+    camera.shutter.send_replace(Shutter::Open);
     assert_reply(mock, "race", "SHUTTERED").await;
+    send(gateway, &snapshot_request("lost-shutter", "BASE64")).await;
+    camera.started(11).await;
+    camera.shutter.send_replace(Shutter::Unknown);
+    assert_reply(mock, "lost-shutter", "CAMERA_ERROR").await;
+    camera.shutter.send_replace(Shutter::Open);
     camera.mode(Capture::Ready);
     assert_jpeg(gateway, mock, "recovered").await;
-    camera.started(8).await;
+    camera.started(12).await;
 }
 
 fn snapshot_request(id: &str, format: &str) -> Value {

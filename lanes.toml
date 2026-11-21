@@ -21,6 +21,11 @@ kind = "lib"
 # and [lints.clippy], changing only unsafe_code from "forbid" to "deny".
 # Never use unsafe_code = "allow"; every unsafe block needs a // SAFETY: comment.
 [[crate]]
+name = "echo-camera"
+path = "crates/echo-camera"
+kind = "ffi"
+
+[[crate]]
 name = "xtask"
 path = "xtask"
 kind = "tool"

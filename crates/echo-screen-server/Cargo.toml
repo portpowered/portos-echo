@@ -14,12 +14,15 @@ echo-contracts = { path = "../echo-contracts", version = "0.1.0" }
 echo-screen-contract = { path = "../echo-screen-contract", version = "0.1.0" }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+hex = "0.4"
+hmac = "0.13"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
 portos-tokens = { path = "../../third_party/portos-tokens", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+rand = "0.9"
 sha2 = "0.11"
 tar = { version = "0.4", default-features = false }
 tempfile = "3"

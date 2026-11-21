@@ -43,8 +43,8 @@ fi
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 apk="$root/target/echo-screen/echo-screen.apk"
-if [ "$uninstall" = false ]; then
-  [ -f "$apk" ] && [ -r "$apk" ] || fail 'APK is not readable'
+if [ "$uninstall" = false ] && { [ ! -f "$apk" ] || [ ! -r "$apk" ]; }; then
+  fail 'APK is not readable'
 fi
 command -v adb >/dev/null 2>&1 || fail 'adb is required'
 umask 077
@@ -62,6 +62,7 @@ if [ "$uninstall" = true ]; then
   printf '%s\n' 'echo-screen uninstalled'
 else
   run_adb 'install failed' install -r "$apk"
+  run_adb 'camera permission grant failed' shell pm grant org.portos.echoscreen android.permission.CAMERA
   run_adb 'home setup failed' shell "printf '%s\\n' org.portos.echoscreen > /data/local/hassmic/state/screen_home && chown system:system /data/local/hassmic/state/screen_home && chmod 644 /data/local/hassmic/state/screen_home"
   if [ -n "$url" ]; then
     # adb joins shell argv with spaces: protect the URL for the remote shell too.
@@ -69,6 +70,10 @@ else
     run_adb 'launch failed' shell am start -n org.portos.echoscreen/.MainActivity --es url "'$quoted'"
   else
     run_adb 'launch failed' shell am start -n org.portos.echoscreen/.MainActivity
+  fi
+  # API 28 am can print an activity error and still return zero.
+  if grep -q '^Error:' "$log"; then
+    fail 'launch failed'
   fi
   printf '%s\n' 'echo-screen installed'
 fi

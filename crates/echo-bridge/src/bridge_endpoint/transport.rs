@@ -260,10 +260,10 @@ impl Transport {
                     if let Some(command) = receipts.accept(device_id, &frame.text, frame.received, deadline) {
                         let lease = lease.clone();
                         replies.push(Box::pin(async move {
-                            let Some(report) = command.reply(lease, &self.camera, self.trace.as_ref()).await else {
+                            let prepare = |report| serde_json::to_vec(&Uplink::report(device_id, report)).ok();
+                            let Some(body) = command.reply(lease, &self.camera, self.trace.as_ref(), prepare).await else {
                                 return;
                             };
-                            let body = serde_json::to_vec(&Uplink::report(device_id, report)).ok();
                             self.send(tokens, body, deadline).await;
                         }));
                     }

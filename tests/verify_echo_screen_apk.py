@@ -31,13 +31,20 @@ def main():
         r"^(?:minSdkVersion|sdkVersion):'28'$",
         r"^targetSdkVersion:'28'$",
         r"^uses-permission: name='android\.permission\.INTERNET'$",
+        r"^uses-permission: name='android\.permission\.CAMERA'$",
     )
     if not all(re.search(pattern, badging, re.MULTILINE) for pattern in required):
         raise RuntimeError("APK metadata does not match the echo-screen contract")
+    manifest = run("aapt2", "dump", "xmltree", "--file", "AndroidManifest.xml")
+    activities = re.findall(r"(?m)^( +)E: activity\b[^\n]*\n((?:\1 +[^\n]*\n)*)", manifest)
+    protected = [attrs for _, attrs in activities
+                 if re.search(r'android:name[^=]*="(?:org\.portos\.echoscreen)?\.MainActivity"', attrs)]
+    if len(protected) != 1 or not re.search(r'android:permission[^=]*="android\.permission\.DUMP"', protected[0]):
+        raise RuntimeError("APK launcher caller permission differs")
     run("zipalign", "-c", "4")
     run("apksigner", "verify", "--verbose")
     print("echo-screen APK: package=org.portos.echoscreen minSdk=28 targetSdk=28 "
-          "INTERNET=true signature=verified")
+          "INTERNET=true CAMERA=true MainActivity=DUMP signature=verified")
 
 
 if __name__ == "__main__":

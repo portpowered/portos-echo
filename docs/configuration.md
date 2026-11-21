@@ -304,6 +304,9 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `portos_endpoint.device_name` | Defaults to `Echo Show`. A nonblank name of 1 to 64 Unicode characters without controls. | save / yes |
 | `portos_endpoint.gateway_url` | Optional WSS template ending in `/devices/{authLinkId}`. Defaults to the Port OS device gateway when the API base is the Port OS API. | restart / no |
 | `portos_endpoint.api_base` | Optional HTTPS API base. Defaults to the configured Port OS grant's HTTPS resource origin. | restart / no |
+| `camera` | Optional camera table for snapshots from the native Echo screen app. | see individual keys |
+| `camera.enabled` | Boolean, default true on Android and false on Linux. Linux always reports the production camera as unavailable. | restart / no |
+| `camera.id` | Exact Android Camera2 ID, default `"0"`. Use a nonblank string without control characters. | restart / no |
 | `screen` | Required screen transport table. | restart / no |
 | `screen.listen` | Socket address; decoder defaults to all IPv4 interfaces on port 16900. Runtime device config must use 127.0.0.1:16900. | restart / no |
 | `screen.pairing_token_file` | Required literal private token-file path. | restart / no |
@@ -357,6 +360,30 @@ with one line on stderr, and the app server's default voice speaks. The v2-only 
 `settings.toml`, as `default` with one settings warning; they are never offered or saved.
 Offline, only the shape of a voice name is checked: lowercase ASCII letters, at most 32.
 `live.voice` is a legacy fallback; use `codex.voice` for the screen editor.
+
+## Camera snapshots
+
+To select a specific Android Camera2 device, use the following base configuration.
+
+```toml
+[camera]
+enabled = true
+id = "rear camera"
+```
+
+To disable snapshots, set `enabled = false` in `[camera]` and restart the bridge.
+The screen page stays available. Remove `[camera]` before reverting to a binary
+that predates this option.
+
+Upgrade the screen APK with the same signing key to preserve its data. Setup
+grants CAMERA before launch. Reprovision the screen once through the authorized
+installer's existing `--url` flow with the paired numeric loopback URL to enable
+the native exchange. The display can continue using its saved URL until then.
+
+The bridge admits a single on-demand JPEG only with a fresh open shutter
+observation. A closed shutter returns `SHUTTERED`. A missing or unreliable
+switch returns `CAMERA_ERROR`. Microphone mute allows capture. The exchange
+holds the image in memory and the full request expires after three seconds.
 
 ## Checking changes
 

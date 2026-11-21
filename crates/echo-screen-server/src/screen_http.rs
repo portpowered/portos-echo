@@ -16,30 +16,23 @@ use axum::{
 };
 use echo_screen_contract::UiAction;
 use futures_util::stream;
-use std::{convert::Infallible, net::SocketAddr, sync::Arc};
+use std::{convert::Infallible, sync::Arc};
 use tokio::sync::{Mutex, mpsc, watch};
 
 #[derive(Clone)]
 pub(super) struct HttpState {
     pub(crate) core: Arc<Mutex<Core>>,
-    actions: mpsc::Sender<UiAction>,
+    pub(crate) actions: mpsc::Sender<UiAction>,
     pub(crate) stop: watch::Receiver<bool>,
     pub(crate) drain: watch::Receiver<Option<tokio::time::Instant>>,
     pub(crate) packs: Arc<crate::packs::Files>,
     pub(crate) origin: String,
-    build: Arc<str>,
-    settings: Option<mpsc::Sender<SettingsRequest>>,
+    pub(crate) build: Arc<str>,
+    pub(crate) settings: Option<mpsc::Sender<SettingsRequest>>,
+    pub(crate) camera: Option<crate::Camera>,
 }
 
-pub(crate) fn router(
-    core: Arc<Mutex<Core>>,
-    actions: mpsc::Sender<UiAction>,
-    stop: watch::Receiver<bool>,
-    drain: watch::Receiver<Option<tokio::time::Instant>>,
-    addr: SocketAddr,
-    settings: Option<mpsc::Sender<SettingsRequest>>,
-    packs: Arc<crate::packs::Files>,
-) -> Router {
+pub(crate) fn router(state: HttpState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/tokens.css", get(screen_assets::tokens))
@@ -48,6 +41,8 @@ pub(crate) fn router(
         .route("/screen.js", get(screen_assets::js))
         .route("/events", get(events))
         .route("/actions", post(actions_post))
+        .route("/camera/v1/events", get(crate::camera::http::events))
+        .route("/camera/v1/results/{id}", post(crate::camera::http::result))
         .route("/settings/v1", get(settings_http::snapshot).post(settings_http::save))
         .route("/settings/v1/prompts/{kind}", post(settings_http::prompt))
         .route(
@@ -65,16 +60,7 @@ pub(crate) fn router(
         .route("/screen-packs/v1/selection", post(crate::packs::view::selection))
         .route("/screen-packs/v1/{pack}/{*file}", get(crate::packs::http::file))
         .layer(middleware::from_fn(headers))
-        .with_state(HttpState {
-            core,
-            actions,
-            stop,
-            drain,
-            origin: format!("http://{addr}"),
-            build: screen_assets::build_id(&screen_assets::startup_bundle()).into(),
-            settings,
-            packs,
-        })
+        .with_state(state)
 }
 
 async fn headers(request: Request, next: Next) -> Response {
@@ -221,6 +207,7 @@ mod tests {
             build: "synthetic".into(),
             settings: None,
             packs: Arc::default(),
+            camera: None,
         };
         let request = Request::builder()
             .uri("/events?token=synthetic-screen-pair")
@@ -258,6 +245,7 @@ mod tests {
                 build: "synthetic".into(),
                 settings: None,
                 packs: Arc::default(),
+                camera: None,
             };
             let request = Request::builder()
                 .uri("/events?token=synthetic-screen-pair")

@@ -87,6 +87,10 @@ impl Core {
         self.revoked.subscribe()
     }
 
+    pub(crate) fn camera_key(&self) -> Option<&[u8; 32]> {
+        self.accepting().then_some(self.digest.expose())
+    }
+
     pub fn drain(&mut self) {
         self.draining = true;
     }

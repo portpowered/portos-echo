@@ -48,13 +48,14 @@ impl Receipts {
 }
 
 impl Command {
-    /// The report answering this command, or `None` for a fire-and-forget one.
-    pub(super) async fn reply(
+    /// Prepare the command's report, or return `None` for a fire-and-forget command.
+    pub(super) async fn reply<T>(
         self,
         lease: tokio::sync::watch::Receiver<()>,
         camera: &Camera,
         trace: Option<&Trace>,
-    ) -> Option<Report> {
+        prepare: impl Fn(Report) -> T,
+    ) -> Option<T> {
         let Self { header, body, received } = self;
         let name = audit_name(&header);
         match (header.interface(), header.name.as_str()) {
@@ -64,19 +65,25 @@ impl Command {
                 None
             }
             (Some("snapshot"), "get-snapshot") => {
-                let (reply, sampled_at_ms) = match camera.reply(body, received).await {
-                    Ok((snapshot, sampled_at_ms)) => (Reply::Snapshot(snapshot), Some(sampled_at_ms)),
-                    Err(refusal) => (refusal, None),
-                };
-                audit(trace, name, reply.code(), received);
-                let mut report = Report::reply(&header.id, reply);
-                report.sampled_at_ms = sampled_at_ms;
-                Some(report)
+                let prepared = camera
+                    .reply(body, received, trace, |snapshot, sampled_at_ms| {
+                        let mut report = Report::reply(&header.id, Reply::Snapshot(snapshot));
+                        report.sampled_at_ms = Some(sampled_at_ms);
+                        prepare(report)
+                    })
+                    .await;
+                audit(
+                    trace,
+                    name,
+                    prepared.as_ref().map_or_else(Reply::code, |_| "OK"),
+                    received,
+                );
+                Some(prepared.unwrap_or_else(|reply| prepare(Report::reply(&header.id, reply))))
             }
             _ => {
                 let reply = correlate(&header, body, received, lease).await;
                 audit(trace, name, reply.code(), received);
-                Some(Report::reply(&header.id, reply))
+                Some(prepare(Report::reply(&header.id, reply)))
             }
         }
     }

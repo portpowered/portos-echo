@@ -50,6 +50,14 @@ impl Screen {
         config: Option<&ScreenConfig>,
         settings: Option<mpsc::Sender<echo_screen_server::SettingsRequest>>,
     ) -> Result<Self, Error> {
+        Self::bind_for_runtime(config, settings, false).await
+    }
+
+    pub(crate) async fn bind_for_runtime(
+        config: Option<&ScreenConfig>,
+        settings: Option<mpsc::Sender<echo_screen_server::SettingsRequest>>,
+        camera: bool,
+    ) -> Result<Self, Error> {
         let Some(config) = config else {
             return Ok(Self {
                 mute: Arc::default(),
@@ -77,7 +85,7 @@ impl Screen {
             return Err(Error::Screen);
         }
         let (states, input) = mpsc::channel(32);
-        let server = echo_screen_server::serve_with_settings(bind, Secret::new(token.into()), input, settings)
+        let server = echo_screen_server::serve_with_camera(bind, Secret::new(token.into()), input, settings, camera)
             .await
             .map_err(|_| Error::Screen)?;
         let screen = Self {
@@ -90,6 +98,11 @@ impl Screen {
             approvals: approval::Approvals::default(),
         };
         Ok(screen)
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn camera(&self) -> Option<echo_screen_server::Camera> {
+        self.server.as_ref()?.camera()
     }
 
     pub(crate) fn download_packs(&mut self, config: Option<&echo_config::BridgeConfig>, trace: &Trace) {

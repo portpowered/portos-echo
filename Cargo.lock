@@ -793,6 +793,7 @@ dependencies = [
  "echo-agent-api",
  "echo-agent-loop",
  "echo-audio",
+ "echo-camera",
  "echo-codex",
  "echo-config",
  "echo-contracts",
@@ -809,6 +810,8 @@ dependencies = [
  "echo-spoof-mcp",
  "echo-wyoming",
  "futures-util",
+ "hex",
+ "hmac 0.13.0",
  "p256",
  "reqwest",
  "rustix",
@@ -818,6 +821,14 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
+]
+
+[[package]]
+name = "echo-camera"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tokio",
 ]
 
 [[package]]
@@ -1017,9 +1028,12 @@ dependencies = [
  "echo-screen-contract",
  "flate2",
  "futures-util",
+ "hex",
+ "hmac 0.13.0",
  "hyper",
  "hyper-util",
  "portos-tokens",
+ "rand 0.9.5",
  "reqwest",
  "serde",
  "serde_json",

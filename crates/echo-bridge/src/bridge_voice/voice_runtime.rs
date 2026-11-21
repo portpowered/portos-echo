@@ -224,7 +224,8 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     .with_payloads(options.delegation.is_none_or(|config| config.trace.payloads));
     super::prompts::publish(&mut trace)?;
     let (service, send) = settings.map_or((None, None), |(service, send)| (Some(service), Some(send)));
-    let mut screen = Screen::bind_with_settings(options.screen, send).await?;
+    let camera = cfg!(target_os = "android") && options.delegation.is_some_and(|config| config.camera.enabled);
+    let mut screen = Screen::bind_for_runtime(options.screen, send, camera).await?;
     screen.download_packs(options.delegation, &trace);
     screen.settings_warning(options.settings_warning, &mut trace)?;
     let health = match Health::bind(options.health).await {
@@ -259,6 +260,7 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
                 .with_local_muse(local_muse)
                 .with_trace(settings_trace)
                 .with_account(account)
+                .with_screen_camera(&screen)
                 .scope_with_grant(work, || link.status(), || link.health.mcp_grant()),
         )
         .await;

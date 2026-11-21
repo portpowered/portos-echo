@@ -62,6 +62,7 @@ fn schema_field(path: &str, key: &str) -> bool {
             "muse",
             "mcp",
             "portos_endpoint",
+            "camera",
             "screen",
             "audit",
             "chatgpt_auth",
@@ -92,6 +93,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         "agent" => &["max_tool_calls", "task_deadline_seconds", "daily_request_cap", "model"],
         "muse" => &["url", "ca_file", "credential_file"],
         "portos_endpoint" => &["enabled", "device_name", "gateway_url", "api_base", "remote_mic"],
+        "camera" => &["enabled", "id"],
         "mcp" => &[
             "server",
             "state_dir",

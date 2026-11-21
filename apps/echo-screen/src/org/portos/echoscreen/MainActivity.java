@@ -25,6 +25,10 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
     private FrameLayout frame;
     private TextView message;
     private WebView web;
+    private CameraPairing pairing;
+    private AndroidStillCapture camera;
+    private NativeCameraClient nativeCamera;
+    private boolean started;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -51,6 +55,7 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
     }
 
     private void configure(Intent intent) {
+        stopCamera();
         SharedPreferences preferences = getSharedPreferences("echo-screen", MODE_PRIVATE);
         ScreenConfig.Store store = new ScreenConfig.Store() {
             public Secret read() {
@@ -58,12 +63,44 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
                 return value == null ? null : new Secret(value);
             }
             public void save(Secret url) {
-                preferences.edit().putString("url", url.expose()).apply();
+                preferences.edit().putString("url", url.expose())
+                        .putBoolean("camera_trusted", CameraPairing.parse(url) != null).apply();
             }
         };
         String extra = intent.getStringExtra("url");
-        load.start(ScreenConfig.select(intent.hasExtra("url"),
-                extra == null ? null : new Secret(extra), store));
+        boolean supplied = intent.hasExtra("url");
+        ScreenConfig config = ScreenConfig.select(supplied, extra == null ? null : new Secret(extra), store);
+        if (supplied && config.url == null) preferences.edit().putBoolean("camera_trusted", false).apply();
+        pairing = preferences.getBoolean("camera_trusted", false) ? CameraPairing.parse(config.url) : null;
+        startCamera();
+        load.start(config);
+    }
+
+    @Override protected void onStart() {
+        super.onStart();
+        started = true;
+        startCamera();
+    }
+
+    @Override protected void onStop() {
+        started = false;
+        stopCamera();
+        super.onStop();
+    }
+
+    private void startCamera() {
+        if (started && pairing != null && nativeCamera == null) {
+            if (camera == null) camera = new AndroidStillCapture(this);
+            nativeCamera = new NativeCameraClient(pairing, camera);
+            nativeCamera.start();
+        }
+    }
+
+    private void stopCamera() {
+        if (nativeCamera != null) {
+            nativeCamera.close();
+            nativeCamera = null;
+        }
     }
 
     private FrameLayout.LayoutParams fill() {
@@ -133,6 +170,7 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
     }
 
     @Override protected void onDestroy() {
+        stopCamera();
         if (load != null) load.destroy();
         super.onDestroy();
     }
