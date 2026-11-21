@@ -3,7 +3,7 @@ use crate::{ClientOptions, EventStream, Run, WyomingClient};
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
 use echo_link::{
     CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
-    ReplySink, RunFailure, RunStats,
+    ReplySink, RunFailure, RunStats, SpeakerRequest,
 };
 use std::{net::SocketAddr, num::NonZeroUsize, time::Duration};
 use tokio::sync::mpsc;
@@ -108,6 +108,16 @@ impl EchoLink for WyomingClient {
     }
     async fn probe(&self) -> Result<(), Error> {
         self.describe().await.map(|_| ()).map_err(error)
+    }
+    async fn request_speaker(&self, request: SpeakerRequest) -> Result<(), Error> {
+        let (name, data) = match request {
+            SpeakerRequest::Volume(volume) if volume <= 100 => {
+                ("hassmic-set-volume", serde_json::json!({"volume":volume}))
+            }
+            SpeakerRequest::OutputMute(mute) => ("hassmic-set-output-mute", serde_json::json!({"mute":mute})),
+            SpeakerRequest::Volume(_) => return Err(Error::InvalidOptions),
+        };
+        self.send_speaker(name, data).await.map_err(error)
     }
     async fn play_with_timeout(
         &self,

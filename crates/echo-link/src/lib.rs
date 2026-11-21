@@ -26,6 +26,17 @@ pub enum PlayOutcome {
     Played,
     Cut,
 }
+/// Speaker attributes reported by the device, independently of microphone privacy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpeakerState {
+    pub volume: Option<u8>,
+    pub muted: Option<bool>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeakerRequest {
+    Volume(u8),
+    OutputMute(bool),
+}
 /// Closed, secret-free reason for ending an unserved device run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunFailure {
@@ -108,6 +119,18 @@ pub trait EchoLink: Send + Sync {
         deadline: std::time::Instant,
     ) -> impl Future<Output = Result<(), Error>> + Send {
         let _ = (request_id, deadline);
+        std::future::ready(Err(Error::InvalidOptions))
+    }
+    /// Wait for a device-reported speaker state different from the current view.
+    fn speaker_changed(&self, previous: SpeakerState) -> impl Future<Output = SpeakerState> + Send {
+        let _ = previous;
+        std::future::pending()
+    }
+    /// Send an output control to the device. A successful send gives no applied acknowledgement.
+    /// # Errors
+    /// Returns a fixed category if the link cannot send the request.
+    fn request_speaker(&self, request: SpeakerRequest) -> impl Future<Output = Result<(), Error>> + Send {
+        let _ = request;
         std::future::ready(Err(Error::InvalidOptions))
     }
     /// # Errors

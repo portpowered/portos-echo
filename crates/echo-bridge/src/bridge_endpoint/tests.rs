@@ -24,6 +24,8 @@ mod command_tests;
 mod gateway_test_peer;
 #[path = "setup_tests.rs"]
 mod setup_tests;
+#[path = "speaker/witness.rs"]
+mod speaker_tests;
 #[path = "voice_tests.rs"]
 mod voice_tests;
 

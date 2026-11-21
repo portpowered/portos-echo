@@ -23,6 +23,7 @@ pub(crate) struct Voice {
     starts: mpsc::Sender<super::remote_start::Start>,
     inbox: std::sync::Arc<Mutex<mpsc::Receiver<super::remote_start::Start>>>,
     new_start: std::sync::Arc<Notify>,
+    pub(super) speaker: super::speaker::Control,
 }
 
 impl Default for Voice {
@@ -36,6 +37,7 @@ impl Default for Voice {
             starts,
             inbox: std::sync::Arc::new(Mutex::new(inbox)),
             new_start: std::sync::Arc::new(Notify::new()),
+            speaker: super::speaker::Control::default(),
         }
     }
 }
@@ -80,6 +82,7 @@ pub(super) struct View {
     muted: bool,
     active: Option<Session>,
     recent: VecDeque<(String, EndedReason)>,
+    pub(super) speaker: echo_link::SpeakerState,
 }
 
 impl View {
@@ -93,8 +96,8 @@ impl View {
             },
             session_id: active.map(|session| session.id.as_str()),
             origin: active.map(|session| session.origin),
-            volume: None,
-            muted: None,
+            volume: self.speaker.volume,
+            muted: self.speaker.muted,
         }
     }
 }
@@ -106,6 +109,10 @@ impl Voice {
 
     pub(super) fn subscribe(&self) -> watch::Receiver<View> {
         self.state.subscribe()
+    }
+
+    pub(crate) async fn with_speaker<T>(&self, client: &impl echo_link::EchoLink, work: impl Future<Output = T>) -> T {
+        self.speaker.scope(client, &self.state, work).await
     }
 
     pub(super) fn terminal(&self) -> broadcast::Receiver<Ended> {

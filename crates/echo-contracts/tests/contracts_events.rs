@@ -1,11 +1,22 @@
 //! T2 exact synthetic task/Live messages; uncaptured Wyoming arms are synthetic.
 use echo_contracts::endpoint::{
-    AssistantState, CommandReply, Downlink, ECHO_PLUGIN, EndSession, EndSessionOutcome, EndedReason, SessionEnded,
-    SessionOrigin, StartSession, StartSessionOutcome, Uplink, VERSION,
+    AdjustVolume, AssistantState, CommandReply, Downlink, ECHO_PLUGIN, EndSession, EndSessionOutcome, EndedReason,
+    SessionEnded, SessionOrigin, SetOutputMute, SetVolume, StartSession, StartSessionOutcome, Uplink, VERSION,
 };
 use echo_contracts::{ids::DelegationId, live::*, wyoming::*};
 use serde_json::to_value;
 use serde_json::{Value, json};
+
+#[test]
+fn endpoint_speaker_payloads_keep_integer_volume_and_boolean_output_mute() {
+    let set: SetVolume = serde_json::from_value(json!({"volume":40})).unwrap();
+    let adjust: AdjustVolume = serde_json::from_value(json!({"delta":-20})).unwrap();
+    let mute: SetOutputMute = serde_json::from_value(json!({"mute":true})).unwrap();
+    assert_eq!((set.volume, adjust.delta, mute.mute), (40, -20, true));
+    assert!(serde_json::from_value::<SetVolume>(json!({"volume":40.5})).is_err());
+    assert!(serde_json::from_value::<AdjustVolume>(json!({"delta":"20"})).is_err());
+    assert!(serde_json::from_value::<SetOutputMute>(json!({"muted":true})).is_err());
+}
 
 #[test]
 fn provisional_live_tags_targets_and_extras() {

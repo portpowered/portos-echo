@@ -122,7 +122,12 @@ where
         publish,
         (context, endpoint.as_ref()),
     ));
-    let result = super::earcon::scope(client, earcon, work).await;
+    let work = super::earcon::scope(client, earcon, work);
+    let result = if let Some(endpoint) = &endpoint {
+        Box::pin(endpoint.with_speaker(client, work)).await
+    } else {
+        work.await
+    };
     if let Some(endpoint) = &endpoint {
         endpoint.unavailable();
     }

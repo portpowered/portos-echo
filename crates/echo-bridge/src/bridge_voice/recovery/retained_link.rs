@@ -1,7 +1,7 @@
 //! One device connection outlives the authenticated generations that use it.
 use echo_link::{
     CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
-    RunFailure, RunStats,
+    RunFailure, RunStats, SpeakerRequest, SpeakerState,
 };
 use std::{
     num::NonZeroUsize,
@@ -181,6 +181,12 @@ impl<L: EchoLink> EchoLink for Handle<L> {
         deadline: Duration,
     ) -> Result<PlayOutcome, Error> {
         self.0.link.play_with_timeout(format, source, deadline).await
+    }
+    async fn speaker_changed(&self, previous: SpeakerState) -> SpeakerState {
+        self.0.link.speaker_changed(previous).await
+    }
+    async fn request_speaker(&self, request: SpeakerRequest) -> Result<(), Error> {
+        self.0.link.request_speaker(request).await
     }
     async fn cut_with_stats(&self) -> Result<CutStats, Error> {
         self.0.link.cut_with_stats().await

@@ -119,6 +119,7 @@ fn reject(command: Option<Command>) -> bool {
             | Command::EndRun(reply)
             | Command::Pause(reply)
             | Command::Thinking(_, reply)
+            | Command::Speaker(_, _, reply)
             | Command::Error(_, _, reply),
         ) => {
             let _ = reply.send(Err(Error::Disconnected));

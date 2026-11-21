@@ -9,6 +9,21 @@ pub const ECHO_PLUGIN: &str = "port1/systems/zero/plugins/echo-show";
 pub const VERSION: &str = "1.0";
 
 #[derive(Deserialize)]
+pub struct SetVolume {
+    pub volume: u8,
+}
+
+#[derive(Deserialize)]
+pub struct AdjustVolume {
+    pub delta: i64,
+}
+
+#[derive(Deserialize)]
+pub struct SetOutputMute {
+    pub mute: bool,
+}
+
+#[derive(Deserialize)]
 pub struct Downlink {
     pub header: CommandHeader,
     pub target: CommandTarget,

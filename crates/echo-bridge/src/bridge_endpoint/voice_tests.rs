@@ -44,19 +44,40 @@ async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
         .await;
 }
 
-struct Fixture {
-    settings: Settings,
-    device: Device,
+pub(super) struct Fixture {
+    pub(super) settings: Settings,
+    pub(super) device: Device,
     app: BufReader<DuplexStream>,
     stale: Arc<Notify>,
 }
 
-async fn fixture(home: &Path, mock: &Mock, gateway: &Gateway, shared_grant: Arc<Grant>) -> Fixture {
-    let (service, send_settings) = Settings::configured(home, mock, gateway, Arc::new(Resolver), false);
-    let (app, server) = tokio::io::duplex(16384);
+pub(super) async fn fixture(home: &Path, mock: &Mock, gateway: &Gateway, shared_grant: Arc<Grant>) -> Fixture {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let connector =
         echo_wyoming::adapter::connector(listener.local_addr().unwrap(), echo_wyoming::ClientOptions::default());
+    let (settings, app, ready, stale) = fixture_with_link(home, mock, gateway, shared_grant, connector).await;
+    let (device, _) = listener.accept().await.unwrap();
+    let mut device = Device::new(device);
+    device.receive("run-satellite").await;
+    device.send("info", json!({})).await;
+    ready.notified().await;
+    Fixture {
+        settings,
+        device,
+        app,
+        stale,
+    }
+}
+
+pub(super) async fn fixture_with_link(
+    home: &Path,
+    mock: &Mock,
+    gateway: &Gateway,
+    shared_grant: Arc<Grant>,
+    connector: impl echo_link::LinkConnector + 'static,
+) -> (Settings, BufReader<DuplexStream>, Arc<Notify>, Arc<Notify>) {
+    let (service, send_settings) = Settings::configured(home, mock, gateway, Arc::new(Resolver), false);
+    let (app, server) = tokio::io::duplex(16384);
     let ready = Arc::new(Notify::new());
     let signal = ready.clone();
     let stale = Arc::new(Notify::new());
@@ -82,17 +103,7 @@ async fn fixture(home: &Path, mock: &Mock, gateway: &Gateway, shared_grant: Arc<
         })
     })
     .await;
-    let (device, _) = listener.accept().await.unwrap();
-    let (mut device, app) = (Device::new(device), BufReader::new(server));
-    device.receive("run-satellite").await;
-    device.send("info", json!({})).await;
-    ready.notified().await;
-    Fixture {
-        settings,
-        device,
-        app,
-        stale,
-    }
+    (settings, BufReader::new(server), ready, stale)
 }
 
 async fn missing_capture(gateway: &Gateway, mock: &Mock, device: &mut Device) {
@@ -345,7 +356,7 @@ async fn outcome(mock: &Mock, id: &str) -> Value {
     }
 }
 
-async fn message(mock: &Mock, name: &str, field: &str, expected: &Value) -> Value {
+pub(super) async fn message(mock: &Mock, name: &str, field: &str, expected: &Value) -> Value {
     loop {
         if let Some(body) = mock
             .state
@@ -401,7 +412,7 @@ async fn write(app: &mut BufReader<DuplexStream>, data: &Value) {
     app.get_mut().write_all(format!("{data}\n").as_bytes()).await.unwrap();
 }
 
-struct Device {
+pub(super) struct Device {
     wire: TcpStream,
     decoder: Decoder,
     frames: std::collections::VecDeque<Event>,
@@ -418,23 +429,29 @@ impl Device {
 
     async fn receive(&mut self, name: &str) -> Event {
         loop {
+            let frame = self.next().await;
+            if frame.header.r#type == name {
+                return frame;
+            }
+            if frame.header.r#type == "describe" {
+                self.send("info", json!({})).await;
+            }
+        }
+    }
+
+    pub(super) async fn next(&mut self) -> Event {
+        loop {
             if let Some(frame) = self.frames.pop_front() {
-                if frame.header.r#type == name {
-                    return frame;
-                }
-                if frame.header.r#type == "describe" {
-                    self.send("info", json!({})).await;
-                }
-                continue;
+                return frame;
             }
             let mut bytes = [0; 4096];
             let n = self.wire.read(&mut bytes).await.unwrap();
-            assert_ne!(n, 0, "missing device frame {name}");
+            assert_ne!(n, 0, "missing device frame");
             self.frames.extend(self.decoder.feed(&bytes[..n]).unwrap());
         }
     }
 
-    async fn send(&mut self, kind: &str, data: Value) {
+    pub(super) async fn send(&mut self, kind: &str, data: Value) {
         let frame = Event {
             header: Header {
                 r#type: kind.into(),

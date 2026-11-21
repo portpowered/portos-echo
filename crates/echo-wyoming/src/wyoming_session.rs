@@ -31,6 +31,7 @@ pub(crate) enum Command {
     Error(String, String, Reply<()>),
     Pause(Reply<()>),
     Thinking(bool, Reply<()>),
+    Speaker(&'static str, Value, Reply<()>),
     Close(Reply<()>),
 }
 
@@ -254,6 +255,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 let _ = reply.send(Ok(()));
             }
             Some(Command::Thinking(on, reply)) => self.thinking(on, reply).await?,
+            Some(Command::Speaker(name, data, reply)) => self.speaker(name, data, reply).await?,
             Some(Command::EndRun(reply)) => self.end_run(reply).await?,
             Some(Command::Error(code, text, reply)) => {
                 self.fail_run(code, text, reply).await?;
@@ -305,6 +307,14 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         self.send(WyomingEvent::Other("hassmic-thinking".into(), data), vec![])
             .await?;
         let _ = reply.send(Ok(()));
+        Ok(())
+    }
+
+    async fn speaker(&mut self, name: &'static str, data: Value, reply: Reply<()>) -> Result<(), Error> {
+        if !reply.is_closed() {
+            self.send(WyomingEvent::Other(name.into(), data), vec![]).await?;
+            let _ = reply.send(Ok(()));
+        }
         Ok(())
     }
 

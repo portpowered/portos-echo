@@ -89,6 +89,9 @@ async fn correlate(
             }
         }
         ("assistant-session", "start-session" | "end-session") => invalid(),
+        ("speaker", "set-volume" | "adjust-volume" | "set-mute") => {
+            super::speaker::command(&header.name, payload, received).await
+        }
         _ => refusal("UNSUPPORTED_COMMAND", "This command is unsupported."),
     }
 }
@@ -97,6 +100,6 @@ pub(crate) fn refusal(code: &str, message: &str) -> Value {
     json!({"ok":false,"failure":{"code":code,"message":message}})
 }
 
-fn invalid() -> Value {
+pub(super) fn invalid() -> Value {
     refusal("INVALID_REQUEST", "The command payload is invalid.")
 }

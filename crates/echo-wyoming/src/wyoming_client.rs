@@ -236,6 +236,11 @@ impl WyomingClient {
         self.request(Command::Thinking(on, tx), rx).await
     }
 
+    pub(crate) async fn send_speaker(&self, name: &'static str, data: serde_json::Value) -> Result<(), Error> {
+        let (tx, rx) = oneshot::channel();
+        self.request(Command::Speaker(name, data, tx), rx).await
+    }
+
     /// Send one device-visible error through the session writer, keeping the connection.
     /// # Errors
     /// Connection failure, capacity limit, or operation timeout.

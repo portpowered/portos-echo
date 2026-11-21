@@ -2,6 +2,8 @@
 mod commands;
 pub(crate) use commands::refusal;
 pub(crate) mod remote_start;
+#[path = "speaker/control.rs"]
+mod speaker;
 #[cfg(test)]
 mod tests;
 mod transport;

@@ -102,6 +102,11 @@ capture request. A mic-only start then waits up to two seconds for the peer. A t
 requests follow-up tries capture after its first reply has played. An explicit remote end cancels
 delegated work and closes playback and capture.
 
+Port OS speaker commands request absolute volume, a relative change from the last reported volume,
+or output mute. The current Wyoming peer does not acknowledge these controls, so the bridge replies
+`NOT_SUPPORTED`. Volume and output mute are unknown until the device reports them. Microphone
+privacy continues to control the assistant's muted state independently.
+
 To downgrade, remove this section from the base file and Settings overlay.
 
 ### Muse
