@@ -5,7 +5,7 @@ use crate::bridge_mcp::{
     bridge_operations::{Operation, StartError},
 };
 use crate::bridge_settings::portos_permissions::portos_server;
-use echo_config::{BridgeConfig, SettingsOptions, SettingsOverlay, SettingsServerTools, WebSearch};
+use echo_config::{BridgeConfig, SettingsEndpoint, SettingsOptions, SettingsOverlay, SettingsServerTools, WebSearch};
 use echo_mcp_auth::GrantStatus;
 use echo_screen_contract::{
     settings_v1::LinkStatusV1,
@@ -17,6 +17,8 @@ use echo_screen_contract::{
     },
 };
 use echo_screen_server::SettingsReply;
+
+const ENDPOINT_UNAVAILABLE: &str = "Port OS endpoint connection is unavailable.";
 
 impl SettingsHost {
     pub(super) fn portos_operation(&self, request: PortosOperationV2, grant: Option<&Grant>) -> SettingsReply {
@@ -108,6 +110,10 @@ impl SettingsHost {
                 .scopes
                 .map(|scopes| scopes.into_iter().map(|scope| scope.as_str().into()).collect()),
             server,
+        })
+        .with_endpoint(SettingsEndpoint {
+            enabled: portos.endpoint_enabled,
+            device_name: portos.endpoint_name,
         }))
     }
 
@@ -126,6 +132,10 @@ impl SettingsHost {
     ) -> Result<SettingsSnapshotV2, SettingsError> {
         let accepted = self.snapshot(link)?;
         let config = self.store.effective();
+        let mut warnings = accepted.warnings;
+        if config.portos_endpoint.enabled {
+            warnings.push(ENDPOINT_UNAVAILABLE.into());
+        }
         let home = config.home.as_ref().map(|home| HomeSettingsV2 {
             agent_tools: [
                 home.agent_tools.notes.then_some(HomeToolGroupV2::Notes),
@@ -161,7 +171,7 @@ impl SettingsHost {
             muse: include_muse.then(|| self.muse_status()),
             bridge_version: accepted.bridge_version,
             restart_pending: accepted.restart_pending,
-            warnings: accepted.warnings,
+            warnings,
         })
     }
 }
@@ -216,6 +226,8 @@ fn portos_status(config: &BridgeConfig, launch_scopes: &[String], grant: GrantSt
         tool_choices: PortosToolV2::ALL.into(),
         server: None,
         challenge: None,
+        endpoint_enabled: Some(config.portos_endpoint.enabled),
+        endpoint_name: Some(config.portos_endpoint.device_name.clone()),
     };
     if let Some(server) = portos_server(config) {
         status.link_status = match grant.scopes.as_ref() {

@@ -47,6 +47,7 @@ optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leave
   and the `notes` and `prompts` groups in `home.agent_tools`. An empty group list disables both groups.
 - Port OS permissions use `mcp.scopes` and the `allow_tools` list under `[[mcp.server]]`, bound to the configured
   Port OS server by its `name`. An empty tool list disables all Port OS tools.
+- Port OS endpoint Settings stores `portos_endpoint.enabled` and `portos_endpoint.device_name`.
 - Muse Settings stores an HTTPS origin and references to its private CA and credential files in `[muse]`.
 - The root `screen_pack` selects installed screen packs.
 
@@ -71,6 +72,29 @@ Pending/applied and failed-restart state are shown on screen. After replacement 
 the old active configuration remains usable; a later explicit stop/start loads the saved overlay.
 Other base edits need restart. To remove an override, stop and edit/remove the corresponding overlay entry;
 changing the base alone does not win over a saved screen value.
+
+### Port OS endpoint
+
+The endpoint preference defaults to off with the name **Echo Show**. From paired Settings, open
+**Port OS**, edit **Name in Port OS** or **Connect this Echo to Port OS**, and save. Names must
+contain 1 to 64 Unicode characters, including at least one non-whitespace character and no control
+characters. The bridge saves these preferences without restarting a conversation.
+
+```toml
+[portos_endpoint]
+enabled = false
+device_name = "Echo Show"
+gateway_url = "wss://gateway.example.invalid/devices/{authLinkId}"
+api_base = "https://api.example.invalid"
+```
+
+Set network destinations in the base file. The optional WSS template ends in
+`/devices/{authLinkId}`. The optional API base uses HTTPS. Omit inline credentials, queries,
+fragments and other substitutions from both. Settings shows an unavailable state until the endpoint
+issuer and an authoritative route resolver are available. To downgrade, remove this section from
+the base file and Settings overlay.
+
+### Muse
 
 In the paired Muse section, enter the bridge origin, the CA as base64-encoded DER and the Muse service
 credential. Saving a new origin requires both private inputs. At the same origin, leave a private input blank
@@ -242,6 +266,11 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `mcp.server[].auth` | Required: `none`, `portos_device_code`, or `bearer_file`. | restart / no |
 | `mcp.server[].bearer_file` | Optional literal file path; required with bearer_file auth. Store credential privately. | restart / no |
 | `mcp.server[].allow_tools` | Array of exact tool-name strings, defaults to all eleven Port OS tools for device-code auth and empty for other auth modes. An explicit empty array disables all tools. | withdraw immediately, other changes at boundary / yes |
+| `portos_endpoint` | Optional Port OS endpoint table. | see individual keys |
+| `portos_endpoint.enabled` | Boolean, default false. Opts in once the endpoint service prerequisites are available. | save / yes |
+| `portos_endpoint.device_name` | Defaults to `Echo Show`. A nonblank name of 1 to 64 Unicode characters without controls. | save / yes |
+| `portos_endpoint.gateway_url` | Optional WSS template ending in `/devices/{authLinkId}`. | restart / no |
+| `portos_endpoint.api_base` | Optional HTTPS API base. | restart / no |
 | `screen` | Required screen transport table. | restart / no |
 | `screen.listen` | Socket address; decoder defaults to all IPv4 interfaces on port 16900. Runtime device config must use 127.0.0.1:16900. | restart / no |
 | `screen.pairing_token_file` | Required literal private token-file path. | restart / no |

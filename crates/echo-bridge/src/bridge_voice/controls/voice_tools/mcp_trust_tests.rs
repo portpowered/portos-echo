@@ -163,7 +163,7 @@ fn scope_rows(path: &std::path::Path) -> Vec<Value> {
 
 #[tokio::test(start_paused = true)]
 async fn t3_mcp_configured_https_link_catalog_query_and_reload() {
-    drive(async {
+    Box::pin(drive(async {
         let peer = TlsPeer::start(false).await;
         let config = &peer.config;
         let screen = Screen::bind(None).await.unwrap();
@@ -192,7 +192,7 @@ async fn t3_mcp_configured_https_link_catalog_query_and_reload() {
         assert_eq!(std::fs::read(path).unwrap(), stored);
         tools.close().await;
         assert_eq!(peer.finish().await, json!({"link":1,"token":1,"catalog":2,"query":1}));
-    })
+    }))
     .await;
 }
 
@@ -289,7 +289,7 @@ async fn t3_mcp_receipts_correlate_overlapping_calls_completed_out_of_order() {
 
 #[tokio::test(start_paused = true)]
 async fn t3_mcp_configured_oauth_refuses_missing_invalid_untrusted_and_wrong_hostname() {
-    drive(async {
+    Box::pin(drive(async {
         let mut peer = TlsPeer::start(false).await;
         let unrelated = TlsPeer::start(false).await;
         let wrong_host = TlsPeer::start(true).await;
@@ -325,7 +325,7 @@ async fn t3_mcp_configured_oauth_refuses_missing_invalid_untrusted_and_wrong_hos
         assert_eq!(peer.finish().await, zero);
         assert_eq!(unrelated.finish().await, zero);
         assert_eq!(wrong_host.finish().await, zero);
-    })
+    }))
     .await;
 }
 

@@ -334,6 +334,29 @@ fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>
     Ok(())
 }
 
+#[test]
+fn settings_v2_endpoint_patch_is_sparse_and_strict() -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::settings_v2::SettingsPatchV2;
+    let wire = r#"{"version":2,"settings":{"portos":{"endpoint_enabled":false,"endpoint_name":"Echo 界"}}}"#;
+    let patch: SettingsPatchV2 = serde_json::from_str(wire)?;
+    assert!(patch.settings.valid_shape());
+    assert_eq!(
+        serde_json::to_value(&patch)?,
+        serde_json::from_str::<serde_json::Value>(wire)?
+    );
+    for invalid in [
+        r#"{"endpoint_enabled":null}"#,
+        r#"{"endpoint_name":null}"#,
+        r#"{"endpoint_enabled":"false"}"#,
+        r#"{"endpoint_name":4}"#,
+        r#"{"gateway_url":"wss://gateway.example.invalid"}"#,
+    ] {
+        let body = format!(r#"{{"version":2,"settings":{{"portos":{invalid}}}}}"#);
+        assert!(serde_json::from_str::<SettingsPatchV2>(&body).is_err());
+    }
+    Ok(())
+}
+
 fn portos_relink_advice_wire(omitted: &serde_json::Value) -> Result<(), Box<dyn Error>> {
     use echo_screen_contract::settings_v2::SettingsSnapshotV2;
     use serde_json::{Value, from_value, to_value};

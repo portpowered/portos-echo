@@ -132,6 +132,12 @@ pub(super) fn decode(value: Value<'_>) -> Result<(BridgeConfig, Vec<ConfigError>
             .map(|v| crate::config_muse::decode(v.into_inner()))
             .transpose()?,
         mcp: mcp(root.node("mcp")?)?,
+        portos_endpoint: root
+            .table
+            .remove("portos_endpoint")
+            .map(|v| crate::config_endpoint::decode(v.into_inner()))
+            .transpose()?
+            .unwrap_or_default(),
         screen: crate::config_screen::decode(root.node("screen")?)?,
         audit: audit(root.node("audit")?)?,
         trace: root

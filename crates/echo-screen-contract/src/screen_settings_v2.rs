@@ -223,7 +223,15 @@ pub struct PortosPermissionsPatchV2 {
     #[schemars(with = "Vec<PortosToolV2>", extend("uniqueItems" = true))]
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub allow_tools: Option<Vec<PortosToolV2>>,
+    #[schemars(with = "bool")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub endpoint_enabled: Option<bool>,
+    #[schemars(with = "String", length(min = 1, max = 64), pattern(ENDPOINT_NAME_PATTERN))]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub endpoint_name: Option<String>,
 }
+
+const ENDPOINT_NAME_PATTERN: &str = r"^[^\u0000-\u001F\u007F-\u009F]*[^\u0000-\u001F\u007F-\u009F\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000][^\u0000-\u001F\u007F-\u009F]*$";
 
 #[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -378,6 +386,12 @@ pub struct PortosStatusV2 {
     #[schemars(with = "PortosChallengeV2")]
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub challenge: Option<PortosChallengeV2>,
+    #[schemars(with = "bool")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub endpoint_enabled: Option<bool>,
+    #[schemars(with = "String", length(min = 1, max = 64), pattern(ENDPOINT_NAME_PATTERN))]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub endpoint_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

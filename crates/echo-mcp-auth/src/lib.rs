@@ -7,6 +7,7 @@
 
 mod auth;
 mod discovery;
+mod endpoint;
 mod proof;
 mod refusal;
 mod store;
@@ -19,6 +20,7 @@ pub mod mock;
 
 pub use auth::{AuthClient, GrantStatus, LinkInstructions};
 use echo_contracts::secret::Secret;
+pub use endpoint::{EndpointExchange, EndpointTokenSource, ExchangeError};
 pub use refusal::LinkFailure;
 use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};
 

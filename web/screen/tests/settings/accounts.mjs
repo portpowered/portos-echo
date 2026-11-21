@@ -4,6 +4,7 @@ import { calls as allCalls } from "../browser.mjs";
 import { response } from "./page.mjs";
 import { open, portosStatus, v2Snapshot } from "./page-v2.mjs";
 import { snapshot as pixelSnapshot } from "../support/snapshot.mjs";
+import "./endpoint/form.mjs";
 
 test("Port OS Settings shows legacy relink advice only for a true flag", async (t) => {
     for (const flag of [true, false, undefined]) {

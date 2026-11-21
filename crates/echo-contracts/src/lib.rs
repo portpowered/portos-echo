@@ -1,4 +1,5 @@
 //! Pure shared bridge vocabulary. No transport or execution policy.
+pub mod endpoint;
 pub mod ids;
 pub mod live;
 pub mod secret;

@@ -1,6 +1,7 @@
 use super::*;
 use echo_config::SettingsOverlay;
 
+mod endpoint;
 mod muse;
 
 fn overlay(input: &str) -> SettingsOverlay {

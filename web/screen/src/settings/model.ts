@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*_v{1,2}.json by tools/screen-schema.mjs.
-// Schema SHA-256: 693833494730a9f1e6371973d5cbedd066ff3a58b82221140385f2ff97f4eaff
+// Schema SHA-256: 3e560368c861921ed8b062de1ebae3e52f630e9c950f73fa6e18094ba5a34be3
 export type AgentValuesV1 = {
     daily_request_cap: DailyCapV1;
     max_tool_calls: number;
@@ -105,6 +105,8 @@ export type PortosStatusV2 = {
     scope_choices: Array<PortosScopeV2>;
     tool_choices: Array<PortosToolV2>;
     challenge?: PortosChallengeV2;
+    endpoint_enabled?: boolean;
+    endpoint_name?: string;
     relink_advised?: boolean;
     server?: PortosServerV2;
 };
@@ -159,6 +161,8 @@ export type MusePatchV2 = {
 };
 export type PortosPermissionsPatchV2 = {
     allow_tools?: Array<PortosToolV2>;
+    endpoint_enabled?: boolean;
+    endpoint_name?: string;
     scopes?: Array<PortosScopeV2>;
 };
 export type SettingsFieldsV2 = {

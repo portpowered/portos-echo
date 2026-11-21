@@ -11,9 +11,14 @@ import { leavePrompt } from "./guard/leave";
 import { mountKeyboard } from "./keyboard";
 import type { UiState } from "../model";
 import { packControls } from "./packs";
-import { loadSettings, restartWarning, saveSettingsV2 } from "./api-v2";
+import {
+    endpointUnavailable,
+    loadSettings,
+    restartWarning,
+    saveSettingsV2,
+} from "./api-v2";
 import { openAIOptions, portosForm } from "./forms-v2";
-import { mountPortos } from "./accounts/portos";
+import { mountPortos, portosEndpointForm } from "./accounts/portos";
 import { mountOpenAI } from "./accounts/openai";
 import { accountRow } from "./accounts/account-buttons";
 import { museForm } from "./muse/form";
@@ -230,8 +235,10 @@ export function mountSettings(
         fields.replaceChildren();
         if (data.version === 1) renderV1(data);
         else renderV2(data);
-        for (const warning of data.warnings)
-            fields.append(element("p", warning));
+        for (const warning of data.warnings) {
+            if (data.version === 1 || warning !== endpointUnavailable)
+                fields.append(element("p", warning));
+        }
     }
     function renderShared(data: Snapshot | SnapshotV2) {
         for (const kind of ["voice", "runner"] as const)
@@ -288,7 +295,17 @@ export function mountSettings(
                             ...patch.portos.allow_tools,
                         );
                 }
-                if (restarting) portos?.settingsSaved(!!patch.portos?.scopes);
+                const endpointChanged =
+                    patch.portos?.endpoint_enabled !== undefined ||
+                    patch.portos?.endpoint_name !== undefined;
+                if (restarting || endpointChanged)
+                    portos?.settingsSaved(
+                        restarting,
+                        !!patch.portos?.scopes,
+                        endpointChanged,
+                    );
+                if (endpointChanged && !restarting)
+                    return "Saved Port OS endpoint settings.";
                 return restarting
                     ? "Saved. The bridge will restart after the current reply finishes."
                     : "Saved. Changes apply to the next conversation.";
@@ -316,6 +333,8 @@ export function mountSettings(
                 void openai?.refresh();
             },
         );
+        const endpoint = portosEndpointForm(data.portos, saveV2, track);
+        if (endpoint) portosRow.section.append(endpoint);
         fields.append(
             accounts,
             packControls(actions, perform, track),

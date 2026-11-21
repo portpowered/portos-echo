@@ -44,6 +44,16 @@ export async function saveSettingsV2(
 
 export const restartWarning =
     "Could not restart bridge; saved settings remain pending";
+export const endpointUnavailable =
+    "Port OS endpoint connection is unavailable.";
+
+export function validEndpointName(name: string) {
+    return (
+        Array.from(name).length <= 64 &&
+        /[^\p{White_Space}]/u.test(name) &&
+        !/\p{Cc}/u.test(name)
+    );
+}
 
 export async function readSettingsProgress(
     actions: string,
@@ -165,7 +175,13 @@ function validatePortos(value: unknown) {
             "scope_choices",
             "tool_choices",
         ],
-        ["server", "challenge", "relink_advised"],
+        [
+            "server",
+            "challenge",
+            "relink_advised",
+            "endpoint_enabled",
+            "endpoint_name",
+        ],
     );
     if (
         !["unconfigured", "link_required", "linked", "relink_for_scope"].some(
@@ -175,6 +191,11 @@ function validatePortos(value: unknown) {
         typeof status.link_waiting_for_restart !== "boolean" ||
         ("relink_advised" in status &&
             typeof status.relink_advised !== "boolean") ||
+        ("endpoint_enabled" in status &&
+            typeof status.endpoint_enabled !== "boolean") ||
+        ("endpoint_name" in status &&
+            (typeof status.endpoint_name !== "string" ||
+                !validEndpointName(status.endpoint_name))) ||
         !strings(status.scope_choices) ||
         !strings(status.tool_choices)
     )
