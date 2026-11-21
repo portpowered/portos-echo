@@ -222,7 +222,7 @@ async fn exercise_engine(
     );
     remote.close();
     assert!((4..=8).contains(&echoed), "remote echoed {echoed} packets");
-    snapshot(&mut input, &mut output, exhausted, model, web_search).await;
+    snapshot(&mut input, &mut output, exhausted, model).await;
     append_receipts(&mut input, &mut output, negative, exhausted).await;
     check_mcp(&spoof, exhausted);
     drop(input);
@@ -413,11 +413,11 @@ async fn snapshot(
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     exhausted: bool,
     model: &str,
-    web_search: echo_config::WebSearch,
 ) {
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();
     let value: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-    let mut names = if model == "gpt-5.4" {
+    // web.run is never a direct declaration: the backend refuses one.
+    let names = if model == "gpt-5.4" {
         json!(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"])
     } else {
         json!([
@@ -427,9 +427,6 @@ async fn snapshot(
             "functions.ui_show_emotion"
         ])
     };
-    if model != "gpt-5.4" && web_search != echo_config::WebSearch::Disabled {
-        names.as_array_mut().unwrap().push(json!("web.run"));
-    }
     if exhausted {
         // The app server releases exactly one request before bridge polling.
         // This is the pre-notification window, not a universal zero-work claim.

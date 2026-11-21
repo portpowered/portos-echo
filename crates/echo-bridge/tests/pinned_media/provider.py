@@ -198,6 +198,11 @@ try:
             delegation = tools_provider.RunnerSkills(command['runner_skills'], command.get('skills_mcp'))
             manual_cases[delegation.identity] = delegation
             emit({'initialized': delegation.identity})
+        elif 'end_call' in command:
+            assert delegation is None
+            delegation = tools_provider.EndCall(command['end_call'])
+            manual_cases[delegation.identity] = delegation
+            emit({'initialized': delegation.identity})
         elif command == {'transcripts': True}:
             transcript_output.sendall(b't')
         elif command == {'transcript_count': True}:

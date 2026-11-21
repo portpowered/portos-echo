@@ -38,6 +38,13 @@ def read_frame(connection):
     return first & 15, data
 
 
+class Reserved(AssertionError):
+    """The backend's refusal of a client declaration that shadows a model-reserved tool."""
+
+    def __init__(self, name):
+        super().__init__(f"Invalid Value: 'tools'. Function '{name}' is reserved for use by this model.")
+
+
 class Delegation:
     def __init__(self, tools, negative, exhausted=False, model="gpt-5.4", web_search="live",
                  identity=None, history=()):
@@ -138,8 +145,11 @@ class Delegation:
         blocks = [item['tools'] for item in body['input'] if 'tools' in item]
         assert len(blocks) == 1, 'missing or repeated native tool block'
         namespaces = blocks[0]
-        # Responses Lite uses the app server's direct provider-backed web.run extension.
-        # It never becomes an exec nested callable or a hosted declaration.
+        # The bridge's catalog is declared directly; the app server's web.run
+        # extension never is. A code-mode-only Responses Lite model reserves
+        # web.run, and the live backend refuses a direct declaration of it
+        # (HTTP 400, measured on the Echo with Codex 0.171.0), so every
+        # delegated turn there failed before the model ran.
         names = [namespace['name'] + '.' + tool['name']
                  for namespace in namespaces for tool in namespace['tools']]
         description = namespaces[0]['tools'][0]['description']
@@ -154,16 +164,16 @@ class Delegation:
                      for tool in namespace['tools']]
         direct = [tool for tool in functions if 'functions.' + tool['name'] in declared]
         assert direct == expected, 'native direct catalog mismatch: ' + json.dumps(direct)
-        # Hosted search follows the bridge's own setting in both directions.
-        assert ('web.run' in names) == (self.web_search != 'disabled'), names
+        if 'web.run' in names:
+            raise Reserved('web.run')
         # What the bridge switches off stays off, whatever else a release adds.
         refused = sorted(set(names) & {'functions.' + name for name in SWITCHED_OFF})
         assert not refused, 'a tool the bridge switches off reached the model: ' + json.dumps(refused)
         self.native_catalog = {'tools': names, 'nested': nested,
-                               'extras': [name for name in names if name not in declared + ['web.run']]}
+                               'extras': [name for name in names if name not in declared]}
         self.native_declarations = {namespace['name'] + '.' + tool['name']: tool
                                     for namespace in namespaces for tool in namespace['tools']}
-        return declared + (['web.run'] if self.web_search != 'disabled' else [])
+        return declared
 
     def check_output(self, output):
         if self.native:
@@ -260,6 +270,47 @@ class RunnerSkills(Delegation):
 
     def snapshot(self):
         return {**super().snapshot(), 'skill_outputs': self.outputs, 'mcp_calls': self.mcp_calls}
+
+
+class EndCall(Delegation):
+    """The user asks to end the call: the delegated model calls end_session once,
+    directly and with no arguments, then reports the farewell it was handed."""
+    def __init__(self, tools):
+        super().__init__(tools, False, model='gpt-6.1-sol', web_search='disabled', identity='end-call')
+        self.call_id = 'end-call-end_session'
+        self.prompt = 'Fixture delegation end-call. The user said: thanks, that is all, please end the call now.'
+        self.reply = 'Ending the call now.'
+
+    def respond(self, body):
+        assert body['model'] == self.model
+        expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
+                     'parameters': deepcopy(tool['inputSchema']), 'strict': False} for tool in self.tools]
+        for tool in expected:
+            if tool['name'] == 'extend_session':
+                tool['parameters']['properties']['seconds'].pop('minimum')
+        tools = self.check_tools(body, expected)
+        outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
+        index = len(self.models)
+        assert index < 2 and len(outputs) == index, 'wrong end_session output count'
+        self.outputs = deepcopy(outputs)
+        if index == 0:
+            item = {'type': 'function_call', 'id': 'fc-end', 'call_id': self.call_id, 'namespace': 'functions',
+                    'name': 'end_session', 'arguments': '{}', 'status': 'completed'}
+        else:
+            assert outputs[0]['call_id'] == self.call_id, 'wrong end_session call ID'
+            item = {'type': 'message', 'id': 'msg-end', 'role': 'assistant', 'status': 'completed',
+                    'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
+        self.models.append({'tools': tools, 'outputs': index})
+        return stream(f'end-call-{index}', [item])
+
+    def append(self, value):
+        assert not self.appends and len(self.models) == 2, 'unexpected end-call append'
+        assert value['delegation_item_id'] == self.identity
+        assert value['content'] == [{'type': 'input_text', 'text': self.reply}]
+        self.appends.append(self.identity)
+
+    def snapshot(self):
+        return {**super().snapshot(), 'end_outputs': self.outputs}
 
 
 class NativeExtras(Delegation):

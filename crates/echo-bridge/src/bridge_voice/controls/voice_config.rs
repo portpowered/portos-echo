@@ -337,18 +337,20 @@ impl Configured {
     }
 }
 
-/// The session tools are the bridge's own and so is their guidance. It follows
+/// The session tools are the bridge's own and so is their guidance. It joins
 /// whatever base prompts were admitted, built in or from the owner's files,
-/// so a prompt file that predates a tool cannot leave that tool unused.
+/// so a prompt file that predates a tool cannot leave that tool unused. The
+/// voice's guidance leads its prompt: placed after a base prompt that says to
+/// avoid hand-offs, the Live model on the Echo answered every goodbye with a
+/// farewell and never handed it off, so end_session was never called.
 pub(super) fn session_guidance((runner, voice): (String, String), advertised: bool) -> (String, String) {
     if !advertised {
         return (runner, voice);
     }
-    // The admitted text stays byte for byte; the guidance only follows it.
-    let join = |base: String, guidance: &str| format!("{base}\n\n{guidance}");
+    // The admitted text stays byte for byte; the guidance only joins it.
     (
-        join(runner, echo_config::RUNNER_SESSION_GUIDANCE),
-        join(voice, echo_config::LIVE_SESSION_GUIDANCE),
+        format!("{runner}\n\n{}", echo_config::RUNNER_SESSION_GUIDANCE),
+        format!("{}\n\n{voice}", echo_config::LIVE_SESSION_GUIDANCE),
     )
 }
 

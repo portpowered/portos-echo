@@ -3,7 +3,7 @@ use super::*;
 use std::{fs, future::Future, os::unix::fs::PermissionsExt};
 use tokio::io::Lines;
 
-type Output = Lines<BufReader<tokio::process::ChildStdout>>;
+pub(super) type Output = Lines<BufReader<tokio::process::ChildStdout>>;
 const MODEL: &str = "gpt-6.1-sol";
 const SKILLS: &str =
     "\n\nEnabled owner skills (use read_skill by name to load the body):\n- brief — Keep the reply brief.";
@@ -112,7 +112,7 @@ async fn configured_journey(selection: Option<&str>, enabled: bool, mcp: Option<
     assert!(provider.wait().await.unwrap().success());
 }
 
-async fn admit_journey(
+pub(super) async fn admit_journey(
     root: &Path,
     listener: &TcpListener,
     config: &CodexConfig,
@@ -164,7 +164,7 @@ async fn observe_journey(
     }
 }
 
-fn start_provider() -> (tokio::process::Child, tokio::process::ChildStdin, Output) {
+pub(super) fn start_provider() -> (tokio::process::Child, tokio::process::ChildStdin, Output) {
     let mut provider = Command::new("python3")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pinned_media/provider.py"))
         .stdin(Stdio::piped())
@@ -177,7 +177,7 @@ fn start_provider() -> (tokio::process::Child, tokio::process::ChildStdin, Outpu
     (provider, control, observed)
 }
 
-async fn acknowledge_cut(satellite: &mut TcpStream) {
+pub(super) async fn acknowledge_cut(satellite: &mut TcpStream) {
     loop {
         let (header, payload) = read_wire(satellite).await;
         assert_eq!(payload, b"");
@@ -196,7 +196,7 @@ async fn acknowledge_cut(satellite: &mut TcpStream) {
     }
 }
 
-async fn drive_peer<T>(peer: &mut LivePeer, work: impl Future<Output = T>) -> T {
+pub(super) async fn drive_peer<T>(peer: &mut LivePeer, work: impl Future<Output = T>) -> T {
     tokio::pin!(work);
     loop {
         tokio::select! {
@@ -232,7 +232,7 @@ async fn tick_clock(stdin: &mut tokio::process::ChildStdin, stdout: &mut Output)
     }
 }
 
-fn configure_skills(root: &Path, port: u16, selection: Option<&str>) -> CodexConfig {
+pub(super) fn configure_skills(root: &Path, port: u16, selection: Option<&str>) -> CodexConfig {
     let config = configure(root, port);
     let wrapper = root.join("skills-observer");
     fs::write(&wrapper, include_bytes!("runner_skills_stdio.py")).unwrap();
@@ -296,15 +296,15 @@ async fn connect_provider(control: &mut tokio::process::ChildStdin, observed: &m
     peer
 }
 
-async fn send_json(control: &mut tokio::process::ChildStdin, value: Value) {
+pub(super) async fn send_json(control: &mut tokio::process::ChildStdin, value: Value) {
     control.write_all(format!("{value}\n").as_bytes()).await.unwrap();
 }
 
-async fn read_json(output: &mut Output) -> Value {
+pub(super) async fn read_json(output: &mut Output) -> Value {
     serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap()
 }
 
-fn read_rpc(root: &Path) -> Vec<Value> {
+pub(super) fn read_rpc(root: &Path) -> Vec<Value> {
     fs::read_to_string(root.join("skills-rpc.jsonl"))
         .unwrap()
         .lines()
@@ -312,9 +312,9 @@ fn read_rpc(root: &Path) -> Vec<Value> {
         .collect()
 }
 
-fn voice_context(observed: &Value) -> String {
+pub(super) fn voice_context(observed: &Value) -> String {
     let voice = observed["session"]["instructions"].as_str().unwrap();
-    let expected = format!("Fixture voice.\n\n{}\n", echo_config::LIVE_SESSION_GUIDANCE);
+    let expected = format!("{}\n\nFixture voice.\n", echo_config::LIVE_SESSION_GUIDANCE);
     let context = voice.strip_prefix(&expected).unwrap();
     assert!(context.starts_with("[Call-start context: "));
     assert!(context.ends_with("UTC+00:00; local offset unavailable]")); // lint-rules: allow-literal UTC calendar expectation, never an endpoint
@@ -329,7 +329,7 @@ fn voice_context(observed: &Value) -> String {
     context.into()
 }
 
-fn declarations(enabled: bool, mcp: Option<&str>) -> Vec<Value> {
+pub(super) fn declarations(enabled: bool, mcp: Option<&str>) -> Vec<Value> {
     let mut tools = vec![
         json!({"name":"extend_session","description":"Extend listening for this voice session within its configured bound.",
             "inputSchema":{"type":"object","properties":{"seconds":{"type":"integer","minimum":1}},"required":["seconds"],"additionalProperties":false}}),
@@ -351,7 +351,7 @@ fn declarations(enabled: bool, mcp: Option<&str>) -> Vec<Value> {
     tools
 }
 
-fn check_thread(observed: &Value, context: &str, tools: &[Value], enabled: bool) {
+pub(super) fn check_thread(observed: &Value, context: &str, tools: &[Value], enabled: bool) {
     let skills = if enabled { SKILLS } else { "" };
     let runner = format!(
         "Fixture runner.\n\n{}\n{context}{skills}",
