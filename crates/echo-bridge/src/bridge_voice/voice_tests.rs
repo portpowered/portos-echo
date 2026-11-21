@@ -137,6 +137,7 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
                 Notice::Transcript { .. } => "transcript",
                 Notice::Device(_) => "device",
                 Notice::SessionTool(_) => "session_tool",
+                Notice::Mark(_) => "mark",
             });
             Ok(())
         },

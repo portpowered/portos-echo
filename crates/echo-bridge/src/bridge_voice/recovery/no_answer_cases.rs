@@ -108,7 +108,8 @@ async fn no_answer_long_question_and_slow_handoff_still_play_the_answer() {
     assert_eq!(cuts(&observer), 0);
 }
 
-/// The guard never fires while the user is still speaking, however long.
+/// The guard never fires while the user is still speaking, however long:
+/// transcript text that keeps arriving renews the speech start's latch.
 #[tokio::test(start_paused = true)]
 async fn no_answer_never_fires_while_the_user_is_still_speaking() {
     let observer = Observer::default();
@@ -131,7 +132,11 @@ async fn no_answer_never_fires_while_the_user_is_still_speaking() {
         },
     ));
     send(&tx, [speech(true)]).await;
-    wait(work.as_mut(), 65).await;
+    // Ninety seconds of speech: past the expiry and the no-answer window.
+    for _ in 0..9 {
+        wait(work.as_mut(), 10).await;
+        send(&tx, [partial("and then")]).await;
+    }
     send(&tx, [speech(false)]).await;
     wait(work.as_mut(), 2).await;
     send(&tx, answer()).await;
@@ -139,6 +144,46 @@ async fn no_answer_never_fires_while_the_user_is_still_speaking() {
     assert_eq!(work.await.unwrap().reply_sent, 12);
     assert_eq!(played.get(), 1);
     assert_eq!(cuts(&observer), 0);
+}
+
+/// A speech start with no transcript text after it holds the guard only
+/// until it expires (owner, 2026-11-21): then the user counts as quiet, and
+/// the guard fires one no-answer window later.
+#[tokio::test(start_paused = true)]
+async fn no_answer_fires_after_a_silent_speech_start_expires() {
+    let expiry = voice_wait::run_marks::SPEECH_START_EXPIRY;
+    let observer = Observer::default();
+    let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
+    let mut events = client.events().unwrap();
+    wake(&observer, 0);
+    let mic = microphone(&mut events).await;
+    let (mut port, tx) = port();
+    let start = Instant::now();
+    let mut work = Box::pin(run(
+        &client,
+        &mut events,
+        mic,
+        &mut port,
+        guard(None),
+        std::future::pending(),
+        |_| Ok(()),
+    ));
+    send(&tx, [speech(true)]).await;
+    // Held past the wake's own window, to the expiry; the window restarts.
+    wait(work.as_mut(), expiry.as_secs()).await;
+    tokio::time::advance(WINDOW.saturating_sub(Duration::from_nanos(1))).await;
+    pending(work.as_mut()).await;
+    tokio::time::advance(Duration::from_nanos(1)).await;
+    assert_eq!(work.await, Err(Error::NoResponse));
+    assert_eq!(Instant::now() - start, expiry + WINDOW);
+}
+
+fn partial(text: &str) -> MediaEvent {
+    MediaEvent::Control(Event::Transcript {
+        role: "user".into(),
+        text: text.into(),
+        done: false,
+    })
 }
 
 /// A hand-off resolved and its answer never starts. The run is unanswered at

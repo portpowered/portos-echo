@@ -53,11 +53,9 @@ pub(crate) use voice_tools::normalize_skill_arguments;
 #[cfg(test)]
 mod voice_tests;
 
+use crate::Error;
+use crate::bridge_codex::{Event, MediaEvent};
 pub use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Endpoint, FirstAudio, Heard, ReplyQuality};
-use crate::{
-    Error,
-    bridge_codex::{Event, MediaEvent},
-};
 use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun, PlayOutcome, ReplySink};
 use echo_media::PcmFrame;
 use std::{future::Future, num::NonZeroUsize, time::Duration};
@@ -126,6 +124,7 @@ pub enum Notice {
     /// Per-reply counters while a persistent run retains capture.
     ReplySettled(Stats),
     SessionTool(session_tools::Receipt),
+    Mark(voice_wait::Mark),
 }
 
 #[derive(Clone, Copy)]
