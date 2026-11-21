@@ -23,8 +23,15 @@ async fn t3_endpoint_pair_resumes_route_lookup_without_a_new_exchange() {
         let mut grant = registered(&mock, home.path()).await;
         let mut gateway = Gateway::open().await;
         let resolver = Arc::new(DelayedRoute::default());
-        let settings =
-            Settings::with_resolver(home.path(), &mock, &gateway, grant.grant.clone(), resolver.clone()).await;
+        let settings = Settings::with_resolver(
+            home.path(),
+            &mock,
+            &gateway,
+            grant.grant.clone(),
+            resolver.clone(),
+            false,
+        )
+        .await;
         settings.save(true, "Hall Echo").await;
         wait_unavailable(&settings).await;
         let retained = read_install(home.path());
@@ -61,6 +68,33 @@ async fn wait_unavailable(settings: &Settings) {
         }
     }
     panic!("endpoint route refusal was not shown in Settings");
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_endpoint_pair_starts_from_enabled_base_configuration() {
+    bridge_mcp::bridge_component::drive(async {
+        let home = tempfile::tempdir().unwrap();
+        let mock = Mock::bind().await.unwrap();
+        mock.enable_endpoint_audience().unwrap();
+        let mut grant = registered(&mock, home.path()).await;
+        let mut gateway = Gateway::open().await;
+        let settings = Settings::with_resolver(
+            home.path(),
+            &mock,
+            &gateway,
+            grant.grant.clone(),
+            Arc::new(Resolver),
+            true,
+        )
+        .await;
+        gateway.assert_upgrade(4).await;
+        assert_eq!(settings.snapshot().await["portos"]["endpoint_enabled"], true);
+        assert_installed(home.path(), &mock).await;
+        assert!(!home.path().join("settings/settings.toml").exists());
+        settings.close().await;
+        grant.close().await;
+    })
+    .await;
 }
 
 #[tokio::test(start_paused = true)]
@@ -150,7 +184,7 @@ async fn t3_endpoint_pair_without_a_production_resolver_keeps_settings_and_mcp_a
         let mock = Mock::bind().await.unwrap();
         mock.enable_endpoint_audience().unwrap();
         let mut grant = registered(&mock, home.path()).await;
-        let (owner, _) = settings_owner(home.path(), &mock);
+        let (owner, _) = settings_owner(home.path(), &mock, false);
         let (service, send) = SettingsService::resume(Box::new(owner));
         let settings = Settings::serve(service, send, grant.grant.clone()).await;
         settings.save(true, "Kitchen").await;
@@ -188,14 +222,14 @@ pub(super) async fn assert_rest_audiences(mock: &Mock) {
     for route in ["/plugin-auth-code-exchanges", "/messages"] {
         let response = client
             .post(format!("{}{route}", mock.base))
-            .bearer_auth("access-3")
+            .bearer_auth("access-5")
             .json(&json!({}))
             .send()
             .await
             .unwrap();
         assert_eq!(response.status(), 401);
     }
-    for (token, status) in [("access-3", 200), ("endpoint-access-4", 401)] {
+    for (token, status) in [("access-5", 200), ("endpoint-access-6", 401)] {
         let response = client
             .post(format!("{}/mcp", mock.base))
             .bearer_auth(token)
@@ -204,6 +238,24 @@ pub(super) async fn assert_rest_audiences(mock: &Mock) {
             .unwrap();
         assert_eq!(response.status(), status);
     }
+    let body = mock
+        .state
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .find(|request| request.path == "/plugin-auth-code-exchanges")
+        .and_then(|request| request.json.clone())
+        .unwrap();
+    let duplicate = client
+        .post(format!("{}/plugin-auth-code-exchanges", mock.base))
+        .bearer_auth("endpoint-access-6")
+        .header("Idempotency-Key", echo_mcp_auth::new_request_id().unwrap())
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), 409);
 }
 
 pub(super) async fn assert_wrong_gateway_audience(gateway: &Gateway) {
@@ -213,7 +265,7 @@ pub(super) async fn assert_wrong_gateway_audience(gateway: &Gateway) {
     let mut handshake = address.into_client_request().unwrap();
     handshake
         .headers_mut()
-        .insert("Authorization", "Bearer access-3".parse().unwrap());
+        .insert("Authorization", "Bearer access-5".parse().unwrap());
     let error = tokio_tungstenite::connect_async(handshake).await.unwrap_err();
     assert!(matches!(error, tokio_tungstenite::tungstenite::Error::Http(reply) if reply.status() == 401));
 }

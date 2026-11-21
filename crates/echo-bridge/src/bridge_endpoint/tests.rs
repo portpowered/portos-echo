@@ -163,7 +163,7 @@ struct Settings {
 
 impl Settings {
     async fn open(home: &Path, mock: &Mock, gateway: &Gateway, grant: Arc<Grant>) -> Self {
-        Self::with_resolver(home, mock, gateway, grant, Arc::new(Resolver)).await
+        Self::with_resolver(home, mock, gateway, grant, Arc::new(Resolver), false).await
     }
 
     async fn with_resolver(
@@ -172,8 +172,9 @@ impl Settings {
         gateway: &Gateway,
         grant: Arc<Grant>,
         resolver: Arc<dyn RouteResolver>,
+        base_enabled: bool,
     ) -> Self {
-        let (owner, desired) = settings_owner(home, mock);
+        let (owner, desired) = settings_owner(home, mock, base_enabled);
         let (service, send) = SettingsService::resume(Box::new(owner));
         let runtime = Runtime::new(
             home.into(),
@@ -266,7 +267,7 @@ impl Settings {
     }
 }
 
-fn settings_owner(home: &Path, mock: &Mock) -> (SettingsHost, echo_config::PortosEndpoint) {
+fn settings_owner(home: &Path, mock: &Mock, base_enabled: bool) -> (SettingsHost, echo_config::PortosEndpoint) {
     let mut config = BridgeConfig::from_toml_str(include_str!("../../../../examples/bridge.echo.toml")).unwrap();
     config.home = Some(HomeConfig {
         dir: home.join("settings"),
@@ -275,6 +276,10 @@ fn settings_owner(home: &Path, mock: &Mock) -> (SettingsHost, echo_config::Porto
     config.mcp.scopes = vec!["endpoint:read".into()];
     config.portos_endpoint.api_base = Some(mock.base.replacen("http://", "https://", 1));
     config.portos_endpoint.gateway_url = Some("wss://127.0.0.1:1/devices/{authLinkId}".into());
+    if base_enabled {
+        config.portos_endpoint.enabled = true;
+        config.portos_endpoint.device_name = "Hall Echo".into();
+    }
     config.mcp.server = vec![McpServer {
         name: "portos".into(),
         url: format!("{}/mcp", mock.base),
@@ -318,8 +323,8 @@ async fn t3_endpoint_pair_settings_to_gateway_and_report() {
         gateway.assert_upgrade(4).await;
         assert_eq!(settings.snapshot().await["portos"]["challenge"], Value::Null);
         assert_installed(home.path(), &mock).await;
-        setup_tests::assert_rest_audiences(&mock).await;
         let settings = restart_and_rename(settings, home.path(), &mock, &mut gateway, &mut grant).await;
+        setup_tests::assert_rest_audiences(&mock).await;
         let device_id = read_install(home.path())["deviceId"].clone();
         settings.unlink().await;
         gateway.assert_disconnect().await;
