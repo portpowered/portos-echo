@@ -365,6 +365,11 @@ async fn drive<L: EchoLink>(
             observe(SessionNotice::ReplyCompleted(stats.clone()))?;
         }
         observe(SessionNotice::Completed(stats))?;
+        if super::prompts::changed() {
+            // A prompt written in this run applies from the next wake: end the
+            // call now, so that wake admits a new one instead of reusing it.
+            return Ok(completed);
+        }
         let expires = Instant::now().checked_add(options.idle);
         let next = wait(events, call, expires, &mut options.muted, cancelled.as_mut(), observe).await?;
         let Some(next) = next else {

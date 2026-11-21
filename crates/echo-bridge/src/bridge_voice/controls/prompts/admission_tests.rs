@@ -48,9 +48,14 @@ async fn admissions(
         let mut options = admission_options();
         options.call.time_zone = None;
         let mut server = BufReader::new(server);
+        let mut runs = 2;
         for index in 0..steps {
             let expected = edit(index).await;
-            observer.wake("admit", vec![]);
+            // After a call that ended on a prompt edit, the retained wake it
+            // did not take is the next wake: it admits this call.
+            if runs == 2 {
+                observer.wake("admit", vec![]);
+            }
             let LinkEvent::Wake(run) = events.recv().await.unwrap().unwrap() else {
                 unreachable!()
             };
@@ -75,13 +80,14 @@ async fn admissions(
                 index,
                 home,
             );
-            let result = tokio::try_join!(work, async {
-                remote.await;
-                Ok::<_, Error>(())
-            });
-            assert_eq!(result, Ok(((), ())));
+            let result = tokio::try_join!(work, async { Ok::<_, Error>(remote.await) });
+            // A run that edits a prompt ends its call; otherwise a wake reuses it.
+            let Ok(((), done)) = result else {
+                unreachable!("{result:?}")
+            };
+            runs = done;
             drop(observe);
-            assert_eq!(completed, 2);
+            assert_eq!(completed, runs);
         }
         Ok(())
     })
@@ -96,6 +102,8 @@ fn check_prompt_trace(path: &std::path::Path) {
         .map(|line| serde_json::from_str(line).unwrap())
         .filter(|row: &serde_json::Value| row["event"].as_str().unwrap().starts_with("prompt."))
         .collect();
+    let (applied, rows): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| row["event"] == "prompt.applied");
+    check_applied(&applied);
     assert_eq!(
         rows.iter()
             .map(|row| (row["event"].as_str().unwrap(), row["prompt"].as_str().unwrap()))
@@ -109,6 +117,36 @@ fn check_prompt_trace(path: &std::path::Path) {
     );
     assert_eq!(rows[0]["reason"], "empty");
     assert_eq!(rows[1]["reason"], "oversized");
+}
+
+/// Each admission names both prompts' admitted digest and whether it changed:
+/// the edit during the first call, applied by the second call over it, the
+/// refused third edit (kept), then deletion (the built-in default).
+fn check_applied(applied: &[serde_json::Value]) {
+    let digest = prompts::digest;
+    let expected: Vec<_> = [
+        ("runner one\n\u{8a9e} \n", "voice one\n", false),
+        ("runner two", "voice two", true),
+        ("runner two", "voice two", false),
+        (echo_config::RUNNER_INSTRUCTIONS, echo_config::LIVE_INSTRUCTIONS, true),
+    ]
+    .into_iter()
+    .flat_map(|(runner, voice, changed)| {
+        [("runner", runner), ("voice", voice)].map(|(kind, text)| {
+            serde_json::json!({"event":"prompt.applied","provider_auth_mode":"api_key",
+                "prompt":kind,"digest":digest(text),"changed":changed})
+        })
+    })
+    .collect();
+    let applied: Vec<_> = applied
+        .iter()
+        .cloned()
+        .map(|mut row| {
+            row.as_object_mut().unwrap().remove("elapsed_ms");
+            row
+        })
+        .collect();
+    assert_eq!(applied, expected);
 }
 
 fn edit(dir: &std::path::Path, index: usize) -> (&'static str, &'static str) {
@@ -139,8 +177,9 @@ async fn prompt_remote(
     expected: (&str, &str),
     index: usize,
     home: Option<&std::path::Path>,
-) {
+) -> usize {
     let thread = format!("thread-{index}");
+    let mut runs = 2;
     for method in ["thread/start", "thread/realtime/start", "thread/realtime/stop"] {
         let mut line = String::new();
         server.read_line(&mut line).await.unwrap();
@@ -150,10 +189,11 @@ async fn prompt_remote(
         let response = serde_json::json!({"id":request["id"],"result":result});
         send(server, &response).await;
         if method == "thread/realtime/start" {
-            edit_retained(home, index);
-            replies(server, observer, started, &thread).await;
+            runs = if edit_retained(home, index) { 1 } else { 2 };
+            replies(server, observer, started, &thread, runs).await;
         }
     }
+    runs
 }
 
 async fn prompt_result(
@@ -185,7 +225,9 @@ async fn prompt_result(
     }
 }
 
-fn edit_retained(home: Option<&std::path::Path>, index: usize) {
+/// An edit during the call's first run. The call ends after that run, so the
+/// edit is admitted by the next call: there is no second wake on this one.
+fn edit_retained(home: Option<&std::path::Path>, index: usize) -> bool {
     if index == 0
         && let Some(home) = home
         && home.join("prompts/edit-during-retained").exists()
@@ -193,7 +235,9 @@ fn edit_retained(home: Option<&std::path::Path>, index: usize) {
         for kind in ["voice", "runner"] {
             std::fs::write(home.join(format!("prompts/{kind}.md")), "edited during retained call").unwrap();
         }
+        return true;
     }
+    false
 }
 
 async fn send(server: &mut BufReader<tokio::io::DuplexStream>, value: &serde_json::Value) {
@@ -209,10 +253,11 @@ async fn replies(
     observer: &Observer,
     started: &tokio::sync::Notify,
     thread: &str,
+    runs: usize,
 ) {
     let stops = || observer.commands().iter().filter(|cmd| **cmd == Command::Stop).count();
     let initial = stops();
-    for count in 1..=2 {
+    for count in 1..=runs {
         if count == 2 {
             ack_retained_context(server, thread).await;
         }
@@ -310,6 +355,8 @@ async fn t3_agent_home_independent_edits_boundaries_atomic_replace_and_recovery(
             .map(|line| serde_json::from_str(line).unwrap())
             .filter(|row: &serde_json::Value| row["event"].as_str().unwrap().starts_with("prompt."))
             .collect();
+        let (applied, rows): (Vec<_>, Vec<_>) = rows.into_iter().partition(|row| row["event"] == "prompt.applied");
+        assert_eq!(applied.len(), 20);
         assert_eq!(rows.len(), 6);
         assert_eq!(rows.iter().filter(|row| row["event"] == "prompt.defaulted").count(), 2);
         let refused: Vec<_> = rows

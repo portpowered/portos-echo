@@ -101,20 +101,65 @@ impl Prompt {
     }
 
     fn reload(&mut self, dir: &Path, trace: &mut Trace) -> Result<(), Error> {
-        match read(&dir.join(format!("{}.md", self.kind))) {
+        let changed = match read(&dir.join(format!("{}.md", self.kind))) {
             Ok(text) => {
                 self.missing = text.is_none();
-                self.text = text.unwrap_or_else(|| Self::default_text(self.kind).into());
+                let text = text.unwrap_or_else(|| Self::default_text(self.kind).into());
+                let changed = text != self.text;
+                self.text = text;
                 self.publish(trace)?;
+                changed
             }
-            Err(reason) => trace.record(
-                "prompt.reload_refused",
-                None,
-                serde_json::json!({"prompt": self.kind, "reason": reason}),
-            )?,
-        }
-        Ok(())
+            Err(reason) => {
+                trace.record(
+                    "prompt.reload_refused",
+                    None,
+                    serde_json::json!({"prompt": self.kind, "reason": reason}),
+                )?;
+                false
+            }
+        };
+        // Only a short digest of the admitted text: never its bytes or path.
+        trace.record(
+            "prompt.applied",
+            None,
+            serde_json::json!({"prompt": self.kind, "digest": digest(&self.text), "changed": changed}),
+        )
     }
+
+    /// A valid file that differs from this call's admitted text. A refused edit
+    /// is not a change, since the next admission would keep the admitted text.
+    fn stale(&self, dir: &Path) -> bool {
+        read(&dir.join(format!("{}.md", self.kind)))
+            .is_ok_and(|text| text.as_deref().unwrap_or(Self::default_text(self.kind)) != self.text)
+    }
+}
+
+/// The first 8 hex digits of the text's SHA-256: `sha256sum` of the file agrees.
+pub(crate) fn digest(text: &str) -> String {
+    use sha2::Digest;
+    use std::fmt::Write;
+    let mut hex = String::with_capacity(8);
+    for byte in sha2::Sha256::digest(text.as_bytes()).iter().take(4) {
+        // Writing to a String cannot fail.
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// True once either prompt file holds valid text that the open call did not
+/// admit, such as a `prompt_write` during this run. The call then ends after
+/// its run, so the next wake admits a new call with the new prompts. Codex's
+/// app server offers no way to replace a live call's or a thread's instructions.
+pub(crate) fn changed() -> bool {
+    CURRENT
+        .try_with(|current| {
+            current
+                .borrow()
+                .as_ref()
+                .is_some_and(|prompts| prompts.runner.stale(&prompts.dir) || prompts.voice.stale(&prompts.dir))
+        })
+        .unwrap_or(false)
 }
 
 /// The settings snapshot starts from the runtime's accepted cache, never a

@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 20
+last modified: 2026, november, 21
 status: active; the program plan. It wins over the drafts in docs/design/
 ---
 
@@ -148,7 +148,9 @@ Consequences:
   running delegated turn), or at the `voice.session_max_seconds` ceiling for delegated waiting and listening granted
   by `extend_session`. Only the automatic ends wait for a running delegated turn.
   Active speech and playback retain their own completion rules (`docs/program/decisions.md`).
-  The Live call stays open for `session_idle_seconds`, so the next wake word continues the same conversation.
+  The Live call stays open for `session_idle_seconds`, so the next wake word continues the same conversation,
+  unless a prompt changed during the run: then the call ends with the run and the next wake admits a new call
+  with the new prompts (`docs/program/decisions.md`, 2026-11-21).
 
 ### 3.1 Spikes (W1)
 

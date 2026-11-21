@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 20
+last modified: 2026, november, 21
 status: current main overview; W4 deployment and in-progress changes are labelled
 ---
 
@@ -549,6 +549,10 @@ Files must be nonblank UTF-8 and at most 32768 bytes. Empty, oversized, invalid 
 nonregular files fail startup before credentials, child or device admission, with the logical filename
 in the error. An invalid edit on reload emits `prompt.reload_refused` with a fixed kind/reason and keeps
 that kind's previous accepted text; the other prompt can still reload. Deletion selects the default.
+Each call admission records `prompt.applied` per kind with `digest`, the first 8 hex digits of the
+admitted text's SHA-256 (`sha256sum` of the file agrees), and `changed` against the previous admission.
+When a run ends and a prompt file holds valid text its call did not admit, the call ends with the run,
+so the next wake admits the new prompts instead of reusing the call; a refused edit does not end it.
 Prompt text and full paths never enter these trace records. The bridge never writes prompt files.
 `<home>/settings.toml` is reserved for the screen-settings lane; prompt loading never reads or writes it.
 
