@@ -281,6 +281,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
             diagnostic.textContent = "Screen update could not be read";
         }
     };
+    stream.onopen = () => presentation.reopened();
     stream.onerror = () => {
         if (disposed) return;
         diagnostic.textContent = "Screen connection interrupted";
