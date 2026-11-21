@@ -266,10 +266,13 @@ async fn observe_timeout(gateway: &Gateway, mock: &Mock, app: &mut Peer) -> Stri
     assert_eq!(app.event("cancel").await, json!({"captureId":stale}));
     assert_reply(mock, "native-timeout", "TIMEOUT").await;
     let jpeg = STANDARD.decode(JPEG).unwrap();
+    let sampled_at = sampled_at_ms();
     assert_eq!(
-        app.result(stale, jpeg, sampled_at_ms(), true).await,
-        StatusCode::CONFLICT
+        app.result(stale, jpeg.clone(), sampled_at, false).await,
+        StatusCode::UNAUTHORIZED
     );
+    assert_eq!(app.result(stale, jpeg, sampled_at, true).await, StatusCode::CONFLICT);
+    assert_eq!(receipt_attempts(mock, "native-timeout").len(), 1);
     stale.into()
 }
 

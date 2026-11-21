@@ -1,7 +1,7 @@
 use echo_contracts::endpoint::MAX_SNAPSHOT_BYTES as MAX_JPEG_BYTES;
 use std::{
     sync::{Arc, Mutex},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 use tokio::{
     sync::{OwnedMutexGuard, mpsc, oneshot, watch},
@@ -10,6 +10,8 @@ use tokio::{
 
 pub(crate) mod http;
 mod wire;
+
+const STALE_UPLOAD_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct Sample {
     pub jpeg: Vec<u8>,
@@ -39,6 +41,7 @@ struct Pending {
 }
 
 struct Upload {
+    live: bool,
     deadline: Instant,
     retired: watch::Receiver<()>,
     _slot: OwnedMutexGuard<()>,
@@ -49,6 +52,8 @@ struct Session {
     generation: Arc<()>,
     events: mpsc::Sender<Event>,
     pending: Option<Pending>,
+    retired: watch::Sender<()>,
+    stale_upload: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub(super) enum Event {
@@ -141,6 +146,8 @@ impl Camera {
             generation: generation.clone(),
             events,
             pending: None,
+            retired: watch::channel(()).0,
+            stale_upload: Arc::default(),
         });
         Some((
             Connection {
@@ -160,12 +167,22 @@ impl Camera {
 
     fn upload(&self, nonce: &str, id: &str) -> Option<Upload> {
         let lock = self.session.lock().ok()?;
-        let session = lock.as_ref().filter(|session| session.owns(nonce, id))?;
-        let pending = session.pending.as_ref()?;
+        let session = lock.as_ref().filter(|session| session.attached(nonce))?;
+        let pending = session.pending.as_ref().filter(|_| session.owns(nonce, id));
+        // Stale results still require body authentication. Their reads cannot occupy a live slot.
+        let (deadline, retired, slot) = match pending {
+            Some(pending) => (pending.deadline, &pending.retired, &pending.upload),
+            None => (
+                Instant::now() + STALE_UPLOAD_TIMEOUT,
+                &session.retired,
+                &session.stale_upload,
+            ),
+        };
         Some(Upload {
-            deadline: pending.deadline,
-            retired: pending.retired.subscribe(),
-            _slot: pending.upload.clone().try_lock_owned().ok()?,
+            live: pending.is_some(),
+            deadline,
+            retired: retired.subscribe(),
+            _slot: slot.clone().try_lock_owned().ok()?,
         })
     }
 
@@ -180,17 +197,19 @@ impl Camera {
     }
 
     fn authorized_nonce(&self, nonce: &str) -> bool {
-        self.session.lock().is_ok_and(|lock| {
-            lock.as_ref()
-                .is_some_and(|session| session.nonce == nonce && !session.events.is_closed())
-        })
+        self.session
+            .lock()
+            .is_ok_and(|lock| lock.as_ref().is_some_and(|session| session.attached(nonce)))
     }
 }
 
 impl Session {
+    fn attached(&self, nonce: &str) -> bool {
+        self.nonce == nonce && !self.events.is_closed()
+    }
+
     fn owns(&self, nonce: &str, id: &str) -> bool {
-        self.nonce == nonce
-            && !self.events.is_closed()
+        self.attached(nonce)
             && self.pending.as_ref().is_some_and(|pending| {
                 pending.id == id && !pending.result.is_closed() && Instant::now() < pending.deadline
             })

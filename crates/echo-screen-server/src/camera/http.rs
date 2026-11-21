@@ -109,6 +109,9 @@ pub(crate) async fn result(
     if !metadata.verify(key, &nonce, &proof, &id, &bytes) {
         return Err(StatusCode::UNAUTHORIZED);
     }
+    if !upload.live {
+        return Err(StatusCode::CONFLICT);
+    }
     let result = metadata.result(bytes).ok_or(StatusCode::BAD_REQUEST)?;
     if !camera.accept(&nonce, &id, result) {
         return Err(StatusCode::CONFLICT);
