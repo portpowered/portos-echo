@@ -58,7 +58,7 @@ impl Gateway {
     async fn open() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let template = format!(
-            "ws://127.0.0.1:{}/devices/{{authLinkId}}",
+            "ws://127.0.0.1:{}/devices/{{authLinkId}}", // lint-rules: allow-literal port interpolated from the loopback listener
             listener.local_addr().unwrap().port()
         );
         let (events, received) = mpsc::channel(8);
@@ -218,7 +218,7 @@ impl Settings {
         .await
         .unwrap();
         let actions = format!(
-            "http://127.0.0.1:{}/settings/v2?token={SETTINGS_TOKEN}",
+            "http://127.0.0.1:{}/settings/v2?token={SETTINGS_TOKEN}", // lint-rules: allow-literal port interpolated from the loopback Settings listener
             server.bound_addr.port()
         );
         Self {

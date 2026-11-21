@@ -115,6 +115,7 @@ fn reject(command: Option<Command>) -> bool {
         }
         Some(
             Command::Register(_, reply)
+            | Command::RemoteCapture(_, _, reply)
             | Command::EndRun(reply)
             | Command::Pause(reply)
             | Command::Thinking(_, reply)
