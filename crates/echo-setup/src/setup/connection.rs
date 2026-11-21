@@ -191,6 +191,9 @@ struct Screen {
     // The bridge owns optional screen packs. Setup only needs the local listener and pairing path.
     #[serde(rename = "packs", default)]
     _packs: serde::de::IgnoredAny,
+    // Lip-sync timing is the bridge's too.
+    #[serde(rename = "mouth_delay_ms", default)]
+    _mouth_delay_ms: serde::de::IgnoredAny,
 }
 
 fn default_listen() -> std::net::SocketAddr {

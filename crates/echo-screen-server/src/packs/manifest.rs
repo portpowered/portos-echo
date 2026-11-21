@@ -73,6 +73,22 @@ pub(super) struct Character {
     states: BTreeMap<String, StateClip>,
     #[serde(default)]
     emotes: BTreeMap<String, Clip>,
+    mouth: Option<Mouth>,
+}
+
+/// Stills of the whole character, one per mouth shape, shown over the
+/// speaking pose in time with the voice. The vowel shapes are optional.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Mouth {
+    closed: String,
+    half: String,
+    open: String,
+    a: Option<String>,
+    i: Option<String>,
+    u: Option<String>,
+    e: Option<String>,
+    o: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -245,6 +261,15 @@ impl Character {
             }
             clip.validate(files)?;
         }
+        if let Some(mouth) = &self.mouth {
+            let vowels = [&mouth.a, &mouth.i, &mouth.u, &mouth.e, &mouth.o];
+            for path in [&mouth.closed, &mouth.half, &mouth.open]
+                .into_iter()
+                .chain(vowels.into_iter().flatten())
+            {
+                file(files, path, &["png", "webp"])?;
+            }
+        }
         Ok(())
     }
 }
@@ -261,5 +286,48 @@ impl Clip {
             file(files, path, &["mp4"])?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn parsed(mouth: &Value) -> Result<(), Error> {
+        let pack = json!({"format":1,"name":"template","version":"0.1.0",
+            "character":{"rest":"rest.png","mouth":mouth}});
+        let files = Files::from([
+            ("pack.json".into(), serde_json::to_vec(&pack).unwrap()),
+            ("rest.png".into(), vec![1]),
+            ("mouth/half.webp".into(), vec![2]),
+            ("idle.webm".into(), vec![3]),
+        ]);
+        parse(&files).map(|_| ())
+    }
+
+    #[test]
+    fn pack_manifest_mouth_set_needs_its_three_stills_and_takes_any_vowels() {
+        let stills = json!({"closed":"rest.png","half":"mouth/half.webp","open":"rest.png"});
+        assert_eq!(parsed(&stills), Ok(()));
+        let mut vowels = stills.clone();
+        vowels["a"] = "mouth/half.webp".into();
+        vowels["o"] = "rest.png".into();
+        assert_eq!(parsed(&vowels), Ok(()));
+        for (field, value, error) in [
+            ("open", Value::Null, Error::Manifest),
+            ("open", json!(["rest.png"]), Error::Manifest),
+            ("y", "rest.png".into(), Error::Manifest),
+            ("half", "absent.png".into(), Error::Reference),
+            ("u", "../rest.png".into(), Error::Path),
+            ("e", "idle.webm".into(), Error::Reference),
+        ] {
+            let mut mouth = stills.clone();
+            mouth[field] = value;
+            assert_eq!(parsed(&mouth), Err(error), "{field}");
+        }
+        let mut partial = stills;
+        partial.as_object_mut().unwrap().remove("closed");
+        assert_eq!(parsed(&partial), Err(Error::Manifest));
     }
 }

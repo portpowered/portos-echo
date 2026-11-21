@@ -154,7 +154,7 @@ jobs:
           path: |
             dist/echo-*-armv7.tar.gz
             dist/default-*.screenpack.tar.gz
-            dist/companion-0.2.1.screenpack.tar.gz
+            dist/companion-0.2.2.screenpack.tar.gz
             dist/echo-setup-*-linux-x86_64
             dist/echo-setup-*-windows-x86_64.exe
             dist/install.sh

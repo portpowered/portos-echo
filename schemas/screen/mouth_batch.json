@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MouthBatch",
+  "description": "Consecutive samples, sent ahead of the audio they describe. The sender's\nclock is monotonic with an arbitrary start: `sent_ms` is its reading when\nthe batch left, so a receiver learns the offset to its own clock.",
+  "type": "object",
+  "properties": {
+    "samples": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MouthSample"
+      }
+    },
+    "sent_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "sent_ms",
+    "samples"
+  ],
+  "$defs": {
+    "MouthSample": {
+      "description": "The mouth at one instant of reply audio.",
+      "type": "object",
+      "properties": {
+        "at_ms": {
+          "description": "When the audio is heard, in milliseconds on the sender's clock.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "open": {
+          "description": "How far the mouth is open: 0 is closed, 100 fully open.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "vowel": {
+          "$ref": "#/$defs/MouthVowel"
+        }
+      },
+      "required": [
+        "at_ms",
+        "open",
+        "vowel"
+      ]
+    },
+    "MouthVowel": {
+      "description": "The vowel a mouth shapes, or `none` when no vowel is clear.",
+      "type": "string",
+      "enum": [
+        "none",
+        "a",
+        "i",
+        "u",
+        "e",
+        "o"
+      ]
+    }
+  }
+}

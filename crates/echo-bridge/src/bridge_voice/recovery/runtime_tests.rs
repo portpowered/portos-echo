@@ -150,6 +150,7 @@ async fn screen(directory: &Path) -> Screen {
         listen: "127.0.0.1:0".parse().unwrap(),
         pairing_token_file: token,
         packs: Vec::new(),
+        mouth_delay_ms: 200,
     }))
     .await
     .unwrap()

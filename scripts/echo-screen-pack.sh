@@ -151,7 +151,7 @@ def clip(value, files):
 
 
 def character(value, files):
-    fields(value, ('rest',), ('states', 'emotes'))
+    fields(value, ('rest',), ('states', 'emotes', 'mouth'))
     reference(files, value['rest'], ('png', 'webp'))
     states = value.get('states', {})
     fields(states, (), ('idle', 'connecting', 'listening', 'thinking', 'speaking',
@@ -165,6 +165,10 @@ def character(value, files):
     for name, item in emotes.items():
         check(1 <= len(name) <= 128)
         clip(item, files)
+    if 'mouth' in value:
+        fields(value['mouth'], ('closed', 'half', 'open'), ('a', 'i', 'u', 'e', 'o'))
+        for still in value['mouth'].values():
+            reference(files, still, ('png', 'webp'))
 
 
 def css_declaration(key, value, files):

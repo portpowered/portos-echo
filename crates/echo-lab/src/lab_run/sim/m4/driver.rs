@@ -89,6 +89,7 @@ impl<'a> M4<'a> {
         self.world.trace = journey.trace;
         self.world.speaking = journey.speaking;
         self.world.ui_states = journey.ui_states;
+        self.world.mouth = journey.mouth;
         self.world.reply_pcm_bytes = journey.timing.played;
         self.world.playback = journey.playback;
         self.samples.push(journey.timing.sample()?);
@@ -112,8 +113,9 @@ impl<'a> M4<'a> {
 
     fn record_audio(&self, artifacts: &mut Artifacts, case: &str, timing: &wire::Timing) -> Result<(), String> {
         let host = self.world.playback.as_ref().ok_or("m4: missing host playback")?;
+        let lips = super::screen::lips::measurement(&self.world.trace.records, &self.world.mouth)?;
         let audio = json!({"case":case,"run_id":self.run,
-            "audibility":timing.audible_reply(host)?,"ui_states":self.world.ui_states});
+            "audibility":timing.audible_reply(host)?,"ui_states":self.world.ui_states,"lips":lips});
         let milestone = if self.emotion { "m6" } else { "m4" };
         let name = format!("{milestone}-{case}-audible.json");
         std::fs::write(artifacts.root.join(&name), audio.to_string())

@@ -1,12 +1,14 @@
 import type { UiState } from "../model";
 import { decodePacks, packRequest, packUrl } from "../settings/packs-api";
-import { Player, type Character } from "./player";
+import { decodeMouth } from "../decoder";
+import { Player, stateName, type Character } from "./player";
+import { Lips, mouthStills, type MouthSet } from "./mouth";
 import { mediaStage } from "./media";
 import { applyLayout, type Layout } from "./layout";
 
 interface Manifest {
     format: 1;
-    character?: Character;
+    character?: Character & { mouth?: MouthSet };
     layout?: Layout;
 }
 
@@ -20,6 +22,7 @@ export function mountPacks(
     let pending: AbortController | undefined;
     let cleanup: (() => void) | undefined;
     let player: Player | undefined;
+    let lips: Lips | undefined;
     let layout: ReturnType<typeof applyLayout> | undefined;
     let state: UiState = { state: "ready", message: "" };
     let revision = -1;
@@ -30,6 +33,8 @@ export function mountPacks(
         cleanup?.();
         cleanup = undefined;
         player = undefined;
+        lips?.stop();
+        lips = undefined;
         layout = undefined;
         host.classList.remove("screen-pack");
         return changed;
@@ -95,6 +100,12 @@ export function mountPacks(
                 still.src = asset(manifest.character.rest);
                 await still.decode();
             }
+            // A mouth set that cannot be drawn leaves the speaking clip.
+            const mouth = manifest.character?.mouth
+                ? await mouthStills(manifest.character.mouth, asset).catch(
+                      () => undefined,
+                  )
+                : undefined;
             if (controller.signal.aborted || stopped) return;
             clear();
             host.classList.add("screen-pack");
@@ -131,6 +142,11 @@ export function mountPacks(
                 player = new Player(manifest.character, (value) =>
                     ownedMedia.show(value),
                 );
+                const stage = host.querySelector<HTMLElement>(".pack-stage");
+                if (mouth && stage) {
+                    mouth.attach(stage);
+                    lips = new Lips(mouth.has, mouth.show);
+                }
                 layout.stage();
             }
             redraw();
@@ -155,6 +171,13 @@ export function mountPacks(
             /* A malformed named event never mutates the ordinary frame. */
         }
     };
+    const mouthed = (event: MessageEvent) => {
+        try {
+            lips?.receive(decodeMouth(event.data));
+        } catch {
+            /* A malformed batch moves nothing. */
+        }
+    };
     const opened = () => {
         if (!openedOnce) {
             openedOnce = true;
@@ -169,17 +192,18 @@ export function mountPacks(
     });
     visibility.observe(host, { attributes: true, attributeFilter: ["hidden"] });
     stream.addEventListener("screen-pack-reload", changed as EventListener);
+    stream.addEventListener("mouth", mouthed as EventListener);
     stream.addEventListener("open", opened);
     void reload();
     return {
         update(next: UiState): boolean {
             state = next;
             layout?.render(state.state);
-            const handled =
-                player?.update(
-                    state,
-                    matchMedia("(prefers-reduced-motion: reduce)").matches,
-                ) ?? false;
+            const reduced = matchMedia(
+                "(prefers-reduced-motion: reduce)",
+            ).matches;
+            const handled = player?.update(state, reduced) ?? false;
+            lips?.state(reduced ? "" : stateName(state));
             const stage = host.querySelector<HTMLElement>(".pack-stage");
             if (stage) stage.hidden = state.state === "emotion" && !handled;
             return handled;
@@ -193,6 +217,7 @@ export function mountPacks(
                 "screen-pack-reload",
                 changed as EventListener,
             );
+            stream.removeEventListener("mouth", mouthed as EventListener);
             stream.removeEventListener("open", opened);
         },
     };

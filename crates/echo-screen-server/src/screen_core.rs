@@ -29,7 +29,12 @@ pub(crate) struct Client {
 struct Writer {
     frames: mpsc::Sender<Publication>,
     cancel: watch::Sender<bool>,
+    /// The client asked for lip-sync batches on this stream.
+    mouth: bool,
 }
+
+/// Queue slots a lip-sync batch never takes: screen frames keep them.
+const MOUTH_RESERVE: usize = 24;
 
 #[derive(PartialEq, Eq)]
 pub(crate) enum PackObservation {
@@ -96,7 +101,12 @@ impl Core {
         }
     }
 
+    #[cfg(test)]
     pub fn attach(&mut self, cancel: watch::Sender<bool>) -> Option<Client> {
+        self.attach_with(cancel, false)
+    }
+
+    pub fn attach_with(&mut self, cancel: watch::Sender<bool>, mouth: bool) -> Option<Client> {
         if self.draining {
             return None;
         }
@@ -112,7 +122,11 @@ impl Core {
                 data: current.clone(),
             });
         }
-        self.clients.push(Writer { frames: tx, cancel });
+        self.clients.push(Writer {
+            frames: tx,
+            cancel,
+            mouth,
+        });
         Some(Client { frames, cancelled })
     }
 
@@ -142,6 +156,36 @@ impl Core {
             data: serde_json::json!({"version":1,"revision":self.pack_revision,"active":active}).to_string(),
         });
         true
+    }
+
+    /// Some open stream asked for lip sync.
+    pub fn mouth_wanted(&self) -> bool {
+        self.accepting()
+            && self
+                .clients
+                .iter()
+                .any(|client| client.mouth && !client.frames.is_closed())
+    }
+
+    /// Offer one lip-sync batch to the streams that asked for it. It is worth
+    /// nothing late: a stream with a backlog misses the batch and stays open,
+    /// and the batch never takes a slot a screen frame may need. Returns the
+    /// streams that took it. The frame sequence and snapshot are untouched.
+    pub fn mouth(&mut self, data: &str) -> usize {
+        if !self.accepting() {
+            return 0;
+        }
+        let wanted = self.clients.iter().filter(|client| client.mouth);
+        wanted
+            .filter(|client| client.frames.capacity() > MOUTH_RESERVE)
+            .filter(|client| {
+                let publication = Publication {
+                    name: Some("mouth"),
+                    data: data.into(),
+                };
+                client.frames.try_send(publication).is_ok()
+            })
+            .count()
     }
 
     fn broadcast(&mut self, publication: &Publication) {

@@ -18,7 +18,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*)?"
-COMPANION_VERSION = "0.2.1"
+COMPANION_VERSION = "0.2.2"
 COMPANION_ASSET = f"companion-{COMPANION_VERSION}.screenpack.tar.gz"
 REQUIRED = {
     "bin/echo-bridge", "bin/codex-app-server", "bin/cacert.pem", "apk/echo-screen.apk",

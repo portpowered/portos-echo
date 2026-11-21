@@ -113,6 +113,16 @@ All references must resolve to normalized relative files in the same pack.
 Future `wake`, `dnd`, `timer` and `call` states validate but have no contract state
 yet. Emote names have 1–128 characters.
 
+A character may carry a `mouth` set for [lip sync](#lip-sync): PNG/WebP stills
+`closed`, `half` and `open`, all three required, and any of the optional vowel
+stills `a`, `i`, `u`, `e`, `o`. Each still is the whole character at the size of
+the clips, with only the mouth different. Unknown keys are refused. A pack
+without a `mouth` set is unchanged.
+
+```json
+"mouth": {"closed": "rest.png", "half": "mouth-half.png", "open": "mouth-open.png", "a": "mouth-a.png"}
+```
+
 Layouts require a percent viewport `safe_area` (`x`, `y`, `width`, `height`),
 `slots` (optional `clock`, `date`, `status`, `link_code`, `approval`, `error`) and
 `stage` (`anchor: {x,y}`, positive `scale` up to 2, `background: #RRGGBB`).
@@ -307,6 +317,56 @@ place: Speaking starts 100 ms after it arrives, and the mouth keeps moving
 through gaps shorter than 500 ms; a longer silence closes it once. Listening,
 Error, Approval, Muted and setup end Speaking at once.
 
+## Lip sync
+
+A pack with a `mouth` set moves its mouth with the voice instead of playing a
+fixed speaking loop. A pack without one keeps its speaking clip and ignores the
+samples.
+
+The bridge measures each 20 ms frame of reply audio as it hands the frame to the
+Echo: an openness from 0 to 100 (loudness over a noise floor, opening fast and
+closing slower) and a vowel (`a`, `i`, `u`, `e`, `o` or `none`) from the two
+strongest resonances of the frame. It is plain arithmetic on the PCM the bridge
+already holds: no model, no extra dependency.
+
+Each sample is stamped with the time its sound will be heard: the frame's place
+in the Echo's queue plus `[screen] mouth_delay_ms` (200 ms by default, at most
+1000), the time the Echo takes to play audio it was given. Samples leave in small
+batches, at most five (100 ms), as a named `mouth` event on `/events`:
+
+```text
+event: mouth
+data: {"sent_ms":1180,"samples":[{"at_ms":1300,"open":70,"vowel":"a"}]}
+
+```
+
+Both times are milliseconds on the bridge's monotonic clock. The page learns the
+difference between that clock and its own from the quickest batch it has seen,
+and shows each sample when its `at_ms` comes, not when it arrives. The schema is
+[`mouth_batch.json`](../schemas/screen/mouth_batch.json).
+
+Only a stream opened with `mouth=1` in its query gets these events; the page asks
+for them when the screen server has pack hosting. They never consume
+`ScreenFrame.seq` and are never replayed on reconnect. Sending never waits: a
+batch goes only to a client with most of its queue free, a busy screen server or
+a slow page loses the batch, and audio delivery is not delayed either way. While
+no stream has asked, the bridge analyses nothing.
+
+The page decodes every mouth still before the pack shows. While the pack is
+speaking, the still for the sample due now covers the speaking clip: under 10
+the `closed` still; a vowel still when the sample names a vowel the pack has and
+openness is at least 30; otherwise `half`, or `open` from 55. With no sample for
+150 ms the mouth shuts. A pause between words keeps the shut mouth for as long as
+the speaking clip is held (500 ms), then the pack's own clip shows again; any
+other state shows it at once. Reduced motion shows no mouth stills.
+
+Tune `mouth_delay_ms` on the device: raise it when the mouth moves before the
+voice, lower it when the mouth trails. Each reply's `reply.quality` trace record
+carries `lips`: `batches`, `samples`, `dropped` (batches no page took),
+`publish_max_ms` (the longest a sample waited from hand-off to being sent),
+`lead_min_ms` (the least time a sample was sent ahead of its sound) and `late`
+(samples sent at or after their sound).
+
 The page never shows a state name or the Ready message over a pack's face; only
 the link code, approval and error cards keep their heading. A known emote is
 dismissed by a tap anywhere, with no visible button.
@@ -392,8 +452,11 @@ release downloads in tests.
 
 ## Companion pack
 
-Companion 0.2.1 is an optional cel-shaded character with poses for Echo's screen
+Companion 0.2.2 is an optional cel-shaded character with poses for Echo's screen
 states and a happy emote. In Listening, she cups an ear with her mouth closed.
+Her `mouth` set drives [lip sync](#lip-sync): the neutral frame is the closed
+mouth, `mouth-half.png` and `mouth-open.png` the other two, and each vowel
+drawing under `scripts/packs/companion/art/` is published when it exists.
 The clock and date share a centre line below the character. Codex image generation
 produced an original reference sheet and edited it into the poses. The checked-in PNGs and their
 [generation prompts](../scripts/packs/companion/prompts.md) are the source for
@@ -403,15 +466,15 @@ On Linux with Python 3 and ffmpeg (libvpx-vp9 and libx264 enabled):
 
 ```sh
 pack_root=$(mktemp -d)
-sh scripts/make-companion-screenpack.sh --version 0.2.1 --out "$pack_root/generated"
+sh scripts/make-companion-screenpack.sh --version 0.2.2 --out "$pack_root/generated"
 cd "$pack_root/generated"
-sha256sum --check companion-0.2.1.screenpack.tar.gz.sha256
+sha256sum --check companion-0.2.2.screenpack.tar.gz.sha256
 ```
 
 For a released build, use the HTTPS URL for
-`companion-0.2.1.screenpack.tar.gz` and that file's digest from the same
+`companion-0.2.2.screenpack.tar.gz` and that file's digest from the same
 release's `SHA256SUMS`. Enter both in **Settings > Load screen packs**. After
-installation, select **companion 0.2.1**, choose **Use screen pack**, then
+installation, select **companion 0.2.2**, choose **Use screen pack**, then
 choose **Back** to see the new appearance. The release example pins the release's
 default pack. To roll back, select the installed default pack or **Disable screen packs**,
 save with **Use screen pack**, and choose **Back**.

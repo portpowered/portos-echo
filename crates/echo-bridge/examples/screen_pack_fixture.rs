@@ -95,6 +95,12 @@ async fn drive(server: &mut ScreenServer, states: mpsc::Sender<UiState>, input: 
                 let Some(line) = line? else { return Err("unexpected eof".into()); };
                 let command: Value = serde_json::from_str(&line)?;
                 if command["stop"] == true { return Ok(()); }
+                if let Some(batch) = command.get("mouth") {
+                    // A lip-sync batch, as the bridge offers one: how many streams took it.
+                    let taken = server.mouth().send(&serde_json::from_value(batch.clone())?);
+                    emit(&json!({"mouth":taken}))?;
+                    continue;
+                }
                 states.send(serde_json::from_value(command["state"].clone())?).await?;
                 emit(&json!({"sent":true}))?;
             }

@@ -10,7 +10,12 @@ use crate::bridge_settings::{
     SettingsCompletion, SettingsHost, SettingsService, openai_account::Account, portos_permissions::PortosPermissions,
     settings_restart::replacement_pending,
 };
-use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
+use crate::{
+    Error,
+    bridge_health::Health,
+    bridge_runtime::{bridge_pacing::reply_lips, bridge_screen::Screen},
+    bridge_trace::Trace,
+};
 use echo_config::{LiveMode, ScreenConfig};
 use echo_link::LinkConnector;
 use echo_media::MediaPeer;
@@ -243,8 +248,10 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
         service.as_ref().map(SettingsService::muse_access),
         account.clone(),
     );
-    let work = Box::pin(work(
-        options, connector, &mut peer, cancelled, &mut view, &requested, &link,
+    let lips = screen.lips(options.screen);
+    let work = Box::pin(reply_lips::scope(
+        lips,
+        work(options, connector, &mut peer, cancelled, &mut view, &requested, &link),
     ));
     let (result, settings) = if let Some((service, account)) = service.zip(account) {
         let (result, completion) = Box::pin(

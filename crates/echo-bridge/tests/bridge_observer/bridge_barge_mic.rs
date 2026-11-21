@@ -231,7 +231,7 @@ async fn barge_in_is_the_sessions_call_and_silences_the_reply_within_its_lead() 
     let onset = room.onset.lock().unwrap().unwrap();
     let sign = room.sign.lock().unwrap().unwrap();
     let (heard, silence) = (room.silence_after(onset), room.silence_after(sign));
-    let (quality, cut) = (settled[0].quality, settled[0].cut.as_deref().unwrap());
+    let (quality, cut) = (*settled[0].quality, settled[0].cut.as_deref().unwrap());
     writeln!(
         std::io::stdout(),
         "BARGE sign_to_silence_ms={} onset_to_silence_ms={} cut={cut:?}",
@@ -290,7 +290,7 @@ async fn barge_in_echo_and_noise_at_the_microphone_lose_no_reply_audio() {
         .iter()
         .filter(|(_, level)| *level >= 1000)
         .count();
-    let quality = settled[0].quality;
+    let quality = *settled[0].quality;
     writeln!(std::io::stdout(), "BARGE noise: audible={audible} {quality:?}").unwrap();
     assert!(audible >= 210 && stats.reply_dropped == 0, "{audible} {stats:?}");
     // Neither the louder reply nor the noise held it.

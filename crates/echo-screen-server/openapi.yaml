@@ -149,10 +149,12 @@ paths:
   /events:
     get:
       security: [{ pairingToken: [] }]
-      description: Current ordinary frame if present, then ordered updates; no history replay; revocation closes streams. Effective pack selection commits and settled external settings changes emit screen-pack-reload with PackReloadV1 data once per change. Each new install publishes once before installed status. No-op, alias, duplicate install and failed mutations emit nothing. Active pack-file watching remains pending. Reconnect fetches the catalog for current pack revision.
+      description: Current ordinary frame if present, then ordered updates; no history replay; revocation closes streams. Effective pack selection commits and settled external settings changes emit screen-pack-reload with PackReloadV1 data once per change. Each new install publishes once before installed status. No-op, alias, duplicate install and failed mutations emit nothing. Active pack-file watching remains pending. Reconnect fetches the catalog for current pack revision. A stream opened with mouth=1 also receives lip-sync batches while a reply plays; they are dropped, never queued, for a client with a filling queue, and are never replayed.
+      parameters:
+        - { name: mouth, in: query, required: false, schema: { const: '1' }, description: Ask for named mouth events on this stream }
       responses:
         '200':
-          description: Unnamed messages contain canonical ScreenFrame JSON. Named screen-pack-reload messages contain PackReloadV1 JSON and do not consume ScreenFrame.seq. Each message ends with two newlines.
+          description: Unnamed messages contain canonical ScreenFrame JSON. Named screen-pack-reload messages contain PackReloadV1 JSON and do not consume ScreenFrame.seq. Named mouth messages contain MouthBatch JSON (schemas/screen/mouth_batch.json), only on a stream opened with mouth=1, and do not consume ScreenFrame.seq either. Each message ends with two newlines.
           content:
             text/event-stream:
               schema: { type: string }

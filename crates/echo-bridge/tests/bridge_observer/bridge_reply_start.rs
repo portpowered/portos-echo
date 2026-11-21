@@ -73,7 +73,7 @@ async fn reply_start_rides_out_a_stall_in_the_first_second_of_a_call() {
     let (room, stats, settled) = tokio::time::timeout(OBSERVATION_TIMEOUT, Box::pin(call(stalled)))
         .await
         .unwrap();
-    let quality = settled[0].quality;
+    let quality = *settled[0].quality;
     writeln!(
         std::io::stdout(),
         "START stall: underruns={} underrun_max_ms={} reprimes={} target_min_ms={}",
@@ -107,7 +107,7 @@ async fn reply_start_is_not_held_by_the_transcript_of_the_turn_it_answers() {
     let (room, stats, settled) = tokio::time::timeout(OBSERVATION_TIMEOUT, Box::pin(call(answered)))
         .await
         .unwrap();
-    let quality = settled[0].quality;
+    let quality = *settled[0].quality;
     let heard = played(&room);
     writeln!(
         std::io::stdout(),

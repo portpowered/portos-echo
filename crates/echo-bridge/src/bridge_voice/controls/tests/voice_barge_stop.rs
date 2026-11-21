@@ -84,7 +84,7 @@ async fn barge_in_stops_reply_audio_and_settles_the_cut_reply() {
     tick(work.as_mut(), 5).await;
     // The cut reply settles with its rows; no playback is opened for it again.
     assert_eq!((settled.borrow().len(), played.get()), (1, 1));
-    let quality = settled.borrow()[0].quality;
+    let quality = *settled.borrow()[0].quality;
     assert_eq!(
         (quality.cuts, quality.cut_trigger),
         (1, Some(BargeTrigger::UserTranscript))
@@ -161,7 +161,7 @@ async fn barge_in_sign_under_a_talking_model_loses_no_reply_audio() {
         (stats.reply_received, stats.reply_sent, stats.reply_dropped),
         (received as u64, received as u64, 0)
     );
-    let quality = settled.borrow()[0].quality;
+    let quality = *settled.borrow()[0].quality;
     assert_eq!(
         (settled.borrow().len(), quality.cuts, quality.cut_trigger),
         (1, 0, None)

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 
 const root = new URL("../../../schemas/screen/", import.meta.url);
 const sources = {};
-for (const file of ["ui_state", "ui_action", "screen_frame"]) {
+for (const file of ["ui_state", "ui_action", "screen_frame", "mouth_batch"]) {
     sources[file] = JSON.parse(
         await readFile(new URL(`${file}.json`, root), "utf8"),
     );
@@ -32,7 +32,8 @@ function shape(schema) {
         };
     }
     if (schema.type === "array") return { array: shape(schema.items) };
-    return { type: schema.format === "uint64" ? "u64" : schema.type };
+    if (schema.format === "uint64") return { type: "u64" };
+    return { type: schema.format === "uint8" ? "u8" : schema.type };
 }
 function type(schema) {
     if (schema.ref) return schema.ref;
@@ -47,11 +48,15 @@ function type(schema) {
             .join(";")}}`;
     if (schema.array) return `Array<${type(schema.array)}>`;
     if (schema.type === "u64") return "bigint";
-    return schema.type === "integer" ? "number" : schema.type;
+    return ["integer", "u8"].includes(schema.type) ? "number" : schema.type;
 }
 const models = Object.fromEntries(
     Object.values(sources).map((s) => [s.title, shape(s)]),
 );
+// The lip-sync batch is the one schema whose definitions have no file of
+// their own.
+for (const [key, value] of Object.entries(sources.mouth_batch.$defs))
+    models[key] = shape(value);
 if (
     !isDeepStrictEqual(
         shape(sources.screen_frame.$defs.UiState),

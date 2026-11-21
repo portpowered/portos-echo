@@ -612,6 +612,14 @@ sign that the user's turn is over, named in `endpoint`: `user_transcript`, or
 before either sign has no sample. The M4 golden comparison skips `timing`, as it
 skips `reply.quality`: the value follows the run's pace.
 
+The M4 and M6 screen observer asks the bridge for lip sync (`/events?...&mouth=1`).
+Each case checks the reply's `reply.quality` `lips` against the `mouth` batches the
+stream carried and writes the result as `lips` in `m4-<case>-audible.json`:
+`publish_max_ms` is the longest a sample waited from its frame's hand-off to being
+sent, `lead_ms` how far ahead of its sound each sample was sent. A late or
+unordered sample, a batch the stream did not carry, or a mouth that never opened
+fails the case.
+
 `make test-sim` runs two halves. Both build the
 lab binaries once. `make test-sim-suites` validates scenarios, runs the
 host/Wyoming component tests and discovers all T3 scenarios. CI runs both halves

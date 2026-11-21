@@ -1,5 +1,5 @@
 //! The screen's mouth, timed from the audio written to the Echo.
-use crate::bridge_runtime::bridge_pacing::QUIET;
+use crate::bridge_runtime::bridge_pacing::{QUIET, reply_lips};
 use std::collections::VecDeque;
 use tokio::time::{Duration, Instant};
 
@@ -27,6 +27,7 @@ impl Mouth {
         }
         let start = self.clock.filter(|end| *end > now).unwrap_or(now);
         self.clock = Some(start + FRAME);
+        reply_lips::wrote(frame, start, now);
         let audible = frame
             .as_chunks::<2>()
             .0

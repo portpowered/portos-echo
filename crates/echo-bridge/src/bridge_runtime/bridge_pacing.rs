@@ -5,6 +5,7 @@ use tokio::time::Instant;
 mod reply_barge;
 mod reply_ear;
 mod reply_jitter;
+pub(crate) mod reply_lips;
 mod reply_playout;
 
 pub use reply_barge::BargeTrigger;
@@ -13,6 +14,7 @@ pub(crate) use reply_barge::{BARGE_QUIET, BARGE_WINDOW};
 pub(crate) use reply_barge::{Barge, Question};
 pub(crate) use reply_ear::Ear;
 pub use reply_ear::Heard;
+pub use reply_lips::LipStats;
 pub(crate) use reply_playout::{ClockPacer, PERIOD, Playout, QUIET};
 
 /// Initial playback credit followed by the existing no-catch-up 20 ms pacer.
@@ -95,6 +97,8 @@ pub struct ReplyQuality {
     pub hold_ms: u32,
     /// What the microphone heard under this reply.
     pub mic: Heard,
+    /// What the screen was sent to move the mouth with this reply.
+    pub lips: LipStats,
     /// The `timing` sample; none when no endpoint preceded the reply's audio.
     pub first_audio: Option<FirstAudio>,
 }

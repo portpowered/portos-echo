@@ -4,11 +4,13 @@ mod screen_assets;
 mod screen_core;
 mod screen_http;
 mod screen_listener;
+mod screen_mouth;
 mod screen_settings;
 mod screen_url;
 
 pub use packs::PackSettings;
 pub use packs::view::{DEFAULT as DEFAULT_PACK, PackCatalog};
+pub use screen_mouth::MouthSender;
 pub use screen_settings::{PromptKind, SettingsOperation, SettingsReply, SettingsRequest, settings_channel};
 pub use screen_url::page_url;
 
@@ -85,6 +87,14 @@ impl ScreenServer {
             inbox,
         )));
         receive
+    }
+
+    /// A handle that offers lip-sync batches to the streams that asked for
+    /// them. It never waits and outlives no stream: after shutdown it sends
+    /// to nobody.
+    #[must_use]
+    pub fn mouth(&self) -> MouthSender {
+        MouthSender::new(self.core.clone())
     }
 
     /// Acknowledge states admitted before this call through the existing pump.

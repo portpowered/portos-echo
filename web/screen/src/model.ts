@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*.json by tools/screen-schema.mjs.
-// Schema SHA-256: 6c7981116e3f42675d6d1101d2b6095386380de8b42a8e59a65d1ae3b4388c0e
+// Schema SHA-256: b10b018b2b44ed8ec901f6d14985218a6a3d40405f3ef4548e0556b9a8fc43f7
 export type UiState =
     | { state: "ready"; message: string }
     | { state: "connecting" }
@@ -35,6 +35,9 @@ export type UiAction =
     | { action: "relink" }
     | { action: "dismiss" };
 export type ScreenFrame = { seq: bigint; state: UiState };
+export type MouthBatch = { sent_ms: bigint; samples: Array<MouthSample> };
+export type MouthSample = { at_ms: bigint; open: number; vowel: MouthVowel };
+export type MouthVowel = "none" | "a" | "i" | "u" | "e" | "o";
 export const models = {
     UiState: {
         variants: [
@@ -105,5 +108,28 @@ export const models = {
     },
     ScreenFrame: {
         fields: { seq: { type: "u64" }, state: { ref: "UiState" } },
+    },
+    MouthBatch: {
+        fields: {
+            sent_ms: { type: "u64" },
+            samples: { array: { ref: "MouthSample" } },
+        },
+    },
+    MouthSample: {
+        fields: {
+            at_ms: { type: "u64" },
+            open: { type: "u8" },
+            vowel: { ref: "MouthVowel" },
+        },
+    },
+    MouthVowel: {
+        variants: [
+            { literal: "none" },
+            { literal: "a" },
+            { literal: "i" },
+            { literal: "u" },
+            { literal: "e" },
+            { literal: "o" },
+        ],
     },
 } as const;

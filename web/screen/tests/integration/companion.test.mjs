@@ -13,9 +13,10 @@ import {
     visibleCharacterBoxes,
     viewport as displayViewport,
 } from "./companion-geometry.mjs";
+import { checkCompanionLips } from "./companion-lips.mjs";
 import { activeVideo, open, playing, refresh, token } from "./pack-session.mjs";
 
-const id = "companion@0.2.1";
+const id = "companion@0.2.2";
 const template = "template@0.1.0";
 const screenshots = "test-results/screenshots";
 const viewport = { width: 960, height: 600 };
@@ -361,7 +362,7 @@ async function alternatePlayback(f) {
     await f.page
         .locator(".pack-stage video:not([hidden])")
         .waitFor({ state: "detached" });
-    const still = f.page.locator(".pack-stage img");
+    const still = f.page.locator(".pack-stage > img:not(.pack-mouth)");
     assert.equal(await still.isVisible(), true);
     assert.deepEqual(
         await still.evaluate(async (img) => {
@@ -466,7 +467,7 @@ test("T3 Companion installs, selects, decodes, preserves selection on failure, a
         `screen_pack = "${id}"\n`,
     );
     console.log(
-        "B4 checksum_mismatch selected=companion@0.2.1 bytes=preserved",
+        "B4 checksum_mismatch selected=companion@0.2.2 bytes=preserved",
     );
 
     await selection(page).focus();
@@ -500,7 +501,7 @@ test("T3 Companion installs, selects, decodes, preserves selection on failure, a
     assert.deepEqual(f.outside, []);
     assert.deepEqual(
         f.peer.requests,
-        Array(2).fill("/companion-0.2.1.screenpack.tar.gz"),
+        Array(2).fill("/companion-0.2.2.screenpack.tar.gz"),
     );
     console.log(
         "B5 keyboard=visible selection=empty navigation=0 restart_requests=0",
@@ -521,4 +522,9 @@ test("T3 Companion drops a pending entry clip when the state moves on", async (t
 test(
     "T3 Companion Link Code stays centered through natural replays",
     withSelected(checkHeldLinkCode),
+);
+
+test(
+    "T3 Companion moves her mouth with lip-sync samples from the screen server",
+    withSelected(checkCompanionLips),
 );

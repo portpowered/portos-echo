@@ -13,6 +13,7 @@ import "./settings/leave.mjs";
 import "./settings/reload.mjs";
 import "./packs/player.mjs";
 import "./packs/page.mjs";
+import "./packs/mouth.mjs";
 
 test("F01 F02 F11: exact state, link and error values, semantic snapshots and reference bounds", async (t) => {
     const page = await pageFor(t);

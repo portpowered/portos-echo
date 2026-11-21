@@ -37,6 +37,7 @@ struct Case {
     emotion: bool,
     hold_model: bool,
     ui_states: Vec<Value>,
+    mouth: Vec<Value>,
     screen: Option<Screen>,
     root: Option<Root>,
     host: Option<Process>,
@@ -61,6 +62,7 @@ pub(super) struct Journey {
     pub completion: Value,
     pub text: String,
     pub ui_states: Vec<Value>,
+    pub mouth: Vec<Value>,
     pub playback: Option<Value>,
 }
 
@@ -93,6 +95,7 @@ pub(super) async fn run(options: &Options, negative: bool) -> Result<Journey, St
         completion,
         text,
         ui_states: case.ui_states,
+        mouth: case.mouth,
         playback: case.playback,
     })
 }
@@ -178,7 +181,7 @@ impl Case {
 
     async fn speak(&mut self) -> Result<(Value, Timing), String> {
         let root = &self.root.as_ref().ok_or("m4: missing root")?.0;
-        let mut screen = Screen::connect(root).await?;
+        let mut screen = Screen::lips(root).await?;
         observe(&mut screen, &mut self.ui_states, "ready").await?;
         self.host_control(json!({"action":"finite","pcm":world::fixture()}))
             .await?;
@@ -273,8 +276,9 @@ impl Case {
         }
     }
     async fn collect_screen(&mut self) -> Result<(), String> {
-        if let Some(screen) = self.screen.take() {
+        if let Some(mut screen) = self.screen.take() {
             self.ui_states.extend(screen.remaining().await?);
+            self.mouth = screen.mouth;
         }
         Ok(())
     }

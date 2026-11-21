@@ -126,7 +126,7 @@ async fn events(
     if *state.stop.borrow() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    let Some(client) = core.attach(cancel) else {
+    let Some(client) = core.attach_with(cancel, crate::screen_mouth::wanted(request.uri())) else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
     drop(core);

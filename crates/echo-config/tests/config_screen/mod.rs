@@ -203,3 +203,31 @@ fn screen_pack_effective_load_keeps_selection_and_rejects_bad_overlay_wholly() {
     assert!(!format!("{error:?}").contains("SYNTHETIC_VALUE"));
     assert_eq!(std::fs::read_to_string(settings_path).unwrap(), text);
 }
+
+#[test]
+fn screen_mouth_delay_defaults_to_the_measured_echo_and_is_bounded() {
+    let with = |value: &str| {
+        MINIMAL.replace(
+            "[screen]",
+            &format!(
+                "[screen]
+mouth_delay_ms={value}"
+            ),
+        )
+    };
+    assert_eq!(BridgeConfig::from_toml_str(MINIMAL).unwrap().screen.mouth_delay_ms, 200);
+    for value in [0, 120, 1000] {
+        let config = BridgeConfig::from_toml_str(&with(&value.to_string())).unwrap();
+        assert_eq!(config.screen.mouth_delay_ms, value);
+    }
+    assert_eq!(
+        BridgeConfig::from_toml_str(&with("1001")).unwrap_err().to_string(),
+        "screen.mouth_delay_ms: must be at most 1000"
+    );
+    for value in ["-1", "'200'", "65536", "1.5"] {
+        assert_eq!(
+            BridgeConfig::from_toml_str(&with(value)).unwrap_err().to_string(),
+            "screen.mouth_delay_ms: invalid type or value"
+        );
+    }
+}

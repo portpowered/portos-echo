@@ -37,8 +37,8 @@ pub struct Stats {
     pub reply_received: u64,
     pub reply_sent: u64,
     pub reply_dropped: u64,
-    /// The settled reply's pacing and discard facts.
-    pub quality: ReplyQuality,
+    /// The settled reply's pacing and discard facts, boxed to keep notices small.
+    pub quality: Box<ReplyQuality>,
     /// The barge-in that cut the settled reply.
     pub cut: Option<Box<Cut>>,
 }
@@ -158,6 +158,7 @@ impl Source {
         self.meter.paced(self.reply.take_playout());
         let mut quality = self.meter.settle(lost);
         quality.mic = self.ear.rest();
+        quality.lips = crate::bridge_runtime::bridge_pacing::reply_lips::settle(Instant::now());
         if quality.cuts == 0 {
             self.stats.cut = None;
             self.question = Question::default();
