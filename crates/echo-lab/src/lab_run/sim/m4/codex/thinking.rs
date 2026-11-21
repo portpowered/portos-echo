@@ -220,7 +220,7 @@ fn assert_playout(clock: &Value) {
     let speaking = clock["states"][4]["epoch_ms"].as_u64().unwrap();
     assert!(thinking <= audible_start);
     assert!(
-        (audible_start + 200..=audible_start + 220).contains(&speaking),
+        (audible_start + 80..=audible_start + 100).contains(&speaking),
         "{clock}"
     );
     writeln!(
