@@ -48,6 +48,36 @@ async fn t3_agent_tools_prompt_writes_preserve_current_and_change_exact_next_rpc
     old.sort();
     assert_eq!(old, ["runner old", "voice old"]);
     privacy(&path);
+    applied(&path);
+}
+
+/// Session N keeps its admitted prompts; session N+1, the next wake, admits the
+/// written ones. Only digests and flags enter the trace, never the text.
+fn applied(path: &Path) {
+    let rows: Vec<(String, String, bool)> = std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|row| row["event"] == "prompt.applied")
+        .map(|row| {
+            let field = |name: &str| row[name].as_str().unwrap().to_owned();
+            (field("prompt"), field("digest"), row["changed"].as_bool().unwrap())
+        })
+        .collect();
+    let digest = |text: &str| prompts::digest(text);
+    let expected: Vec<_> = [
+        ("runner", "runner old", false),
+        ("voice", "voice old", false),
+        ("runner", RUNNER, true),
+        ("voice", VOICE, true),
+        ("runner", RUNNER, false),
+        ("voice", VOICE, false),
+    ]
+    .into_iter()
+    .map(|(kind, text, changed)| (kind.to_owned(), digest(text), changed))
+    .collect();
+    assert_eq!(rows, expected);
+    assert_ne!(digest(VOICE), digest("voice old"));
 }
 
 fn assert_prompt_bytes(home: &Path, runner: &str, voice: &str) {
@@ -68,7 +98,10 @@ async fn exercise(home: &Path, trace: &Trace, tools: &mut Tools) {
     options.call.time_zone = None;
     let mut server = BufReader::new(server);
     for index in 0..3 {
-        observer.wake("admit", vec![]);
+        // Call 0 ends after its run; the wake it did not take admits call 1.
+        if index != 1 {
+            observer.wake("admit", vec![]);
+        }
         let LinkEvent::Wake(run) = events.recv().await.unwrap().unwrap() else {
             unreachable!()
         };
@@ -90,7 +123,9 @@ async fn exercise(home: &Path, trace: &Trace, tools: &mut Tools) {
         let (result, ()) = tokio::join!(work, remote);
         assert_eq!(result, Ok(()));
         drop(observe);
-        assert_eq!(completed, 2);
+        // The first call's run writes both prompts, so that run ends its call
+        // and the next wake admits call 1. The other calls keep a second wake.
+        assert_eq!(completed, if index == 0 { 1 } else { 2 });
     }
 }
 
@@ -144,8 +179,10 @@ async fn remote(
         send(server, &json!({"id":request["id"],"result":result})).await;
         if method == "thread/realtime/start" {
             turn(server, &thread, index, home).await;
-            // These two wakes reuse the call. The next call checks both new prompt texts.
-            replies(server, run.0, run.1, &thread).await;
+            // After a run that wrote a prompt the call ends; the next wake opens
+            // the next call, which checks both new prompt texts. Otherwise two
+            // wakes reuse the call.
+            replies(server, run.0, run.1, &thread, if index == 0 { 1 } else { 2 }).await;
         }
     }
 }

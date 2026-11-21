@@ -1,12 +1,84 @@
 use super::*;
 use serde_json::{Value, json};
 
+/// Every row except the per-admission `prompt.applied`, which `applied` checks.
 fn rows(path: &Path) -> Vec<Value> {
+    all_rows(path)
+        .into_iter()
+        .filter(|row| row["event"] != "prompt.applied")
+        .collect()
+}
+
+fn all_rows(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
+}
+
+fn applied(path: &Path) -> Vec<(String, String, bool)> {
+    all_rows(path)
+        .into_iter()
+        .filter(|row| row["event"] == "prompt.applied")
+        .map(|row| {
+            assert_eq!(row.as_object().unwrap().len(), 6);
+            let field = |name: &str| row[name].as_str().unwrap().to_owned();
+            (field("prompt"), field("digest"), row["changed"].as_bool().unwrap())
+        })
+        .collect()
+}
+
+#[test]
+fn prompt_digest_is_the_sha256_prefix() {
+    // FIPS 180-2 test vector: sha256("abc") = ba7816bf 8f01cfea ...
+    assert_eq!(digest("abc"), "ba7816bf");
+    assert_eq!(digest(""), "e3b0c442");
+}
+
+/// T1: a valid write during an admitted call marks it changed without touching
+/// the admitted text; a refused edit does not; the next admission applies it.
+#[tokio::test(start_paused = true)]
+async fn prompt_write_marks_the_open_call_changed_and_next_admission_applies_it() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("trace");
+    let mut trace = Some(Trace::open(&path, "api_key").unwrap());
+    assert!(!changed());
+    scope(Some(root.path()), async {
+        let admitted = snapshot("unused", "unused", &mut trace).unwrap();
+        assert_eq!(admitted, (RUNNER_INSTRUCTIONS.into(), LIVE_INSTRUCTIONS.into()));
+        assert!(!changed());
+        // An external edit that would be refused is not a change.
+        std::fs::write(root.path().join("prompts/voice.md"), " \n").unwrap();
+        assert!(!changed());
+        // Nor is a deletion back to the default this call admitted.
+        std::fs::remove_file(root.path().join("prompts/voice.md")).unwrap();
+        assert!(!changed());
+        write_base(root.path(), "voice", "voice two").unwrap();
+        assert!(changed());
+        assert_eq!(accepted().unwrap().voice, LIVE_INSTRUCTIONS);
+        let next = snapshot("unused", "unused", &mut trace).unwrap();
+        assert_eq!(next.1.len(), "voice two".len());
+        assert!(!changed());
+        write_base(root.path(), "runner", "runner two").unwrap();
+        assert!(changed());
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert!(!changed());
+    let own = |kind: &str, text: &str, changed: bool| (kind.to_owned(), digest(text), changed);
+    assert_eq!(
+        applied(&path),
+        [
+            own("runner", RUNNER_INSTRUCTIONS, false),
+            own("voice", LIVE_INSTRUCTIONS, false),
+            own("runner", RUNNER_INSTRUCTIONS, false),
+            own("voice", "voice two", true),
+        ]
+    );
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("voice two") && !text.contains("prompts/"));
 }
 
 #[tokio::test(start_paused = true)]

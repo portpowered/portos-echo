@@ -8,6 +8,8 @@
 //! `settings.reexec_failed` with reason exec. No settings values, paths or text.
 //! `prompt.defaulted` names voice|runner once per missing kind per runtime.
 //! `prompt.reload_refused` adds a fixed reason; neither contains paths or text.
+//! `prompt.applied` names voice|runner at each call admission with an 8-hex
+//! SHA-256 prefix `digest` of the admitted text and `changed`; never the text.
 //! `wyoming.probe_ok` acknowledges each successful idle describe probe when its
 //! owner observes completion. It carries only the existing envelope, no payload.
 //! `reply.cut` also reports `bridge_evicted` (prior capacity evictions) and
