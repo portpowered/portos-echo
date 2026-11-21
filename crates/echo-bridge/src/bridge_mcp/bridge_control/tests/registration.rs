@@ -119,7 +119,7 @@ async fn t3_registration_failures_are_redacted_cli_receipts_without_challenge() 
 // The trace names the failed step, its HTTP status and the OAuth code, and nothing else.
 fn assert_link_failure(root: &Path, error: &Error, replied: bool) {
     let Error::Mcp(error) = error else {
-        panic!("a link failure is an MCP error");
+        unreachable!("a link failure is an MCP error");
     };
     let text = std::fs::read_to_string(root.join("trace")).unwrap();
     assert!(!text.contains("private detail") && !text.contains("127.0.0.1"));
