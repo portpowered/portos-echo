@@ -136,6 +136,7 @@ test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and
     await update(approval);
     for (const [path, file] of [
         ["/", "index.html"],
+        ["/tokens.css", "tokens.css"],
         ["/screen.css", "screen.css"],
         ["/screen.js", "screen.js"],
     ]) {
@@ -150,6 +151,35 @@ test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and
         );
         assert.equal(response.headers.get("referrer-policy"), "no-referrer");
     }
+    // The one bundled font is served byte for byte; nothing else under /fonts.
+    const font = "/fonts/manrope-latin-wght-normal.woff2";
+    const served = await fetch(origin + font);
+    assert.equal(served.status, 200);
+    assert.equal(served.headers.get("content-type"), "font/woff2");
+    assert.equal(
+        Buffer.from(await served.arrayBuffer()).equals(
+            await readFile(new URL(`../../dist${font}`, import.meta.url)),
+        ),
+        true,
+    );
+    assert.equal((await fetch(origin + "/fonts/OFL.txt")).status, 404);
+    // The served page resolves the token properties and loads Manrope.
+    assert.deepEqual(
+        await page.evaluate(async () => {
+            const style = getComputedStyle(document.documentElement);
+            const faces = await document.fonts.load("16px Manrope");
+            return {
+                primary: style.getPropertyValue("--color-primary").trim(),
+                font: style.getPropertyValue("--font-sans").trim(),
+                faces: faces.map((face) => `${face.family} ${face.status}`),
+            };
+        }),
+        {
+            primary: "#ffda36",
+            font: "Manrope, system-ui, sans-serif",
+            faces: ["Manrope loaded"],
+        },
+    );
     command({ revoke: true });
     assert.deepEqual(await next(), { revoked: true });
     const posts = [];

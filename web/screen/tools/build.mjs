@@ -1,5 +1,6 @@
-import { mkdir, copyFile, rm } from "node:fs/promises";
+import { mkdir, copyFile, rm, writeFile } from "node:fs/promises";
 import { build } from "esbuild";
+import { tokensCss } from "./tokens.mjs";
 
 await mkdir("dist", { recursive: true });
 await rm(new URL("../test-results/coverage", import.meta.url), {
@@ -27,5 +28,11 @@ await build({
     format: "esm",
     bundle: true,
 });
-for (const file of ["index.html", "screen.css"])
+await mkdir("dist/fonts", { recursive: true });
+for (const file of [
+    "index.html",
+    "screen.css",
+    "fonts/manrope-latin-wght-normal.woff2",
+])
     await copyFile(`src/${file}`, `dist/${file}`);
+await writeFile("dist/tokens.css", await tokensCss());

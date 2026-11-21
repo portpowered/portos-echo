@@ -42,6 +42,7 @@ lint-self-tests:
 	python scripts/test_lint_docs.py
 	python scripts/test_coverage_profiles.py
 	python scripts/test_build_echo.py
+	sh scripts/sync-portos-tokens.sh --check
 
 # CI runs each nextest invocation below as parallel shards, one per runner, by passing
 # NEXTEST_PARTITION=count:K/N; the shards together run every test. Unset, a target runs all of them.

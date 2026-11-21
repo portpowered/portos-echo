@@ -1,0 +1,13 @@
+# Generated from frontend/packages/ui/theme/tokens.json by frontend/packages/ui/theme/generate-tokens.mjs. Do not edit by hand.
+[package]
+name = "portos-tokens"
+version = "0.1.0"
+edition = "2021"
+description = "Port OS design tokens: colors, type, spacing, radii, borders, shadows and breakpoints"
+license = "Apache-2.0"
+repository = "https://github.com/portpowered/portos-ui-rust"
+readme = "README.md"
+keywords = ["design-tokens", "theme", "css", "portos"]
+publish = false
+
+[dependencies]

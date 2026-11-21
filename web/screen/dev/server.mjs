@@ -6,7 +6,13 @@ const assets = {};
 for (const [route, name, type] of [
     ["/", "index.html", "text/html"],
     ["/screen.js", "screen.js", "text/javascript"],
+    ["/tokens.css", "tokens.css", "text/css"],
     ["/screen.css", "screen.css", "text/css"],
+    [
+        "/fonts/manrope-latin-wght-normal.woff2",
+        "fonts/manrope-latin-wght-normal.woff2",
+        "font/woff2",
+    ],
 ]) {
     assets[route] = {
         type,
