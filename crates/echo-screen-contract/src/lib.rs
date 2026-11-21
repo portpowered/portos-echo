@@ -4,6 +4,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[path = "screen_mouth.rs"]
+pub mod mouth;
+
 #[path = "screen_settings.rs"]
 pub mod settings_v1;
 

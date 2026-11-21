@@ -10,6 +10,10 @@ pub struct ScreenPackDownload {
     pub sha256: String,
 }
 
+/// The Echo's measured output delay: 0.07 to 0.24 s, typically 0.22 s.
+const MOUTH_DELAY_MS: u16 = 200;
+const MOUTH_DELAY_MAX_MS: u16 = 1000;
+
 pub(super) fn decode(value: Value<'_>) -> Result<ScreenConfig, ConfigError> {
     let mut f = Fields::new(value, "screen")?;
     let listen: String = f.optional("listen")?.unwrap_or_else(|| "0.0.0.0:16900".into());
@@ -19,12 +23,16 @@ pub(super) fn decode(value: Value<'_>) -> Result<ScreenConfig, ConfigError> {
             .map_err(|_| ConfigError::new("screen.listen", "expected socket address"))?,
         pairing_token_file: f.required("pairing_token_file")?,
         packs: f.optional("packs")?.unwrap_or_default(),
+        mouth_delay_ms: f.optional("mouth_delay_ms")?.unwrap_or(MOUTH_DELAY_MS),
     };
     f.finish()?;
     Ok(result)
 }
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
+    if config.screen.mouth_delay_ms > MOUTH_DELAY_MAX_MS {
+        return Err(ConfigError::new("screen.mouth_delay_ms", "must be at most 1000"));
+    }
     if !config.screen.packs.is_empty() && config.home.is_none() {
         return Err(ConfigError::new("screen.packs", "requires home.dir"));
     }

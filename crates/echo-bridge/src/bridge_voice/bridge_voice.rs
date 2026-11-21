@@ -30,7 +30,7 @@ mod voice_listen;
 mod voice_recovery;
 mod voice_runtime;
 mod voice_session;
-mod voice_source;
+pub(crate) mod voice_source;
 #[path = "controls/voice_tools.rs"]
 mod voice_tools;
 mod voice_view;
@@ -227,7 +227,7 @@ async fn run_opened<L: EchoLink>(
     source.stats.received_chunks = microphone.stats().received;
     source.stats.dropped_chunks = microphone.stats().dropped;
     source.stats.reply_dropped += source.reply.dropped_frames();
-    source.stats.quality = source.settle(port.rtp_lost());
+    *source.stats.quality = source.settle(port.rtp_lost());
     Ok(source.stats)
 }
 

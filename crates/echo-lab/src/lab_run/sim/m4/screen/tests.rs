@@ -23,7 +23,12 @@ async fn response(bytes: &'static [u8]) -> (Screen, tokio::task::JoinHandle<()>)
         socket.write_all(bytes).await.unwrap();
         socket.shutdown().await.unwrap();
     });
-    (Screen(TcpStream::connect(address).await.unwrap()), task)
+    let screen = Screen {
+        socket: TcpStream::connect(address).await.unwrap(),
+        named: None,
+        mouth: vec![],
+    };
+    (screen, task)
 }
 
 #[tokio::test]
@@ -45,10 +50,33 @@ async fn t3_final_collection_retains_late_mouth_publications_and_rejects_truncat
     screen.expect("ready").await.unwrap();
     assert_eq!(screen.remaining().await.unwrap(), Vec::<Value>::new());
     task.await.unwrap();
-    let (screen, task) = response(b"data: {\"seq\":6}").await;
+    let (mut screen, task) = response(b"data: {\"seq\":6}").await;
     assert_eq!(
         screen.remaining().await,
         Err("screen: incomplete or oversized final publication".into())
+    );
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn t3_named_lip_sync_events_are_kept_apart_from_screen_frames() {
+    let (mut screen, task) = response(
+        b"data: {\"seq\":5,\"state\":{\"state\":\"speaking\"}}\n\nevent: mouth\ndata: {\"sent_ms\":1,\"samples\":[]}\n\nevent: screen-pack-reload\ndata: {\"version\":1}\n\ndata: {\"seq\":6,\"state\":{\"state\":\"connected\"}}\n\nevent: mouth\ndata: {\"sent_ms\":2,\"samples\":[]}\n\ndata: {\"seq\":7,\"state\":{\"state\":\"ready\"}}\n\n",
+    )
+    .await;
+    screen.expect("speaking").await.unwrap();
+    screen.expect("connected").await.unwrap();
+    assert_eq!(screen.mouth, [serde_json::json!({"sent_ms":1,"samples":[]})]);
+    assert_eq!(
+        screen.remaining().await.unwrap(),
+        vec![serde_json::json!({"seq":7,"state":{"state":"ready"}})]
+    );
+    assert_eq!(
+        screen.mouth,
+        [
+            serde_json::json!({"sent_ms":1,"samples":[]}),
+            serde_json::json!({"sent_ms":2,"samples":[]})
+        ]
     );
     task.await.unwrap();
 }

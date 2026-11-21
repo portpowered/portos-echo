@@ -22,8 +22,8 @@ from render import keyframes  # noqa: E402
 
 ROLES = ("idle", "connecting", "listening", "thinking", "speaking", "muted",
          "setup", "approval", "error", "happy")
-ARCHIVE = "companion-0.2.1.screenpack.tar.gz"
-SUCCESS = "screenpack: companion=0.2.1 generated=PASS checksum=PASS\n"
+ARCHIVE = "companion-0.2.2.screenpack.tar.gz"
+SUCCESS = "screenpack: companion=0.2.2 generated=PASS checksum=PASS\n"
 FAILURE = "screenpack: generation failed; output was not published\n"
 WIDTH, HEIGHT = 768, 720
 FRAME_BYTES = WIDTH * HEIGHT * 4
@@ -35,7 +35,7 @@ HOME_CENTER, CARD_CENTER = 506, 252
 
 def invoke(out, *, env=None):
     return subprocess.run(["sh", "scripts/make-companion-screenpack.sh",
-                           "--version", "0.2.1", "--out", str(out)],
+                           "--version", "0.2.2", "--out", str(out)],
                           cwd=ROOT, capture_output=True, text=True, env=env)
 
 
@@ -141,7 +141,9 @@ class CompanionPack(unittest.TestCase):
         for folder in (self.first, second):
             self.assertEqual((folder / (ARCHIVE + ".sha256")).read_bytes(),
                              f"{checksum}  {ARCHIVE}\n".encode())
+        shapes = ("half", "open", "a", "i", "u", "e", "o")
         expected = {"pack.json", "rest.png", "companion-clock.css",
+                    *(f"mouth-{shape}.png" for shape in shapes),
                     *(f"{role}.{ext}" for role in (*ROLES, "setup-enter") for ext in ("webm", "mp4"))}
         with tarfile.open(self.archive) as bundle:
             members = bundle.getmembers()
@@ -154,10 +156,10 @@ class CompanionPack(unittest.TestCase):
                 if member.name.endswith((".mp4", ".webm")):
                     self.assertLessEqual(member.size, 8 * 1024 ** 2)
                 self.assertEqual((self.extracted / member.name).read_bytes(),
-                                 (self.first / "companion@0.2.1" / member.name).read_bytes())
+                                 (self.first / "companion@0.2.2" / member.name).read_bytes())
         manifest = json.loads((self.extracted / "pack.json").read_bytes())
         self.assertEqual((manifest["format"], manifest["name"], manifest["version"]),
-                         (1, "companion", "0.2.1"))
+                         (1, "companion", "0.2.2"))
         character = manifest["character"]
         self.assertEqual(character["rest"], "rest.png")
         states = {
@@ -168,7 +170,16 @@ class CompanionPack(unittest.TestCase):
         self.assertEqual(character["states"], states)
         self.assertEqual(character["emotes"], {
             "happy": {"mode": "once", "webm": "happy.webm", "mp4": "happy.mp4"}})
-        print(f"PACK identity=companion@0.2.1 files={len(expected)} sha256={checksum} "
+        # The lip-sync stills: the neutral frame is the closed mouth, and each
+        # still is a whole frame of the clips' size.
+        self.assertEqual(character["mouth"], {
+            "closed": "rest.png", **{shape: f"mouth-{shape}.png" for shape in shapes}})
+        rest = (self.extracted / "rest.png").read_bytes()
+        for shape in shapes:
+            still = (self.extracted / f"mouth-{shape}.png").read_bytes()
+            self.assertEqual(still[:24], rest[:24], shape)
+            self.assertNotEqual(still, rest, shape)
+        print(f"PACK identity=companion@0.2.2 files={len(expected)} sha256={checksum} "
               f"archive_bytes={self.archive.stat().st_size} repeat=identical", flush=True)
 
     def test_release_allows_only_approved_stylesheet(self):
@@ -178,7 +189,7 @@ class CompanionPack(unittest.TestCase):
         layout = json.loads((self.extracted / "pack.json").read_bytes())["layout"]
         stylesheet = "companion-clock.css"
         self.assertEqual(layout["css"], stylesheet)
-        files = package.screen_pack_payload(self.archive, "companion", "0.2.1")
+        files = package.screen_pack_payload(self.archive, "companion", "0.2.2")
         self.assertEqual(files[stylesheet], (self.extracted / stylesheet).read_bytes())
 
         altered = self.root / "extra-css" / ARCHIVE
@@ -190,7 +201,7 @@ class CompanionPack(unittest.TestCase):
             extra.size = len(files[stylesheet])
             target.addfile(extra, io.BytesIO(files[stylesheet]))
         with self.assertRaisesRegex(package.BundleError, "^invalid companion members$"):
-            package.screen_pack_payload(altered, "companion", "0.2.1")
+            package.screen_pack_payload(altered, "companion", "0.2.2")
         print("RELEASE-CSS companion-clock.css=ACCEPTED other.css=REFUSED", flush=True)
 
     def test_occupied_and_failed_encoder(self):

@@ -838,6 +838,11 @@ target is given back by leaving silent frames out of pauses. Each reply's `reply
 carries the arrival gaps, modelled device depth, underruns, discards, RTP loss, the target, restarts, fades
 and frames left out.
 
+The same hand-off feeds [lip sync](screen-packs.md#lip-sync): when a paired page has asked for it, each
+frame handed to the Echo is measured for mouth openness and vowel and sent to the screen, stamped with the
+time it will be heard (`screen.mouth_delay_ms` after its place in the Echo's queue). Sending never waits, so
+the hand-off times do not change; `reply.quality` `lips` reports what was sent, dropped or late.
+
 #### Why — Audio formats and resampling
 
 The hardware, caller API and network codec use different rates. Explicit conversion prevents pitch and

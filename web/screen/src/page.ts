@@ -5,6 +5,7 @@ import { animate } from "./emotion";
 import { formatExpiry } from "./expiry";
 import { mountSettings } from "./settings/view";
 import { mountPacks } from "./packs/view";
+import { mouthEvents } from "./packs/mouth";
 
 function text(tag: string, value: string): HTMLElement {
     const node = document.createElement(tag);
@@ -233,8 +234,14 @@ export function startPage(root: HTMLElement, href: string): () => void {
     }
     try {
         urls = endpoints(href);
-        stream = new EventSource(urls.events);
-        if (document.querySelector('meta[name="echo-packs"][content="v1"]'))
+        const packed = !!document.querySelector(
+            'meta[name="echo-packs"][content="v1"]',
+        );
+        // Only a page that can draw a pack's mouth asks for lip sync.
+        stream = new EventSource(
+            packed ? mouthEvents(urls.events) : urls.events,
+        );
+        if (packed)
             packs = mountPacks(content, urls.actions, stream, () => {
                 if (presentation.current) render(presentation.current);
             });

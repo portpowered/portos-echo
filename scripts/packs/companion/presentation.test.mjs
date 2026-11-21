@@ -10,7 +10,7 @@ import {
     refresh,
 } from "../../../web/screen/tests/integration/pack-session.mjs";
 
-const id = "companion@0.2.1";
+const id = "companion@0.2.2";
 const viewport = { width: 1280, height: 748 };
 const ready = { state: "ready", message: "Ready" };
 const sampleFrame = 24;
@@ -75,7 +75,7 @@ async function installCompanion({ page, peer, sha256, api }) {
         ].some(
             (link) =>
                 new URL(link.href).pathname.endsWith(
-                    "/companion@0.2.1/companion-clock.css",
+                    "/companion@0.2.2/companion-clock.css",
                 ) && link.sheet,
         ),
     );
@@ -307,7 +307,7 @@ test("T3 release-staged Companion has a closed-mouth Listening pose and centered
     await mkdir(directory, { recursive: true });
     const snapshot = (state) =>
         page.screenshot({
-            path: join(directory, `companion-0.2.1-${state}.png`),
+            path: join(directory, `companion-0.2.2-${state}.png`),
         });
     await settle(f, ready, "idle");
     await checkLayout(page, "ready");

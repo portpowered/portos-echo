@@ -1,4 +1,5 @@
 //! T0: generated schemas are the published contract, compared without writes.
+use echo_screen_contract::mouth::MouthBatch;
 use echo_screen_contract::settings_v1::{
     PromptSaveV1, SaveResultV1, SettingsErrorV1, SettingsPatchV1, SettingsSnapshotV1,
 };
@@ -35,7 +36,8 @@ fn snapshot<T: JsonSchema>(name: &str) -> Result<(), Box<dyn Error>> {
 fn schema_snapshots() -> Result<(), Box<dyn Error>> {
     snapshot::<UiState>("ui_state")?;
     snapshot::<UiAction>("ui_action")?;
-    snapshot::<ScreenFrame>("screen_frame")
+    snapshot::<ScreenFrame>("screen_frame")?;
+    snapshot::<MouthBatch>("mouth_batch")
 }
 
 #[test]

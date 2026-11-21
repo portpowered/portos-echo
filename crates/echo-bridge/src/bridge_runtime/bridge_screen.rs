@@ -1,5 +1,6 @@
 //! The bridge owns screen lifetime and publishes bounded activity updates.
 use crate::bridge_mcp::bridge_presentation::Presentation;
+use crate::bridge_runtime::bridge_pacing::reply_lips::Lips;
 use crate::{Error, bridge_input::loopback, bridge_trace::Trace};
 use echo_config::ScreenConfig;
 use echo_contracts::secret::Secret;
@@ -33,6 +34,12 @@ impl Screen {
 
     pub fn address(&self) -> Option<std::net::SocketAddr> {
         self.server.as_ref().map(|server| server.bound_addr)
+    }
+
+    /// Lips that follow reply audio onto this screen; none without a screen.
+    pub(crate) fn lips(&self, config: Option<&ScreenConfig>) -> Option<Lips> {
+        let delay = std::time::Duration::from_millis(config?.mouth_delay_ms.into());
+        Some(Lips::new(Box::new(self.server.as_ref()?.mouth()), delay))
     }
 
     pub async fn bind(config: Option<&ScreenConfig>) -> Result<Self, Error> {
@@ -329,6 +336,7 @@ mod tests {
                 listen: ([127, 0, 0, 1], 0).into(),
                 pairing_token_file: pairing,
                 packs,
+                mouth_delay_ms: 200,
             },
             ..base
         }

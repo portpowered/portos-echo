@@ -64,6 +64,9 @@ allow_tools = ["control", "endpoint_query", "endpoint_show", "endpoint_manage", 
 [screen]
 listen = "127.0.0.1:16900"
 pairing_token_file = "/data/local/echo-bridge/private/screen-pairing.txt"
+# Lip sync: milliseconds from a reply frame's hand-off until the speaker plays it.
+# Raise it when the mouth leads the voice, lower it when the mouth trails.
+# mouth_delay_ms = 200
 # Optional pinned screen-pack archives require [home]. Downloads are bridge-owned.
 # Release packaging replaces the version and zero SHA placeholder with generated pins.
 # For source use, replace sha256 from that release's SHA256SUMS, or set packs = [].

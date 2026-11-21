@@ -38,7 +38,7 @@ def companion_stylesheet_faults(data, sums, row, name):
 
 
 def companion_cases(assets, pack, witness):
-    name = 'companion-0.2.1.screenpack.tar.gz'
+    name = 'companion-0.2.2.screenpack.tar.gz'
     archive = next(assets.glob('echo-*-armv7.tar.gz')).name
     sums = (assets / 'SHA256SUMS').read_text()
     data = (assets / name).read_bytes()
@@ -47,7 +47,7 @@ def companion_cases(assets, pack, witness):
     require(sums.count(row) == 1, 'expected one exact Companion digest row')
     with tarfile.open(assets / name) as source:
         manifest = json.load(source.extractfile('pack.json'))
-    require((manifest['format'], manifest['name'], manifest['version']) == (1, 'companion', '0.2.1'),
+    require((manifest['format'], manifest['name'], manifest['version']) == (1, 'companion', '0.2.2'),
             'Companion identity differs')
     default_pack = next(assets.glob('default-*.screenpack.tar.gz')).read_bytes()
     substitute = f'{hashlib.sha256(default_pack).hexdigest()}  {name}\n'

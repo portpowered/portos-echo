@@ -161,7 +161,7 @@ async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played(
             microphone_frames: 2,
             reply_received: 32,
             reply_sent: 32,
-            quality: stats.quality,
+            quality: stats.quality.clone(),
             ..Stats::default()
         }
     );

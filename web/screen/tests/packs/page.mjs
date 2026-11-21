@@ -29,7 +29,7 @@ const layout = {
     },
     stage: { anchor: { x: 50, y: 50 }, scale: 1, background: "#101827" },
 };
-const manifest = {
+export const manifest = {
     format: 1,
     name: "sample",
     version: "1.0.0",
@@ -37,7 +37,7 @@ const manifest = {
     layout,
 };
 
-async function packPage(t, pack = manifest, vp9 = true) {
+export async function packPage(t, pack = manifest, vp9 = true) {
     return pageFor(
         t,
         "?events=%2Fevents%3Ftoken%3Dsynthetic-screen-pair&actions=%2Factions%3Ftoken%3Dsynthetic-screen-pair",
@@ -152,7 +152,7 @@ async function packPage(t, pack = manifest, vp9 = true) {
         },
     );
 }
-const send = (page, seq, state) =>
+export const send = (page, seq, state) =>
     emit(page, frame(seq, JSON.stringify(state)));
 const loaded = (page) =>
     page.evaluate(() => {
@@ -168,7 +168,7 @@ const end = (page) =>
             .querySelector("video:not([hidden]):not([data-leaving])")
             .dispatchEvent(new Event("ended")),
     );
-const hiddenSource = (page) =>
+export const hiddenSource = (page) =>
     page.evaluate(() =>
         new URL(
             [...document.querySelectorAll("video")].find(

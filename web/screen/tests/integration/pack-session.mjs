@@ -70,6 +70,11 @@ export async function open(
         command({ state });
         assert.deepEqual(await next(), { sent: true });
     }
+    // Offer one lip-sync batch; resolves to how many streams took it.
+    async function mouth(batch) {
+        command({ mouth: batch });
+        return (await next()).mouth;
+    }
     await send(initialState);
     const origin = `http://127.0.0.1:${ready}`;
     browser = await chromium.launch({
@@ -135,7 +140,18 @@ export async function open(
         assert.equal(response.status, 200);
         return response.json();
     }
-    return { page, context, home, peer, sha256, update, api, next, outside };
+    return {
+        page,
+        context,
+        home,
+        peer,
+        sha256,
+        update,
+        mouth,
+        api,
+        next,
+        outside,
+    };
 }
 
 // The named clip of the named pack is decoding and the pack's own stylesheet

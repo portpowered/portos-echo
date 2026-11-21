@@ -1,4 +1,10 @@
-import { models, type ScreenFrame, type UiAction, type UiState } from "./model";
+import {
+    models,
+    type MouthBatch,
+    type ScreenFrame,
+    type UiAction,
+    type UiState,
+} from "./model";
 
 // Tokenize outside strings before JSON.parse can round an integer token.
 export function parseLossless(wire: string): unknown {
@@ -88,6 +94,13 @@ function validate(value: unknown, shape: Shape): unknown {
     )
         return value;
     if (
+        shape.type === "u8" &&
+        typeof value === "bigint" &&
+        value >= 0n &&
+        value <= 255n
+    )
+        return Number(value);
+    if (
         (shape.type === "string" && typeof value === "string") ||
         (shape.type === "boolean" && typeof value === "boolean")
     )
@@ -99,6 +112,9 @@ export function decodeFrame(wire: string): ScreenFrame {
 }
 export function decodeState(wire: string): UiState {
     return validate(parseLossless(wire), models.UiState) as UiState;
+}
+export function decodeMouth(wire: string): MouthBatch {
+    return validate(parseLossless(wire), models.MouthBatch) as MouthBatch;
 }
 export function decodeAction(wire: string): UiAction {
     return validate(parseLossless(wire), models.UiAction) as UiAction;

@@ -7,6 +7,8 @@ use std::path::Path;
 #[derive(Default)]
 pub struct World {
     pub ui_states: Vec<Value>,
+    /// The lip-sync batches the paired screen stream carried.
+    pub mouth: Vec<Value>,
     pub playback: Option<Value>,
     pub reply_pcm_bytes: usize,
     pub trace: Trace,

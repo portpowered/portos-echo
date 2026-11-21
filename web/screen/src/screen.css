@@ -669,6 +669,18 @@ main.settings-open {
     height: 100%;
     object-fit: contain;
 }
+/* Mouth stills cover the speaking clip while the voice drives them. */
+.pack-stage .pack-mouth {
+    z-index: 2;
+    visibility: hidden;
+}
+.pack-stage .pack-mouth[data-shown] {
+    visibility: visible;
+}
+.pack-stage[data-lips] > video,
+.pack-stage[data-lips] > img:not(.pack-mouth) {
+    visibility: hidden;
+}
 .pack-clock,
 .pack-date {
     margin: 0;

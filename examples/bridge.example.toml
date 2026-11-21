@@ -55,6 +55,8 @@ allow_tools = ["test.echo"]
 [screen]
 listen = "0.0.0.0:16900"
 pairing_token_file = "credentials/screen-pairing.txt"
+# Lip sync: milliseconds from a reply frame's hand-off until the Echo's speaker plays it.
+# mouth_delay_ms = 200
 
 # Duplex run listening after activity/reply. This differs from live.session_idle_seconds,
 # which retains the Live call between separate wake runs. Omitted table/keys use these defaults.

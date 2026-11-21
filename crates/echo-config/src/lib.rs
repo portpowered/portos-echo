@@ -269,6 +269,9 @@ pub struct ScreenConfig {
     pub pairing_token_file: PathBuf,
     /// Verified downloads, scheduled by the screen owner outside the voice path.
     pub packs: Vec<ScreenPackDownload>,
+    /// From a reply frame's hand-off to the Echo until its sound leaves the
+    /// speaker: lip-sync samples are stamped this far after the hand-off.
+    pub mouth_delay_ms: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

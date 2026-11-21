@@ -323,7 +323,10 @@ impl<'a> View<'a> {
                     "cut_ms":cut.map(|cut| cut.yield_ms), "text":cut.map(|cut| cut.text.as_str())},
                 "mic":{"onsets":quality.mic.onsets, "echo_max":quality.mic.echo_max,
                     "level_max":quality.mic.level_max, "coupling":quality.mic.coupling,
-                    "echo_mean":quality.mic.echo_mean, "noise":quality.mic.noise}
+                    "echo_mean":quality.mic.echo_mean, "noise":quality.mic.noise},
+                "lips":{"batches":quality.lips.batches, "samples":quality.lips.samples,
+                    "dropped":quality.lips.dropped, "publish_max_ms":quality.lips.publish_max_ms,
+                    "lead_min_ms":quality.lips.lead_min_ms, "late":quality.lips.late}
             }),
         )?;
         let Some(first) = quality.first_audio else {

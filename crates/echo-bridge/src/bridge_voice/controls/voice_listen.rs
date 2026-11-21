@@ -202,7 +202,7 @@ fn settled(
     stats.reply_received -= previous.reply_received;
     stats.reply_sent -= previous.reply_sent;
     stats.reply_dropped -= previous.reply_dropped;
-    stats.quality = source.settle(port.rtp_lost());
+    *stats.quality = source.settle(port.rtp_lost());
     source.follow_up = super::voice_source::FollowUp::Replied;
     *previous = totals;
     observe(Notice::ReplySettled(stats))?;

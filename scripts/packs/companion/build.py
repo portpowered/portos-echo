@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 
+from mouth import stills
 from render import BACKGROUND, FRAMES, WARMTH, render
 
 MIB = 1024 ** 2
@@ -22,7 +23,7 @@ def clip(name, mode):
     return {"webm": f"{name}.webm", "mp4": f"{name}.mp4", "mode": mode}
 
 
-def manifest(version):
+def manifest(version, mouth):
     states = {role: {"clip": clip(role, "loop")}
               for role in FRAMES if role not in ("happy", "setup-enter")}
     states["setup"]["enter"] = clip("setup-enter", "once")
@@ -50,6 +51,9 @@ def manifest(version):
             "rest": "rest.png",
             "states": states,
             "emotes": {"happy": clip("happy", "once")},
+            # While she speaks, the still for what her voice is doing covers
+            # the speaking clip.
+            "mouth": mouth,
         },
     }
 
@@ -86,9 +90,10 @@ def build(version, out, warmth=WARMTH):
         pack = payload / f"companion@{version}"
         pack.mkdir(parents=True)
         render(pack, stage, warmth)
+        mouth = stills(pack)
         stylesheet = Path(__file__).with_name("companion-clock.css")
         (pack / stylesheet.name).write_bytes(stylesheet.read_bytes())
-        (pack / "pack.json").write_text(json.dumps(manifest(version), indent=2) + "\n",
+        (pack / "pack.json").write_text(json.dumps(manifest(version, mouth), indent=2) + "\n",
                                        encoding="utf-8")
         archive_pack(pack, payload / f"companion-{version}.screenpack.tar.gz")
         # Same filesystem as out. Refuse a destination created mid-build.

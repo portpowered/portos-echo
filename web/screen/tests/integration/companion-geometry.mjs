@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { activeVideo, playing } from "./pack-session.mjs";
 
-const id = "companion@0.2.1";
+const id = "companion@0.2.2";
 export const viewport = { width: 1280, height: 748 };
 const ready = { state: "ready", message: "Ready" };
 const thinking = { state: "thinking" };

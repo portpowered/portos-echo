@@ -102,6 +102,16 @@ fn m6_audio(session: &Session, report: &Value) {
     assert!(audio["audibility"]["audible_samples"].as_u64().unwrap() >= 2400);
 }
 
+/// Lip sync for the 200 ms reply: samples reached the paired stream, each
+/// sent ahead of its sound. A batch may be dropped when the screen server is
+/// busy that instant; the scenario accounts for it.
+fn lips(lips: &Value) {
+    assert_eq!(lips["late"], 0, "{lips}");
+    assert!(lips["samples"].as_u64().unwrap() >= 5, "{lips}");
+    assert!(lips["received_samples"].as_u64().unwrap() >= 1, "{lips}");
+    assert!(lips["lead_ms"]["min"].as_u64().unwrap() >= 100, "{lips}");
+}
+
 fn m4_audio(session: &Session, report: &Value, case: &str) {
     let name = format!("m4-{case}-audible.json");
     assert!(report["evidence"].as_array().unwrap().contains(&json!(name)));
@@ -113,6 +123,7 @@ fn m4_audio(session: &Session, report: &Value, case: &str) {
     assert!(audio["audibility"]["host"]["nonzero_bytes"].as_u64().unwrap() > 0);
     assert!(audio["audibility"]["nonzero_samples"].as_u64().unwrap() >= 2400);
     assert!(audio["audibility"]["audible_samples"].as_u64().unwrap() >= 2400);
+    lips(&audio["lips"]);
     let frames = audio["ui_states"].as_array().unwrap();
     assert_eq!(frames.len(), 7);
     for (index, (frame, state)) in frames

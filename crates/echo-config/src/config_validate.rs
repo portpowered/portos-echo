@@ -97,7 +97,7 @@ fn schema_field(path: &str, key: &str) -> bool {
             "scopes",
             "operator_listen",
         ],
-        "screen" => &["listen", "pairing_token_file", "packs"],
+        "screen" => &["listen", "pairing_token_file", "packs", "mouth_delay_ms"],
         "audit" => &["log_dir"],
         p if p.starts_with("mcp.server[") && p.ends_with(']') => &["name", "url", "auth", "bearer_file", "allow_tools"],
         _ => &[],
