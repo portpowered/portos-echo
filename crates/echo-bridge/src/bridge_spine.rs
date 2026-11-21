@@ -5,6 +5,30 @@ use bridge_input::{Provider, parse};
 use echo_live::call::{CallError, CredentialProvider, LiveCredential};
 use serde_json::json;
 
+#[test]
+fn muse_configured_selects_codex() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("bridge.toml");
+    let config = include_str!("../../../examples/bridge.example.toml")
+        .replace("echo.example.invalid", "127.0.0.1")
+        .replace("[agent]", "[agent]\nbackend='muse'");
+    std::fs::write(
+        &path,
+        format!(
+            "{config}\n[muse]\nurl='https://127.0.0.1:7448'\nca_file='absent/ca.der'\ncredential_file='absent/muse'\n"
+        ),
+    )
+    .unwrap();
+    let args = vec![
+        "--config".into(),
+        path.to_string_lossy().into_owned(),
+        "--trace".into(),
+        "unused-trace".into(),
+    ];
+    let settings = parse(&args, [None, None, None]).unwrap().unwrap();
+    assert_eq!(bridge_runtime::configured(&settings), true);
+}
+
 #[tokio::test]
 async fn muse_selection_cannot_silently_execute_the_unselected_client_backend() {
     let directory = tempfile::tempdir().unwrap();
