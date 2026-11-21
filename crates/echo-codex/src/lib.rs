@@ -53,7 +53,9 @@ impl ThreadSettings {
                 "tools.update_plan.enabled": false,
                 // Every catalog model is code-mode-only. `functions` is the pin's
                 // namespace for the caller's tools: declared directly they need no
-                // code-mode host, which the Echo's install does not have.
+                // code-mode host, which the Echo's install does not have. `web` is
+                // never direct: the backend reserves `web.run` for these models and
+                // refuses a client declaration of it (HTTP 400).
                 "features.code_mode.direct_only_tool_namespaces": ["functions"],
                 "web_search": "live",
                 "mcp_servers": {},

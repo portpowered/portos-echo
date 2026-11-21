@@ -151,7 +151,8 @@ The voice model answers conversation, explanations and general knowledge directl
 needs an effect or unavailable live/personal data. The runner gets bridge-declared tools, with native shell,
 unified execution and independent Codex MCP discovery disabled. Provider-backed read-only web search is the sole
 exception: `codex.web_search` defaults to `live`, accepts `cached` or `disabled`, and adds no local authority.
-Conventional models use hosted search; native Responses Lite models use the pin's provider-backed `web.run`.
+Conventional models use hosted search; native Responses Lite models use the pin's provider-backed `web.run`,
+which runs behind `exec` and so is unavailable on the Echo until `codex-code-mode-host` is built for it.
 Cached sets `external_web_access` false for both forms; disabled omits search.
 A read-only runner sandbox does not prevent effects through explicitly granted MCP tools. Prompt instructions
 guide behavior; allowlists and caps enforce the available effect surface.

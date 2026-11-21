@@ -217,7 +217,8 @@ need, since the Echo's disk is small.
   direct declarations beside them, never `exec` callables: `exec` runs in `codex-code-mode-host`, which the
   Echo's armv7 install does not have, so a tool that is only an `exec` callable cannot be called on the Echo
   (decision 2026-11-20). Both configuration paths set
-  `features.code_mode.direct_only_tool_namespaces=["web","functions"]`. "Only the bridge's tools" means the
+  `features.code_mode.direct_only_tool_namespaces=["functions"]`; `web.run` is not a direct declaration, since
+  the live backend refuses one for code-mode-only models (decision 2026-11-21). "Only the bridge's tools" means the
   effect surface: the only callable effects are the bridge's declared tools, search and, inside `exec`,
   `clock__curr_time`. T3 (`pinned_media/tools_provider.py`) fails if either list widens (decision 2026-11-17)
   and proves a direct call with no code-mode host beside the app server.

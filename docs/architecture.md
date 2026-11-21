@@ -372,10 +372,12 @@ selects `"live"`. Live search allows external web access; cached search sets pro
 is not exposed. Conventional models receive one hosted `web_search` declaration. Responses Lite models,
 including `gpt-6.1-sol`, receive the pin's standalone `web.run` extension instead, using the authenticated
 provider search API. Neither form adds local fetch, process, browser or file authority.
-The complete bridge dynamic catalog remains unchanged; native direct tools are that catalog plus exactly
-`web.run` when enabled. Every other built-in effect stays disabled and `mcp_servers` stays `{}`.
-Thread settings and local overrides set `features.code_mode.direct_only_tool_namespaces=["web","functions"]`
-so search and the bridge's own tools are direct declarations. Every catalog model is code-mode-only, and
+The complete bridge dynamic catalog remains unchanged; native direct tools are exactly that catalog. Every other built-in effect stays disabled and `mcp_servers` stays `{}`.
+Thread settings and local overrides set `features.code_mode.direct_only_tool_namespaces=["functions"]`
+so the bridge's own tools are direct declarations. `web.run` is not: for a code-mode-only Responses Lite
+model the live backend reserves it and refuses a client declaration with HTTP 400, which failed every
+delegated turn on the Echo with `rust-v0.171.0` (decision 2026-11-21). Search then needs `exec`, so it is
+unavailable on the Echo until `codex-code-mode-host` is built for it. Every catalog model is code-mode-only, and
 `exec` needs `codex-code-mode-host`, which the Echo does not have: a tool that is only an `exec` callable
 cannot be called there. The local-fake provider opts into `supports_standalone_web_search` to reproduce
 production support.
@@ -520,9 +522,12 @@ thread/start's base instructions; `<home>/prompts/voice.md` is the Live prompt, 
 makes conversation the rule and a hand-off the exception. A new call and its delegated thread reload both
 files; retained calls keep their original snapshot and text. Edits require no bridge restart.
 The files are the base prompts only. On a call that advertises the bridge's session tools, the bridge
-appends its own goodbye guidance for `end_session` to both admitted texts, after the file or built-in
-text and before the call-start snapshot. That guidance is not in the prompt files and an edit cannot
-drop it, so a home seeded by an older install still ends a run on goodbye.
+adds its own goodbye guidance for `end_session` to both admitted texts, before the call-start snapshot:
+after the runner's file or built-in text, and ahead of the voice's. The voice prompt reaches the live
+model only as one developer message, and with the guidance after a base prompt that avoids hand-offs the
+model answered "end the call" with a farewell and no hand-off (Echo, 2026-11-21); leading with it, the
+model hands off and the runner calls `end_session`. That guidance is not in the prompt files and an edit
+cannot drop it, so a home seeded by an older install still ends a run on goodbye.
 
 Configure `[home] dir` with an absolute path (no tilde or environment expansion). On the Echo use
 `/data/local/echo-bridge/home`, separate from `/data/local/echo-bridge/private`, which still holds secrets.
