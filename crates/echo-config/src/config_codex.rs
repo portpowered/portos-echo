@@ -279,12 +279,26 @@ For Port OS device control, resolve the named room or device with group_query or
         }
         assert!(RUNNER_SESSION_GUIDANCE.contains("immediately call end_session with {} once"));
         assert!(RUNNER_SESSION_GUIDANCE.contains("finish with an empty reply"));
+        // The base prompt no longer argues against a hand-off.
+        assert!(
+            !LIVE_INSTRUCTIONS.contains("answer directly") && !LIVE_INSTRUCTIONS.contains("instead of handing off")
+        );
+        assert!(
+            RUNNER_SESSION_GUIDANCE
+                .contains(r#"call extend_session once with that many seconds, such as {"seconds":120}"#)
+        );
+    }
+
+    #[test]
+    fn live_session_guidance_delegates_waiting_and_ending_first() {
         // Device, 2026-11-21: after an answered question the Live voice spoke an
         // acknowledgement or a farewell and never delegated, so a hold or an end
         // did nothing. Waiting and ending are tasks it delegates first, every time.
         assert!(LIVE_SESSION_GUIDANCE.starts_with("Waiting and ending the call are background-agent tasks"));
         assert!(LIVE_SESSION_GUIDANCE.contains("hold on for two minutes"));
-        assert!(LIVE_SESSION_GUIDANCE.contains("first delegate it to the background agent with the user's exact words"));
+        assert!(
+            LIVE_SESSION_GUIDANCE.contains("first delegate it to the background agent with the user's exact words")
+        );
         assert!(LIVE_SESSION_GUIDANCE.contains("also right after you answered another question"));
         // Nothing is spoken before the delegation: no farewell instruction leads it.
         let delegate = LIVE_SESSION_GUIDANCE.find("first delegate").unwrap();
@@ -294,12 +308,6 @@ For Port OS device control, resolve the named room or device with group_query or
             let (before, after) = example.split_once("You: [delegate").unwrap();
             assert!(!before.to_lowercase().contains("bye") && after.contains(']'));
         }
-        // The base prompt no longer argues against a hand-off.
-        assert!(!LIVE_INSTRUCTIONS.contains("answer directly") && !LIVE_INSTRUCTIONS.contains("instead of handing off"));
-        assert!(
-            RUNNER_SESSION_GUIDANCE
-                .contains(r#"call extend_session once with that many seconds, such as {"seconds":120}"#)
-        );
     }
 
     #[test]

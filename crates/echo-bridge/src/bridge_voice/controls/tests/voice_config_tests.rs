@@ -111,7 +111,13 @@ async fn configured_call_options_include_context_and_preserve_policy() {
         .voice
         .conversation((&text, "live snapshot"), options.host.deadline);
     assert_eq!(call.call.prompt, "live snapshot");
-    assert!(options.voice.call.prompt.contains("Keep replies brief and conversational"));
+    assert!(
+        options
+            .voice
+            .call
+            .prompt
+            .contains("Keep replies brief and conversational")
+    );
     assert_eq!(options.voice.call.prompt, echo_config::LIVE_INSTRUCTIONS);
     assert_eq!(
         call.call.instructions,
