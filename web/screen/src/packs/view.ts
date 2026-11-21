@@ -5,6 +5,7 @@ import { Player, stateName, type Character } from "./player";
 import { Lips, mouthStills, type MouthSet } from "./mouth";
 import { mediaStage } from "./media";
 import { applyLayout, type Layout } from "./layout";
+import type { StreamEvents } from "../transport";
 
 interface Manifest {
     format: 1;
@@ -15,7 +16,7 @@ interface Manifest {
 export function mountPacks(
     host: HTMLElement,
     actions: string,
-    stream: EventSource,
+    stream: StreamEvents,
     redraw: () => void,
 ) {
     let stopped = false;
