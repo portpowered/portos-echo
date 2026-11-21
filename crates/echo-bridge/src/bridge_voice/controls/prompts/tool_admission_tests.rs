@@ -164,7 +164,10 @@ async fn remote(
         echo_config::LIVE_SESSION_GUIDANCE,
         expected.1
     );
-    assert!(runner.contains("immediately call end_session with {} once") && voice.contains("hand off once"));
+    assert!(
+        runner.contains("immediately call end_session with {} once")
+            && voice.contains("first delegate it to the background agent")
+    );
     let advertised: Vec<_> = catalog.as_array().unwrap().iter().map(|tool| &tool["name"]).collect();
     assert_eq!(advertised.iter().filter(|name| **name == "end_session").count(), 1);
     for method in ["thread/start", "thread/realtime/start", "thread/realtime/stop"] {

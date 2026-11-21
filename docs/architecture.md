@@ -529,8 +529,11 @@ model only as one developer message, and with the guidance after a base prompt t
 model answered "end the call" with a farewell and no hand-off (Echo, 2026-11-21); leading with it, the
 model hands off and the runner calls `end_session`. That guidance is not in the prompt files and an edit
 cannot drop it, so a home seeded by an older install still ends a run on goodbye. The runner guidance
-also maps "hold on" to one `extend_session` call with the requested seconds, and the voice guidance
-makes that hand-off mandatory: an acknowledgement alone does not hold the call (Echo, 2026-11-21).
+also maps "hold on" to one `extend_session` call with the requested seconds. The voice guidance frames
+waiting and ending as background-agent tasks the voice delegates first, with the user's exact words,
+every time, speaking only after the delegation: after an answered question the Echo's voice otherwise
+answered a hold or an end with speech alone (2026-11-21). The default voice prompt keeps conversation
+with the voice but no longer argues against a hand-off.
 An applied `end_session` ends the run at once: the bridge drops the delegation it waited for, cuts a
 reply opened for the turn that has not spoken yet (an audible farewell plays out first) and interrupts
 the running delegated turn (best effort: a missed acknowledgement cancels the request and keeps the

@@ -31,8 +31,9 @@ output_lock = threading.Lock()
 observed = {'calls': 0, 'sidebands': 0, 'external': 0, 'models': [], 'delegations': [], 'appends': [],
             'model_requests': 0, 'time_wire': [], 'media_time_turns': [], 'media_time_transcripts': []}
 script = None
-TIME_RULE = ('Always answer time, date, and day-of-week questions directly '
-             'from the call-start context and never hand them off.')
+# Live answers time questions itself only while its prompt keeps the call-start time rule.
+TIME_RULE = ('The context is a call-start snapshot: answer time, date, and day-of-week questions '
+             'yourself from it.')
 UTC_CAVEAT = "When no operator time zone is configured, UTC does not establish the user's local time zone."
 SEARCH_GUIDANCE = 'When current facts need a lookup, the background agent can search the web'
 
@@ -286,7 +287,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                        if item.get('type') == 'message' and item.get('role') == 'developer'
                                        for part in item['content'] if part.get('type') == 'input_text'), '')
         if script and any('request' in turn[0] for turn in script.turns):
-            if 'hand off once with their words so the background agent ends the session' not in script.instructions:
+            if "first delegate it to the background agent with the user's exact words" not in script.instructions:
                 emit({'event': 'provider.failure', 'failure': 'missing goodbye Live prompt'})
         observed['calls'] += 1
         emit({'event': 'provider.offer', 'offer': body['sdp']})

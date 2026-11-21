@@ -52,13 +52,24 @@ pub struct CodexConfig {
     pub skills: Vec<String>,
 }
 
-/// Owner, 2026-11-18: conversation is the default and a hand-off is the exception.
-pub const LIVE_INSTRUCTIONS: &str = r"You are a friendly voice assistant on a smart speaker. Conversation is the default: answer directly and briefly from the conversation, the call-start context and your own general knowledge. Greetings, small talk, opinions, explanations, general knowledge and arithmetic never need the background agent; do not hand off just to check or verify something you can answer. Hand off to the background agent only when the request truly needs a tool: an action on a device or service, or live or personal data you do not have. If you are unsure whether a tool is needed, answer or ask a short question instead of handing off. After a hand-off, say one short acknowledgement and wait for its result; never hand off the same request twice. The context is a call-start snapshot. Always answer time, date, and day-of-week questions directly from the call-start context and never hand them off. When no operator time zone is configured, UTC does not establish the user's local time zone.";
+/// Owner, 2026-11-18: conversation stays with the voice. Device, 2026-11-21: waiting
+/// and ending lead, delegated first, or the voice answered them with speech alone.
+pub const LIVE_INSTRUCTIONS: &str = r#"You are a friendly voice assistant on a smart speaker. Answer briefly.
+
+Waiting and ending are background-agent tasks. When the user asks you to wait, hold on, pause, give them a minute, or end, stop or hang up the call, delegate it to the background agent with the user's exact words before you say anything. Do this every time, also right after you answered another question. Never handle these yourself: your words alone cannot keep the call open or close it. Saying goodbye does not end the call; only the delegation does, so delegate first and say goodbye only after it.
+User: What time is it? You: It's ten past three. User: Hold on for two minutes. You: [delegate "Hold on for two minutes."] Sure, I'll wait.
+User: What's twelve times four? You: Forty-eight. User: End the call now. You: [delegate "End the call now."] Okay, ending the call. Goodbye!
+User: Thanks, that's all. You: [delegate "Thanks, that's all."] Bye for now!
+
+Talk with the user yourself for small talk, opinions, explanations, general knowledge and arithmetic. Delegate actions on devices or services, and live or personal data you do not have. After a delegation, say one short acknowledgement and wait for its result; never delegate the same request twice. The context is a call-start snapshot: answer time, date, and day-of-week questions yourself from it. When no operator time zone is configured, UTC does not establish the user's local time zone."#;
 
 /// The bridge's own guidance for its `end_session` tool, appended to the
 /// admitted voice prompt. It is not part of the base prompt: an owner prompt
 /// file replaces that whole text and must not be able to drop the goodbye.
-pub const LIVE_SESSION_GUIDANCE: &str = r"Ending the call is a tool action that only the background agent can take: you cannot end the call yourself, and a farewell alone leaves it open. When the user clearly signals they are finished, such as goodbye, that's all, thanks that's it, end the call, hang up, stop, never mind, or go to sleep, hand off once with their words so the background agent ends the session, and say one brief farewell as the acknowledgement of that hand-off. Always make this hand-off, even though you otherwise avoid hand-offs. This farewell is the only thing you say for that hand-off. If a task or another hand-off is still pending, hand off anyway: ending the call supersedes it. If the user thanks you and asks a question, answer the question and keep the conversation open. Keeping the call open is also a tool action that only the background agent can take: an acknowledgement alone does not hold the call, which closes a few seconds after the user goes quiet. When the user asks you to wait or hold on for a while, such as hold on for two minutes, give me a minute, one moment, or I'll be right back, always hand off once with their words so the background agent keeps the session open, even right after you answered another question and even though you otherwise avoid hand-offs. Say only a brief acknowledgement for that hand-off.";
+pub const LIVE_SESSION_GUIDANCE: &str = r#"Waiting and ending the call are background-agent tasks: only the background agent can keep the call open or close it, and your own words do neither. When the user asks you to wait or hold on, such as hold on for two minutes, give me a minute, one moment, or I'll be right back, or to end the call, such as goodbye, that's all, thanks that's it, end the call, hang up, stop, never mind, or go to sleep, first delegate it to the background agent with the user's exact words. Do this every time, also right after you answered another question and even while another task is pending: ending the call supersedes it. Speak only after the delegation: a brief acknowledgement, or a brief goodbye for an end. If the user thanks you and also asks a question, answer the question and keep the call open.
+User: How far away is the Moon? You: About 384,000 kilometres. User: Hold on for two minutes. You: [delegate "Hold on for two minutes."] Sure, I'll wait.
+User: What's twelve times four? You: Forty-eight. User: End the call now. You: [delegate "End the call now."] Okay, ending the call. Goodbye!
+User: Thanks, that's all. You: [delegate "Thanks, that's all."] Bye for now!"#;
 
 /// The runner's half of the same guidance, appended to its admitted prompt.
 pub const RUNNER_SESSION_GUIDANCE: &str = r#"A hand-off carries the user's latest words and the recent transcript, never a command. If those latest words only say the user is finished, such as goodbye, that's all, thanks that's it, stop, never mind, or go to sleep, and ask for nothing else, immediately call end_session with {} once. After the tool result, finish with an empty reply: the Live voice has already said the farewell. If the user also asks for something, such as "thanks, and what time is it?", do that and do not end the session. If those latest words ask you to wait or hold on for a while, call extend_session once with that many seconds, such as {"seconds":120} for two minutes, then finish with an empty reply."#;
@@ -255,36 +266,49 @@ mod tests {
     use super::*;
 
     const EXAMPLE: &str = include_str!("../../../examples/bridge.example.toml");
+    // The shipped default prompt files extend the built-in texts with later notes.
+    const VOICE: &str = include_str!("../../../examples/prompts/voice.md");
+    const RUNNER: &str = include_str!("../../../examples/prompts/runner.md");
 
     #[test]
     fn agent_home_builtin_prompts_match_the_admitted_text() {
-        assert_eq!(
-            LIVE_INSTRUCTIONS,
-            r"You are a friendly voice assistant on a smart speaker. Conversation is the default: answer directly and briefly from the conversation, the call-start context and your own general knowledge. Greetings, small talk, opinions, explanations, general knowledge and arithmetic never need the background agent; do not hand off just to check or verify something you can answer. Hand off to the background agent only when the request truly needs a tool: an action on a device or service, or live or personal data you do not have. If you are unsure whether a tool is needed, answer or ask a short question instead of handing off. After a hand-off, say one short acknowledgement and wait for its result; never hand off the same request twice. The context is a call-start snapshot. Always answer time, date, and day-of-week questions directly from the call-start context and never hand them off. When no operator time zone is configured, UTC does not establish the user's local time zone."
-        );
-        assert_eq!(
-            RUNNER_INSTRUCTIONS,
-            r"Client audio bridge
-
-For Port OS device control, resolve the named room or device with group_query or endpoint_query. If no target matches, explain that. If several match, ask which one. Copy the discovered ID and message into control and call it once per resolved action with an idempotencyKey. Lights need no extra confirmation. Describe a queued or pending action as submitted and stop. Even a successful delivery receipt only confirms delivery. When checking the effect of a completed light command, read the resolved lights' fresh power state once. Report only the confirmed result or uncertainty in one short sentence. If the tool says to relink Port OS, relay that instruction."
-        );
+        assert_eq!(VOICE.split("\n\nWhen current facts").next(), Some(LIVE_INSTRUCTIONS));
+        assert!(RUNNER.starts_with(&format!("{RUNNER_INSTRUCTIONS}\n\n")));
         // The goodbye guidance is the bridge's own, never part of a base prompt.
         for base in [LIVE_INSTRUCTIONS, RUNNER_INSTRUCTIONS] {
             assert!(!base.contains("end_session") && !base.contains("farewell"));
         }
-        assert!(LIVE_SESSION_GUIDANCE.contains("hand off once with their words"));
         assert!(RUNNER_SESSION_GUIDANCE.contains("immediately call end_session with {} once"));
         assert!(RUNNER_SESSION_GUIDANCE.contains("finish with an empty reply"));
-        // Device, 2026-11-21: after an answered question, "Hold on for two
-        // minutes." got a spoken acknowledgement and no hand-off, so the run
-        // closed at its listen window. The hold hand-off is mandatory too.
-        assert!(LIVE_SESSION_GUIDANCE.contains("an acknowledgement alone does not hold the call"));
-        assert!(LIVE_SESSION_GUIDANCE.contains("always hand off once with their words so the background agent keeps"));
-        assert!(LIVE_SESSION_GUIDANCE.contains("even right after you answered another question"));
+        // The base prompt no longer argues against a hand-off.
+        assert!(
+            !LIVE_INSTRUCTIONS.contains("answer directly") && !LIVE_INSTRUCTIONS.contains("instead of handing off")
+        );
         assert!(
             RUNNER_SESSION_GUIDANCE
                 .contains(r#"call extend_session once with that many seconds, such as {"seconds":120}"#)
         );
+    }
+
+    #[test]
+    fn live_session_guidance_delegates_waiting_and_ending_first() {
+        // Device, 2026-11-21: after an answered question the Live voice spoke an
+        // acknowledgement or a farewell and never delegated, so a hold or an end
+        // did nothing. Waiting and ending are tasks it delegates first, every time.
+        assert!(LIVE_SESSION_GUIDANCE.starts_with("Waiting and ending the call are background-agent tasks"));
+        assert!(LIVE_SESSION_GUIDANCE.contains("hold on for two minutes"));
+        assert!(
+            LIVE_SESSION_GUIDANCE.contains("first delegate it to the background agent with the user's exact words")
+        );
+        assert!(LIVE_SESSION_GUIDANCE.contains("also right after you answered another question"));
+        // Nothing is spoken before the delegation: no farewell instruction leads it.
+        let delegate = LIVE_SESSION_GUIDANCE.find("first delegate").unwrap();
+        assert!(LIVE_SESSION_GUIDANCE.find("Speak only after the delegation").unwrap() > delegate);
+        assert!(!LIVE_SESSION_GUIDANCE.contains("farewell"));
+        for example in LIVE_SESSION_GUIDANCE.lines().skip(1) {
+            let (before, after) = example.split_once("You: [delegate").unwrap();
+            assert!(!before.to_lowercase().contains("bye") && after.contains(']'));
+        }
     }
 
     #[test]
