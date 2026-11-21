@@ -11,3 +11,7 @@ keywords = ["design-tokens", "theme", "css", "portos"]
 publish = false
 
 [dependencies]
+
+# The crate states its own lints, so a workspace that vendors it does not expect it to inherit [workspace.lints].
+[lints.rust]
+unsafe_code = "forbid"

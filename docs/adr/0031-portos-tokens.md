@@ -37,11 +37,10 @@ The crate is generated code with a 651-line source file and a name outside the `
 treats `third_party/portos-tokens/` as a vendored root, as it does `factory/`. `cargo-deny` reads the crate's
 Apache-2.0 licence like any other dependency's.
 
-Cargo makes a path dependency inside the workspace directory a workspace member. The generated manifest has no
-`[lints]` table and is never edited here, so Cargo prints its `missing_lints_inheritance` warning for that one
-manifest. The warning fails nothing. Excluding the crate from the workspace instead breaks `cargo fmt --all` in a
-worktree nested under another checkout, and a workspace lint level does not reach a manifest that inherits none.
-The clean fix is upstream: the generator can emit an empty `[lints]` table.
+Cargo makes a path dependency inside the workspace directory a workspace member. The generated manifest states
+its own lints (`[lints.rust] unsafe_code = "forbid"`), so Cargo does not expect it to inherit `[workspace.lints]`
+and prints no `missing_lints_inheritance` warning. Excluding the crate from the workspace instead would break
+`cargo fmt --all` in a worktree nested under another checkout.
 
 Rollback removes the path dependency, the two routes and the vendored directories, and restores the literal
 colours in `screen.css`.
