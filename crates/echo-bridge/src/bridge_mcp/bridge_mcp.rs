@@ -208,7 +208,6 @@ pub(crate) fn category(error: &AuthError) -> &'static str {
         AuthError::Discovery => "discovery",
         AuthError::RegistrationUnavailable => "registration_unavailable",
         AuthError::RegistrationRefused => "registration_refused",
-        AuthError::RegistrationFailed => "registration_failed",
         AuthError::Transport => "transport",
         AuthError::Protocol => "protocol",
         AuthError::AccessDenied => "access_denied",

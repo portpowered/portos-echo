@@ -185,7 +185,6 @@ fn error(category: &str) -> Result<AuthError, Error> {
         "discovery" => Ok(AuthError::Discovery),
         "registration_unavailable" => Ok(AuthError::RegistrationUnavailable),
         "registration_refused" => Ok(AuthError::RegistrationRefused),
-        "registration_failed" => Ok(AuthError::RegistrationFailed),
         "transport" => Ok(AuthError::Transport),
         "protocol" => Ok(AuthError::Protocol),
         "access_denied" => Ok(AuthError::AccessDenied),

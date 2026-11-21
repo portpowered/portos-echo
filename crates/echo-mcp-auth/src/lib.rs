@@ -80,8 +80,6 @@ pub enum AuthError {
     RegistrationUnavailable,
     #[error("Port OS refused client registration (invalid_client_metadata).")]
     RegistrationRefused,
-    #[error("Port OS client registration failed. Try linking again or set mcp.client_id.")]
-    RegistrationFailed,
     #[error("OAuth transport failed; operation may be incomplete")]
     Transport,
     #[error("OAuth protocol failed")]

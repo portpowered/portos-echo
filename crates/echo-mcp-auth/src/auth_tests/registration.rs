@@ -40,10 +40,13 @@ async fn t3_default_registration_commits_identity_and_reuses_it_after_reopen() {
     assert!(!client.has_grant());
     assert_eq!(mock.count(REGISTER), 0);
     let key = approve(&mock, client, &path).await;
+    mock.state.lock().unwrap().metadata = None;
     let next = automatic(&mock, directory.path(), EPOCH + 5).await;
     assert!(next.has_grant());
     assert_eq!(approve(&mock, next, &path).await, key);
     assert_eq!(mock.count(REGISTER), 1);
+    assert_eq!(mock.count("/custom/link"), 2);
+    assert_eq!(mock.count("/custom/token"), 2);
     assert_requests(&mock);
 }
 
@@ -145,9 +148,9 @@ async fn t3_registration_failures_never_issue_a_challenge_or_save_a_grant() {
             json!({"error":"invalid_client_metadata","error_description":"private detail"}),
             AuthError::RegistrationRefused,
         ),
-        (429, json!({"error":"private detail"}), AuthError::RegistrationFailed),
-        (503, json!({"error":"private detail"}), AuthError::RegistrationFailed),
-        (201, json!({"client_id":" "}), AuthError::RegistrationFailed),
+        (429, json!({"error":"private detail"}), AuthError::Transport),
+        (503, json!({"error":"private detail"}), AuthError::Transport),
+        (201, json!({"client_id":" "}), AuthError::Protocol),
     ] {
         mock.fault(REGISTER, status, body);
         let client = automatic(&mock, directory.path(), EPOCH).await;

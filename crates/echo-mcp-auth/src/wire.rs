@@ -26,25 +26,25 @@ pub(crate) async fn register(
         }))
         .send()
         .await
-        .map_err(|_| AuthError::RegistrationFailed)?;
+        .map_err(|_| AuthError::Transport)?;
     match response.status() {
         StatusCode::CREATED => {
-            let result: RegistrationReply = response.json().await.map_err(|_| AuthError::RegistrationFailed)?;
+            let result: RegistrationReply = response.json().await.map_err(|_| AuthError::Protocol)?;
             if crate::valid_text(&result.client_id) {
                 Ok(result.client_id)
             } else {
-                Err(AuthError::RegistrationFailed)
+                Err(AuthError::Protocol)
             }
         }
-        StatusCode::BAD_REQUEST
-            if response
-                .json::<Failure>()
-                .await
-                .is_ok_and(|body| body.error == "invalid_client_metadata") =>
-        {
-            Err(AuthError::RegistrationRefused)
+        StatusCode::BAD_REQUEST => {
+            let failure: Failure = response.json().await.map_err(|_| AuthError::Protocol)?;
+            if failure.error == "invalid_client_metadata" {
+                Err(AuthError::RegistrationRefused)
+            } else {
+                Err(AuthError::Protocol)
+            }
         }
-        _ => Err(AuthError::RegistrationFailed),
+        _ => Err(AuthError::Transport),
     }
 }
 
