@@ -3,7 +3,7 @@ mod packs;
 mod screen_settings;
 mod support;
 use echo_screen_contract::{ScreenFrame, UiAction, UiState};
-use support::{Result, TOKEN, events, frame, post, report, request, server};
+use support::{Result, TOKEN, events, frame, page_build, post, report, request, server};
 use tokio::{io::AsyncReadExt, net::TcpListener};
 
 #[cfg(echo_screen_embedded)]
@@ -268,12 +268,18 @@ async fn t3_stream_capacity_assets_and_cleanup() -> Result {
         request(addr, "GET", &format!("/events?token={TOKEN}"), "", "").await?.0,
         503
     );
-    for (path, source) in [
-        ("/", include_str!("../../../web/screen/src/index.html")),
-        ("/screen.css", include_str!("../../../web/screen/src/screen.css")),
-    ] {
-        assert_eq!(request(addr, "GET", path, "", "").await?, (200, source.into()));
-    }
+    // Every request names the same page build, in a document that is otherwise the source.
+    let (status, page) = request(addr, "GET", "/", "", "").await?;
+    assert_eq!(status, 200);
+    let (build, document) = page_build(&page)?;
+    assert_eq!(document, include_str!("../../../web/screen/src/index.html"));
+    assert_eq!(build.len(), 16);
+    assert!(build.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert_eq!(request(addr, "GET", "/", "", "").await?, (200, page));
+    assert_eq!(
+        request(addr, "GET", "/screen.css", "", "").await?,
+        (200, include_str!("../../../web/screen/src/screen.css").into())
+    );
     let (status, tokens) = request(addr, "GET", "/tokens.css", "", "").await?;
     assert_eq!(status, 200);
     assert!(tokens.starts_with(portos_tokens::CSS));

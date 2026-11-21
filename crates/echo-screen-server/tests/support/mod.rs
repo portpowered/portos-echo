@@ -87,3 +87,11 @@ pub fn report(message: &str) {
     use std::io::Write;
     let _ = writeln!(std::io::stdout(), "{message}");
 }
+
+/// Splits a served document into its page build identity and the document without the echo-build meta.
+pub fn page_build(html: &str) -> Result<(String, String)> {
+    let open = "<head>\n    <meta name=\"echo-build\" content=\"";
+    let (before, rest) = html.split_once(open).ok_or("missing page build")?;
+    let (build, after) = rest.split_once("\" />").ok_or("unterminated page build")?;
+    Ok((build.to_owned(), format!("{before}<head>{after}")))
+}

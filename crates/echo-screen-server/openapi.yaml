@@ -111,10 +111,10 @@ paths:
         '503': { description: Pack host absent, stopping, draining or read capacity exhausted; empty body }
   /:
     get:
-      description: Existing events/actions bootstrap query grammar; fixed echo-settings v1 meta capability only when a home-backed settings inbox is mounted
+      description: Existing events/actions bootstrap query grammar; fixed echo-settings v1 meta capability only when a home-backed settings inbox is mounted. Every document carries an echo-build meta, the first in head, whose content is 16 lowercase hex digits naming the page build (document, stylesheets and script bundle). It is the same for every request to one server. The page fetches this document again each time its events stream opens and reloads itself once when the build named differs from its own.
       responses:
         '200':
-          description: Existing page, no state or token injected; no-inbox HTML bytes unchanged
+          description: Existing page, no state or token injected; the no-inbox HTML is the source document plus the echo-build meta
           content:
             text/html: { schema: { type: string } }
   /tokens.css:

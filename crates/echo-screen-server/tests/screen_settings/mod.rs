@@ -221,7 +221,8 @@ async fn t3_settings_absent_closed_host_and_capability_are_explicit() -> Result 
     let (mut baseline, _states) = super::support::server().await?;
     let original = request(baseline.bound_addr, "GET", "/", "", "").await?;
     assert_eq!(original.0, 200);
-    assert_eq!(original.1, include_str!("../../../../web/screen/src/index.html"));
+    let (build, document) = super::support::page_build(&original.1)?;
+    assert_eq!(document, include_str!("../../../../web/screen/src/index.html"));
     for method in ["GET", "POST"] {
         assert_eq!(
             request(
@@ -240,9 +241,9 @@ async fn t3_settings_absent_closed_host_and_capability_are_explicit() -> Result 
     let enabled = request(server.bound_addr, "GET", "/", "", "").await?;
     assert_eq!(
         enabled.1,
-        original.1.replacen(
+        document.replacen(
             "<head>",
-            "<head>\n    <meta name=\"echo-settings\" content=\"v1\" />\n    <meta name=\"echo-packs\" content=\"v1\" />",
+            &format!("<head>\n    <meta name=\"echo-build\" content=\"{build}\" />\n    <meta name=\"echo-settings\" content=\"v1\" />\n    <meta name=\"echo-packs\" content=\"v1\" />"),
             1
         )
     );

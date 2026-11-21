@@ -3,26 +3,49 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-pub(crate) fn index_with_settings(settings: bool) -> Response {
-    let html = include_str!("../../../web/screen/src/index.html");
-    let html = if settings {
-        html.replacen(
-            "<head>",
-            "<head>\n    <meta name=\"echo-settings\" content=\"v1\" />\n    <meta name=\"echo-packs\" content=\"v1\" />",
-            1,
-        )
+const INDEX: &str = include_str!("../../../web/screen/src/index.html");
+const CSS: &str = include_str!("../../../web/screen/src/screen.css");
+
+// The identity of the page this server serves: a digest of the document, both stylesheets and the script
+// bundle. The document carries it in its echo-build meta. A page that reconnects to a server whose document
+// names another build reloads itself, so an upgraded bridge never keeps driving the previous page.
+pub(crate) fn build_id(bundle: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    for part in [INDEX.as_bytes(), CSS.as_bytes(), tokens_css().as_bytes(), bundle] {
+        digest.update(Sha256::digest(part));
+    }
+    let mut head = [0; 8];
+    head.copy_from_slice(&digest.finalize()[..8]);
+    format!("{:016x}", u64::from_be_bytes(head))
+}
+
+// The bundle as it is when the server starts. A development build reads the file again for every request, so
+// its page identity is the one of the bundle present at startup.
+pub(crate) fn startup_bundle() -> Vec<u8> {
+    #[cfg(echo_screen_embedded)]
+    {
+        EMBEDDED.to_vec()
+    }
+    #[cfg(not(echo_screen_embedded))]
+    {
+        std::fs::read(DIST).unwrap_or_default()
+    }
+}
+
+pub(crate) fn index_with_settings(settings: bool, build: &str) -> Response {
+    let capabilities = if settings {
+        "\n    <meta name=\"echo-settings\" content=\"v1\" />\n    <meta name=\"echo-packs\" content=\"v1\" />"
     } else {
-        html.to_owned()
+        ""
     };
+    let head = format!("<head>\n    <meta name=\"echo-build\" content=\"{build}\" />{capabilities}");
+    let html = INDEX.replacen("<head>", &head, 1);
     ([("content-type", "text/html; charset=utf-8")], html).into_response()
 }
 
 pub(crate) async fn css() -> Response {
-    (
-        [("content-type", "text/css; charset=utf-8")],
-        include_str!("../../../web/screen/src/screen.css"),
-    )
-        .into_response()
+    ([("content-type", "text/css; charset=utf-8")], CSS).into_response()
 }
 
 // The vendored Port OS design tokens (third_party/portos-tokens) as CSS custom properties. Port OS switches
@@ -61,18 +84,19 @@ pub(crate) fn bundle(bytes: Option<Vec<u8>>) -> Response {
     }
 }
 
+#[cfg(echo_screen_embedded)]
+const EMBEDDED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/screen.js"));
+#[cfg(not(echo_screen_embedded))]
+const DIST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/screen/dist/screen.js");
+
 pub(crate) async fn js() -> Response {
     #[cfg(echo_screen_embedded)]
     {
-        bundle(Some(include_bytes!(concat!(env!("OUT_DIR"), "/screen.js")).to_vec()))
+        bundle(Some(EMBEDDED.to_vec()))
     }
     #[cfg(not(echo_screen_embedded))]
     {
-        bundle(
-            tokio::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/screen/dist/screen.js"))
-                .await
-                .ok(),
-        )
+        bundle(tokio::fs::read(DIST).await.ok())
     }
 }
 
@@ -90,6 +114,27 @@ mod tests {
         assert_eq!(present.status(), StatusCode::OK);
         assert_eq!(present.headers()["content-type"], "text/javascript; charset=utf-8");
         assert_eq!(to_bytes(present.into_body(), 1024).await.unwrap(), "compiled page");
+    }
+
+    #[tokio::test]
+    async fn build_identity_is_stable_and_follows_the_bundle() {
+        let build = build_id(b"bundle one");
+        assert_eq!(build.len(), 16);
+        assert!(build.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(build_id(b"bundle one"), build);
+        assert_ne!(build_id(b"bundle two"), build);
+        assert_ne!(build_id(b""), build);
+        assert_eq!(build_id(&startup_bundle()), build_id(&startup_bundle()));
+        for (settings, metas) in [(false, 1), (true, 3)] {
+            let body = to_bytes(index_with_settings(settings, &build).into_body(), 4096)
+                .await
+                .unwrap();
+            let html = std::str::from_utf8(&body).unwrap();
+            let meta = format!("<head>\n    <meta name=\"echo-build\" content=\"{build}\" />\n");
+            assert_eq!(html.matches(&meta).count(), 1);
+            assert_eq!(html.matches("<meta name=\"echo-").count(), metas);
+            assert_eq!(html.replacen(&meta, "<head>\n", 1) == INDEX, !settings);
+        }
     }
 
     #[test]
