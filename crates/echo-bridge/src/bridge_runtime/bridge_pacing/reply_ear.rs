@@ -6,7 +6,7 @@ use tokio::time::Instant;
 
 const PERIOD: Duration = Duration::from_millis(20);
 /// How long a frame written to the Echo may still sound at its microphone:
-/// the speaker's output delay (about 200 ms, `Mouth`), the capture path back
+/// the speaker's output delay (about 85 ms, `Mouth`), the capture path back
 /// and the room's tail.
 const REACH: Duration = Duration::from_millis(700);
 /// A level this far above the echo and the room is somebody speaking.

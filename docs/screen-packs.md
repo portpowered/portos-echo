@@ -331,9 +331,9 @@ already holds: no model, no extra dependency.
 
 Each sample is stamped with the time its sound will be heard: the frame's place
 in the Echo's queue plus `[screen] mouth_delay_ms` (40 ms by default, at most
-1000). The Echo plays a frame 45 to 80 ms after its place in the queue and the
-page draws a still about 35 ms after it is due, so 40 puts the picture on the
-sound. Samples leave in small
+1000). The Echo plays a frame about 85 ms after its place in the queue and the
+page draws a still about 35 ms after it is due, so 40 puts the picture about
+15 ms ahead of the sound, the side the eye forgives. Samples leave in small
 batches, at most five (100 ms), as a named `mouth` event on `/events`:
 
 ```text

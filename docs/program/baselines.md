@@ -302,6 +302,29 @@ Fifth owner run, `echo-bridge` at a7d0f49c with hassmic capturing through the Ec
 The session's transcript of a question trails the start of its answer, so the question held its own
 answer. The session was not transcribing the Echo's speaker in this run.
 
+## Lip sync on the Echo (2026-11-20)
+
+Measured on the Echo with the Companion pack and its mouth set. Picture: `adb shell screenrecord --bugreport`, whose
+overlay stamps each frame with the device's wall clock; the still on screen is read from the mouth region of each frame.
+Samples: the `mouth` events of `/events`, with their `sent_ms` and `at_ms`. Sound: the Ring camera's recording, and the
+Echo's AudioFlinger log (`AT::add`, `AT::remove`, and the kernel's frame and time pair in each standby record). All
+recordings were deleted after analysis.
+
+| Fact | Value |
+| --- | --- |
+| Page draws a still after its sample is due | 30 to 35 ms in seven recordings; the still agrees with the sample's shape 83 to 93% of the time |
+| Sound after a frame's place in the modelled queue | about 85 ms: the frame cannot be mixed before it is written, hassmic's track starts within 30 ms of the first data, and the mixer's output is 66 to 73 ms behind it by the kernel's timestamps |
+| The 200 ms used before | hassmic reports `played` a fixed 120 ms (`TAIL_MS`) after the player took the last slot |
+| Output opened from standby | first frame 102 to 203 ms after `AT::add`; a reply never starts cold, because hassmic opens the player on `audio-start`, 240 to 350 ms before the first reply frame |
+| Drift over one reply | none: 2 s pieces of a 35 s reply stay within 10 ms of each other |
+| Picture against sound, default 200 ms | picture about 145 ms late; the Ring's own recording shows 320 ms |
+| Picture against sound, default 40 ms, state at 80 ms | picture 15 to 25 ms early over two 10 s replies (2 s pieces -35 to -15 ms and -70 to +10 ms); the Ring's own recording shows 165 to 185 ms |
+| Second and third turns of a call | within 30 ms of the first turn |
+| Mouth shut after a reply's last sound | +5, +35 and +70 ms in three replies |
+| Barge-in | the mouth is shut within 30 ms of hassmic's flush and no mouth still shows after it |
+| Speaking clip showing after a reply, before the fix | about 0.4 s of its own mouth animation, starting 0.5 s after every reply and barge-in; after the fix at most one frame as the next clip eases in |
+| Ring camera | its sound leads its picture by about 180 to 200 ms; its microphone is ducked while its speaker plays; the wake earcon, written to a cold output, is heard up to 85 ms later than the kernel's timestamps say |
+
 ## Milestones
 
 | Fact | Value | Measured |

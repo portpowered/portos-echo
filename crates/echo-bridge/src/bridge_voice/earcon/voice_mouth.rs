@@ -5,7 +5,7 @@ use tokio::time::{Duration, Instant};
 
 pub(super) const FRAME: Duration = Duration::from_millis(20);
 /// Measured on the real Echo against a recording of its sound: a frame is
-/// heard 45 to 80 ms after its place on the modelled playout clock below.
+/// heard about 85 ms after its place on the modelled playout clock below.
 /// (hassmic reports `played` later than that: it adds a fixed 120 ms tail.)
 pub(super) const OUTPUT_DELAY: Duration = Duration::from_millis(80);
 
