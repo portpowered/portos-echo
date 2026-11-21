@@ -13,7 +13,8 @@ colours, spacing, margins, borders and radii. Port OS publishes its design token
 Apache License 2.0, the same licence as this repository. It is `no_std`, has no dependencies and is not
 published to crates.io.
 
-`third_party/portos-tokens` holds that crate's manifest, licence, README and source byte for byte. `echo-screen-server` is its
+`third_party/portos-tokens` holds that crate's manifest, licence, README and source byte for byte.
+`echo-screen-server` is its
 only dependent, by path. This adds one package to `Cargo.lock` and no registry package. The screen server emits
 the crate's `CSS` constant at `/tokens.css`, followed by the dark scheme's values repeated on `:root`, and the
 Settings rules in `web/screen/src/screen.css` read those custom properties. No token value is written by hand in
