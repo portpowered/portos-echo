@@ -311,6 +311,6 @@ fn assert_private_trace(home: &Path) {
     );
     assert!(voice.lines().any(|line| {
         let row: Value = serde_json::from_str(line).unwrap();
-        row["event"] == "endpoint.session_started" && row["reason"].is_string()
+        row["event"] == "endpoint.session_started" && row["reason"] == "requested"
     }));
 }

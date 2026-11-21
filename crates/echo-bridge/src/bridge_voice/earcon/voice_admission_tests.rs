@@ -390,6 +390,9 @@ pub(crate) async fn endpoint_fixture(
     config.audit.log_dir = home.join("audit");
     let screen = crate::bridge_runtime::bridge_screen::Screen::bind(None).await.unwrap();
     let mut trace = crate::bridge_trace::Trace::open(&home.join("voice-trace"), "api_key").unwrap();
+    let health = crate::bridge_health::Health::offline();
+    let mut presentation_trace = trace.clone();
+    let mut view = super::super::voice_view::View::new(&screen, &health, &mut presentation_trace);
     let mut tools = super::super::voice_tools::Tools::new(&config, std::sync::Arc::new(|| 0));
     tools.open(&config, &screen, &mut trace, None).await.unwrap();
     let (read, write) = tokio::io::split(stream);
@@ -409,11 +412,15 @@ pub(crate) async fn endpoint_fixture(
         async || Ok(MemoryPeer),
         cancelled,
         |notice| {
-            match notice {
-                ServeNotice::Ready => ready.notify_one(),
+            let signal = match &notice {
+                ServeNotice::Ready => Some(ready),
                 ServeNotice::Device(LinkEvent::StaleRemoteCapture | LinkEvent::Mute(_))
-                | ServeNotice::Session(SessionNotice::Run(Notice::Device(LinkEvent::Mute(_)))) => stale.notify_one(),
-                _ => {}
+                | ServeNotice::Session(SessionNotice::Run(Notice::Device(LinkEvent::Mute(_)))) => Some(stale),
+                _ => None,
+            };
+            view.observe(notice)?;
+            if let Some(signal) = signal {
+                signal.notify_one();
             }
             Ok(())
         },
@@ -422,5 +429,6 @@ pub(crate) async fn endpoint_fixture(
     .await;
     tools.close().await;
     retained.close().await;
+    health.close().await;
     result
 }
