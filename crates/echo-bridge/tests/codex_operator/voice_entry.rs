@@ -55,7 +55,7 @@ async fn codex_voice_entry_binary_authenticates_before_ready_and_reaps_after_eof
             .0;
         assert_eq!(
             std::fs::read_to_string(fixture.home.join("last-method")).unwrap(),
-            "account/read"
+            "thread/realtime/listVoices"
         );
         let registration = bridge_short::read(&mut satellite).await.0;
         assert_eq!(registration["type"], "run-satellite");
@@ -312,6 +312,7 @@ fn recovered_process(fixture: &Fixture) {
             "initialize",
             "initialized",
             "account/read",
+            "thread/realtime/listVoices",
         ],
     );
     assert_eq!(

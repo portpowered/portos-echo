@@ -344,7 +344,7 @@ pub(super) fn valid(snapshot: &Value) -> bool {
     snapshot
         == &json!({"event":"provider.snapshot", "calls":[{
         "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-        "model":"gpt-live-1-codex", "alpha":"quicksilver=v2", "nominated_key":true,
+        "model":"gpt-live-1.1-codex", "alpha":"quicksilver=v2", "nominated_key":true,
         "account_header":null}], "sidebands":1, "external":0, "refreshes":0})
 }
 

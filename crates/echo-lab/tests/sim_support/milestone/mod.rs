@@ -3,7 +3,7 @@ use super::{Command, Output, Session, Value, fs, json};
 use std::io::Write;
 use std::path::PathBuf;
 
-// rust-v0.160.0 performs two startup refreshes; remeasure on a pin bump.
+// Codex performs two startup refreshes (first measured at rust-v0.160.0); a release that changes the count fails here.
 const EXPIRED_REFRESHES: u64 = 2;
 
 const SCENARIO: &str = include_str!("../../../../../tests/scenarios/m2-live-connect.yaml");

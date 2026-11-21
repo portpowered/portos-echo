@@ -95,7 +95,7 @@ impl SettingsOverlay {
     }
 
     /// Decode only editable keys. Validation against the base is separate.
-    /// A stored voice the pin no longer accepts decodes as `default`.
+    /// A stored v2-only voice decodes as `default`.
     ///
     /// # Errors
     /// Returns fixed field diagnostics, never submitted keys, values or paths.
@@ -179,7 +179,7 @@ impl SettingsOverlay {
         if self.voice.as_deref().is_some_and(crate::config_codex::retired_voice) {
             return Err(ConfigError::new(
                 "codex.voice",
-                "not supported by the pinned realtime version; choose default or a listed voice",
+                "not supported by the v3 realtime version; choose default or a listed voice",
             ));
         }
         let mut config = base.clone();

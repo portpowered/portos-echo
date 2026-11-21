@@ -16,7 +16,7 @@ SESSION_NAMES = [tool['name'] for tool in SESSION_TOOLS]
 
 def function_tools(tools):
     expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
-                 # rust-v0.160.0 closes each dynamic object schema on the wire.
+                 # Codex closes each dynamic object schema on the wire.
                  'parameters': {**deepcopy(tool['inputSchema']), 'additionalProperties': False},
                  'strict': False} for tool in tools + SESSION_TOOLS]
     # The same pin drops numeric minimum while lowering JSON schema to its
@@ -243,7 +243,12 @@ class PortosDelegation(McpDelegation):
         expected = function_tools(self.tools)
         assert body['tools'] == expected, f"Port OS dynamic catalog mismatch: {body['tools']!r}"
         assert body['model'] == 'gpt-5.4', 'Port OS wrong delegated model'
-        instructions = body.get('instructions', '')
+        instructions = body.get('instructions')
+        if instructions is None:
+            # Codex at rust-v0.171.0 sends the base instructions as the first developer message.
+            first = body['input'][0]
+            assert (first.get('type'), first.get('role')) == ('message', 'developer'), 'runner input shape'
+            instructions = first['content'][0]['text']
         assert 'Lights need no extra confirmation.' in instructions, 'missing default runner guidance'
         assert 'Describe a queued or pending action as submitted and stop.' in instructions, 'missing pending guidance'
         assert "read the resolved lights' fresh power state once" in instructions, 'missing power confirmation guidance'

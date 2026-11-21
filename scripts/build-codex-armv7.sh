@@ -82,18 +82,44 @@ PY
   export CARGO_ENCODED_RUSTFLAGS
 }
 
+codex_release() {
+  # No release is pinned: the newest stable one, or the one CODEX_RELEASE names.
+  release=$(python3 "$repo/scripts/codex_release.py" resolve "$repo") || codex_fail 'cannot select a Codex release'
+  tag=$(printf '%s\n' "$release" | sed -n 's/^tag=//p')
+  commit=$(printf '%s\n' "$release" | sed -n 's/^commit=//p')
+  [ -n "$tag" ] && [ -n "$commit" ] || codex_fail 'cannot select a Codex release'
+  printf 'build-codex-armv7: building %s at %s\n' "$tag" "$commit" >&2
+}
+
 codex_source() {
   git init -q "$work/source"
   git -C "$work/source" fetch --depth 1 https://github.com/openai/codex.git "$commit"
   actual=$(git -C "$work/source" rev-parse FETCH_HEAD)
   [ "$actual" = "$commit" ] || codex_fail 'wrong source identity'
   git -C "$work/source" checkout -q --detach FETCH_HEAD
-  for change in "$repo"/third_party/codex/patches/*.patch; do
-    [ -f "$change" ] || continue
-    case $change in */0003-pagable-arm-layout.patch) continue ;; esac
-    git -C "$work/source" apply --unidiff-zero --check "$change"
-    git -C "$work/source" apply --unidiff-zero "$change"
-  done
+  # Content-anchored steps for any release: lock versions, Android OpenSSL, mode width.
+  python3 "$repo/third_party/codex/prepare_source.py" "$work/source" ||
+    codex_fail 'source preparation failed'
+}
+
+codex_check_lock() {
+  python3 - "$work/source/codex-rs" <<'PY'
+from pathlib import Path
+import sys
+import tomllib
+
+root = Path(sys.argv[1])
+with (root / "Cargo.toml").open("rb") as manifest:
+    expected = tomllib.load(manifest)["workspace"]["package"]["version"]
+with (root / "Cargo.lock").open("rb") as lock:
+    packages = tomllib.load(lock)["package"]
+for package in packages:
+    if "source" not in package and package["version"] != expected:
+        raise SystemExit(
+            f"build-codex-armv7: local package {package['name']} is locked at "
+            f"{package['version']}; expected {expected}"
+        )
+PY
 }
 
 codex_pagable() {
@@ -105,8 +131,8 @@ import tomllib
 with open(sys.argv[1], "rb") as source:
     packages = tomllib.load(source)["package"]
 package, = (p for p in packages if p["name"] == "pagable")
-assert package["version"] == "0.4.1"
-assert package["source"] == "registry+https://github.com/rust-lang/crates.io-index"
+if (package["version"], package["source"]) != ("0.4.1", "registry+https://github.com/rust-lang/crates.io-index"):
+    raise SystemExit("build-codex-armv7: pagable step is stale: the release locks pagable " + package["version"])
 print(package["checksum"])
 PY
   )
@@ -124,6 +150,16 @@ work = Path(sys.argv[1])
 (work / "cargo-config.toml").write_text(
     "paths = [" + json.dumps(str(work / "vendor/pagable-0.4.1")) + "]\n")
 PY
+}
+
+codex_mxc() {
+  # Codex locks Microsoft's sandbox SDK from git, and its engine names a module
+  # it compiles only for Windows, Linux and macOS. The locked checkout is
+  # vendored with those calls configured out on other hosts.
+  (cd "$work/source/codex-rs" && cargo +1.100.0 metadata --locked --format-version 1 \
+    --filter-platform armv7-linux-androideabi) >"$work/metadata.json" ||
+    codex_fail 'cannot read the locked dependency graph'
+  python3 "$repo/third_party/codex/prepare_source.py" --mxc "$work" || codex_fail 'mxc preparation failed'
 }
 
 codex_ca() {
@@ -177,9 +213,9 @@ codex_cleanup() {
 
 codex_main() {
   stage='' work_claimed=false output_claimed=false
-  commit=a956835d020762cb2b570053af06f643a11c0ecc
   repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
   codex_prerequisites
+  codex_release
   codex_paths
   trap codex_cleanup EXIT
   trap 'exit 1' HUP INT TERM
@@ -193,7 +229,9 @@ codex_main() {
   stage=$(mktemp -d "$output.staging.XXXXXX")
   codex_environment
   codex_source >&2
+  codex_check_lock
   codex_pagable >&2
+  codex_mxc >&2
   codex_ca
   codex_build
   codex_inspect
@@ -202,8 +240,8 @@ codex_main() {
   if [ -d "$output" ]; then rmdir -- "$output"; fi
   mv -T -- "$stage" "$output"
   stage=''
-  printf 'source_commit=%s\nrustc=%s\nndk=%s\nbinary=%s/codex-app-server\nca_bundle=%s/cacert.pem\nneeded=%s\nsize_bytes=%s\nsha256=%s\n' \
-    "$commit" "$compiler" '27.3.13750724/API24' "$output" "$output" "$needed" "$size" "$digest"
+  printf 'release=%s\nsource_commit=%s\nrustc=%s\nndk=%s\nbinary=%s/codex-app-server\nca_bundle=%s/cacert.pem\nneeded=%s\nsize_bytes=%s\nsha256=%s\n' \
+    "$tag" "$commit" "$compiler" '27.3.13750724/API24' "$output" "$output" "$needed" "$size" "$digest"
 }
 
 if [ "${CODEX_ARMV7_SOURCE_ONLY:-0}" != 1 ]; then codex_main; fi

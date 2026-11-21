@@ -8,6 +8,7 @@ use echo_delegation::codex_dispatch::Catalog;
 use echo_mcp_client::{McpClient, TokenError, TokenProvider};
 use echo_spoof_mcp::{Fault, Spoof};
 use std::io::Write as _;
+mod native_extras;
 
 struct NoToken;
 impl TokenProvider for NoToken {
@@ -420,27 +421,23 @@ async fn snapshot(
         json!(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"])
     } else {
         json!([
-            "functions.exec",
-            "functions.wait",
-            "functions.request_user_input_async",
             "functions.test_echo",
             "functions.test_wait",
             "functions.test_requires_approval",
-            "functions.ui_show_emotion",
-            "clock.sleep"
+            "functions.ui_show_emotion"
         ])
     };
     if model != "gpt-5.4" && web_search != echo_config::WebSearch::Disabled {
         names.as_array_mut().unwrap().push(json!("web.run"));
     }
     if exhausted {
-        // rust-v0.160.0: release exactly one request before bridge polling.
+        // The app server releases exactly one request before bridge polling.
         // This is the pre-notification window, not a universal zero-work claim.
         assert_eq!(
             value,
             json!({"calls":[{
             "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-            "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}],
+            "model":"gpt-live-1.1-codex", "alpha":"quicksilver=v2"}],
             "sidebands":1,"external":0,"delegations":["delegation-local"],
             "models":[{"tools":names,"outputs":0}],"appends":[]})
         );
@@ -450,7 +447,7 @@ async fn snapshot(
         value,
         json!({"calls":[{
             "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-            "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}],
+            "model":"gpt-live-1.1-codex", "alpha":"quicksilver=v2"}],
             "sidebands":1,"external":0, "delegations":["delegation-local"],
             "models":[{"tools":names,"outputs":0},
                       {"tools":names,"outputs":1}],

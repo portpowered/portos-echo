@@ -362,7 +362,7 @@ fn failure_receipts(observed: &Value, path: &Path) {
         observed["calls"],
         json!([{
             "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-            "model":"gpt-live-1-codex", "alpha":"quicksilver=v2", "nominated_key":true,
+            "model":"gpt-live-1.1-codex", "alpha":"quicksilver=v2", "nominated_key":true,
             "account_header":null
         }])
     );

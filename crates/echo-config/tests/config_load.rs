@@ -242,7 +242,7 @@ fn default_voice_is_omitted_and_unknown_voices_are_refused_offline() {
     ] {
         assert_eq!(
             load(live, codex).unwrap_err().to_string(),
-            format!("{field}: expected default or a pinned realtime voice")
+            format!("{field}: expected default or a realtime voice name")
         );
     }
 }

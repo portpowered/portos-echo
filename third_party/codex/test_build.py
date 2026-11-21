@@ -103,23 +103,57 @@ class BuildHelperTests(unittest.TestCase):
                 f"--remap-path-prefix={self.work}=/codex-armv7/work",
             ])
 
-    def test_wrong_revision_and_patch_failure(self):
+    def test_wrong_revision_and_preparation_failure(self):
         fake = '''
 work="$CODEX_ARMV7_WORK_DIR"; mkdir "$work"; commit=expected
 git() {
   case "$*" in
     *rev-parse*) printf '%s\\n' "$REVISION" ;;
-    *apply*) return 7 ;;
   esac
 }
+python3() { printf '%s\\n' "$*" > "$work/prepared"; return "$PREPARE"; }
 codex_source
 '''
-        self.assert_failed(self.call(fake, REVISION="wrong"), "wrong source identity")
+        self.assert_failed(self.call(fake, REVISION="wrong", PREPARE="0"), "wrong source identity")
+        self.assertFalse((self.work / "prepared").exists())
         self.work.rmdir()
-        patches = self.repo / "third_party/codex/patches"
-        patches.mkdir(parents=True)
-        (patches / "0001.patch").write_text("fake patch")
-        self.assert_failed(self.call(fake, REVISION="expected"))
+        self.assert_failed(self.call(fake, REVISION="expected", PREPARE="7"), "source preparation failed")
+        (self.work / "prepared").unlink()
+        self.work.rmdir()
+        result = self.call(fake, REVISION="expected", PREPARE="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.work / "prepared").read_text(),
+                         f"{self.repo}/third_party/codex/prepare_source.py {self.work}/source\n")
+
+    def test_release_selection_failure_and_incomplete_answer_stop_the_build(self):
+        for answer in ("return 3", "printf 'tag=rust-v0.171.0\\n'", "printf 'commit=expected\\n'"):
+            with self.subTest(answer=answer):
+                result = self.call('python3() { ' + answer + '; }; codex_release; printf reached')
+                self.assert_failed(result, "cannot select a Codex release")
+                self.assertEqual(result.stdout, "")
+        result = self.call("python3() { printf 'tag=rust-v0.171.0\\nversion=0.171.0\\ncommit=expected\\n'; }; "
+                           'codex_release; printf "%s %s" "$tag" "$commit"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "rust-v0.171.0 expected")
+        self.assertIn("building rust-v0.171.0 at expected", result.stderr)
+
+    def test_mxc_reads_the_locked_graph_for_android_and_stops_on_failure(self):
+        fake = '''
+work="$CODEX_ARMV7_WORK_DIR"; mkdir -p "$work/source/codex-rs"
+cargo() { printf '%s\\n' "$*" > "$work/cargo-arguments"; printf metadata; return "$METADATA"; }
+python3() { printf '%s\\n' "$*" > "$work/prepared"; return "$PREPARE"; }
+codex_mxc
+'''
+        self.assert_failed(self.call(fake, METADATA="5", PREPARE="0"), "cannot read the locked dependency graph")
+        self.assertFalse((self.work / "prepared").exists())
+        self.assert_failed(self.call(fake, METADATA="0", PREPARE="7"), "mxc preparation failed")
+        result = self.call(fake, METADATA="0", PREPARE="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.work / "cargo-arguments").read_text(),
+                         "+1.100.0 metadata --locked --format-version 1 --filter-platform armv7-linux-androideabi\n")
+        self.assertEqual((self.work / "metadata.json").read_text(), "metadata")
+        self.assertEqual((self.work / "prepared").read_text(),
+                         f"{self.repo}/third_party/codex/prepare_source.py --mxc {self.work}\n")
 
     def test_ca_download_and_checksum_failure(self):
         self.assert_failed(self.call('stage="$CODEX_ARMV7_OUTPUT_DIR"; '
@@ -173,19 +207,37 @@ codex_source
         # Controlled component seams: real directory claiming/staging/publication.
         return self.call('''
 codex_prerequisites() { compiler='rustc controlled'; tools=/ndk/bin; ndk=/ndk; }
+codex_release() { tag=rust-v0.171.0; commit=controlled; }
 codex_source() {
-  mkdir -p "$work/source"
+  mkdir -p "$work/source/codex-rs"
   printf license > "$work/source/LICENSE"
   printf notice > "$work/source/NOTICE"
+  printf '[workspace.package]\nversion = "0.171.0"\n' > "$work/source/codex-rs/Cargo.toml"
+  printf '[[package]]\nname = "codex-test"\nversion = "%s"\n' "${TEST_LOCK_VERSION:-0.171.0}" \
+    > "$work/source/codex-rs/Cargo.lock"
 }
 codex_ca() { printf ca > "$stage/cacert.pem"; }
 codex_pagable() { :; }
+codex_mxc() { :; }
 codex_build() { printf binary > "$stage/codex-app-server"; }
 codex_inspect() {
   needed=libc.so; size=6
   digest=$(sha256sum "$stage/codex-app-server"); digest=${digest%% *}
 }
 ''' + override + '\ncodex_main')
+
+    def test_bad_local_lock_stops_before_cargo_and_publication(self):
+        for version in ("0.0.0", "0.160.0"):
+            with self.subTest(version=version):
+                result = self.pipeline(f'''
+TEST_LOCK_VERSION={version}
+codex_build() {{ touch "$work/cargo-entered"; }}
+''')
+                self.assert_failed(result, f"local package codex-test is locked at {version}; expected 0.171.0")
+                self.assertFalse((self.work / "cargo-entered").exists())
+                self.assertFalse(self.output.exists())
+                self.assertEqual(list(self.root.glob("*.staging.*")), [])
+                self.work = self.root / "second work"
 
     def test_success_publishes_exact_bundle_and_records(self):
         result = self.pipeline()
@@ -194,6 +246,7 @@ codex_inspect() {
                          ["LICENSE", "NOTICE", "cacert.pem", "codex-app-server"])
         self.assertEqual((self.output / "codex-app-server").read_bytes(), b"binary")
         records = dict(line.split("=", 1) for line in result.stdout.splitlines())
+        self.assertEqual((records["release"], records["source_commit"]), ("rust-v0.171.0", "controlled"))
         self.assertEqual(records["size_bytes"], "6")
         self.assertEqual(records["sha256"], hashlib.sha256(b"binary").hexdigest())
         self.assertEqual(records["binary"], str(self.output / "codex-app-server"))
@@ -201,7 +254,7 @@ codex_inspect() {
         self.assertEqual(list(self.root.glob("*.lock")), [])
 
     def test_every_stage_failure_and_signal_prevent_publication(self):
-        for stage in ["codex_source", "codex_pagable", "codex_ca", "codex_build", "codex_inspect"]:
+        for stage in ["codex_source", "codex_pagable", "codex_mxc", "codex_ca", "codex_build", "codex_inspect"]:
             with self.subTest(stage=stage):
                 result = self.pipeline(stage + '() { return 9; }')
                 self.assert_failed(result)

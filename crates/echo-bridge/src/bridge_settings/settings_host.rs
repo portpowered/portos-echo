@@ -24,6 +24,8 @@ pub struct SettingsHost {
     launch_scopes: Vec<String>,
     permissions: PortosPermissions,
     muse: settings_muse::MuseSettings,
+    /// The realtime voices the running app server listed; `None` until it has.
+    voices: Option<Vec<String>>,
 }
 
 impl SettingsHost {
@@ -59,7 +61,46 @@ impl SettingsHost {
             prompts,
             warnings,
             restart_pending: false,
+            voices: None,
         })
+    }
+
+    /// Adopt the list the admitted app server reported. A later generation that
+    /// could not list keeps the last one.
+    pub(super) fn listed_voices(&mut self, voices: Option<Vec<String>>) {
+        if voices.is_some() {
+            self.voices = voices;
+        }
+    }
+
+    /// `default`, then every voice the running app server lists. Before it has
+    /// listed any, echo-config's built-in names. The saved voice is always
+    /// present, so a snapshot can show a choice a newer release dropped.
+    fn allowed_voices(&self, saved: Option<&str>) -> Vec<String> {
+        let mut names: Vec<String> = match &self.voices {
+            Some(listed) => std::iter::once("default")
+                .chain(listed.iter().map(String::as_str))
+                .map(String::from)
+                .collect(),
+            None => echo_config::realtime_voices().map(String::from).collect(),
+        };
+        if let Some(saved) = saved
+            && !names.iter().any(|name| name == saved)
+        {
+            names.push(saved.into());
+        }
+        names
+    }
+
+    /// A voice the running app server does not list would be left out of every
+    /// realtime start, so it is refused at save time once the list is known.
+    pub(super) fn check_voice(&self, voice: Option<&str>) -> Result<(), SettingsError> {
+        match (voice, &self.voices) {
+            (Some(voice), Some(listed)) if voice != "default" && !listed.iter().any(|name| name == voice) => Err(
+                SettingsError::Prompt("codex.voice: not listed by the app server; choose default or a listed voice"),
+            ),
+            _ => Ok(()),
+        }
     }
 
     pub(super) fn permissions(&self) -> PortosPermissions {
@@ -197,6 +238,7 @@ impl SettingsHost {
         }
         let voice = fields.voice.unwrap_or_default();
         let agent = fields.agent.unwrap_or_default();
+        self.check_voice(fields.codex.as_ref().map(|codex| codex.voice.as_str()))?;
         let daily_cap = agent
             .daily_request_cap
             .map(|value| value.as_str().parse::<u64>())
@@ -250,7 +292,7 @@ impl SettingsHost {
                     max_tool_calls: self.store.overlay.legacy_tool_cap().unwrap_or(8),
                 },
             },
-            allowed_voices: echo_config::realtime_voices().map(String::from).collect(),
+            allowed_voices: self.allowed_voices(config.codex_voice()),
             prompts: self.prompts.clone(),
             link_status,
             bridge_version: env!("CARGO_PKG_VERSION").into(),
@@ -296,6 +338,63 @@ mod tests {
     use crate::bridge_settings::settings_atomic::Stage;
     use echo_config::{AgentTools, HomeConfig, McpAuth, McpServer};
     use std::io::Write as _;
+
+    /// No Codex release is pinned: the picker is the running app server's list.
+    #[test]
+    fn screen_settings_voices_follow_the_running_app_server() {
+        let root = tempfile::tempdir().unwrap();
+        let mut base =
+            BridgeConfig::load(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bridge.echo.toml")).unwrap();
+        base.home = Some(HomeConfig {
+            dir: root.path().join("home"),
+            agent_tools: AgentTools::default(),
+        });
+        let prompts = PromptTextsV1 {
+            voice: "Synthetic voice".into(),
+            runner: "Synthetic runner".into(),
+        };
+        let mut host = SettingsHost::open(base, SettingsOverlay::default(), prompts, Vec::new()).unwrap();
+        let offered = |host: &SettingsHost| host.snapshot(LinkStatusV1::Unconfigured).unwrap().allowed_voices;
+        let save = |host: &mut SettingsHost, voice: &str| {
+            host.save(SettingsFieldsV1 {
+                codex: Some(CodexPatchV1 { voice: voice.into() }),
+                ..SettingsFieldsV1::default()
+            })
+            .map_err(|error| error.to_string())
+        };
+        // Before the app server has answered: the built-in names.
+        assert_eq!(offered(&host), echo_config::realtime_voices().collect::<Vec<_>>());
+        host.listed_voices(Some(
+            ["cove", "miko", "himari", "hanul", "leher"].map(String::from).to_vec(),
+        ));
+        // A generation that could not list keeps the last list.
+        host.listed_voices(None);
+        assert_eq!(offered(&host), ["default", "cove", "miko", "himari", "hanul", "leher"]);
+        for voice in ["miko", "himari", "hanul", "leher", "default"] {
+            assert_eq!(save(&mut host, voice), Ok(true), "{voice}");
+        }
+        assert_eq!(save(&mut host, "himari"), Ok(true));
+        assert_eq!(
+            host.snapshot(LinkStatusV1::Unconfigured).unwrap().settings.codex.voice,
+            "himari"
+        );
+        // `maple` is a built-in name this app server does not list; `alloy` is v2-only.
+        for (voice, reason) in [
+            (
+                "maple",
+                "codex.voice: not listed by the app server; choose default or a listed voice",
+            ),
+            (
+                "alloy",
+                "codex.voice: not listed by the app server; choose default or a listed voice",
+            ),
+        ] {
+            assert_eq!(save(&mut host, voice), Err(reason.into()));
+        }
+        // A release that drops the saved voice still shows it, last.
+        host.listed_voices(Some(vec!["cove".into()]));
+        assert_eq!(offered(&host), ["default", "cove", "himari"]);
+    }
 
     #[test]
     fn screen_settings_store_uncertain_portos_save_denies_pending_effects() {

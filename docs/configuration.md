@@ -284,12 +284,16 @@ Defaults are independent constants: changing issuer alone does not derive new de
 The public client defaults are defined in
 [config_auth.rs](../crates/echo-config/src/config_auth.rs) and [lib.rs](../crates/echo-config/src/lib.rs).
 
-Pinned realtime voices: `default`, `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`, `sol`, `spruce`, `vale`.
-The list is bound to the realtime version the bridge sends (`v3`) at the Codex pin; the pinned app server refuses
-any other voice when the call starts. A voice that earlier builds offered (`alloy`, `ash`, `ballad`, `cedar`, `coral`,
-`echo`, `marin`, `sage`, `shimmer`, `verse`) still loads from an existing `bridge.toml` or `settings.toml`, as
-`default` with one settings warning; Settings no longer offers or saves it.
-An unknown voice is rejected offline. `live.voice` is a legacy fallback; use `codex.voice` for the screen editor.
+Realtime voices: `default` plus every voice the running Codex app server lists for the realtime version the bridge
+sends (`v3`). The bridge reads that list after sign-in, so Settings follows the bundled Codex release; `miko`,
+`himari`, `hanul` and `leher` are among the 26 voices `rust-v0.171.0` lists. Until the list has been read, Settings
+offers `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`, `sol`, `spruce` and `vale`. Settings refuses to save a
+voice that is not listed. A `codex.voice` in `bridge.toml` that the app server does not list is left out of the call,
+with one line on stderr, and the app server's default voice speaks. The v2-only voices earlier builds offered (`alloy`,
+`ash`, `ballad`, `cedar`, `coral`, `echo`, `sage`, `shimmer`, `verse`) still load from an existing `bridge.toml` or
+`settings.toml`, as `default` with one settings warning; they are never offered or saved.
+Offline, only the shape of a voice name is checked: lowercase ASCII letters, at most 32.
+`live.voice` is a legacy fallback; use `codex.voice` for the screen editor.
 
 ## Checking changes
 

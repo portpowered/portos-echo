@@ -14,6 +14,8 @@ use tokio::sync::watch;
 struct State {
     snapshot: OpenAiAccountV2,
     queued: Option<Action>,
+    /// The realtime voices the admitted app server listed, once it has.
+    voices: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -38,9 +40,14 @@ impl Account {
                     challenge: None,
                 },
                 queued: None,
+                voices: None,
             })
             .0,
         )
+    }
+
+    pub fn voices(&self) -> Option<Vec<String>> {
+        self.0.borrow().voices.clone()
     }
 
     pub fn snapshot(&self) -> SettingsReply {
@@ -171,6 +178,21 @@ pub(crate) fn observed(result: Result<(), AccountError>) {
             }
             state.snapshot.link_status = status;
             true
+        });
+    });
+}
+
+/// The voice list comes from the same process generation that serves the calls.
+/// A generation that could not list keeps the last list read.
+pub(crate) fn voices_observed(voices: Option<&[String]>) {
+    let Some(voices) = voices else { return };
+    let _ = CURRENT.try_with(|account| {
+        account.0.send_if_modified(|state| {
+            let changed = state.voices.as_deref() != Some(voices);
+            if changed {
+                state.voices = Some(voices.to_vec());
+            }
+            changed
         });
     });
 }

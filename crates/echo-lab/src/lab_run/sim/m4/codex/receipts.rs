@@ -86,7 +86,7 @@ pub(super) fn merge_mode(
 pub(super) fn expected(negative: bool, emotion: bool) -> Value {
     json!({"event":"provider.snapshot", "calls":[{
         "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-        "model":"gpt-live-1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0,
+        "model":"gpt-live-1.1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0,
         "delegations":["delegation-local"], "appends":["delegation-local"],
         "transcripts":[{"role":"user","text":"ping"},{"role":"assistant","text":if negative {super::super::FALLBACK} else if emotion {super::super::emotion::REPLY} else {super::super::SUCCESS}}],
         "models":[{"tools":["test_echo","test_wait","test_requires_approval","ui_show_emotion","extend_session","end_session"],"outputs":0},

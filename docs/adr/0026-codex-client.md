@@ -1,19 +1,21 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 20
+last modified: 2026, november, 21
 status: implementation in progress
 ---
 
-# Pinned Codex app-server client
+# Codex app-server client
 
 The [program plan](../program/plan.md#33-the-codex-app-server) selects the
 unmodified Codex app server for call control and delegated turns. `echo-codex`
 is an additive component; the bridge and its current Live path remain unchanged.
-The selected release is `rust-v0.160.0`, commit
-`a956835d020762cb2b570053af06f643a11c0ecc`. `codex.pin` fixes the Linux musl and code-mode-host
-asset digests. The Linux helper verifies archives before publishing an external
-cache, retains upstream LICENSE and NOTICE, and rejects corrupt warm entries.
+No release is pinned (owner, 2026-11-21; see the last section). The Linux helper
+takes the newest stable `rust-v*` release, never older than the floor in
+[codex.release](../../codex.release), and checks the musl and code-mode-host archives
+against the SHA-256 digests GitHub publishes for them before publishing an external
+cache. It retains upstream LICENSE and NOTICE and rejects corrupt warm entries.
+Where this record says "the pin", read "the app server release in use".
 `ECHO_CODEX_OFFLINE=1` permits only cache reads during a test.
 
 The crate uses the workspace's existing `serde`, `serde_json`, `tokio` and
@@ -1195,3 +1197,41 @@ search. No pin, model metadata or wire schema changes are needed, and the code-m
 the Echo. T3 asserts the exact direct catalog for `gpt-6.1-sol`, calls a bridge tool with no code-mode
 host beside the app server, and runs the Live goodbye with that model
 (`tests/scenarios/session-live-goodbye-native.yaml`).
+
+## No pinned release (2026-11-21)
+
+Owner: "yeah upgrade, remove all pins generally they're bad practice imo". This supersedes the
+2026-11-20 pin to `rust-v0.171.0` and the exact-catalog rule above.
+
+**Release.** `codex.pin` is gone. `codex.release` holds the repository, the licence and a floor
+(`0.164.0`, the first release whose app server lists the v3 voices). `scripts/codex_release.py`
+selects the newest stable `rust-v*` release when a build or test provisions, or the one
+`CODEX_RELEASE` names, and verifies each official asset against the digest GitHub publishes for it.
+`ECHO_CODEX_OFFLINE=1` still permits only cache reads. On 2026-11-21 the selection is
+`rust-v0.171.0`, commit `ccf9be8cc458bd6b8336fe84d68d8893f2691a5e`.
+
+**Tool boundary.** The bridge cannot fix the model-facing catalog of a release it has not seen, and
+it does not patch Codex. The rule is now: every tool the bridge declares is present, as a direct
+declaration, in order; Codex's own extras are allowed only when they can do nothing. T3 proves that
+against the real app server with the bridge's thread settings
+(`t3_pinned_tools_native_extras_are_inert`): it records the catalog the model receives, then has the
+model call each extra. At `rust-v0.171.0` the catalog for `gpt-6.1-sol` is `functions.exec`,
+`functions.wait`, `functions.list_mcp_resources`, `functions.list_mcp_resource_templates`,
+`functions.read_mcp_resource`, `functions.apply_patch`, the bridge's tools, `clock.sleep` and
+`web.run`. `apply_patch` answers that no execution environment is available and writes nothing; the
+two list helpers return empty lists; `read_mcp_resource` fails with an unknown server; no MCP server
+receives a `resources/*` request. A future extra that is not inert fails that test, which is the
+signal to switch it off in the thread settings or take a new decision. The bridge has no RPC that
+reports the model-facing catalog, so the test's output, not the bridge trace, is the record of it.
+
+**`request_user_input_async`.** Codex registers it only when its request-user-input feature is on,
+and the bridge keeps that feature off, so the tool is absent. The bridge never called it and nothing
+replaces it. `end_session` is a direct bridge tool and works as before.
+
+**Voices.** After the account is admitted, the bridge asks the app server for
+`thread/realtime/listVoices` and keeps the `v3` list, the realtime version it sends. Settings offers
+`default` plus that list and refuses to save a voice that is not on it; a call start leaves an
+unlisted configured voice out, so the app server's default speaks instead of the start failing.
+Until a list has been read, Settings offers echo-config's nine built-in names. `echo-config` checks
+only the shape of a voice name. At `rust-v0.171.0` the v3 list has 26 voices, including `miko`,
+`himari`, `hanul` and `leher`; `alloy` is not a v3 voice and stays refused.

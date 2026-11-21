@@ -141,10 +141,14 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Cheap release checks
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           actionlint .github/workflows/release.yml .github/workflows/targeted.yml
           python3 tests/test_release_kit.py --configure-native
       - name: Build and verify release bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           make dist
           python3 tests/test_release_kit.py --assets dist

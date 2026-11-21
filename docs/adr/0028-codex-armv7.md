@@ -1,58 +1,82 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 16
+last modified: 2026, november, 21
 status: proposed; Android build evidence pending
 ---
 
-# Pinned Codex Android ARM build
+# Codex Android ARM build
 
-The owner's W2d decision authorizes building OpenAI Codex release
-`rust-v0.160.0`, commit `a956835d020762cb2b570053af06f643a11c0ecc`,
-for the future W4 deployment. This target builds its standalone
+The owner's W2d decision authorizes building OpenAI Codex for the W4 deployment.
+No release is pinned (owner, 2026-11-21): the build takes the newest stable
+`rust-v*` release of `openai/codex` when it runs, never older than the floor in
+[codex.release](../../codex.release). `CODEX_RELEASE=rust-vX.Y.Z` names another
+release to reproduce an old build. `scripts/codex_release.py` selects the
+release and its tag commit from GitHub; the helper fetches exactly that commit
+and stops on any other source identity. The build prints the release and
+commit it built, with the binary's size and SHA-256.
+This target builds the standalone
 `codex-app-server`, without changing repository crates or runtime behavior.
 The [research brief](../spikes/codex-app-server.md) describes an older main;
-the release pin wins. At this pin `codex-rs/rust-toolchain.toml` says
-1.95.0, rather than the payload's 1.99.1. We explicitly select installed
-Rust 1.100.0 and NDK 27.3.13750724, API 24.
+the selected release wins. The Android
+helper selects Rust 1.100.0 and NDK 27.3.13750724, API 24.
 
-The release manifest versions its workspace packages as 0.160.0 but its
-lockfile retains 159 local packages at 0.0.0. Patch 0001 reconciles only
-those local lock versions so Cargo can run with `--locked`. It changes no
-external version, checksum, feature or dependency. Its zero-context hunks
-apply only after verifying the exact pinned source. Other build failures
-remain blockers; behavioral portability changes require a new decision.
+## Source preparation
 
-Coordinator mailbox answer 1 (2026-11-16) authorizes patch 0003 for locked
-`pagable` 0.4.1 only: ARM32's layout is ten words, while the existing
-non-ARM32 (including wasm32) assertion retains twelve. Neither assertion is
-removed and no runtime code changes. The coordinator checked that no runtime
-code depends on this size. The helper downloads the crate outside git, checks
-the checksum from the pinned lockfile, and applies the patch there. Cargo's
-`paths` override selects that private copy without changing the lockfile,
-version, dependencies or shared registry cache. GNU tar is also required to
-unpack the crate.
+A release cannot be patched with fixed line numbers when the release is not
+fixed. `third_party/codex/prepare_source.py` therefore finds each place by its
+content and stops the build when an anchor is gone, so a release that moved
+the code fails loudly instead of building something unreviewed. The rules of
+the original authorizations are unchanged: external locked dependencies are
+preserved, mode constants are only widened losslessly, and no filesystem
+behaviour changes.
 
-Coordinator mailbox answer 2 (2026-11-16) authorizes patch 0004: in
-`exec-server/src/no_follow/unix.rs`, lines 220/221/228/229 and 313/314/320,
-widen libc's `S_IFMT`, `S_IFLNK`, `S_IFDIR` and `S_IFREG` constants from
-ARM32 Android's `u16` to rustix `Stat.st_mode`'s `u32` using `u32::from`.
-Every mask, comparison, symlink rejection and removal decision is preserved.
-The same answer permits only identical lossless integer-width fixes elsewhere
-in the pinned closure, each documented in its patch header. Narrowing, casts
-that could truncate, branches, cfgs, features, dependencies and other behavior
-changes still require a new decision. Patch 0004 also compiles on hosts where
-these constants already are `u32`.
+- **Lock versions** (was patch 0001). A release tag sets the workspace version
+  in `Cargo.toml` and leaves the lock's local packages at 0.0.0. The step sets
+  only those local entries to the workspace version so Cargo can run with
+  `--locked`. It fails if any external version, checksum, feature or dependency
+  would change. The helper then checks every source-less lock entry again.
+- **OpenSSL** (was patch 0002). The build has no Android static `OPENSSL_DIR`
+  and `openssl-sys` cannot cross-compile through pkg-config. The step enables
+  the existing `vendored` feature for ARMv7 Android only, as explicitly
+  authorized. The locked `openssl-src` supplies the source. NDK tools are on
+  PATH and `ANDROID_NDK_ROOT` selects the NDK for OpenSSL's Android
+  configuration. Dynamic OpenSSL and every SONAME outside the explicit Android
+  system list are rejected. No TLS validation bypass is allowed.
+- **Mode width** (was patch 0004, coordinator mailbox answer 2, 2026-11-16).
+  In `exec-server/src/no_follow/unix.rs` every bare libc `S_IF*` constant is
+  wrapped in `u32::from`, widening ARM32 Android's `u16` to rustix
+  `Stat.st_mode`'s `u32`. Every mask, comparison, symlink rejection and removal
+  decision is preserved; the step fails when the file holds no such constant.
+  Narrowing, casts that could truncate, branches, features, dependencies and
+  other behavior changes still require a new decision.
+- **pagable** (patch 0003, coordinator mailbox answer 1, 2026-11-16). For
+  locked `pagable` 0.4.1 only: ARM32's layout is ten words, while the existing
+  non-ARM32 (including wasm32) assertion retains twelve. Neither assertion is
+  removed and no runtime code changes. The helper downloads the crate outside
+  git, checks the checksum from the release's lockfile, and applies the patch
+  there. Cargo's `paths` override selects that private copy without changing
+  the lockfile, version, dependencies or shared registry cache. GNU tar is
+  required to unpack the crate. A release that locks another `pagable` version
+  stops the build.
+- **mxc-sdk host gate** (new 2026-11-21; needs the coordinator's sign-off as a
+  second external-crate compile fix). Releases from the floor onward lock
+  `mxc-sdk` from the `microsoft/mxc` git repository. Its engine module `run` is
+  compiled only for Windows, Linux and macOS, but `dispatch.rs` names
+  `run::log_policy_hash` without that condition, so the crate does not compile
+  for Android. The step copies Cargo's own locked checkout outside git, puts
+  the crate's existing host condition on those statements, and selects the
+  copy through the same private `paths` override. The statements sit behind
+  the crate's host check, which already returns an error on Android, so no
+  reachable behaviour changes. The lockfile, revision and dependencies are
+  untouched. The step does nothing for a release that does not lock `mxc-sdk`
+  or no longer needs the gate, and stops the build when the code no longer has
+  the shape described here.
 
 The pre-approved upstream closure includes OpenSSL, aws-lc, portable-pty,
 bundled SQLite and compression libraries. No package enters this repository's
-Cargo.lock. pe-ci has no Android static `OPENSSL_DIR`; `openssl-sys` 0.9.111
-fails because pkg-config cannot cross-compile. Patch 0002 enables its existing
-vendored feature for ARMv7 Android only, as explicitly authorized. The locked
-`openssl-src` supplies the source. NDK tools are on PATH and
-`ANDROID_NDK_ROOT` selects the NDK for OpenSSL's Android configuration.
-Dynamic OpenSSL and every SONAME outside the explicit Android system list
-are rejected. No TLS validation bypass is allowed.
+Cargo.lock. Other build failures remain blockers; behavioral portability
+changes require a new decision.
 
 ## Operator procedure
 
@@ -70,8 +94,8 @@ make build-codex-armv7
 ~~~
 
 The target runs at niceness 10 with exactly four Cargo workers and its own
-target directory, without the quality lock. Source is shallow-fetched;
-configuration patches apply in lexical order. Staging and directory claims
+target directory, without the quality lock. Source is shallow-fetched and
+prepared as described above. Staging and directory claims
 isolate invocations. A complete verified bundle is renamed into place on
 success. Failure leaves source/build diagnostics in the work directory and
 removes only invocation-owned staging and empty claim directories. Existing
@@ -97,12 +121,12 @@ and upstream attributions). Codex is Apache-2.0. The CA bundle retains its
 Mozilla/MPL-2.0 attribution and is downloaded from
 `https://curl.se/ca/cacert-2026-11-05.pem`, verified against
 SHA-256 `427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285`.
-Updating either pin requires review. No downloaded checksum is trusted.
+Updating the CA bundle requires review. No downloaded checksum is trusted.
 
 For the coordinator's future deployment, place the bundle under
 `/data/local/echo/codex/` and configure
 `CODEX_CA_CERTIFICATE=/data/local/echo/codex/cacert.pem` and
-`SSL_CERT_FILE=/data/local/echo/codex/cacert.pem`. At the pin,
+`SSL_CERT_FILE=/data/local/echo/codex/cacert.pem`. In Codex,
 `CODEX_CA_CERTIFICATE` takes precedence over nonempty `SSL_CERT_FILE`.
 This lane does not install or execute Android code, contact providers,
 or prove on-device TLS, memory use or account compatibility.

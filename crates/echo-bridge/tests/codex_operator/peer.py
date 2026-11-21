@@ -199,6 +199,9 @@ for line in sys.stdin:
         if mode == "signed-out" or (mode == "screen-account" and not home.joinpath("auth.json").is_file()):
             account = None
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
+    elif method == "thread/realtime/listVoices":
+        assert request["params"] == {}
+        emit({"id": request["id"], "result": {"voices": {"v3": ["cove", "maple", "miko"]}}})
     elif method == "thread/start":
         mode = home.joinpath("mode").read_text()
         assert mode.startswith("tool-")

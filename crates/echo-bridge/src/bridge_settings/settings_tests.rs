@@ -66,7 +66,7 @@ fn screen_settings_store_invalid_candidate_does_not_write_or_change_accepted_sta
         ),
         (
             "[codex]\nvoice='SYNTHETIC_VALUE'",
-            "codex.voice: expected default or a pinned realtime voice",
+            "codex.voice: expected default or a realtime voice name",
         ),
     ] {
         assert_eq!(store.save(&patch(input)).unwrap_err().to_string(), expected);

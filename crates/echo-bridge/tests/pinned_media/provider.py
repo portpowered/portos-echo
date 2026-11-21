@@ -15,6 +15,7 @@ answers = queue.Queue()
 transcript_input, transcript_output = socket.socketpair()
 transcript_count = 0
 observed = {'calls': [], 'sidebands': 0, 'external': 0}
+call_voices = []
 output_lock = threading.Lock()
 delegation = None
 manual_cases = {}
@@ -114,6 +115,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         global session
         session = {key: body['session'].get(key) for key in ('instructions', 'initial_items')}
+        call_voices.append(body['session'].get('audio', {}).get('output', {}).get('voice'))
         observed['calls'].append({
             'path': self.path, 'model': body['session']['model'],
             'alpha': self.headers.get('OpenAI-Alpha'),
@@ -182,6 +184,9 @@ try:
             identity = command.get('identity')
             assert delegation is None or (identity and identity not in manual_cases)
             history = [] if delegation is None else delegation.history + delegation.outputs
+            if 'native_extras' in command:
+                delegation = tools_provider.NativeExtras(command['tools'], command['native_extras'])
+                continue
             delegation = tools_provider.Delegation(
                 command['tools'], command['negative'], command.get('exhausted', False),
                 command.get('model', 'gpt-5.4'), command.get('web_search', 'live'), identity, history)
@@ -201,6 +206,8 @@ try:
             emit({'append_receipts': delegation.append_receipts})
         elif command == {'session': True}:
             emit({'session': session})
+        elif command == {'call_voices': True}:
+            emit({'call_voices': call_voices})
         elif 'release_model' in command:
             identity = command['release_model']
             case = manual_cases[identity]

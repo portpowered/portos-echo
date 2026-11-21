@@ -208,7 +208,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
     async fn negotiate(&mut self, options: &Options<'_>, offer: &str) -> Result<String, Error> {
         let thread = self.thread.as_deref().ok_or(Error::Input)?;
         let mut params = serde_json::to_value(RealtimeStart::new(thread, offer)).map_err(|_| Error::Decode)?;
-        if let Some(voice) = options.voice {
+        if let Some(voice) = call_host::admitted_voice(options.voice) {
             params["voice"] = voice.into();
         }
         params["prompt"] = options.prompt.into();

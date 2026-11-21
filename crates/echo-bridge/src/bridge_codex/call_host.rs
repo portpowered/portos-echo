@@ -9,6 +9,48 @@ use tokio::{
     time::{Instant, timeout_at},
 };
 
+tokio::task_local! {
+    /// The realtime voices this host generation's app server listed.
+    static LISTED: Option<Vec<String>>;
+}
+
+/// The voices the running app server accepts for the realtime version the
+/// bridge sends (`v3`). No release is pinned, so the list is read from the
+/// process itself. `None` when it cannot be read.
+async fn listed_voices(io: &mut RpcIo<ChildStdout, ChildStdin>) -> Option<Vec<String>> {
+    let request = io
+        .begin_request("thread/realtime/listVoices", &serde_json::json!({}))
+        .ok()?;
+    let result = io.wait_reply(&request).await.ok()?;
+    let names = result["voices"]["v3"].as_array()?;
+    let names: Vec<String> = names
+        .iter()
+        .filter_map(|name| name.as_str().map(String::from))
+        .collect();
+    (!names.is_empty()).then_some(names)
+}
+
+/// The voice to send with a realtime start. The app server refuses the whole
+/// start for a voice it does not list, after the wake, so such a voice is left
+/// out and the server's default speaks instead. Outside a host, and when the
+/// list could not be read, the configured voice is sent as it is.
+pub(crate) fn admitted_voice(voice: Option<&str>) -> Option<&str> {
+    let voice = voice?;
+    let listed = LISTED
+        .try_with(|listed| {
+            listed
+                .as_ref()
+                .is_none_or(|names| names.iter().any(|name| name == voice))
+        })
+        .unwrap_or(true);
+    if !listed {
+        use std::io::Write as _;
+        let warning = "codex.voice is not listed by the app server; using its default voice";
+        let _ = writeln!(std::io::stderr(), "echo-bridge: {warning}");
+    }
+    listed.then_some(voice)
+}
+
 #[derive(Clone)]
 pub struct HostOptions<'a> {
     pub config: &'a CodexConfig,
@@ -84,7 +126,9 @@ pub async fn with_host_options<T>(
             .map_err(|_| Error::Deadline)?;
         crate::bridge_settings::openai_account::observed(account);
         account.map_err(account_error)?;
-        session(io).await
+        let voices = timeout_at(deadline, listed_voices(io)).await.ok().flatten();
+        crate::bridge_settings::openai_account::voices_observed(voices.as_deref());
+        LISTED.scope(voices, session(io)).await
     })
     .await
 }

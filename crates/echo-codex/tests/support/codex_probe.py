@@ -177,7 +177,7 @@ def verify(sdps, tools, started, closed):
     call = observed['calls'][0]
     assert call['body']['sdp'] == 'v=0\r\ns=fake-offer\r\n'
     assert urllib.parse.parse_qs(urllib.parse.urlsplit(call['path']).query) == {'intent': ['quicksilver'], 'architecture': ['avas']}, call['path']
-    assert call['body']['session']['model'] == 'gpt-live-1-codex', call['body']['session']['model']
+    assert call['body']['session']['model'] == 'gpt-live-1.1-codex', call['body']['session']['model']
     assert sdps == [ANSWER] and started == ['v3'], (sdps, started)
     assert [body['tools'] for body in observed['responses']] == [EXPECTED_TOOLS, EXPECTED_TOOLS]
     assert normalized == [['echo_test', 'web_search'], ['echo_test', 'web_search']], normalized
@@ -203,7 +203,7 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 port = server.server_port
 base = f'http://127.0.0.1:{port}'
 with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=True) as home:
-    overrides = {'model_provider': 'local', 'model': 'gpt-5.4', 'model_providers.local': {'name': 'local', 'base_url': base + '/v1', 'wire_api': 'responses', 'requires_openai_auth': True, 'experimental_bearer_token': 'dummy-local-only'}, 'experimental_realtime_webrtc_call_base_url': base + '/backend-api/codex', 'experimental_realtime_ws_base_url': base + '/v1', 'features.plugins': False, 'features.recommended_plugins': False, 'features.remote_models': False, 'features.apps': False, 'features.remote_control': False, 'features.skill_search': False, 'features.skip_host_skill_discovery': True, 'cloud.skills.enabled': False, 'analytics.enabled': False, 'feedback.enabled': False, 'features.multi_agent': False, 'features.multi_agent_v2': False, 'features.goals': False, 'tools.experimental_request_user_input.enabled': False, 'features.shell_tool': False, 'features.unified_exec': False, 'web_search': 'live', 'tools.update_plan.enabled': False, 'mcp_servers': {}, 'cli_auth_credentials_store': 'file', 'check_for_update_on_startup': False}
+    overrides = {'model_provider': 'local', 'model': 'gpt-5.4', 'model_providers.local': {'name': 'local', 'base_url': base + '/v1', 'wire_api': 'responses', 'requires_openai_auth': True, 'experimental_bearer_token': 'dummy-local-only'}, 'experimental_realtime_webrtc_call_base_url': base + '/backend-api/codex', 'experimental_realtime_ws_base_url': base + '/v1', 'features.plugins': False, 'features.recommended_plugins': False, 'features.remote_models': False, 'features.apps': False, 'features.remote_control': False, 'features.skill_search': False, 'features.skip_host_skill_discovery': True, 'cloud.skills.enabled': False, 'analytics.enabled': False, 'feedback.enabled': False, 'features.multi_agent': False, 'features.multi_agent_v2': False, 'features.goals': False, 'tools.experimental_request_user_input.enabled': False, 'features.view_image': False, 'features.shell_tool': False, 'features.unified_exec': False, 'web_search': 'live', 'tools.update_plan.enabled': False, 'mcp_servers': {}, 'cli_auth_credentials_store': 'file', 'check_for_update_on_startup': False}
 
     def toml(v):
         if isinstance(v, dict):
@@ -249,7 +249,7 @@ with tempfile.TemporaryDirectory(prefix='echo-codex-s5-', ignore_cleanup_errors=
                     report = json.loads(line.removeprefix('RUST_REPORT='))
             result = child.wait(timeout=10)
             calls = [{'path': x['path'], 'model': x['body']['session']['model']} for x in observed['calls']]
-            assert result == 0, ('expected explicit v3, model=gpt-live-1-codex, '
+            assert result == 0, ('expected explicit v3, model=gpt-live-1.1-codex, '
                                  'query=intent=quicksilver&architecture=avas; observed calls=' +
                                  json.dumps(calls) + '; Rust: ' + child.stderr.read())
             assert report is not None, 'Rust journey produced no report'

@@ -6,6 +6,12 @@ import sys
 import threading
 from copy import deepcopy
 
+# Built-in tools the bridge disables in every thread (echo-codex ThreadSettings):
+# command execution, images, planning, synchronous user input and sub-agents.
+SWITCHED_OFF = ('shell', 'shell_command', 'local_shell', 'exec_command', 'unified_exec', 'write_stdin',
+                'view_image', 'update_plan', 'request_user_input', 'spawn_agent', 'send_message',
+                'wait_agent', 'close_agent', 'resume_agent')
+
 
 def exact(connection, count):
     result = b''
@@ -54,6 +60,7 @@ class Delegation:
         self.release = threading.Event() if identity and exhausted else None
         self.ingress = []
         self.lock = threading.Lock()
+        self.probes = {}
         if identity:
             self.prompt = f'Fixture delegation {identity}. {self.prompt}'
 
@@ -77,20 +84,24 @@ class Delegation:
             assert self.release is not None and not self.release.is_set(), 'unexpected model release'
             self.release.set()
 
-    def respond(self, body):
+    def respond_catalog(self, body):
         expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
-                     # rust-v0.160.0 closes each dynamic object schema on the wire.
+                     # The app server closes each dynamic object schema on the wire.
                      'parameters': {**deepcopy(tool['inputSchema']), 'additionalProperties': False},
                      'strict': False} for tool in self.tools]
-        # The same pin drops numeric minimum while lowering JSON schema to its
+        # It also drops numeric minimum while lowering JSON schema to its
         # tool-schema type. Assert that measured representation exactly.
         expected[1]['parameters']['properties']['ms'].pop('minimum')
         for tool in expected:
             if tool['name'] == 'extend_session':
                 tool['parameters']['properties']['seconds'].pop('minimum')
-        names = self.check_tools(body, expected)
+        return self.check_tools(body, expected)
+
+    def respond(self, body):
+        names = self.respond_catalog(body)
         assert body['model'] == self.model, 'wrong delegated model'
-        outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
+        outputs = [item for item in body['input'] if item.get('type') == 'function_call_output'
+                   and item['call_id'] not in self.probes]
         assert outputs[:len(self.history)] == self.history, 'prior tool outputs changed across turns'
         outputs = outputs[len(self.history):]
         index = len(self.models)
@@ -105,17 +116,13 @@ class Delegation:
                 item['namespace'] = 'functions'
         else:
             assert len(outputs) == 1 and outputs[0]['call_id'] == self.call_id, 'tool identity mismatch'
-            # The pinned engine encodes dynamic-tool content as a JSON text value.
+            # The app server encodes dynamic-tool content as a JSON text value.
             self.check_output(outputs[0]['output'])
             self.outputs = deepcopy(outputs)
             item = {'type': 'message', 'id': 'msg-local', 'role': 'assistant', 'status': 'completed',
                     'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
         self.models.append({'tools': names, 'outputs': len(outputs)})
-        response = {'id': f'response-{index}', 'status': 'completed', 'output': [item]}
-        events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
-                  {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
-                  {'type': 'response.completed', 'response': response}]
-        return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
+        return stream(f'response-{index}', [item])
 
     def check_tools(self, body, expected):
         hosted = []
@@ -131,28 +138,32 @@ class Delegation:
         blocks = [item['tools'] for item in body['input'] if 'tools' in item]
         assert len(blocks) == 1, 'missing or repeated native tool block'
         namespaces = blocks[0]
-        # Responses Lite uses the pin's direct provider-backed web.run extension.
+        # Responses Lite uses the app server's direct provider-backed web.run extension.
         # It never becomes an exec nested callable or a hosted declaration.
         names = [namespace['name'] + '.' + tool['name']
                  for namespace in namespaces for tool in namespace['tools']]
         description = namespaces[0]['tools'][0]['description']
         nested = re.findall(r'^### `([^`]+)`$', description, re.M)
         print(json.dumps({'model': self.model, 'tools': names, 'nested': nested}), file=sys.stderr, flush=True)
-        # Pin spec_plan.rs:1178-1204 registers async input from bundled model
-        # metadata independently of tools.experimental_request_user_input.enabled.
-        # :1225-1251 registers clock from that metadata and default sleep_tool.
-        # The binding amendment permits these exact extras, not synchronous input.
-        wrappers = ['functions.exec', 'functions.wait', 'functions.request_user_input_async']
-        expected_names = wrappers + ['functions.' + tool['name'] for tool in expected] + ['clock.sleep']
-        if self.web_search != 'disabled':
-            expected_names += ['web.run']
-        assert names == expected_names, names
-        # The bridge's tools are direct declarations, exactly as a conventional
-        # model sees them: `exec` needs a code-mode host the Echo does not have.
-        assert namespaces[0]['name'] == 'functions' and namespaces[0]['tools'][len(wrappers):] == expected, \
-            'native direct catalog mismatch: ' + json.dumps(namespaces[0]['tools'][len(wrappers):])
-        assert nested == ['clock__curr_time'], nested
-        return names
+        # No release is pinned, so the app server's own tools are not compared
+        # exactly (owner, 2026-11-21). Every tool the bridge declares must be a
+        # direct declaration, exactly as a conventional model sees it and in
+        # order: `exec` needs a code-mode host the Echo does not have.
+        declared = ['functions.' + tool['name'] for tool in expected]
+        functions = [tool for namespace in namespaces if namespace['name'] == 'functions'
+                     for tool in namespace['tools']]
+        direct = [tool for tool in functions if 'functions.' + tool['name'] in declared]
+        assert direct == expected, 'native direct catalog mismatch: ' + json.dumps(direct)
+        # Hosted search follows the bridge's own setting in both directions.
+        assert ('web.run' in names) == (self.web_search != 'disabled'), names
+        # What the bridge switches off stays off, whatever else a release adds.
+        refused = sorted(set(names) & {'functions.' + name for name in SWITCHED_OFF})
+        assert not refused, 'a tool the bridge switches off reached the model: ' + json.dumps(refused)
+        self.native_catalog = {'tools': names, 'nested': nested,
+                               'extras': [name for name in names if name not in declared + ['web.run']]}
+        self.native_declarations = {namespace['name'] + '.' + tool['name']: tool
+                                    for namespace in namespaces for tool in namespace['tools']}
+        return declared + (['web.run'] if self.web_search != 'disabled' else [])
 
     def check_output(self, output):
         if self.native:
@@ -239,11 +250,7 @@ class RunnerSkills(Delegation):
             item = {'type': 'message', 'id': 'msg-skills', 'role': 'assistant', 'status': 'completed',
                     'content': [{'type': 'output_text', 'text': self.reply, 'annotations': []}]}
         self.models.append({'tools': tools, 'outputs': index})
-        response = {'id': f'skills-{index}', 'status': 'completed', 'output': [item]}
-        events = [{'type': 'response.created', 'response': {'id': response['id'], 'status': 'in_progress', 'output': []}},
-                  {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
-                  {'type': 'response.completed', 'response': response}]
-        return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
+        return stream(f'skills-{index}', [item])
 
     def append(self, value):
         assert not self.appends and len(self.models) == len(self.names) + 1, 'unexpected skill append'
@@ -255,8 +262,66 @@ class RunnerSkills(Delegation):
         return {**super().snapshot(), 'skill_outputs': self.outputs, 'mcp_calls': self.mcp_calls}
 
 
+class NativeExtras(Delegation):
+    """The app server's own tools beyond the bridge's catalog are called once each.
+
+    No release is pinned, so those tools are not refused by name. What holds for
+    any release is that they do nothing here: the thread's sandbox is read-only
+    and its configuration names no MCP server."""
+    patch = '*** Begin Patch\n*** Add File: {}\n+written by a native tool\n*** End Patch\n'
+    arguments = {'list_mcp_resources': {}, 'list_mcp_resource_templates': {},
+                 'read_mcp_resource': {'server': 'bridge', 'uri': 'file:///native-extra'}}
+
+    def __init__(self, tools, target):
+        super().__init__(tools, False, model='gpt-6.1-sol')
+        self.target = target
+        self.results = None
+
+    def respond(self, body):
+        if self.results is not None:
+            return super().respond(body)
+        if not self.probes:
+            return self.probe(body)
+        kinds = ('function_call_output', 'custom_tool_call_output')
+        outputs = {item['call_id']: item['output'] for item in body['input']
+                   if item.get('type') in kinds and item['call_id'] in self.probes}
+        assert sorted(outputs) == sorted(self.probes), 'a native extra returned no output: ' + json.dumps(outputs)
+        self.results = {self.probes[call]: output for call, output in outputs.items()}
+        return super().respond(body)
+
+    def probe(self, body):
+        self.respond_catalog(body)
+        items = []
+        for name in self.native_catalog['extras']:
+            namespace, _, tool = name.partition('.')
+            declaration = self.native_declarations[name]
+            call = {'id': 'probe-item-' + tool, 'call_id': 'probe-' + tool, 'namespace': namespace,
+                    'name': tool, 'status': 'completed'}
+            if tool == 'apply_patch':
+                assert declaration['type'] == 'custom', 'apply_patch is no longer a freeform tool'
+                items.append({**call, 'type': 'custom_tool_call', 'input': self.patch.format(self.target)})
+            elif tool in self.arguments:
+                items.append({**call, 'type': 'function_call', 'arguments': json.dumps(self.arguments[tool])})
+            else:
+                continue
+            self.probes[call['call_id']] = name
+        return stream('probe', items)
+
+    def snapshot(self):
+        return {**super().snapshot(), 'catalog': self.native_catalog, 'extras': self.results}
+
+
+def stream(identity, items):
+    response = {'id': identity, 'status': 'completed', 'output': items}
+    events = [{'type': 'response.created', 'response': {'id': identity, 'status': 'in_progress', 'output': []}}]
+    events += [{'type': 'response.output_item.done', 'output_index': index, 'item': item}
+               for index, item in enumerate(items)]
+    events.append({'type': 'response.completed', 'response': response})
+    return ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
+
+
 def model_identity(body):
-    # The pin includes earlier turns in Responses input. The latest marked
+    # The app server includes earlier turns in Responses input. The latest marked
     # delegation owns this request, even if the fixture has started another one.
     for item in reversed(body['input']):
         if item.get('role') != 'user':

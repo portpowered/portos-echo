@@ -82,9 +82,11 @@ class Script:
             # transcript, never a request the voice model wrote.
             request = steps[0]['request']
             instructions, delegated = body.get('instructions', ''), json.dumps(body['input'])
-            if native:
-                # Responses Lite: the base instructions are the first developer
-                # message and the hand-off is the last user message.
+            if native or 'instructions' not in body:
+                # The base instructions are the first developer message and the
+                # hand-off is the last user message: always for Responses Lite,
+                # and for every model since Codex stopped sending `instructions`
+                # (observed at rust-v0.171.0).
                 messages = [item for item in body['input'] if item.get('type') == 'message']
                 assert [messages[0]['role'], messages[-1]['role']] == ['developer', 'user'], 'native input shape'
                 instructions, delegated = messages[0]['content'][0]['text'], json.dumps(messages[-1])
@@ -130,16 +132,21 @@ class Script:
 
         The Echo has no code-mode host, so a tool that is only an `exec`
         callable cannot be called there. Responses Lite carries declarations
-        as one input block of namespaces; search is the pin's `web.run`."""
+        as one input block of namespaces; search is the app server's `web.run`.
+
+        No release is pinned, so the app server's own tools are not compared:
+        the T3 native-extras witness shows they do nothing in a bridge thread.
+        Every tool the bridge declares must be a direct declaration, in order."""
         assert 'tools' not in body, 'unexpected conventional tools field'
         blocks = [item['tools'] for item in body['input'] if 'tools' in item]
         assert len(blocks) == 1, 'missing or repeated native tool block'
         names = [namespace['name'] + '.' + tool['name'] for namespace in blocks[0] for tool in namespace['tools']]
-        wrappers = ['functions.exec', 'functions.wait', 'functions.request_user_input_async']
-        direct = function_tools([])[:-1]
-        assert names == wrappers + ['functions.' + tool['name'] for tool in direct] + ['clock.sleep', 'web.run'], \
+        declared = [tool['name'] for tool in function_tools([])[:-1]]
+        direct = [tool for namespace in blocks[0] if namespace['name'] == 'functions'
+                  for tool in namespace['tools'] if tool['name'] in declared]
+        assert [tool['name'] for tool in direct] == declared and 'web.run' in names, \
             'bridge tools are not direct declarations: ' + json.dumps(names)
-        return blocks[0][0]['tools'][len(wrappers):] + function_tools([])[-1:]
+        return direct + function_tools([])[-1:]
 
     def begin(self, turn, request=None):
         assert turn == len(observed['delegations']), 'unexpected delegation identity'

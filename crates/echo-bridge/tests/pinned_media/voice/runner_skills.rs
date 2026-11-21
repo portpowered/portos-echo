@@ -364,7 +364,7 @@ fn check_thread(observed: &Value, context: &str, tools: &[Value], enabled: bool)
             "id":observed["id"],"method":"thread/start","params":{
                 "ephemeral":true,"approvalPolicy":"never","sandbox":"read-only","environments":[],
                 "config":{
-                    "features.shell_tool":false,"features.unified_exec":false,"features.multi_agent":false,
+                    "features.view_image":false,"features.shell_tool":false,"features.unified_exec":false,"features.multi_agent":false,
                     "features.multi_agent_v2":false,"agents.enabled":false,"features.goals":false,
                     "tools.experimental_request_user_input.enabled":false,"tools.update_plan.enabled":false,
                     "features.code_mode.direct_only_tool_namespaces":["web","functions"],"web_search":"disabled",

@@ -19,7 +19,7 @@ async fn t3_pinned_startup_refreshes_before_bridge_account_authentication() {
         .unwrap();
 }
 
-// rust-v0.160.0 performs two startup refreshes; remeasure when the pin changes.
+// Codex performs two startup refreshes (first measured at rust-v0.160.0); a release that changes the count fails here.
 const EXPIRED_REFRESHES: u64 = 2;
 
 async fn exercise() {

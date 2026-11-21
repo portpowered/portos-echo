@@ -320,6 +320,9 @@ fn assert_fixed_context(runner: &Value, live: &Value) {
     let context = "[Call-start context: 2027-01-15 Friday 08:00:00 UTC+00:00; local offset unavailable]"; // lint-rules: allow-literal UTC calendar expectation, never an endpoint
     let base = runner["params"]["baseInstructions"].as_str().unwrap();
     let prompt = live["params"]["prompt"].as_str().unwrap();
+    assert_eq!(live["params"]["version"], "v3");
+    assert_eq!(live["params"].get("voice"), None);
+    assert_eq!(live["params"].get("model"), None);
     assert_eq!(base.lines().last(), Some(context));
     assert_eq!(prompt.lines().last(), Some(context));
     assert_eq!(live["params"]["initialItems"][0]["text"], prompt);
