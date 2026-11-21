@@ -67,6 +67,7 @@ async fn relink_with_settings(fixture: &Fixture, mock: &echo_mcp_auth::mock::Moc
     assert_eq!(legacy["portos"]["server"]["granted_scopes"], json!(["endpoint:read"]));
     assert_eq!(legacy["portos"]["relink_advised"], true);
     assert_eq!(mock.state.lock().unwrap().requests.len(), requests);
+    browser_witness(&url, "legacy").await;
     let operation = settings_runtime_url(fixture, "/settings/v2/portos");
     let response = client
         .post(operation)
@@ -84,6 +85,7 @@ async fn relink_with_settings(fixture: &Fixture, mock: &echo_mcp_auth::mock::Moc
     assert_eq!(linked["portos"]["server"]["granted_scopes"], json!(["endpoint:read"]));
     assert_eq!(linked["portos"].get("relink_advised"), None);
     assert_eq!(linked["portos"].get("challenge"), None);
+    browser_witness(&url, "registered").await;
     for value in [legacy, pending, linked] {
         let body = value.to_string();
         for private in [LEGACY_CLI, REGISTERED_CLIENT, "client_id"] {
@@ -470,4 +472,16 @@ async fn wait_account(client: &reqwest::Client, url: &reqwest::Url, ready: impl 
     })
     .await
     .unwrap()
+}
+
+async fn browser_witness(url: &reqwest::Url, phase: &str) {
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../web/screen/own-client-witness.mjs");
+    let output = tokio::process::Command::new("node")
+        .kill_on_drop(true)
+        .args([script, url.as_str(), phase])
+        .output()
+        .await
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    write!(std::io::stdout().lock(), "{}", String::from_utf8_lossy(&output.stdout)).unwrap();
 }
