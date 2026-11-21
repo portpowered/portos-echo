@@ -225,7 +225,7 @@ export async function checkTemplateLayout(
     );
     for (const [, button] of longButtons) await button.click({ trial: true });
     await fixture.update({ state: "connected" });
-    await playing(page, "idle.webm");
+    await playing(page, "listening.webm");
     await observe(
         "Connected",
         [

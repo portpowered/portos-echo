@@ -281,9 +281,17 @@ export function startPage(root: HTMLElement, href: string): () => void {
             diagnostic.textContent = "Screen update could not be read";
         }
     };
+    const INTERRUPTED = "Screen connection interrupted";
+    stream.onopen = () => {
+        if (disposed) return;
+        presentation.reopened();
+        // The same bridge replays the frame already showing, which draws
+        // nothing: the line goes when the connection is back.
+        if (diagnostic.textContent === INTERRUPTED) diagnostic.textContent = "";
+    };
     stream.onerror = () => {
         if (disposed) return;
-        diagnostic.textContent = "Screen connection interrupted";
+        diagnostic.textContent = INTERRUPTED;
     };
     function dispose(): void {
         if (disposed) return;

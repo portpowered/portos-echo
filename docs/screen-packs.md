@@ -310,8 +310,10 @@ cut never jumps. Superseded media callbacks cannot advance newer clips.
 VP9-capable browsers choose WebM; otherwise they choose MP4. Reduced-motion
 preference applies states at once with no glide.
 
-Connected (the awake gaps of a session) plays the `wake` state when a pack has
-one, else stays on `idle`. Speaking follows the bridge, which publishes Speaking
+Connected (the open session while she is not speaking) plays the `wake` state
+when a pack has one, else the `listening` state, else `idle`: a session that
+is open shows listening before the reply, in its gaps and after it, until the
+session closes with Ready. Speaking follows the bridge, which publishes Speaking
 while reply audio plays and Connected in the gaps. The page debounces it in one
 place: Speaking starts 100 ms after it arrives, and the mouth keeps moving
 through gaps shorter than 500 ms; a longer silence closes it once. Listening,

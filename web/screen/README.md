@@ -97,9 +97,11 @@ The page entry grammar is
 Both URLs are required HTTP(S) URLs resolved relative to the page and must have
 the same origin. Example: `http://127.0.0.1:4173/?events=%2Fevents&actions=%2Factions`.
 Invalid configuration makes no connections or POSTs. The page uses EventSource;
-each message.data must contain one published ScreenFrame JSON object. Only a
-strictly newer unsigned 64-bit seq replaces the presentation, including across
-reconnections. Reload resets ordering. All supplied strings display as inert
+each message.data must contain one published ScreenFrame JSON object. On one
+connection only a strictly newer unsigned 64-bit seq replaces the presentation.
+A restarted bridge counts from 1 again, so the first frame of each connection
+replaces the presentation unless it is the frame already showing. Reload resets
+ordering. All supplied strings display as inert
 text. Link instructions never navigate automatically.
 
 Actions use fetch with POST, Content-Type application/json and exact UiAction

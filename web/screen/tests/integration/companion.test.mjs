@@ -32,7 +32,7 @@ const approval = {
 const presentations = [
     [{ state: "ready", message: "Ready" }, "idle"],
     [{ state: "connecting" }, "connecting"],
-    [{ state: "connected" }, "idle"],
+    [{ state: "connected" }, "listening"],
     [{ state: "listening" }, "listening"],
     [{ state: "thinking" }, "thinking"],
     [{ state: "speaking" }, "speaking"],

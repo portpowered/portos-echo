@@ -147,6 +147,34 @@ test("F16: actual forward/reverse focus order, names, focus ring and keyboard ac
     }
 });
 
+test("a reopened stream clears the interrupted line, ignores a replay and shows a restarted bridge's frames", async (t) => {
+    const page = await pageFor(t);
+    const status = () => page.getByRole("status").textContent();
+    const shown = () =>
+        page
+            .locator("section")
+            .evaluate((node) => [node.dataset.uiState, node.dataset.seq]);
+    await emit(page, frame(40, states[3]));
+    // The same bridge: its replayed snapshot draws nothing, the line goes.
+    await page.evaluate(() => window.streams[0].onerror());
+    assert.equal(await status(), "Screen connection interrupted");
+    await page.evaluate(() => window.streams[0].onopen());
+    assert.equal(await status(), "");
+    await emit(page, frame(40, states[3]));
+    assert.deepEqual(await shown(), ["listening", "40"]);
+    // A restarted bridge counts from one again.
+    await page.evaluate(() => window.streams[0].onerror());
+    await page.evaluate(() => window.streams[0].onopen());
+    await emit(page, frame(1, states[0]));
+    assert.deepEqual(await shown(), ["ready", "1"]);
+    await emit(page, frame(2, states[5]));
+    assert.deepEqual(await shown(), ["speaking", "2"]);
+    // An unread update's line is not the connection's to clear.
+    await emit(page, "bad");
+    await page.evaluate(() => window.streams[0].onopen());
+    assert.equal(await status(), "Screen update could not be read");
+});
+
 test("F17: reconnect replay keeps order; replacement/unload abort pending action and clear every timer", async (t) => {
     const page = await pageFor(t);
     await emit(page, frame(10, states[9]));

@@ -27,7 +27,14 @@ const html = (build) =>
               `<head>\n    <meta name="echo-build" content="${build}" />`,
           )
         : index;
-const bridge = { document: A, named: A, documents: 0, checks: 0, seq: 0 };
+const bridge = {
+    document: A,
+    named: A,
+    documents: 0,
+    checks: 0,
+    seq: 0,
+    state: "listening",
+};
 const streams = new Set();
 const server = createServer((request, response) => {
     const path = request.url.split("?")[0];
@@ -38,7 +45,7 @@ const server = createServer((request, response) => {
             "Content-Type": "text/event-stream",
         });
         response.write(
-            `retry: 20\n\ndata: ${JSON.stringify({ seq: ++bridge.seq, state: { state: "listening" } })}\n\n`,
+            `retry: 20\n\ndata: ${JSON.stringify({ seq: ++bridge.seq, state: { state: bridge.state } })}\n\n`,
         );
         streams.add(response);
         response.on("close", () => streams.delete(response));
@@ -135,5 +142,49 @@ test("upgrade: a page reconnecting to a bridge with another page build reloads o
     assert.deepEqual([bridge.documents, bridge.checks], [3, 10]);
     console.log(
         "upgrade: same and absent build kept the page; build B reloaded it once; an unreachable build reloaded once, no loop",
+    );
+});
+
+test("restart: a page shows the frames of a bridge that restarted and counts from one again", async (t) => {
+    const context = await browser.newContext({ serviceWorkers: "block" });
+    t.after(() => context.close());
+    await context.route("**/*", (route) =>
+        new URL(route.request().url()).origin === origin
+            ? route.continue()
+            : route.abort(),
+    );
+    Object.assign(bridge, { document: A, named: A, state: "listening" });
+    const page = await context.newPage();
+    const shown = () =>
+        page
+            .locator(".screen-presentation")
+            .evaluate((node) => [node.dataset.uiState, node.dataset.seq]);
+    // The running bridge has sent many frames.
+    bridge.seq = 40;
+    await page.goto(`${origin}/?events=%2Fevents&actions=%2Factions`);
+    await page.locator('[data-ui-state="listening"]').waitFor();
+    assert.deepEqual(await shown(), ["listening", "41"]);
+    // A settings save restarts it in place with the same page build: no
+    // reload, and the new process numbers its first frame one.
+    const { checks, documents } = bridge;
+    Object.assign(bridge, { seq: 0, state: "speaking" });
+    await restart(checks + 1);
+    await page.locator('[data-ui-state="speaking"]').waitFor();
+    assert.deepEqual(await shown(), ["speaking", "1"]);
+    assert.equal(bridge.documents, documents);
+    // On that connection frames are ordered by number as before.
+    const [stream] = streams;
+    const send = (seq, state) =>
+        stream.write(`data: ${JSON.stringify({ seq, state: { state } })}
+
+`);
+    send(2, "connected");
+    await page.locator('[data-ui-state="connected"]').waitFor();
+    send(1, "thinking");
+    send(3, "muted");
+    await page.locator('[data-ui-state="muted"]').waitFor();
+    assert.deepEqual(await shown(), ["muted", "3"]);
+    console.log(
+        "restart: frame 1 of a restarted bridge replaced frame 41; a stale frame on the same connection stayed out",
     );
 });
