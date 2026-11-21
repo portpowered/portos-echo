@@ -57,7 +57,10 @@ enum GatewayEvent {
 impl Gateway {
     async fn open() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let template = format!("ws://{}/devices/{{authLinkId}}", listener.local_addr().unwrap());
+        let template = format!(
+            "ws://127.0.0.1:{}/devices/{{authLinkId}}",
+            listener.local_addr().unwrap().port()
+        );
         let (events, received) = mpsc::channel(8);
         let task = tokio::spawn(gateway(listener, events));
         Self {
@@ -214,7 +217,10 @@ impl Settings {
         )
         .await
         .unwrap();
-        let actions = format!("http://{}/settings/v2?token={SETTINGS_TOKEN}", server.bound_addr);
+        let actions = format!(
+            "http://127.0.0.1:{}/settings/v2?token={SETTINGS_TOKEN}",
+            server.bound_addr.port()
+        );
         Self {
             server,
             actions,
@@ -455,8 +461,8 @@ async fn assert_installed(home: &Path, mock: &Mock) {
         })
     );
     let state = mock.state.lock().unwrap();
-    assert!(state.mcp_claimed);
-    assert!(state.endpoint_claimed);
+    assert!(state.endpoint.mcp_claimed);
+    assert!(state.endpoint.endpoint_claimed);
     let exchange = state
         .requests
         .iter()

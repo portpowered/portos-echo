@@ -50,6 +50,7 @@ impl LinkEvents for Events {
             LinkEvent::Mute(value) => LinkEvent::Mute(value),
             LinkEvent::MicrophoneDropped(value) => LinkEvent::MicrophoneDropped(value),
             LinkEvent::Other => LinkEvent::Other,
+            LinkEvent::StaleRemoteCapture | LinkEvent::RemoteCapture { .. } => LinkEvent::StaleRemoteCapture,
         }))
     }
 }

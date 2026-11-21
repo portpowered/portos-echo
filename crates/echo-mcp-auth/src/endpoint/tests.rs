@@ -57,17 +57,17 @@ fn endpoint_exchange_requires_a_secure_base() {
     let timeout = Duration::from_secs(2);
     for value in [
         "http://127.0.0.1",
-        "https://@api.example.invalid",
-        "https://api.example.invalid/?query",
-        "https://api.example.invalid/#fragment",
-        "https://api.example.invalid/{substitution}",
+        "https://@127.0.0.1", // lint-rules: allow-literal offline credentials rejection fixture
+        "https://127.0.0.1/?query",
+        "https://127.0.0.1/#fragment",
+        "https://127.0.0.1/{substitution}",
     ] {
         assert_eq!(
             EndpointExchange::open(value, timeout).err(),
             Some(ExchangeError::Unavailable)
         );
     }
-    assert!(EndpointExchange::open("https://api.example.invalid", timeout).is_ok());
+    assert!(EndpointExchange::open("https://127.0.0.1", timeout).is_ok());
 }
 
 #[tokio::test]

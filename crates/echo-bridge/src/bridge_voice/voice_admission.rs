@@ -305,6 +305,9 @@ async fn wait<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                             } else if !*muted { return Ok(Some(run)); }
                         },
                         LinkEvent::Played | LinkEvent::Other => (),
+                        LinkEvent::StaleRemoteCapture | LinkEvent::RemoteCapture { .. } => {
+                            observe(ServeNotice::Device(LinkEvent::StaleRemoteCapture))?;
+                        }
                         LinkEvent::Mute(value) => {
                             *muted = value;
                             observe(ServeNotice::Device(LinkEvent::Mute(value)))?;

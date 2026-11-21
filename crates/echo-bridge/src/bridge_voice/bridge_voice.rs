@@ -448,6 +448,7 @@ fn device<R>(
         }
         LinkEvent::MicrophoneDropped(count) => LinkEvent::MicrophoneDropped(*count),
         LinkEvent::Other => LinkEvent::Other,
+        LinkEvent::StaleRemoteCapture | LinkEvent::RemoteCapture { .. } => LinkEvent::StaleRemoteCapture,
         LinkEvent::Wake(_) => {
             source.failure = "unexpected_wake";
             return Err(Error::Wyoming);

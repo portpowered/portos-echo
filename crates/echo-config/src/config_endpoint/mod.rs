@@ -9,6 +9,7 @@ const GATEWAY_SUFFIX: &str = "/devices/{authLinkId}";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortosEndpoint {
     pub enabled: bool,
+    pub remote_mic: bool,
     pub device_name: String,
     pub gateway_url: Option<String>,
     pub api_base: Option<String>,
@@ -18,6 +19,7 @@ impl Default for PortosEndpoint {
     fn default() -> Self {
         Self {
             enabled: false,
+            remote_mic: false,
             device_name: "Echo Show".into(),
             gateway_url: None,
             api_base: None,
@@ -68,6 +70,7 @@ pub(super) fn decode(value: toml::de::DeValue<'_>) -> Result<PortosEndpoint, Con
     let mut fields = Fields::new(value, "portos_endpoint")?;
     let values = PortosEndpoint {
         enabled: fields.optional("enabled")?.unwrap_or(false),
+        remote_mic: fields.optional("remote_mic")?.unwrap_or(false),
         device_name: fields
             .optional("device_name")?
             .unwrap_or_else(|| PortosEndpoint::default().device_name),

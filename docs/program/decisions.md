@@ -211,6 +211,13 @@ Explicit end-session cancels delegation, stops speech and closes the mic run in 
 state. Reply idle within 1 s and report the remote end. Automatic idle and no-answer timeouts
 retain their protections for active work. See [program plan, section 9](plan.md#9-port-os-dependencies).
 
+The coordinator's remote-mic answer authorizes a UUID in `hassmic-start-run.data.requestId`
+and the same optional field in `run-pipeline.data`. Only a live matching reservation accepts
+the response. An untagged pipeline is a local wake. Drop and trace unmatched or expired IDs.
+The operator base switch `portos_endpoint.remote_mic` defaults to false. When false,
+a no-text start returns `NOT_READY` within the immediate reply bound. Native peer support
+belongs to EXT-HASSMIC.
+
 ## Open
 
 | Question | Recommendation | Decides |

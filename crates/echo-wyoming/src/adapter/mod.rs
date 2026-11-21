@@ -97,6 +97,15 @@ impl EchoLink for WyomingClient {
     async fn enable_capture(&self, failsafe_seconds: u32) -> Result<(), Error> {
         self.run_satellite_with_failsafe(failsafe_seconds).await.map_err(error)
     }
+    async fn request_remote_capture(
+        &self,
+        request_id: std::sync::Weak<str>,
+        deadline: std::time::Instant,
+    ) -> Result<(), Error> {
+        Self::request_remote_capture(self, request_id, deadline)
+            .await
+            .map_err(error)
+    }
     async fn probe(&self) -> Result<(), Error> {
         self.describe().await.map(|_| ()).map_err(error)
     }
@@ -152,3 +161,6 @@ mod echo_link_recovery;
 
 #[cfg(test)]
 mod mute_tests;
+
+#[cfg(test)]
+mod remote_capture_tests;

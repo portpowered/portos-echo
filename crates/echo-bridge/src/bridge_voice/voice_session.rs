@@ -447,6 +447,9 @@ async fn idle_step<E: LinkEvents>(
         event = events.recv() => match event?.ok_or(Error::Wyoming)? {
             LinkEvent::Wake(run) if !*muted => return Ok(Some(run)),
             LinkEvent::Wake(_) | LinkEvent::Played | LinkEvent::Other => (),
+            LinkEvent::StaleRemoteCapture | LinkEvent::RemoteCapture { .. } => {
+                observe(SessionNotice::Run(Notice::Device(LinkEvent::StaleRemoteCapture)))?;
+            }
             LinkEvent::Mute(value) => {
                 *muted = value;
                 observe(SessionNotice::Run(Notice::Device(LinkEvent::Mute(value))))?;

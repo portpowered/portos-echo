@@ -49,8 +49,13 @@ pub struct State {
     pub hold: Option<String>,
     pub held: bool,
     mcp_access: u64,
-    endpoint_access: Option<u64>,
-    endpoint_enabled: bool,
+    pub endpoint: EndpointState,
+}
+
+#[derive(Default)]
+pub struct EndpointState {
+    access: Option<u64>,
+    enabled: bool,
     exchanges: BTreeMap<String, Option<Value>>,
     pub mcp_claimed: bool,
     pub endpoint_claimed: bool,
@@ -102,7 +107,7 @@ impl Mock {
     /// Reports an unavailable mock state.
     pub fn enable_endpoint_audience(&self) -> std::io::Result<()> {
         let mut state = self.state.lock().map_err(|_| invalid())?;
-        state.endpoint_enabled = true;
+        state.endpoint.enabled = true;
         Ok(())
     }
 
@@ -279,13 +284,13 @@ fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
                 && request.headers.get("authorization") == Some(&format!("Bearer access-{}", state.mcp_access));
             (if allowed { 200 } else { 401 }, json!({}))
         }
-        "/plugin-auth-code-exchanges" | "/messages" if state.endpoint_enabled => endpoint_api(request, state),
+        "/plugin-auth-code-exchanges" | "/messages" if state.endpoint.enabled => endpoint_api(request, state),
         _ => (404, json!({})),
     }
 }
 
 fn endpoint_api(request: &Request, state: &mut State) -> (u16, Value) {
-    let Some(access) = state.endpoint_access else {
+    let Some(access) = state.endpoint.access else {
         return (401, json!({}));
     };
     if state.revoked
@@ -295,7 +300,7 @@ fn endpoint_api(request: &Request, state: &mut State) -> (u16, Value) {
         return (401, json!({}));
     }
     if request.path == "/messages" {
-        return if state.endpoint_claimed {
+        return if state.endpoint.endpoint_claimed {
             (202, json!({"receiptId":"synthetic-receipt"}))
         } else {
             (401, json!({}))
@@ -311,14 +316,14 @@ fn endpoint_api(request: &Request, state: &mut State) -> (u16, Value) {
     let Some(key) = request.headers.get("idempotency-key") else {
         return (400, json!({}));
     };
-    if let Some(prior) = state.exchanges.get(key) {
+    if let Some(prior) = state.endpoint.exchanges.get(key) {
         if prior != &request.json {
             return (409, json!({}));
         }
-    } else if !state.exchanges.is_empty() && !is_rename {
+    } else if !state.endpoint.exchanges.is_empty() && !is_rename {
         return (409, json!({}));
     }
-    state.exchanges.insert(key.clone(), request.json.clone());
+    state.endpoint.exchanges.insert(key.clone(), request.json.clone());
     (
         201,
         json!({"authLinkId": auth_link_id,"id":"synthetic-install","etag":"synthetic-etag","status":"SUCCEEDED"}),
@@ -372,9 +377,9 @@ fn token(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
         return fail("invalid_grant");
     }
     let refresh = request.form.get("grant_type").is_some_and(|g| g == "refresh_token");
-    let endpoint = refresh && state.endpoint_enabled && request.form.get("resource").is_some_and(|r| r == base);
+    let endpoint = refresh && state.endpoint.enabled && request.form.get("resource").is_some_and(|r| r == base);
     if refresh {
-        if state.endpoint_enabled && !endpoint && request.form.get("resource") != Some(&format!("{base}/mcp")) {
+        if state.endpoint.enabled && !endpoint && request.form.get("resource") != Some(&format!("{base}/mcp")) {
             return fail("invalid_target");
         }
         if request.form.get("refresh_token") != Some(&format!("refresh-{}", state.generation)) {
@@ -385,14 +390,14 @@ fn token(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
         return fail(&error);
     }
     state.generation += 1;
-    let installed = !state.exchanges.is_empty();
+    let installed = !state.endpoint.exchanges.is_empty();
     let audience = if endpoint {
-        state.endpoint_access = Some(state.generation);
-        state.endpoint_claimed = installed;
+        state.endpoint.access = Some(state.generation);
+        state.endpoint.endpoint_claimed = installed;
         "endpoint-"
     } else {
         state.mcp_access = state.generation;
-        state.mcp_claimed = installed;
+        state.endpoint.mcp_claimed = installed;
         ""
     };
     (

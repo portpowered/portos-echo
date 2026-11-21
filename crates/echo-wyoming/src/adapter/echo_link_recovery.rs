@@ -9,13 +9,7 @@ async fn m1_restart_regression_wake_before_info_preserves_played() {
         let (sender, receiver) = crate::wyoming_events::channel(32);
         let (_terminal, terminal) = tokio::sync::watch::channel(Some(crate::Error::Protocol));
         let mut events = Events::new(EventStream { receiver, terminal }, true);
-        let mut router = crate::wyoming_route::Router {
-            generation: std::sync::Arc::new(()),
-            current: None,
-            events: sender,
-            capacity: 16,
-            muted: false,
-        };
+        let mut router = crate::wyoming_route::Router::new(sender, 16);
         let frame = crate::wyoming_test_support::frame;
         router.route(frame("info", json!({}), vec![])).unwrap();
         assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Other)));

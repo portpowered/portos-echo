@@ -349,7 +349,7 @@ fn settings_v2_endpoint_patch_is_sparse_and_strict() -> Result<(), Box<dyn Error
         r#"{"endpoint_name":null}"#,
         r#"{"endpoint_enabled":"false"}"#,
         r#"{"endpoint_name":4}"#,
-        r#"{"gateway_url":"wss://gateway.example.invalid"}"#,
+        r#"{"gateway_url":"wss://127.0.0.1"}"#,
     ] {
         let body = format!(r#"{{"version":2,"settings":{{"portos":{invalid}}}}}"#);
         assert!(serde_json::from_str::<SettingsPatchV2>(&body).is_err());

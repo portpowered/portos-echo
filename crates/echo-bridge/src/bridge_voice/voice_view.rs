@@ -220,6 +220,9 @@ impl<'a> View<'a> {
     }
 
     fn device(&mut self, event: &echo_link::LinkEvent<()>) -> Result<(), Error> {
+        if matches!(event, echo_link::LinkEvent::StaleRemoteCapture) {
+            return self.trace.record("endpoint.mic_start_stale", None, json!({}));
+        }
         if matches!(event, echo_link::LinkEvent::Mute(true)) && self.mouth == MouthActivity::ThinkingAfterEarcon {
             self.mouth = MouthActivity::AwaitingReady;
         }

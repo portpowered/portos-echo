@@ -4,15 +4,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[test]
 fn endpoint_api_uses_the_configured_grant_origin_when_omitted() {
     let mut config = BridgeConfig::from_toml_str(include_str!("../../../../examples/bridge.echo.toml")).unwrap();
-    config.mcp.server[0].url = "https://api.example.invalid:8443/mcp".into();
+    config.mcp.server[0].url = "https://api.example.invalid:8443/mcp".into(); // lint-rules: allow-literal offline origin derivation fixture
     assert_eq!(
         endpoint_api(&config).as_deref(),
-        Some("https://api.example.invalid:8443")
+        Some("https://api.example.invalid:8443") // lint-rules: allow-literal offline origin derivation assertion
     );
-    config.portos_endpoint.api_base = Some("https://endpoint.example.invalid".into());
+    config.portos_endpoint.api_base = Some("https://endpoint.example.invalid".into()); // lint-rules: allow-literal offline origin override fixture
     assert_eq!(
         endpoint_api(&config).as_deref(),
-        Some("https://endpoint.example.invalid")
+        Some("https://endpoint.example.invalid") // lint-rules: allow-literal offline origin override assertion
     );
     config.portos_endpoint.api_base = None;
     config.mcp.server.clear();

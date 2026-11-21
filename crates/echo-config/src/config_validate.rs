@@ -90,7 +90,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
         "agent" => &["max_tool_calls", "task_deadline_seconds", "daily_request_cap", "model"],
         "muse" => &["url", "ca_file", "credential_file"],
-        "portos_endpoint" => &["enabled", "device_name", "gateway_url", "api_base"],
+        "portos_endpoint" => &["enabled", "device_name", "gateway_url", "api_base", "remote_mic"],
         "mcp" => &[
             "server",
             "state_dir",

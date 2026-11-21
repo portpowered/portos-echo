@@ -93,7 +93,7 @@ impl EndpointGrant<'_> {
     /// Reports relinking, protocol, transport or storage failure.
     pub async fn refresh_installation(&self) -> Result<(), AuthError> {
         let mut state = self.owner.state.lock().await;
-        self.require_registered(&state)?;
+        Self::require_registered(&state)?;
         if self.cached(&state).is_some_and(|access| access.claimed) {
             return Ok(());
         }
@@ -101,7 +101,7 @@ impl EndpointGrant<'_> {
         self.rotate(&mut state, true).await
     }
 
-    fn require_registered(&self, state: &State) -> Result<(), AuthError> {
+    fn require_registered(state: &State) -> Result<(), AuthError> {
         if state.uncertain || state.record.registration.is_none() || state.record.grant.is_none() {
             return Err(AuthError::RelinkRequired);
         }
@@ -148,7 +148,7 @@ impl EndpointTokenSource for EndpointGrant<'_> {
     fn access_token(&self) -> TokenFuture<'_> {
         Box::pin(async move {
             let mut state = self.owner.state.lock().await;
-            self.require_registered(&state)?;
+            Self::require_registered(&state)?;
             let cached = self.cached(&state);
             if cached.is_none_or(|access| access.expires <= self.owner.now().saturating_add(300)) {
                 let claimed = cached.is_some_and(|access| access.claimed);

@@ -85,6 +85,7 @@ that sign-in. The bridge requests a separate access token for each audience.
 ```toml
 [portos_endpoint]
 enabled = false
+remote_mic = false
 device_name = "Echo Show"
 gateway_url = "wss://gateway.example.invalid/devices/{authLinkId}"
 api_base = "https://api.example.invalid"
@@ -271,6 +272,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `mcp.server[].allow_tools` | Array of exact tool-name strings, defaults to all eleven Port OS tools for device-code auth and empty for other auth modes. An explicit empty array disables all tools. | withdraw immediately, other changes at boundary / yes |
 | `portos_endpoint` | Optional Port OS endpoint table. | see individual keys |
 | `portos_endpoint.enabled` | Boolean, default false. Opts in once the endpoint service prerequisites are available. | save / yes |
+| `portos_endpoint.remote_mic` | Boolean, default false. Enable only when the Wyoming peer supports the correlated remote capture handshake. | restart / no |
 | `portos_endpoint.device_name` | Defaults to `Echo Show`. A nonblank name of 1 to 64 Unicode characters without controls. | save / yes |
 | `portos_endpoint.gateway_url` | Optional WSS template ending in `/devices/{authLinkId}`. | restart / no |
 | `portos_endpoint.api_base` | Optional HTTPS API base. Defaults to the configured Port OS grant's HTTPS resource origin. | restart / no |

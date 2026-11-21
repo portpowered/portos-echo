@@ -93,6 +93,9 @@ impl<C: LinkConnector> Retained<C> {
                     }
                     Ok(Some(LinkEvent::Mute(value))) => observe(LinkEvent::Mute(value)),
                     Ok(Some(LinkEvent::MicrophoneDropped(count))) => observe(LinkEvent::MicrophoneDropped(count)),
+                    Ok(Some(LinkEvent::StaleRemoteCapture | LinkEvent::RemoteCapture { .. })) => {
+                        observe(LinkEvent::StaleRemoteCapture);
+                    }
                     Ok(Some(LinkEvent::Played | LinkEvent::Other)) => (),
                     Ok(None) | Err(_) => break,
                 }
@@ -158,6 +161,13 @@ impl<L: EchoLink> EchoLink for Handle<L> {
     }
     async fn probe(&self) -> Result<(), Error> {
         self.0.link.probe().await
+    }
+    async fn request_remote_capture(
+        &self,
+        request_id: std::sync::Weak<str>,
+        deadline: std::time::Instant,
+    ) -> Result<(), Error> {
+        self.0.link.request_remote_capture(request_id, deadline).await
     }
     async fn play_with_timeout(
         &self,
@@ -226,7 +236,7 @@ impl<L: EchoLink> LinkEvents for Shared<L> {
         match &event {
             Some(LinkEvent::Mute(value)) => self.kept.muted.store(*value, Ordering::SeqCst),
             // A muted wake is dropped by every owner without a device run.
-            Some(LinkEvent::Wake(_)) if !self.kept.muted.load(Ordering::SeqCst) => {
+            Some(LinkEvent::Wake(_) | LinkEvent::RemoteCapture { .. }) if !self.kept.muted.load(Ordering::SeqCst) => {
                 self.kept.open.store(true, Ordering::SeqCst);
             }
             _ => (),

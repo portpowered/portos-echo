@@ -167,6 +167,7 @@ pub(super) async fn negotiating<E: LinkEvents, T>(
                     LinkEvent::Mute(value) => LinkEvent::Mute(value),
                     LinkEvent::MicrophoneDropped(count) => LinkEvent::MicrophoneDropped(count),
                     LinkEvent::Other => LinkEvent::Other,
+                    LinkEvent::StaleRemoteCapture | LinkEvent::RemoteCapture { .. } => LinkEvent::StaleRemoteCapture,
                     LinkEvent::Wake(_) | LinkEvent::Played => return Err(Error::Wyoming),
                 };
                 let muted = matches!(event, LinkEvent::Mute(true));

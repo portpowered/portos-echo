@@ -4,11 +4,12 @@ use echo_config::SettingsOverlay;
 #[test]
 fn endpoint_overlay_keeps_operator_origins_and_sparse_siblings() {
     let base = BridgeConfig::from_toml_str(&format!(
-        "{MINIMAL}\n[portos_endpoint]\ngateway_url='wss://gateway.example.invalid/devices/{{authLinkId}}'\n\
-         api_base='https://api.example.invalid'"
+        "{MINIMAL}\n[portos_endpoint]\ngateway_url='wss://127.0.0.1/devices/{{authLinkId}}'\n\
+         api_base='https://127.0.0.1'"
     ))
     .unwrap();
     assert!(!base.portos_endpoint.enabled);
+    assert!(!base.portos_endpoint.remote_mic);
     assert_eq!(base.portos_endpoint.device_name, "Echo Show");
 
     let saved = overlay("[portos_endpoint]\ndevice_name='Hall Echo'\n[voice]\nsession_listen_enabled=false\n");
@@ -60,18 +61,12 @@ fn endpoint_names_use_the_same_bound_and_safe_diagnostic() {
 fn endpoint_origin_configuration_refuses_unsafe_and_noneditable_values() {
     for (field, value) in [
         ("gateway_url", "ws://127.0.0.1/devices/{authLinkId}"),
-        (
-            "gateway_url",
-            "wss://gateway.example.invalid/{other}/devices/{authLinkId}",
-        ),
-        (
-            "gateway_url",
-            "wss://gateway.example.invalid/devices/{authLinkId}?extra",
-        ),
-        ("gateway_url", "wss://user@gateway.example.invalid/devices/{authLinkId}"),
-        ("api_base", "http://api.example.invalid"),
-        ("api_base", "https://api.example.invalid#fragment"),
-        ("api_base", "https://api.example.invalid/{other}"),
+        ("gateway_url", "wss://127.0.0.1/{other}/devices/{authLinkId}"),
+        ("gateway_url", "wss://127.0.0.1/devices/{authLinkId}?extra"),
+        ("gateway_url", "wss://user@127.0.0.1/devices/{authLinkId}"), // lint-rules: allow-literal offline credentials rejection fixture
+        ("api_base", "http://127.0.0.1"),
+        ("api_base", "https://127.0.0.1#fragment"),
+        ("api_base", "https://127.0.0.1/{other}"),
     ] {
         let section = format!("[portos_endpoint]\n{field}='{value}'");
         let error = BridgeConfig::from_toml_str(&format!("{MINIMAL}\n{section}")).unwrap_err();
@@ -82,4 +77,15 @@ fn endpoint_origin_configuration_refuses_unsafe_and_noneditable_values() {
             "portos_endpoint: unknown field"
         );
     }
+}
+
+#[test]
+fn endpoint_remote_capture_capability_is_operator_only() {
+    let section = "[portos_endpoint]\nremote_mic=true";
+    let base = BridgeConfig::from_toml_str(&format!("{MINIMAL}\n{section}")).unwrap();
+    assert!(base.portos_endpoint.remote_mic);
+    assert_eq!(
+        SettingsOverlay::from_toml_str(section).unwrap_err().to_string(),
+        "portos_endpoint: unknown field"
+    );
 }

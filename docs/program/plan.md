@@ -673,6 +673,10 @@ final reply by 2.5 s with a healthy uplink. Explicit end-session cancels a runni
 stops speech and closes the mic run immediately. The device owns speaker acknowledgements, and the camera
 source owns the snapshot shutter. Workers exercise this path through local fakes.
 
+Remote microphone starts require explicit `portos_endpoint.remote_mic` capability configuration,
+off by default. The Wyoming request carries a fresh `requestId` echoed by the corresponding
+`run-pipeline`. Local wakes keep the same wire and cannot satisfy a remote reservation.
+
 ## 10. Phase F: the repository harness, before any crate
 
 Process and review trust CI alone, so the gates exist first. Each item's acceptance is: **the gate runs in CI, and

@@ -1,5 +1,5 @@
 //! Protocol-neutral device capture and acknowledged, bounded reply playback.
-use std::{future::Future, num::NonZeroUsize, time::Duration};
+use std::{future::Future, num::NonZeroUsize, sync::Weak, time::Duration};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// PCM descriptor. Width is bytes per sample; no transport extensions.
 pub struct PcmFormat {
@@ -45,6 +45,11 @@ pub enum Error {
 }
 pub enum LinkEvent<R> {
     Wake(R),
+    RemoteCapture {
+        request_id: String,
+        run: R,
+    },
+    StaleRemoteCapture,
     Played,
     /// Effective device mute, ordered with wake and playback events.
     Mute(bool),
@@ -93,6 +98,18 @@ pub trait EchoLink: Send + Sync {
     /// The stalled-progress watchdog must be in 1..=2147483647 seconds.
     /// Invalid values fail before any device effect.
     fn enable_capture(&self, failsafe_seconds: u32) -> impl Future<Output = Result<(), Error>> + Send;
+    /// Request capture while the caller owns the corresponding strong request ID.
+    /// A matching device response arrives as `LinkEvent::RemoteCapture`.
+    /// # Errors
+    /// Returns a fixed category if the link cannot send the request.
+    fn request_remote_capture(
+        &self,
+        request_id: Weak<str>,
+        deadline: std::time::Instant,
+    ) -> impl Future<Output = Result<(), Error>> + Send {
+        let _ = (request_id, deadline);
+        std::future::ready(Err(Error::InvalidOptions))
+    }
     /// # Errors
     /// Returns a fixed category on failure; no peer data enters diagnostics.
     fn probe(&self) -> impl Future<Output = Result<(), Error>> + Send;

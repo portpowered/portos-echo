@@ -87,7 +87,16 @@ impl Events {
             self.barrier = false;
             self.current = Some(run.queue.clone());
             self.capture = if self.muted { Capture::Ended } else { Capture::Open };
+            if let Some(request_id) = run.pipeline().extra.get("requestId").and_then(|id| id.as_str()) {
+                return Ok(Some(LinkEvent::RemoteCapture {
+                    request_id: request_id.to_owned(),
+                    run,
+                }));
+            }
             return Ok(Some(LinkEvent::Wake(run)));
+        }
+        if matches!(event.event, WyomingEvent::RunPipeline(_)) {
+            return Ok(Some(LinkEvent::StaleRemoteCapture));
         }
         if matches!(event.event, WyomingEvent::AudioChunk(_))
             && (self.capture == Capture::Ended || !event.capture_active)
