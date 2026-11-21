@@ -19,47 +19,12 @@ async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
             mock.enable_endpoint_audience().unwrap();
             let mut grant = registered(&mock, home.path()).await;
             let mut gateway = Gateway::open().await;
-            let (service, send_settings) =
-                Settings::configured(home.path(), &mock, &gateway, Arc::new(Resolver), false);
-            let (app, server) = tokio::io::duplex(16384);
-            let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-            let connector = echo_wyoming::adapter::connector(
-                listener.local_addr().unwrap(),
-                echo_wyoming::ClientOptions::default(),
-            );
-            let ready = Arc::new(Notify::new());
-            let signal = ready.clone();
-            let stale = Arc::new(Notify::new());
-            let ordered = stale.clone();
-            let shared_grant = grant.grant.clone();
-            let settings = Settings::serve_with_owner(send_settings, |stop| {
-                tokio::task::spawn_local(async move {
-                    let work = async {
-                        let result = crate::bridge_voice::endpoint_fixture(
-                            connector,
-                            app,
-                            async {
-                                let _ = stop.await;
-                            },
-                            (&signal, &ordered),
-                        )
-                        .await;
-                        assert_eq!(result, Err(crate::Error::Control));
-                    };
-                    Box::pin(service.scope_with_grant(
-                        work,
-                        || shared_grant.link_status(),
-                        || Some(shared_grant.clone()),
-                    ))
-                    .await;
-                })
-            })
-            .await;
-            let (device, _) = listener.accept().await.unwrap();
-            let (mut device, mut app) = (Device::new(device), BufReader::new(server));
-            device.receive("run-satellite").await;
-            device.send("info", json!({})).await;
-            ready.notified().await;
+            let Fixture {
+                settings,
+                mut device,
+                mut app,
+                stale,
+            } = fixture(home.path(), &mock, &gateway, grant.grant.clone()).await;
             settings.save(true, "Hall Echo").await;
             gateway.assert_upgrade(4).await;
             assert_installed(home.path(), &mock).await;
@@ -68,13 +33,66 @@ async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
             stale.notified().await;
             mic_start(&gateway, &mock, &mut app, &mut device, &stale).await;
             text_start(&gateway, &mock, &mut app, &mut device).await;
+            text_followup(&gateway, &mock, &mut app, &mut device, &stale).await;
             wake_and_end(&gateway, &mock, &mut app, &mut device).await;
-            assert_eq!(receipts(&mock).len(), 6);
+            safety_refusals(&gateway, &mock, &mut device, &stale, home.path()).await;
+            assert_eq!(receipts(&mock).len(), 9);
             settings.close().await;
             gateway.assert_disconnect().await;
             grant.close().await;
         })))
         .await;
+}
+
+struct Fixture {
+    settings: Settings,
+    device: Device,
+    app: BufReader<DuplexStream>,
+    stale: Arc<Notify>,
+}
+
+async fn fixture(home: &Path, mock: &Mock, gateway: &Gateway, shared_grant: Arc<Grant>) -> Fixture {
+    let (service, send_settings) = Settings::configured(home, mock, gateway, Arc::new(Resolver), false);
+    let (app, server) = tokio::io::duplex(16384);
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let connector =
+        echo_wyoming::adapter::connector(listener.local_addr().unwrap(), echo_wyoming::ClientOptions::default());
+    let ready = Arc::new(Notify::new());
+    let signal = ready.clone();
+    let stale = Arc::new(Notify::new());
+    let ordered = stale.clone();
+    let fixture_home = home.to_path_buf();
+    let settings = Settings::serve_with_owner(send_settings, |stop| {
+        tokio::task::spawn_local(async move {
+            let work = async {
+                let result = crate::bridge_voice::endpoint_fixture(
+                    connector,
+                    app,
+                    async {
+                        let _ = stop.await;
+                    },
+                    (&signal, &ordered),
+                    &fixture_home,
+                )
+                .await;
+                assert_eq!(result, Err(crate::Error::Control));
+            };
+            Box::pin(service.scope_with_grant(work, || shared_grant.link_status(), || Some(shared_grant.clone())))
+                .await;
+        })
+    })
+    .await;
+    let (device, _) = listener.accept().await.unwrap();
+    let (mut device, app) = (Device::new(device), BufReader::new(server));
+    device.receive("run-satellite").await;
+    device.send("info", json!({})).await;
+    ready.notified().await;
+    Fixture {
+        settings,
+        device,
+        app,
+        stale,
+    }
 }
 
 async fn missing_capture(gateway: &Gateway, mock: &Mock, device: &mut Device) {
@@ -138,14 +156,47 @@ async fn finish_capture(app: &mut BufReader<DuplexStream>, device: &mut Device) 
 }
 
 async fn text_start(gateway: &Gateway, mock: &Mock, app: &mut BufReader<DuplexStream>, device: &mut Device) {
+    let reply = begin_text(gateway, mock, app, "text", false).await;
+    let session = reply["sessionId"].as_str().unwrap();
+    play_reply(app, device).await;
+    app_stop(app).await;
+    assert_end(mock, session, "remote", "completed").await;
+}
+
+async fn text_followup(
+    gateway: &Gateway,
+    mock: &Mock,
+    app: &mut BufReader<DuplexStream>,
+    device: &mut Device,
+    ordered: &Notify,
+) {
+    let reply = begin_text(gateway, mock, app, "text-followup", true).await;
+    play_reply(app, device).await;
+    let capture = device.remote_request().await;
+    device.pipeline(Some(&capture)).await;
+    device.send("hassmic-mute", json!({"muted":false})).await;
+    ordered.notified().await;
+    advance(Duration::from_secs(8)).await;
+    device.receive("hassmic-end").await;
+    app_stop(app).await;
+    assert_end(mock, reply["sessionId"].as_str().unwrap(), "remote", "completed").await;
+}
+
+async fn begin_text(
+    gateway: &Gateway,
+    mock: &Mock,
+    app: &mut BufReader<DuplexStream>,
+    request: &str,
+    listen: bool,
+) -> Value {
     let at = Instant::now();
     send(
         gateway,
         &command(
             "start-session",
-            "text",
+            request,
             ROUTE,
-            &json!({"reason":"fixture","initialText":"hello","listen":false}),
+            &json!({"reason":"fixture","initialText":"hello","listen":listen}),
         ),
     )
     .await;
@@ -156,14 +207,38 @@ async fn text_start(gateway: &Gateway, mock: &Mock, app: &mut BufReader<DuplexSt
         json!({"threadId":"test-thread","role":"user","text":"hello"})
     );
     answer(app, &append, json!({})).await;
-    let reply = outcome(mock, "text").await;
+    let reply = outcome(mock, request).await;
     assert_eq!(reply["state"], "thinking");
     assert_eq!(reply["ok"], true);
     assert!(at.elapsed() <= Duration::from_secs(1));
-    let session = reply["sessionId"].as_str().unwrap();
-    play_reply(app, device).await;
-    app_stop(app).await;
-    assert_end(mock, session, "remote", "completed").await;
+    reply
+}
+
+async fn safety_refusals(gateway: &Gateway, mock: &Mock, device: &mut Device, ordered: &Notify, home: &Path) {
+    device.send("hassmic-mute", json!({"muted":true})).await;
+    ordered.notified().await;
+    assert_start_refused(gateway, mock, "mute", "MUTED").await;
+    device.send("hassmic-mute", json!({"muted":false})).await;
+    ordered.notified().await;
+    let flag = home.join("voice-disabled");
+    fs::write(&flag, "").unwrap();
+    assert_start_refused(gateway, mock, "disable", "DISABLED").await;
+}
+
+async fn assert_start_refused(gateway: &Gateway, mock: &Mock, id: &str, code: &str) {
+    let at = Instant::now();
+    send(
+        gateway,
+        &command(
+            "start-session",
+            id,
+            ROUTE,
+            &json!({"reason":"fixture","initialText":"hello"}),
+        ),
+    )
+    .await;
+    assert_eq!(outcome(mock, id).await["failure"]["code"], code);
+    assert!(at.elapsed() <= Duration::from_secs(1));
 }
 
 async fn play_reply(app: &mut BufReader<DuplexStream>, device: &mut Device) {
@@ -177,21 +252,38 @@ async fn wake_and_end(gateway: &Gateway, mock: &Mock, app: &mut BufReader<Duplex
     device.pipeline(None).await;
     app_start(app).await;
     device.receive("audio-start").await;
+    start_delegation(app, device).await;
     advance(Duration::from_millis(250)).await;
     let wake = message(mock, "report-state", "origin", &json!("wake")).await;
     let id = wake["sessionId"].as_str().unwrap();
     assert_busy(gateway, mock, id).await;
-    end_wake(gateway, mock, device, id).await;
+    end_wake(gateway, mock, app, device, id).await;
     advance(Duration::from_secs(1)).await;
     app_stop(app).await;
 }
 
-async fn end_wake(gateway: &Gateway, mock: &Mock, device: &mut Device, id: &str) {
+async fn start_delegation(app: &mut BufReader<DuplexStream>, device: &mut Device) {
+    write(
+        app,
+        &json!({"method":"turn/started","params":{"threadId":"test-thread","turn":{"id":"delegated-turn"}}}),
+    )
+    .await;
+    let event = device.receive("hassmic-thinking").await;
+    assert_eq!(event.header.data.or(event.data).unwrap(), json!({"thinking":true}));
+}
+
+async fn end_wake(gateway: &Gateway, mock: &Mock, app: &mut BufReader<DuplexStream>, device: &mut Device, id: &str) {
     let ended = Instant::now();
     send(gateway, &command("end-session", "end", ROUTE, &json!({"sessionId":id}))).await;
     device.receive("hassmic-flush").await;
     device.send("played", Value::Null).await;
     device.receive("hassmic-end").await;
+    let interrupt = rpc(app, "turn/interrupt").await;
+    assert_eq!(
+        interrupt["params"],
+        json!({"threadId":"test-thread","turnId":"delegated-turn"})
+    );
+    answer(app, &interrupt, json!({})).await;
     assert_eq!(
         outcome(mock, "end").await,
         json!({"ok":true,"state":"idle","ending":false})

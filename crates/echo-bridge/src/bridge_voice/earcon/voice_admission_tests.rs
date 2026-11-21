@@ -378,31 +378,49 @@ pub(crate) async fn endpoint_fixture(
     stream: tokio::io::DuplexStream,
     cancelled: impl Future<Output = ()>,
     (ready, stale): (&tokio::sync::Notify, &tokio::sync::Notify),
+    home: &std::path::Path,
 ) -> Result<(), Error> {
     use echo_link::LinkConnector as _;
+    let mut config = echo_config::BridgeConfig::from_toml_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/bridge.example.toml"
+    )))
+    .unwrap();
+    config.mcp.server.clear();
+    config.audit.log_dir = home.join("audit");
+    let screen = crate::bridge_runtime::bridge_screen::Screen::bind(None).await.unwrap();
+    let mut trace = crate::bridge_trace::Trace::open(&home.join("voice-trace"), "api_key").unwrap();
+    let mut tools = super::super::voice_tools::Tools::new(&config, std::sync::Arc::new(|| 0));
+    tools.open(&config, &screen, &mut trace, None).await.unwrap();
     let (read, write) = tokio::io::split(stream);
     let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
     let retained = super::super::retained_link::Retained::new(connector);
     let mut link = retained.connect().await.unwrap();
     link.enable_capture(30).await.unwrap();
     let remote = remote_admission::Options::retained(true);
+    let kill = home.join("voice-disabled");
+    let mut configured = options();
+    configured.kill_path = Some(&kill);
+    configured.session.listen_timeout = Some(Duration::from_secs(8));
     let result = service(
         &mut link,
         &mut io,
-        options(),
+        configured,
         async || Ok(MemoryPeer),
         cancelled,
         |notice| {
             match notice {
                 ServeNotice::Ready => ready.notify_one(),
-                ServeNotice::Device(LinkEvent::StaleRemoteCapture | LinkEvent::Mute(false)) => stale.notify_one(),
+                ServeNotice::Device(LinkEvent::StaleRemoteCapture | LinkEvent::Mute(_))
+                | ServeNotice::Session(SessionNotice::Run(Notice::Device(LinkEvent::Mute(_)))) => stale.notify_one(),
                 _ => {}
             }
             Ok(())
         },
-        (None, None, false, None, Some(remote)),
+        (Some(&mut tools), Some(trace), false, None, Some(remote)),
     )
     .await;
+    tools.close().await;
     retained.close().await;
     result
 }
