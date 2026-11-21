@@ -12,6 +12,9 @@
     "bridge_version": {
       "type": "string"
     },
+    "muse": {
+      "$ref": "#/$defs/MuseStatusV2"
+    },
     "portos": {
       "$ref": "#/$defs/PortosStatusV2"
     },
@@ -121,6 +124,47 @@
         "link_required",
         "linked",
         "relink_for_scope"
+      ]
+    },
+    "MuseProbeReasonV2": {
+      "type": "string",
+      "enum": [
+        "unconfigured",
+        "invalid_configuration",
+        "unauthorized",
+        "unavailable",
+        "unexpected_response"
+      ]
+    },
+    "MuseReachabilityV2": {
+      "type": "string",
+      "enum": [
+        "unchecked",
+        "reachable",
+        "unreachable"
+      ]
+    },
+    "MuseStatusV2": {
+      "type": "object",
+      "properties": {
+        "configured": {
+          "type": "boolean"
+        },
+        "reachability": {
+          "$ref": "#/$defs/MuseReachabilityV2"
+        },
+        "reason": {
+          "$ref": "#/$defs/MuseProbeReasonV2"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "configured",
+        "reachability"
       ]
     },
     "PortosChallengeV2": {

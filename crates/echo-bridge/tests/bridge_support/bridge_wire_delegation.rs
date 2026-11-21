@@ -35,11 +35,6 @@ impl Drop for Model {
 }
 
 impl Model {
-    #[cfg(unix)]
-    pub(super) fn request_count(&self) -> usize {
-        self.requests.lock().unwrap().len()
-    }
-
     pub(super) async fn start(outage: bool, allowed: bool) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = "http://127.0.0.1";

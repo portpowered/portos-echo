@@ -58,11 +58,22 @@ use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun, PlayOutcome, Rep
 use echo_media::PcmFrame;
 use std::{future::Future, num::NonZeroUsize, time::Duration};
 use tokio::time::{Instant, timeout};
+pub use voice_source::Stats;
 use voice_source::{Source, UserSpeech};
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
     /// Bind the run identity, preserving queued tools' original binding.
     fn bind_session(&mut self, _run: Option<std::sync::Arc<()>>) {}
+    /// Bind Muse admission to the owning Wyoming run and its deadline.
+    ///
+    /// # Errors
+    /// Returns an error if the current run cannot be read from its trace.
+    fn start_muse_run(&mut self, _deadline: Instant) -> Result<(), Error> {
+        Ok(())
+    }
+    fn finish_muse_run(&mut self) -> impl Future<Output = Result<(), Error>> {
+        std::future::ready(Ok(()))
+    }
     fn flush_session_answer(&mut self) -> impl Future<Output = Result<(), Error>> {
         std::future::ready(Ok(()))
     }
@@ -121,24 +132,6 @@ pub struct Options {
     pub muted: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Stats {
-    pub received_chunks: u64,
-    pub dropped_chunks: u64,
-    pub microphone_chunks: u64,
-    pub microphone_frames: u64,
-    pub microphone_tail: usize,
-    /// Speech evicted because the media sender stalled past the backlog bound.
-    pub uplink_dropped: u64,
-    pub reply_received: u64,
-    pub reply_sent: u64,
-    pub reply_dropped: u64,
-    /// The settled reply's pacing and discard facts.
-    pub quality: ReplyQuality,
-    /// The barge-in that cut the settled reply.
-    pub cut: Option<Box<crate::bridge_runtime::bridge_pacing::Cut>>,
-}
-
 /// Run an already connected call without creating a second process or IO reader.
 /// Success requires assistant transcript/done, local accepted-media drain, PCM
 /// handoff, the device Played event AND the playback operation's Played result.
@@ -193,6 +186,7 @@ async fn run_opened<L: EchoLink>(
     source.run_ceiling = opened.checked_add(options.session_max);
     source.session = session_tools::Grants::new(options.listen_timeout, options.session_max);
     port.bind_session(Some(source.session.run.clone()));
+    port.start_muse_run(source.run_ceiling.ok_or(Error::Deadline)?)?;
     source.controller.admit_response(options.response_deadline)?;
     // A cut replaces playback, while the run still owns pending clock receipts.
     let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
@@ -211,8 +205,9 @@ async fn run_opened<L: EchoLink>(
         &mut observe,
     ))
     .await;
+    let cleanup = port.finish_muse_run().await;
     port.bind_session(None);
-    result?;
+    result.and(cleanup)?;
     session_controller::close(
         client,
         (events, &mut microphone),
@@ -494,7 +489,7 @@ async fn media(
         MediaEvent::Control(Event::Session(request)) => {
             session_tools::answer(request, &mut source.session, &mut source.controller, observe)
         }
-        MediaEvent::Control(Event::Other | Event::ReplyHandoff) => Ok(()),
+        MediaEvent::Control(Event::Other | Event::ReplyHandoff(_)) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
     }
 }

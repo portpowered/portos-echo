@@ -100,7 +100,7 @@ impl Wait {
     pub fn playback(&self, settings: &Settings) -> Duration {
         // The transport is a backstop. The producer, cut and Played retain
         // their phase bounds, with room for audio accepted near the cutoff.
-        let room = if settings.delegation.is_some() || settings.muse.is_some() {
+        let room = if settings.delegation.is_some() {
             self.cutoff.saturating_duration_since(Instant::now())
         } else {
             Duration::ZERO

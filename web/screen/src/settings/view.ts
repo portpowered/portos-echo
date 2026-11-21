@@ -16,6 +16,7 @@ import { openAIOptions, portosForm } from "./forms-v2";
 import { mountPortos } from "./accounts/portos";
 import { mountOpenAI } from "./accounts/openai";
 import { accountRow } from "./accounts/account-buttons";
+import { museForm } from "./muse/form";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
 const LINK_FROM_PC =
@@ -81,6 +82,7 @@ export function mountSettings(
     let disposed = false;
     let portos: ReturnType<typeof mountPortos> | undefined;
     let openai: ReturnType<typeof mountOpenAI> | undefined;
+    let muse: ReturnType<typeof museForm> | undefined;
     let fading: ReturnType<typeof setTimeout> | undefined;
     // The sections of this load; each knows its unsaved edits and its save.
     const sections: Section[] = [];
@@ -122,6 +124,8 @@ export function mountSettings(
         portos = undefined;
         openai?.stop();
         openai = undefined;
+        muse?.forget();
+        muse = undefined;
         pending = undefined;
         clearTimeout(timeout);
         settle();
@@ -160,6 +164,7 @@ export function mountSettings(
             | HTMLTextAreaElement
         >("input,button,select,textarea"))
             control.disabled = value;
+        if (!value) muse?.sync();
     }
     // A successful result is transient unless `keep` says it is information
     // the owner still needs (a pending restart); errors always stay. Resolves
@@ -320,6 +325,14 @@ export function mountSettings(
             ),
             settingsSection("Port OS permissions", permissions),
         );
+        if (data.muse) {
+            muse = museForm(data.muse, actions, (work, message, keep) => {
+                keyboard.close();
+                return perform(work, message, keep);
+            });
+            track(muse);
+            fields.append(settingsSection("Muse", muse.form));
+        }
         renderShared(data);
         fields.append(element("p", "Version: " + data.bridge_version));
     }
@@ -415,6 +428,7 @@ export function mountSettings(
             pending?.abort();
             portos?.stop();
             openai?.stop();
+            muse?.forget();
             clearTimeout(timeout);
             clearTimeout(fading);
             gear.remove();

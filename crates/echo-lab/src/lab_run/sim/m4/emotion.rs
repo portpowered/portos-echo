@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 pub const UTTERANCE: &str = "Computer, show me a happy face";
 pub const REPLY: &str = "Here is a happy face.";
 
+#[cfg(test)]
 pub fn call() -> Value {
     json!({"type":"function_call","call_id":"call-1","name":"tool_3","arguments":"{\"name\":\"happy\"}"})
 }

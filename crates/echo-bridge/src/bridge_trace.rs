@@ -83,6 +83,10 @@ impl Trace {
         self
     }
 
+    pub(crate) fn current_run(&self) -> Result<Option<String>, Error> {
+        Ok(self.active_run.lock().map_err(|_| Error::Trace)?.clone())
+    }
+
     pub(crate) fn tool_run(&self, run: Option<&str>) -> Result<(), Error> {
         *self.active_run.lock().map_err(|_| Error::Trace)? = run.map(str::to_owned);
         Ok(())

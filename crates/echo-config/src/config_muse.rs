@@ -1,15 +1,6 @@
-//! Offline Muse profile selection. Paths are literal and never opened here.
+//! Offline Muse connection configuration. Paths are literal and never opened here.
 use crate::{BridgeConfig, ConfigError, config_decode::Fields, config_validate::http_url};
 use std::path::PathBuf;
-
-/// Exactly one delegation executor is selected for an install.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentBackend {
-    #[default]
-    Client,
-    Muse,
-}
 
 /// The authenticated Muse service origin and separately provisioned local files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,11 +23,7 @@ pub(super) fn decode(value: toml::de::DeValue<'_>) -> Result<MuseConfig, ConfigE
 
 pub(super) fn validate(config: &BridgeConfig) -> Result<(), ConfigError> {
     let Some(muse) = &config.muse else {
-        return if config.agent_backend == AgentBackend::Muse {
-            Err(ConfigError::new("muse", "required for muse backend"))
-        } else {
-            Ok(())
-        };
+        return Ok(());
     };
     if !https_origin(&muse.url) {
         return Err(ConfigError::new(

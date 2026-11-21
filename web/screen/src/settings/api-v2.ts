@@ -14,12 +14,17 @@ import {
     type SnapshotV2,
 } from "./api";
 import type { OpenAiAccountV2, PortosOperationV2 } from "./model";
+import { validateMuseStatus } from "./muse/api";
 
 export async function loadSettings(
     actions: string,
     signal: AbortSignal,
 ): Promise<Snapshot | SnapshotV2> {
-    const response = await send(settingsUrl(actions, "", 2), signal, "GET");
+    const response = await send(
+        settingsUrl(actions, "", 2, true),
+        signal,
+        "GET",
+    );
     if (response.status === 404)
         return decodeSnapshot(await request(settingsUrl(actions), signal));
     return decodeV2(await readResponse(response, 2));
@@ -46,7 +51,7 @@ export async function readSettingsProgress(
     waiting: boolean,
 ) {
     const response = await send(
-        settingsUrl(actions, "", 2),
+        settingsUrl(actions, "", 2, true),
         signal,
         "GET",
     ).catch((error: unknown) => {
@@ -120,7 +125,7 @@ function decodeV2(value: unknown): SnapshotV2 {
     const settings = record(data.settings);
     const codex = record(settings.codex);
     const agent = record(settings.agent);
-    assertShape(data, [...snapshotKeys, "portos"]);
+    assertShape(data, [...snapshotKeys, "portos"], ["muse"]);
     assertShape(settings, ["voice", "codex", "agent"], ["home"]);
     assertShape(codex, [
         "voice",
@@ -145,6 +150,7 @@ function decodeV2(value: unknown): SnapshotV2 {
         if (!options(home.agent_tools, groups)) invalid();
     }
     validatePortos(data.portos);
+    if ("muse" in data) validateMuseStatus(data.muse);
     return data as SnapshotV2;
 }
 

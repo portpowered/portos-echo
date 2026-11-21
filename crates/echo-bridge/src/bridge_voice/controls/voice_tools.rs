@@ -18,6 +18,8 @@ use echo_screen_contract::settings_v1::LinkStatusV1;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot};
+#[path = "voice_tools/muse.rs"]
+mod muse;
 #[path = "voice_tools/runner_skills.rs"]
 mod runner_skills;
 use runner_skills::READ_SKILL;
@@ -198,6 +200,8 @@ pub(super) struct Tools {
     pub host: Option<Local<Policy<Mcp>>>,
     pub budget: ToolBudget,
     pub(super) skills: RunnerSkills,
+    muse: Option<Arc<crate::bridge_muse::Backend>>,
+    muse_access: Option<crate::bridge_muse::Access>,
     allowed: Vec<String>,
     server: Option<String>,
     specs: Option<Vec<ToolSpec>>,
@@ -213,6 +217,8 @@ impl Tools {
             host: None,
             budget: ToolBudget::new(config.agent.daily_request_cap, move || Ok(utc_day())),
             skills: RunnerSkills::default(),
+            muse: None,
+            muse_access: None,
             allowed: config
                 .mcp
                 .server
@@ -311,6 +317,7 @@ impl Tools {
         let mut local = session_specs().to_vec();
         local.extend(self.host.as_ref().ok_or(Error::Unavailable)?.notes.specs());
         local.extend(self.skills.spec());
+        local.extend(self.muse_enabled().then(crate::bridge_muse::tool_spec));
         local_catalog(self.specs.clone().unwrap_or_default(), &self.allowed, local)
     }
 
@@ -379,6 +386,7 @@ pub(super) fn session_catalog(specs: Vec<ToolSpec>, allowed: &[String]) -> Resul
 
 fn local_catalog(specs: Vec<ToolSpec>, allowed: &[String], local: Vec<ToolSpec>) -> Result<Catalog, Error> {
     let mut reserved = NAMES.to_vec();
+    reserved.push(crate::bridge_muse::TOOL);
     if local.iter().any(|spec| spec.name == READ_SKILL) {
         reserved.push(READ_SKILL);
     }
@@ -444,7 +452,7 @@ where
                 catalog,
                 tools.budget.clone(),
             ),
-            Some((receiver, run, tools.skills.is_enabled())),
+            Some((receiver, run, tools.skills.is_enabled(), tools.muse_for_call())),
             (options.session, opened),
             cancelled.as_mut(),
             &mut observe,
@@ -463,3 +471,7 @@ where
 #[cfg(test)]
 #[path = "voice_tools/mcp_trust_tests.rs"]
 mod mcp_trust_tests;
+
+#[cfg(test)]
+#[path = "voice_tools/muse_tests.rs"]
+mod muse_tests;

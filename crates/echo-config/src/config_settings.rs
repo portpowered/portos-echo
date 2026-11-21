@@ -1,5 +1,8 @@
 //! The screen's sparse, non-secret overlay. Never rewrites the operator's base.
 use crate::{AgentTools, BridgeConfig, ConfigError, McpAuth, WebSearch, config_decode::Fields};
+#[path = "config_settings/settings_muse.rs"]
+mod settings_muse;
+pub use settings_muse::SettingsMuse;
 use std::{collections::BTreeMap, io::Read, path::Path};
 
 const MAX_OVERLAY_BYTES: u64 = 65_536;
@@ -15,6 +18,7 @@ pub struct SettingsOverlay {
     daily_cap: Option<u64>,
     tool_cap: Option<u32>,
     options: SettingsOptions,
+    muse: Option<SettingsMuse>,
 }
 
 /// Additional sparse leaves admitted by Settings V2.
@@ -68,12 +72,19 @@ impl SettingsOverlay {
             daily_cap,
             tool_cap,
             options: SettingsOptions::default(),
+            muse: None,
         }
     }
 
     #[must_use]
     pub fn with_options(mut self, options: SettingsOptions) -> Self {
         self.options = options;
+        self
+    }
+
+    #[must_use]
+    pub fn with_muse(mut self, muse: Option<SettingsMuse>) -> Self {
+        self.muse = muse;
         self
     }
 
@@ -139,14 +150,16 @@ impl SettingsOverlay {
         }
         if let Some(mut mcp) = fields.section("mcp")? {
             result.options.scopes = mcp.optional("scopes")?;
-            let servers: Option<Vec<SettingsServerTools>> = mcp.optional("server")?;
-            if let Some(mut servers) = servers {
-                if servers.len() != 1 {
-                    return Err(ConfigError::new("mcp.server", "expected one Port OS server override"));
-                }
-                result.options.server = servers.pop();
-            }
+            result.options.server = single_server(mcp.optional("server")?)?;
             mcp.finish()?;
+        }
+        if let Some(mut muse) = fields.section("muse")? {
+            let enabled = muse.optional("enabled")?;
+            let url = muse.optional("url")?;
+            let ca_file = muse.optional("ca_file")?;
+            let credential_file = muse.optional("credential_file")?;
+            muse.finish()?;
+            result.muse = Some(SettingsMuse::from_fields(enabled, url, ca_file, credential_file)?);
         }
         fields.finish()?;
         if let Some(value) = result.daily_cap {
@@ -187,6 +200,9 @@ impl SettingsOverlay {
             return Err(ConfigError::new("agent.max_tool_calls", "must be within 1..=32"));
         }
         self.options.apply_to(&mut config)?;
+        if let Some(muse) = &self.muse {
+            config.muse = muse.resolve(base.home.as_ref().map(|home| home.dir.as_path()))?;
+        }
         crate::config_validate::validate(&config)?;
         Ok(config)
     }
@@ -202,6 +218,7 @@ impl SettingsOverlay {
             daily_cap: patch.daily_cap.or(self.daily_cap),
             tool_cap: patch.tool_cap.or(self.tool_cap),
             options: self.options.merge(&patch.options),
+            muse: patch.muse.clone().or_else(|| self.muse.clone()),
         }
     }
 
@@ -241,6 +258,9 @@ impl SettingsOverlay {
                 .insert("max_tool_calls", value.into());
         }
         self.options.encode(&mut tables)?;
+        if let Some(muse) = &self.muse {
+            tables.insert("muse", muse.encode());
+        }
         let mut root: BTreeMap<&str, toml::Value> = tables
             .into_iter()
             .map(|(key, table)| {
@@ -356,6 +376,14 @@ impl SettingsOptions {
         }
         Ok(())
     }
+}
+
+fn single_server(servers: Option<Vec<SettingsServerTools>>) -> Result<Option<SettingsServerTools>, ConfigError> {
+    let Some(mut servers) = servers else { return Ok(None) };
+    if servers.len() != 1 {
+        return Err(ConfigError::new("mcp.server", "expected one Port OS server override"));
+    }
+    Ok(servers.pop())
 }
 
 fn nonempty_override(value: &str) -> Option<String> {

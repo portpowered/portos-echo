@@ -1,6 +1,8 @@
 //! Typed transactions for the bridge's single settings owner. No task or exec here.
 use super::{PromptKind, SettingsError, SettingsStore, portos_permissions::PortosPermissions};
 use crate::bridge_mcp::Grant;
+#[path = "settings_host/settings_muse.rs"]
+mod settings_muse;
 #[path = "settings_host/settings_v2.rs"]
 pub(super) mod settings_v2;
 use echo_config::{BridgeConfig, SettingsOverlay};
@@ -21,6 +23,7 @@ pub struct SettingsHost {
     restart_pending: bool,
     launch_scopes: Vec<String>,
     permissions: PortosPermissions,
+    muse: settings_muse::MuseSettings,
 }
 
 impl SettingsHost {
@@ -52,6 +55,7 @@ impl SettingsHost {
             store,
             launch_scopes,
             permissions,
+            muse: settings_muse::MuseSettings::default(),
             prompts,
             warnings,
             restart_pending: false,
@@ -64,6 +68,19 @@ impl SettingsHost {
 
     pub(super) fn disable_restart(&mut self) {
         self.store.restart_allowed = false;
+    }
+
+    pub(super) fn muse_access(&self) -> crate::bridge_muse::Access {
+        self.muse.access.clone()
+    }
+
+    pub(super) fn restrict_muse_to_loopback(&mut self) {
+        self.muse.local = true;
+    }
+
+    #[cfg(test)]
+    pub(super) fn fail_next_overlay_directory_sync(&mut self) {
+        self.store.fail_next_directory_sync = true;
     }
 
     /// Call only inside `SettingsRequest::commit`; no detached work or retries.
@@ -86,8 +103,8 @@ impl SettingsHost {
             SettingsOperation::PackRefresh(catalog, snapshot) => self.refresh_pack(catalog, &snapshot),
             SettingsOperation::PackSelection(catalog, selection) => self.select_pack(catalog, &selection),
             SettingsOperation::Snapshot => self.snapshot(link).map(SettingsReply::Snapshot),
-            SettingsOperation::SnapshotV2 => {
-                return self.snapshot_v2(link, grant).map_or_else(
+            SettingsOperation::SnapshotV2 { include_muse } => {
+                return self.snapshot_v2(link, grant, include_muse).map_or_else(
                     |error| error_reply_v2(&error),
                     |snapshot| SettingsReply::SnapshotV2(Box::new(snapshot)),
                 );
@@ -101,7 +118,9 @@ impl SettingsHost {
                     .unwrap_or_else(|error| error_reply_v2(&error));
             }
             SettingsOperation::PortosV2(request) => return self.portos_operation(request, owner),
-            SettingsOperation::OpenAiSnapshot | SettingsOperation::OpenAiOperation(_) => {
+            SettingsOperation::OpenAiSnapshot
+            | SettingsOperation::OpenAiOperation(_)
+            | SettingsOperation::MuseProbe => {
                 return SettingsReply::Unavailable;
             }
             SettingsOperation::Save(patch) => self.save(patch.settings).map(saved),
@@ -157,6 +176,12 @@ impl SettingsHost {
         // writing settings, requesting exec or clearing durability uncertainty.
         if overlay.manages_portos() {
             self.permissions.narrow(&effective);
+        }
+        if effective.muse != self.store.effective.muse {
+            self.muse.observation = None;
+            if effective.muse.is_none() {
+                self.muse.access.withdraw();
+            }
         }
         self.store.overlay = overlay;
         self.store.effective = effective;

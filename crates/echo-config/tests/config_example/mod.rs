@@ -11,7 +11,6 @@ fn committed_example_loads_with_all_expected_values() {
         home: None,
         wake_earcon: true,
         codex: echo_config::CodexConfig::default(),
-        agent_backend: echo_config::AgentBackend::Client,
         muse: None,
         chatgpt_auth: echo_config::ChatGptAuthConfig::default(),
         audio: echo_config::AudioConfig::default(),

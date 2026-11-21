@@ -10,7 +10,7 @@ async fn m6_t3_http500_never_animates_and_plays_honest_fallback_once() {
     assert_eq!(completion, json!({"event":"bridge.run_completed","run_id":"run-1"}));
     assert_eq!(timing.played, 9600);
     assert_eq!(case.close().await, Ok(()));
-    assert_eq!(case.transcript.as_deref(), Some(super::super::model::FALLBACK));
+    assert_eq!(case.transcript.as_deref(), Some(super::super::FALLBACK));
     let expected = super::super::emotion::sequence();
     let states: Vec<_> = case.ui_states.iter().map(|f| f["state"].clone()).collect();
     assert_eq!(

@@ -8,7 +8,7 @@ use tokio::{
     time::Instant,
 };
 
-pub(super) enum Control {
+pub(in crate::lab_run::sim) enum Control {
     Delegate,
     Complete,
     Tail,
@@ -17,7 +17,7 @@ pub(super) enum Control {
     Quiesce(oneshot::Sender<()>),
     Close,
 }
-pub(super) struct Provider {
+pub(in crate::lab_run::sim) struct Provider {
     pub origin: String,
     pub observed: watch::Receiver<Value>,
     pub(super) commands: mpsc::Sender<Control>,
@@ -26,15 +26,28 @@ pub(super) struct Provider {
 }
 impl Provider {
     pub async fn start_mode(python: &str, negative: bool, emotion: bool, hold_model: bool) -> Result<Self, String> {
+        Self::start(
+            python,
+            json!({"tools":catalog(),"negative":negative,"emotion":emotion,"hold_model":hold_model}),
+            (emotion, hold_model),
+        )
+        .await
+    }
+
+    pub async fn start_muse(python: &str, reply: &str) -> Result<Self, String> {
+        let spec = json!({"name":"ask_muse","description":"Ask Muse to handle the user’s request and report the result.",
+            "inputSchema":{"type":"object","properties":{"request":{"type":"string"}},"required":["request"],"additionalProperties":false}});
+        Self::start(python, json!({"tools":[spec],"muse":reply}), (false, false)).await
+    }
+
+    async fn start(python: &str, configuration: Value, mode: (bool, bool)) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
         command
             .arg("-u")
             .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m4/codex/provider.py"));
         let mut process = Process::start(&mut command)?;
         let ready = process.expect("provider.ready").await?;
-        process
-            .send(&json!({"tools": catalog(), "negative":negative,"emotion":emotion,"hold_model":hold_model}))
-            .await?;
+        process.send(&configuration).await?;
         let origin = ready["origin"]
             .as_str()
             .ok_or("m4: missing provider origin")?
@@ -42,7 +55,7 @@ impl Provider {
         let (commands, receiver) = mpsc::channel(2);
         let (ticks, clock) = mpsc::channel(1);
         let (observe, observed) = watch::channel(json!({"delegations":[],"appends":[]}));
-        let task = tokio::spawn(owned(process, receiver, ticks, observe, (emotion, hold_model)));
+        let task = tokio::spawn(owned(process, receiver, ticks, observe, mode));
         Ok(Self {
             origin,
             observed,

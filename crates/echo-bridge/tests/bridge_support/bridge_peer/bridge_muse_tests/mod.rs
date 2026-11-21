@@ -1,292 +1,108 @@
-//! T3: real selected bridge/daemon/report binaries and pinned playback host.
+//! T3 Muse transport tests against the real daemon or a controlled TLS peer.
 use super::*;
 mod failures;
 mod fixture;
 mod pending;
-mod ready_input;
 mod transport;
-use fixture::{Muse, configure};
+use echo_agent_api::{AgentBackend, AgentError, Task};
+use echo_contracts::{
+    ids::{DelegationId, TaskId},
+    task::TaskEvent,
+};
+use fixture::Muse;
 
 fn evidence(message: &str) {
     use std::io::Write;
     writeln!(std::io::stdout(), "{message}").unwrap();
 }
 
-fn san(fault: &str) -> &'static str {
-    if fault == "hostname" {
-        "subjectAltName=DNS:localhost"
-    } else {
-        "subjectAltName=IP:127.0.0.1"
+fn task(delegation: &str) -> Task {
+    Task {
+        delegation_id: DelegationId::new(delegation).unwrap(),
+        instructions: "Run the test job".into(),
+        context: Value::Null,
+        deadline_seconds: 8,
+        max_tool_calls: 8,
     }
 }
 
-async fn wait(path: &Path, event: &str) -> Value {
-    let result = tokio::time::timeout(Duration::from_secs(8), async {
-        loop {
-            if let Some(value) = trace(path).into_iter().find(|e| e["event"] == event) {
-                return value;
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-    })
-    .await;
-    assert!(result.is_ok(), "waiting for {event}: {:?}", trace(path));
-    result.unwrap()
+async fn submit(backend: &echo_bridge::bridge_muse::Backend, delegation: &str) -> TaskId {
+    let id = backend.submit(task(delegation)).await.unwrap();
+    assert_eq!(
+        backend.next_event(&id).await,
+        Some(TaskEvent::Progress {
+            task_id: id.clone(),
+            message: "Done! The job completed successfully.".into(),
+        })
+    );
+    id
+}
+
+fn peer(muse: &Muse) -> echo_bridge::bridge_muse::Backend {
+    let config = fixture::config(muse.directory.path(), muse, "");
+    echo_bridge::bridge_muse::Backend::open(&config, true).unwrap()
 }
 
 #[tokio::test]
-#[ignore = "T3 requires pinned hassmic-host and prebuilt bridge/Muse binaries; Linux and openssl"]
+#[ignore = "T3 requires prebuilt Muse binaries, Linux and openssl"]
 async fn muse_correlated_success() {
-    let mut muse = Muse::start("subjectAltName=IP:127.0.0.1").await;
-    let directory = tempfile::tempdir().unwrap();
-    let mut host = Process::spawn(&mut host());
-    let port = host.line().await.parse().unwrap();
-    configure(directory.path(), port, &muse, "");
-    let model = bridge_wire_delegation::Model::start(false, true).await;
-    let mut live = bridge_peer::Live::bind_frames(0).await;
-    let mut bridge = Process::spawn(&mut bridge_wire_delegation::run_command(
-        directory.path(),
-        &live.url,
-        &model.origin,
-    ));
-    assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
-    assert_eq!(host.command("wake").await, "wake");
-    let path = directory.path().join("trace");
-    wait(&path, "mic.frames").await;
-    live.events
-        .send(bridge_wire_delegation::event("muse-d-1", "client"))
-        .await
-        .unwrap();
-    let progress = wait(&path, "muse.progress").await;
-    let id = progress["task_id"].as_str().unwrap();
-    assert_eq!(progress["delegation_id"], "muse-d-1");
-    assert_eq!(progress["run_id"], "run-1");
-    assert!(live.commentary.try_recv().is_err()); // Chat output never implies success.
+    let muse = Muse::start("subjectAltName=IP:127.0.0.1").await;
+    let backend = peer(&muse);
+    let delegation = "muse-d-1";
+    let id = submit(&backend, delegation).await;
     let calls = muse.calls();
     assert_eq!(calls.len(), 1);
-    check_gadget(&calls[0], id);
-    muse.set_time(161).await;
-    assert_eq!(muse.report(id).await, json!({"accepted":true,"task_id":id}));
-    reply(&mut live, &mut bridge, &mut host, &path, "Muse test job completed").await;
-    check_trace(&path, Some(id));
-    assert_eq!(model.request_count(), 0);
-    bridge.finish(0).await;
-    host.finish(0).await;
-    assert_eq!(muse.calls().len(), 1);
-    evidence(&format!(
-        "muse success: delegation_id=muse-d-1 task_id={id} gadget_session={} report_task_id={id} submissions=1 progress=1 completed=1 commentary=1 reply_frames=10 pcm_bytes=9600 model_requests=0",
-        calls[0]["argv"][2]
-    ));
-    muse.stop().await;
-}
-
-fn check_gadget(call: &Value, id: &str) {
-    let argv = call["argv"].as_array().unwrap();
+    let argv = calls[0]["argv"].as_array().unwrap();
     assert_eq!(argv.len(), 6);
-    assert_eq!(argv[0], "send-user-msg");
-    assert_eq!(argv[1], "--session-id");
+    assert_eq!(&argv[..2], &[json!("send-user-msg"), json!("--session-id")]);
+    assert_eq!(&argv[3..5], &[json!("--wait"), json!("1")]);
+    assert_eq!(calls[0]["stdin"], "");
     let session = argv[2].as_str().unwrap();
     assert_eq!(session.len(), 36);
     assert_eq!(&session[14..15], "4");
-    assert_eq!(argv[3], "--wait");
-    assert_eq!(argv[4], "1");
-    let event: Value = serde_json::from_str(&bridge_wire_delegation::event("muse-d-1", "client")).unwrap();
     assert_eq!(
         argv[5],
         format!(
-            "Execute the delegated request and report its result.\nContext: {event}\nTask ID: {id}\nWhen you are finished, call the echo.report.result command with task_id {id}, status completed or failed, and a short summary. Do not report success any other way."
+            "Run the test job\nContext: null\nTask ID: {id}\nWhen you are finished, call the echo.report.result command with task_id {id}, status completed or failed, and a short summary. Do not report success any other way."
         )
     );
-    assert_eq!(call["stdin"], "");
-}
-
-async fn reply(live: &mut bridge_peer::Live, bridge: &mut Process, host: &mut Process, path: &Path, text: &str) {
-    play_reply(live, bridge, host, path, ("muse-d-1", text, "run-1"), false).await;
-}
-
-async fn play_reply(
-    live: &mut bridge_peer::Live,
-    bridge: &mut Process,
-    host: &mut Process,
-    path: &Path,
-    (delegation, text, run): (&str, &str, &str),
-    clocked: bool,
-) {
-    let commentary = tokio::time::timeout(OBSERVATION_TIMEOUT, live.commentary.recv())
-        .await
-        .unwrap()
-        .unwrap();
     assert_eq!(
-        serde_json::from_str::<Value>(&commentary).unwrap(),
-        json!({"type":"session.commentary.append","delegation_id":delegation,"text":text})
+        muse.report(&id.to_string()).await,
+        json!({"accepted":true,"task_id":id})
     );
-    live.send_acknowledged("synthetic.muse_audio".into()).await;
-    if clocked {
-        clock_to_reply_start(bridge, path, run).await;
-    }
-    wait(path, "reply.started").await;
-    live.send_acknowledged(json!({"type":"response.audio.done"}).to_string())
-        .await;
-    if !clocked || !clock_reply_frames(bridge, run).await {
-        assert_eq!(
-            serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
-            json!({"event":"bridge.run_completed","run_id":run})
-        );
-    }
-    assert_eq!(host.command("pcm").await, "9600 0");
-    assert!(live.commentary.try_recv().is_err());
-}
-
-async fn clock_to_reply_start(bridge: &mut Process, path: &Path, run: &str) {
-    for _ in 0..250 {
-        if trace(path)
-            .iter()
-            .any(|row| row["event"] == "reply.started" && row["run_id"] == run)
-        {
-            return;
-        }
-        assert!(!playback_tick(bridge, run).await);
-    }
-}
-
-async fn clock_reply_frames(bridge: &mut Process, run: &str) -> bool {
-    // Allow one poll and ten 20 ms frames. Played comes from the host's
-    // real playout clock, so leave the bridge clock still while it drains.
-    for _ in 0..=10 {
-        if playback_tick(bridge, run).await {
-            return true;
-        }
-    }
-    false
-}
-
-async fn playback_tick(bridge: &mut Process, run: &str) -> bool {
-    let line = bridge.command(r#"{"action":"advance_clock","milliseconds":20}"#).await;
-    let value: Value = serde_json::from_str(&line).unwrap();
-    if value["event"] == "bridge.run_completed" {
-        assert_eq!(value["run_id"], run);
-        return true;
-    }
-    assert_eq!(value, json!({"event":"bridge.clock_advanced","milliseconds":20}));
-    false
-}
-
-fn check_trace(path: &Path, id: Option<&str>) {
-    let entries = trace(path);
-    for event in [
-        "session.delegation.created",
-        "session.commentary.append",
-        "reply.started",
-        "reply.played",
-    ] {
-        assert_eq!(entries.iter().filter(|e| e["event"] == event).count(), 1, "{event}");
-    }
-    for event in ["muse.submit", "muse.progress", "muse.terminal"] {
-        let found: Vec<_> = entries.iter().filter(|e| e["event"] == event).collect();
-        assert_eq!(found.len(), usize::from(id.is_some()), "{event}");
-        if let Some(id) = id {
-            assert_eq!(found[0]["task_id"], id);
-            assert_eq!(found[0]["delegation_id"], "muse-d-1");
-            assert_eq!(found[0]["run_id"], "run-1");
-            if event == "muse.terminal" {
-                assert_eq!(found[0]["status"], "completed");
-            }
-        }
-    }
-    assert_eq!(entries.iter().filter(|e| e["event"] == "tools/call").count(), 0);
-    let (outcome, answer, reason) = if id.is_some() {
-        ("completed", "Muse test job completed", None)
-    } else {
-        (
-            "failed",
-            "Muse is unavailable. Please try again.",
-            Some("submission_failed"),
-        )
-    };
-    check_resolution(path, outcome, "submitted", Some(answer), reason);
-    let raw = std::fs::read_to_string(path).unwrap();
-    for private in ["synthetic-api-key", "Done!", "server.der", "muse-credential"] {
-        assert!(!raw.contains(private), "private trace disclosure");
-    }
-}
-
-fn check_resolution(path: &Path, outcome: &str, handback: &str, answer: Option<&str>, reason: Option<&str>) {
-    let entries = trace(path);
-    let created: Vec<_> = entries
-        .iter()
-        .filter(|e| e["event"] == "session.delegation.created")
-        .collect();
-    let resolved: Vec<_> = entries.iter().filter(|e| e["event"] == "delegation.resolved").collect();
-    assert_eq!(created.len(), 1);
-    assert_eq!(resolved.len(), 1);
-    let row = resolved[0];
-    assert_eq!(row["delegation_id"], created[0]["delegation_id"]);
-    assert_eq!(row["run_id"], created[0]["run_id"]);
-    assert_eq!(row["outcome"], outcome);
-    assert_eq!(row["handback"], handback);
-    assert_eq!(row["tool_counts"], json!({}));
-    assert_eq!(row.get("answer").cloned(), answer.map(|text| json!({"text":text})));
-    assert_eq!(row.get("reason_class").and_then(Value::as_str), reason);
-    assert!(row["duration_ms"].as_u64().is_some());
-    assert!(row.get("thread_id").is_none());
-    assert!(row.get("turn_id").is_none());
     assert_eq!(
-        created[0]["task"],
-        serde_json::from_str::<Value>(&bridge_wire_delegation::event("muse-d-1", "client")).unwrap()
+        backend.next_event(&id).await,
+        Some(TaskEvent::Completed {
+            task_id: id.clone(),
+            summary: "Muse test job completed".into(),
+        })
     );
-    for entry in [created[0], row] {
-        evidence(&entry.to_string());
-    }
-}
-
-#[tokio::test]
-#[ignore = "T3 requires pinned hassmic-host and prebuilt bridge/Muse binaries; Linux and openssl"]
-async fn muse_transport_refuses_without_client_fallback() {
-    for fault in ["unreachable", "untrusted", "hostname", "authentication"] {
-        transport_refusal(fault).await;
-    }
-}
-
-async fn transport_refusal(fault: &str) {
-    let muse = Muse::start(san(fault)).await;
-    let directory = tempfile::tempdir().unwrap();
-    let mut host = Process::spawn(&mut host());
-    let port = host.line().await.parse().unwrap();
-    configure(directory.path(), port, &muse, fault);
-    let model = bridge_wire_delegation::Model::start(false, true).await;
-    let mut live = bridge_peer::Live::bind_frames(0).await;
-    let mut bridge = Process::spawn(&mut bridge_wire_delegation::run_command(
-        directory.path(),
-        &live.url,
-        &model.origin,
-    ));
-    assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
-    assert_eq!(host.command("wake").await, "wake");
-    let path = directory.path().join("trace");
-    wait(&path, "mic.frames").await;
-    live.events
-        .send(bridge_wire_delegation::event("muse-d-1", "client"))
-        .await
-        .unwrap();
-    reply(
-        &mut live,
-        &mut bridge,
-        &mut host,
-        &path,
-        "Muse is unavailable. Please try again.",
-    )
-    .await;
-    check_trace(&path, None);
-    no_execution(&model, &muse);
-    bridge.finish(0).await;
-    host.finish(0).await;
+    assert_eq!(backend.next_event(&id).await, None);
+    assert_eq!(muse.calls(), calls);
     evidence(&format!(
-        "muse {fault}: admissions=0 gadget_calls=0 model_requests=0 commentary=1 reply_frames=10 pcm_bytes=9600"
+        "muse TLS success: delegation_id={delegation} task_id={id} session_id={session} submissions=1 progress=1 completed=1 callbacks=1"
     ));
     muse.stop().await;
 }
 
-fn no_execution(model: &bridge_wire_delegation::Model, muse: &Muse) {
-    assert_eq!(model.request_count(), 0);
-    assert_eq!(muse.calls(), Vec::<Value>::new());
+#[tokio::test]
+#[ignore = "T3 requires prebuilt Muse binaries, Linux and openssl"]
+async fn muse_transport_refuses_unreachable_untrusted_wrong_hostname_and_bad_credential() {
+    for fault in ["unreachable", "untrusted", "hostname", "authentication"] {
+        let san = if fault == "hostname" {
+            "subjectAltName=DNS:localhost"
+        } else {
+            "subjectAltName=IP:127.0.0.1"
+        };
+        let muse = Muse::start(san).await;
+        let config = fixture::config(muse.directory.path(), &muse, fault);
+        let backend = echo_bridge::bridge_muse::Backend::open(&config, true).unwrap();
+        assert_eq!(
+            backend.submit(task("muse-refused")).await,
+            Err(AgentError::UnscriptedTask),
+            "{fault}"
+        );
+        assert_eq!(muse.calls(), Vec::<Value>::new(), "{fault}");
+        muse.stop().await;
+    }
 }

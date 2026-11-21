@@ -11,6 +11,10 @@ use std::{cell::Cell, fs, time::Duration};
 
 const TOKEN: &str = "synthetic-service-pair";
 
+#[cfg(unix)]
+#[path = "settings_service_tests/muse.rs"]
+mod muse;
+
 struct Fixture {
     root: tempfile::TempDir,
     server: ScreenServer,

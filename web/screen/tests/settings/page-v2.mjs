@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { verifyMuseSettings } from "./muse.mjs";
 import { calls as allCalls, pageFor } from "../browser.mjs";
 import { response, snapshot } from "./page.mjs";
 import { snapshot as pixelSnapshot } from "../support/snapshot.mjs";
@@ -101,6 +102,14 @@ export async function open(
 
 const section = (page, name) =>
     page.getByText(name, { exact: true }).and(page.locator("summary"));
+
+test("paired Muse settings support keyboard save, test and clear without echoing private inputs", async (t) => {
+    const page = await open(t, {
+        ...v2Snapshot(),
+        muse: { configured: false, reachability: "unchecked" },
+    });
+    await verifyMuseSettings(page, calls);
+});
 
 test("settings V2 displays configured options and submits only changed requested scopes", async (t) => {
     const page = await open(t, v2Snapshot());

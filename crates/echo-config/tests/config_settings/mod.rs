@@ -1,6 +1,8 @@
 use super::*;
 use echo_config::SettingsOverlay;
 
+mod muse;
+
 fn overlay(input: &str) -> SettingsOverlay {
     let Ok(overlay) = SettingsOverlay::from_toml_str(input) else {
         unreachable!("invalid settings fixture")

@@ -5,6 +5,7 @@ mod binary_turn;
 mod clock;
 #[path = "configured/restart.rs"]
 mod restart;
+mod restart_muse;
 #[path = "configured/restart_v2.rs"]
 mod restart_v2;
 mod startup;
@@ -20,7 +21,6 @@ struct RefusedDevice {
     refused: std::sync::Arc<std::sync::atomic::AtomicBool>,
     observer: Observer,
 }
-
 impl echo_link::LinkConnector for RefusedDevice {
     type Link = echo_link::fake::FakeLink;
 

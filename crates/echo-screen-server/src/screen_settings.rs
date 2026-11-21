@@ -13,10 +13,10 @@ use echo_screen_contract::settings_v1::{
     PromptSaveV1, SaveResultV1, SettingsErrorV1, SettingsPatchV1, SettingsSnapshotV1,
 };
 use echo_screen_contract::settings_v2::{
-    OpenAiAccountV2, PortosOperationStartedV2, PortosOperationV2, SaveResultV2, SettingsErrorV2, SettingsPatchV2,
-    SettingsSnapshotV2,
+    MuseProbeResultV2, OpenAiAccountV2, PortosOperationStartedV2, PortosOperationV2, SaveResultV2, SettingsErrorV2,
+    SettingsPatchV2, SettingsSnapshotV2,
 };
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
 /// Fixed prompt selector; never a user-controlled filesystem path.
@@ -29,7 +29,9 @@ pub enum PromptKind {
 /// Decoded input, with no arbitrary key/path or executable surface.
 pub enum SettingsOperation {
     Snapshot,
-    SnapshotV2,
+    SnapshotV2 {
+        include_muse: bool,
+    },
     PackCatalog(crate::PackCatalog),
     /// Settled local files, resolved by the same accepted settings owner.
     PackWatch(crate::PackCatalog, u64),
@@ -41,6 +43,7 @@ pub enum SettingsOperation {
     PortosV2(PortosOperationV2),
     OpenAiSnapshot,
     OpenAiOperation(PortosOperationV2),
+    MuseProbe,
     Prompt(PromptKind, PromptSaveV1),
 }
 
@@ -52,6 +55,7 @@ pub enum SettingsReply {
     InvalidV2(SettingsErrorV2),
     PersistenceV2(SettingsErrorV2),
     OpenAiSnapshot(OpenAiAccountV2),
+    MuseProbe(MuseProbeResultV2),
     AccountStarted(PortosOperationStartedV2),
     AccountConflict(SettingsErrorV2),
     Unavailable,
@@ -80,6 +84,7 @@ impl SettingsReply {
             Self::InvalidV2(value) => (StatusCode::UNPROCESSABLE_ENTITY, Json(value)).into_response(),
             Self::PersistenceV2(value) => (StatusCode::INTERNAL_SERVER_ERROR, Json(value)).into_response(),
             Self::OpenAiSnapshot(value) => Json(value).into_response(),
+            Self::MuseProbe(value) => Json(value).into_response(),
             Self::AccountStarted(value) => (StatusCode::ACCEPTED, Json(value)).into_response(),
             Self::AccountConflict(value) => (StatusCode::CONFLICT, Json(value)).into_response(),
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
@@ -106,7 +111,62 @@ impl SettingsRequest {
     /// Only a V2 snapshot uses the passive current grant projection.
     #[must_use]
     pub fn reads_portos(&self) -> bool {
-        matches!(self.operation, SettingsOperation::SnapshotV2)
+        matches!(self.operation, SettingsOperation::SnapshotV2 { .. })
+    }
+
+    #[must_use]
+    pub fn is_muse_probe(&self) -> bool {
+        matches!(self.operation, SettingsOperation::MuseProbe)
+    }
+
+    /// Admit a read-only check against the accepted connection, release the pairing
+    /// lock while it runs, and recheck admission before publishing its observation.
+    pub async fn probe_muse<H, F: Future>(
+        mut self,
+        host: &mut H,
+        prepare: impl FnOnce(&H) -> F,
+        finish: impl FnOnce(&mut H, F::Output) -> MuseProbeResultV2,
+    ) {
+        let (check, revoked) = {
+            let core = self.core.lock().await;
+            if let Err(status) = self.probe_admission(&core) {
+                let _ = self.reply.send(status.into_response());
+                return;
+            }
+            (prepare(host), core.revocation())
+        };
+        let result = tokio::select! {
+            biased;
+            () = self.reply.closed() => return,
+            () = cancelled(revoked) => {
+                let _ = self.reply.send(StatusCode::UNAUTHORIZED.into_response());
+                return;
+            }
+            () = cancelled(self.stop.clone()) => return,
+            () = crate::draining(self.drain.clone()) => return,
+            result = check => result,
+        };
+        let core = self.core.lock().await;
+        let response = match self.probe_admission(&core) {
+            Ok(()) => SettingsReply::MuseProbe(finish(host, result)).into_response(),
+            Err(status) => status.into_response(),
+        };
+        let _ = self.reply.send(response);
+    }
+
+    fn probe_admission(&self, core: &Core) -> Result<(), StatusCode> {
+        if self.uri.as_ref().is_none_or(|uri| !authorized(core, uri)) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        if !self.is_muse_probe()
+            || self.reply.is_closed()
+            || *self.stop.borrow()
+            || self.drain.borrow().is_some()
+            || !core.accepting()
+        {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        Ok(())
     }
 
     /// Run one synchronous transaction while revocation and shutdown admission

@@ -323,8 +323,7 @@ fn minimal_config_defaults_match_both_loaders() {
 fn muse_loaders_preserve_literal_paths_and_never_create_credential_files() {
     let directory = Directory::new().unwrap();
     let input = format!(
-        "{}\n[muse]\nurl='https://127.0.0.1:7448/'\nca_file='absent/ca.der'\ncredential_file='~/absent/muse'\n",
-        MINIMAL.replace("[agent]", "[agent]\nbackend='muse'")
+        "{MINIMAL}\n[muse]\nurl='https://127.0.0.1:7448/'\nca_file='absent/ca.der'\ncredential_file='~/absent/muse'\n"
     );
     let path = directory.write(&input).unwrap();
     let expected = BridgeConfig::from_toml_str(&input).unwrap();

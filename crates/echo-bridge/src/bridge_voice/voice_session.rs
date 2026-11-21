@@ -17,6 +17,7 @@ type SessionRequests = (
     tokio::sync::mpsc::Receiver<crate::bridge_codex::SessionRequest>,
     tokio::sync::watch::Sender<Option<std::sync::Arc<()>>>,
     bool,
+    Option<super::super::bridge_codex::MuseTool>,
 );
 
 pub(super) const NO_ANSWER_TIMEOUT: Duration = Duration::from_secs(60);
@@ -259,8 +260,11 @@ where
         validate(&options)?;
         let (host, catalog, budget) = tools;
         let mut session = crate::bridge_codex::ToolSession::new(call, host, catalog, budget)?;
-        if let Some((requests, run, skills_enabled)) = requests {
-            session = session.with_session(requests, run).with_skill_reader(skills_enabled);
+        if let Some((requests, run, skills_enabled, muse)) = requests {
+            session = session
+                .with_session(requests, run)
+                .with_skill_reader(skills_enabled)
+                .with_muse(muse);
         }
         let result = drive(device, &mut session, (&mut options, opened), cancelled, &mut observe).await;
         if result == Err(Error::SessionCeiling) {

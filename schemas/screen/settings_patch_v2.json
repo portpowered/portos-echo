@@ -90,6 +90,31 @@
         "prompts"
       ]
     },
+    "MusePatchV2": {
+      "type": "object",
+      "properties": {
+        "ca": {
+          "description": "DER-encoded trust anchor.",
+          "type": "string",
+          "contentEncoding": "base64",
+          "writeOnly": true
+        },
+        "clear": {
+          "type": "boolean",
+          "const": true
+        },
+        "credential": {
+          "type": "string",
+          "writeOnly": true
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "additionalProperties": false,
+      "minProperties": 1
+    },
     "PortosPermissionsPatchV2": {
       "type": "object",
       "properties": {
@@ -151,6 +176,9 @@
         },
         "home": {
           "$ref": "#/$defs/HomeSettingsV2"
+        },
+        "muse": {
+          "$ref": "#/$defs/MusePatchV2"
         },
         "portos": {
           "$ref": "#/$defs/PortosPermissionsPatchV2"

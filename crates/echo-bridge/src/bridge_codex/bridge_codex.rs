@@ -9,6 +9,7 @@ pub use call_audio::{CaptureAudio, ReplyAudio};
 pub use call_host::{HostOptions, with_host, with_host_options};
 pub(crate) use call_media::RetainedCall;
 pub use call_media::{MediaCall, MediaEvent};
+pub(crate) use call_tools::MuseTool;
 pub use call_tools::{SessionCommand, SessionRequest, ToolBudget, ToolSession};
 #[cfg(test)]
 mod call_failure_tests;
@@ -56,7 +57,7 @@ pub enum Event {
         turn: String,
         answered: bool,
     },
-    ReplyHandoff,
+    ReplyHandoff(echo_contracts::ids::DelegationId),
     SpeechStarted,
     SpeechStopped,
     Session(SessionRequest),

@@ -20,9 +20,9 @@ async fn journey(negative: bool) {
     assert_eq!(
         case.transcript.as_deref(),
         Some(if negative {
-            super::super::model::FALLBACK
+            super::super::FALLBACK
         } else {
-            super::super::model::SUCCESS
+            super::super::SUCCESS
         })
     );
     assert_trace(&case.trace);

@@ -30,6 +30,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-
 thiserror = "2"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time", "macros", "io-util", "test-util"] }
 rustix = { version = "=1.1.6", features = ["fs", "time"] }
+base64 = "0.23"
 
 [dev-dependencies]
 echo-lab = { version = "0.1.0", path = "../echo-lab" }
@@ -37,7 +38,6 @@ p256 = { version = "0.14", features = ["ecdsa"] }
 echo-link = { version = "0.1.0", path = "../echo-link", features = ["fake"] }
 echo-mcp-auth = { version = "0.1.0", path = "../echo-mcp-auth", features = ["mock"] }
 echo-spoof-mcp = { version = "0.1.0", path = "../echo-spoof-mcp" }
-base64 = "0.23"
 echo-live = { version = "0.1.0", path = "../echo-live", features = ["fake"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util", "process"] }

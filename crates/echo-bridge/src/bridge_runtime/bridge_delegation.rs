@@ -1,9 +1,8 @@
 //! The active call owner alone delivers prepared commentary. Workers own no Live socket.
 mod bridge_client_trace;
-mod bridge_host;
-mod bridge_muse_host;
-mod bridge_muse_work;
+pub(crate) mod bridge_muse_work;
 mod bridge_resolution;
+pub(super) use self::Client as Host;
 use super::bridge_budget::{Budget, Credentials};
 use super::journey::bridge_live::LivePort;
 use crate::bridge_mcp::{Grant, Token};
@@ -12,7 +11,6 @@ use crate::{
     bridge_input::{Provider, Settings},
     bridge_trace::Trace,
 };
-pub(super) use bridge_host::Host;
 use echo_config::McpServer;
 use echo_contracts::live::{DelegationTarget, LiveEvent};
 use echo_delegation::{DelegationRunner, TraceEvent, TraceSink};
@@ -249,6 +247,10 @@ impl Client {
 
     /// Await worker completion without requiring another Live, device or timer event.
     /// Retain the result when select cancels the other owner futures.
+    pub(super) fn awaiting_result(&self) -> bool {
+        self.active.is_some()
+    }
+
     pub async fn ready(&mut self) {
         let Some(pending) = self.pending.as_mut() else {
             return std::future::pending().await;
@@ -363,7 +365,7 @@ impl Client {
         Ok(())
     }
 
-    fn cancel(&mut self) {
+    pub(super) fn cancel(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }

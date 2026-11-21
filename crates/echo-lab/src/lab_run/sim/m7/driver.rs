@@ -71,11 +71,7 @@ impl<'a> M7<'a> {
             _ => {}
         }
         let mut value = self.world.observation(self.negative)?;
-        let audio_name = format!("m7-{case}-audible.json");
-        let audio = json!({"audibility":value["audibility"],"ui_states":value["ui_states"]});
-        std::fs::write(artifacts.root.join(&audio_name), audio.to_string())
-            .map_err(|_| "m7: audio retention failed")?;
-        artifacts.evidence.push(audio_name);
+        self.retain_observations(artifacts, case, &value)?;
         if let Some(object) = value.as_object_mut() {
             object.remove("audibility");
             object.remove("ui_states");
@@ -89,6 +85,30 @@ impl<'a> M7<'a> {
         }
         artifacts.measurement(value.clone())?;
         self.measured = Some(value);
+        Ok(())
+    }
+
+    fn retain_observations(&self, artifacts: &mut Artifacts, case: &str, value: &Value) -> Result<(), String> {
+        let dialogue = &self.world.dialogue;
+        for (kind, evidence) in [
+            (
+                "audible",
+                json!({"audibility":value["audibility"],"ui_states":value["ui_states"]}),
+            ),
+            (
+                "native",
+                json!({
+                    "appends":dialogue["appends"],
+                    "models":dialogue["models"],
+                    "tool_output":dialogue["tool_output"]
+                }),
+            ),
+        ] {
+            let name = format!("m7-{case}-{kind}.json");
+            std::fs::write(artifacts.root.join(&name), evidence.to_string())
+                .map_err(|_| format!("m7: {kind} evidence retention failed"))?;
+            artifacts.evidence.push(name);
+        }
         Ok(())
     }
 

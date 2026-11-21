@@ -39,7 +39,7 @@ async fn start(world: &mut World, root: &Path, bridge: &Path, host: &Host) -> Re
 
 async fn close(world: &mut World) -> Result<(), String> {
     let mut owned = std::mem::take(world);
-    let mut completion = Completion::new("M7 daemon/helper/bridge/relay/Live/model/spoof/host", async move {
+    let mut completion = Completion::new("M7 daemon/helper/bridge/relay/provider/spoof/host", async move {
         let result = owned.close().await;
         (owned, result)
     });
@@ -86,12 +86,12 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
     let bridge = world.bridge.as_mut().unwrap().observe_collection();
     let host = world.host.as_mut().unwrap().observe_collection();
     // Cancel after a genuine submitted task has emitted Progress, before report.
-    let journey = async {
-        world.control(json!({"action":"finite","pcm":fixture()})).await?;
-        world.progress().await?;
+    let mut task = None;
+    let journey = world.speak_with(async |root, _muse| {
+        task = Some(progress(root).await?);
         std::fs::write(&cancel, "cancel").unwrap();
         std::future::pending::<Result<(), String>>().await
-    };
+    });
     assert_eq!(
         super::super::super::controlled(
             journey,
@@ -100,6 +100,14 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
         )
         .await,
         Err("sim: cancelled".into())
+    );
+    let mut failures = Vec::new();
+    world.close_bridge(&mut failures).await;
+    assert_eq!(failures, Vec::<String>::new());
+    assert_cancelled_muse_task(&mut world, &task.unwrap()).await;
+    assert_eq!(
+        world.control(json!({"action":"playback"})).await.unwrap()["pcm_bytes"],
+        0
     );
     assert_eq!(close(&mut world).await, Ok(()));
     for collected in [daemon, bridge, host] {
@@ -111,12 +119,28 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
             .trace
             .records
             .iter()
-            .filter(|e| e["event"] == "session.commentary.append")
+            .filter(|e| e["event"] == "muse.terminal")
             .count(),
         0
     );
     host_owner.assert_closed();
     assert_eq!(close(&mut world).await, Ok(()));
+}
+
+#[cfg(unix)]
+async fn assert_cancelled_muse_task(world: &mut World, id: &str) {
+    let response = world.muse.report(id).await.unwrap();
+    assert_eq!(response["exit"], 1);
+    assert_eq!(response["stdout"], "");
+    assert!(response["stderr"].as_str().unwrap().contains("cancelled task_id"));
+    world.muse.collect().unwrap();
+    let calls = &world.muse.calls;
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["argv"][2], calls[1]["argv"][2]);
+    assert_eq!(
+        calls[1]["argv"][5],
+        format!("Cancel task {id}. Do not call echo.report.result for it.")
+    );
 }
 
 #[tokio::test]

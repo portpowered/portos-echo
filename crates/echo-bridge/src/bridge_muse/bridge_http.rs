@@ -2,13 +2,14 @@
 use crate::Error;
 use echo_config::MuseConfig;
 use echo_contracts::secret::Secret;
+use echo_screen_contract::settings_v2::MuseProbeReasonV2;
 use reqwest::{Client, Method, StatusCode, Url, header};
 use std::{io::Read, path::Path, time::Duration};
 
 pub(super) const MAX_BODY: usize = 1_048_576;
 const OPERATION: Duration = Duration::from_secs(5);
 
-pub(super) struct Http {
+pub(crate) struct Http {
     client: Client,
     origin: Url,
     credential: Secret<header::HeaderValue>,
@@ -16,9 +17,32 @@ pub(super) struct Http {
 
 impl Http {
     pub fn open(config: &MuseConfig, local: bool) -> Result<Self, Error> {
-        let origin = origin(&config.url, local)?;
-        let certificate = reqwest::Certificate::from_der(&read(&config.ca_file, 65536)?).map_err(|_| Error::Input)?;
-        let credential = credential(read(&config.credential_file, 257)?)?;
+        Self::from_inputs(
+            Self::origin(&config.url, local)?,
+            &Self::read_ca(&config.ca_file)?,
+            &Self::read_credential(&config.credential_file)?,
+        )
+    }
+
+    pub(crate) fn origin(text: &str, local: bool) -> Result<Url, Error> {
+        origin(text, local)
+    }
+
+    pub(crate) fn read_ca(path: &Path) -> Result<Secret<Vec<u8>>, Error> {
+        read(path, 65536).map(Secret::new)
+    }
+
+    pub(crate) fn read_credential(path: &Path) -> Result<Secret<Vec<u8>>, Error> {
+        read(path, 257).map(Secret::new)
+    }
+
+    pub(crate) fn validate_credential(private: &Secret<Vec<u8>>) -> Result<(), Error> {
+        credential(private.expose().clone()).map(|_| ())
+    }
+
+    pub(crate) fn from_inputs(origin: Url, ca: &Secret<Vec<u8>>, private: &Secret<Vec<u8>>) -> Result<Self, Error> {
+        let certificate = reqwest::Certificate::from_der(ca.expose()).map_err(|_| Error::Input)?;
+        let credential = credential(private.expose().clone())?;
         let client = Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -37,31 +61,67 @@ impl Http {
     }
 
     pub async fn request(&self, method: Method, path: &str, body: Option<Vec<u8>>) -> Result<(u16, Vec<u8>), Error> {
-        let url = self.origin.join(path).map_err(|_| Error::Input)?;
-        let mut request = self
-            .client
-            .request(method, url)
-            .header(header::AUTHORIZATION, self.credential.expose().clone());
+        let mut request = self.prepare(method, path)?;
         if let Some(body) = body {
             request = request.header(header::CONTENT_TYPE, "application/json").body(body);
         }
-        let mut response = request.send().await.map_err(|_| Error::Unavailable)?;
+        let response = request.send().await.map_err(|_| Error::Unavailable)?;
         let status = response.status();
         if !matches!(status, StatusCode::OK | StatusCode::CREATED | StatusCode::NO_CONTENT) {
             return Err(Error::Unavailable);
         }
-        if response.content_length().is_some_and(|size| size > MAX_BODY as u64) {
+        Ok((status.as_u16(), response_bytes(response, MAX_BODY).await?))
+    }
+
+    fn prepare(&self, method: Method, path: &str) -> Result<reqwest::RequestBuilder, Error> {
+        let url = self.origin.join(path).map_err(|_| Error::Input)?;
+        Ok(self
+            .client
+            .request(method, url)
+            .header(header::AUTHORIZATION, self.credential.expose().clone()))
+    }
+
+    pub(crate) async fn probe(&self) -> Result<(), MuseProbeReasonV2> {
+        use MuseProbeReasonV2::{InvalidConfiguration, Unauthorized, Unavailable, UnexpectedResponse};
+        let response = self
+            .prepare(Method::GET, "/v1/tasks")
+            .map_err(|_| InvalidConfiguration)?
+            .send()
+            .await
+            .map_err(|_| Unavailable)?;
+        match response.status() {
+            StatusCode::UNAUTHORIZED => Err(Unauthorized),
+            status if status.is_server_error() => Err(Unavailable),
+            StatusCode::METHOD_NOT_ALLOWED => {
+                let bytes = response_bytes(response, 1024).await.map_err(|error| {
+                    if error == Error::Unavailable {
+                        Unavailable
+                    } else {
+                        UnexpectedResponse
+                    }
+                })?;
+                let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| UnexpectedResponse)?;
+                (value.get("error").and_then(serde_json::Value::as_str) == Some("method_not_allowed"))
+                    .then_some(())
+                    .ok_or(UnexpectedResponse)
+            }
+            _ => Err(UnexpectedResponse),
+        }
+    }
+}
+
+async fn response_bytes(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>, Error> {
+    if response.content_length().is_some_and(|size| size > limit as u64) {
+        return Err(Error::Decode);
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| Error::Unavailable)? {
+        if chunk.len() > limit - bytes.len() {
             return Err(Error::Decode);
         }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| Error::Unavailable)? {
-            if chunk.len() > MAX_BODY - bytes.len() {
-                return Err(Error::Decode);
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        Ok((status.as_u16(), bytes))
+        bytes.extend_from_slice(&chunk);
     }
+    Ok(bytes)
 }
 
 fn origin(text: &str, local: bool) -> Result<Url, Error> {

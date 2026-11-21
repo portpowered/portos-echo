@@ -111,7 +111,7 @@ fn wrapper(name: &str) -> bool {
 
 fn local_kind(name: &str) -> &'static str {
     match name {
-        "notes_read" | "notes_write" | "notes_list" | "prompt_read" | "prompt_write" => "agent",
+        "notes_read" | "notes_write" | "notes_list" | "prompt_read" | "prompt_write" | "ask_muse" => "agent",
         "extend_session" | "end_session" => "home",
         _ => "mcp",
     }

@@ -467,7 +467,7 @@ async fn handoff(tx: &mpsc::Sender<MediaEvent>, turn_first: bool) {
         thread: "thread".into(),
         turn: "turn".into(),
     };
-    let marker = Event::ReplyHandoff;
+    let marker = Event::ReplyHandoff(echo_contracts::ids::DelegationId::new("voice-handoff").unwrap());
     let events = if turn_first { [turn, marker] } else { [marker, turn] };
     for event in events {
         send_control(tx, event).await;

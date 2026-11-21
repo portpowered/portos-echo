@@ -47,6 +47,7 @@ optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leave
   and the `notes` and `prompts` groups in `home.agent_tools`. An empty group list disables both groups.
 - Port OS permissions use `mcp.scopes` and the `allow_tools` list under `[[mcp.server]]`, bound to the configured
   Port OS server by its `name`. An empty tool list disables all Port OS tools.
+- Muse Settings stores an HTTPS origin and references to its private CA and credential files in `[muse]`.
 - The root `screen_pack` selects installed screen packs.
 
 Missing leaves retain base values. The Port OS server identity and URL are read-only in the panel.
@@ -70,6 +71,15 @@ Pending/applied and failed-restart state are shown on screen. After replacement 
 the old active configuration remains usable; a later explicit stop/start loads the saved overlay.
 Other base edits need restart. To remove an override, stop and edit/remove the corresponding overlay entry;
 changing the base alone does not win over a saved screen value.
+
+In the paired Muse section, enter the bridge origin, the CA as base64-encoded DER and the Muse service
+credential. Saving a new origin requires both private inputs. At the same origin, leave a private input blank
+to preserve it. Settings stores the inputs in owner-only files under `home/muse/` and returns only the accepted
+origin and connection status. Test connection checks the saved origin once with an authenticated request
+and submits no task. Changes apply after the idle restart. Clear Muse immediately withdraws `ask_muse`
+even if replacement fails, and saves `[muse] enabled = false` to mask any inherited base connection.
+To restore a prior connection, stop the bridge and restore its overlay and matching files together.
+Before downgrading to a bridge without Muse Settings support, remove the overlay's `[muse]` section.
 
 Prompts are separate UTF-8 files, not TOML keys: `prompts/voice.md` guides the conversation and
 `prompts/runner.md` guides delegated turns. Reloads apply at new call/thread boundaries, not mid-turn.
@@ -210,13 +220,14 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `clock.servers` | Array of at most 8 `host` or `host:port` names (port 123 when omitted). Default: `0.pool.ntp.org` to `3.pool.ntp.org`. `[]` turns measurement off. | restart / no |
 | `clock.interval_seconds` | Integer 60–86400, default 3600; time between measurements after the one at startup. | restart / no |
 | `agent` | Required delegated-task policy table. | restart / no |
-| `agent.backend` | `client` (default) or `muse` parses; current Codex voice runtime admits only client. | restart / no |
+| `agent.backend` | Removed. Delete this key and configure the optional `[muse]` table to enable Muse. | rejected |
 | `agent.daily_request_cap` | Unsigned 64-bit integer, default 500; UTC-day delegated-request cap. Overlay must also fit signed TOML integer. | boundary / yes |
 | `agent.model` | Optional nonblank runner-model alias, lowest precedence. | restart / no |
-| `muse` | Optional legacy backend table; required by muse selection; not used by current Codex voice path. | restart / no |
-| `muse.url` | Required HTTPS origin without credentials, query, fragment or non-root path; optional valid u16 port. | restart / no |
+| `muse` | Optional connection for the Codex voice tool `ask_muse`. The bridge advertises it after loading a usable CA and credential. Tasks use the remaining Wyoming run time. | restart / yes |
+| `muse.url` | Required HTTPS origin without credentials, query, fragment or non-root path; optional valid u16 port. | restart / yes |
 | `muse.ca_file` | Required nonblank literal CA path. | restart / no |
 | `muse.credential_file` | Required nonblank literal credential path. | restart / no |
+| `muse.enabled` | Settings overlay only. A lone `false` masks the base Muse connection and immediately withdraws the tool. | withdraw immediately / yes |
 | `mcp` | Required server/grant table. | restart / no |
 | `mcp.state_dir` | Optional nonempty path; runtime Port OS requires private state outside a repository, no parent traversal. | restart / no |
 | `mcp.client_id` | Optional override for an already registered public client. Omit it to register this Echo when you link Port OS. Accepts nonblank text without control characters. | restart / no |

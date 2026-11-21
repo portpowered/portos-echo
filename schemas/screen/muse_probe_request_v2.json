@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MuseProbeRequestV2",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "const": "probe"
+        },
+        "version": {
+          "$ref": "#/$defs/SettingsVersionV2"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "version"
+      ]
+    }
+  ],
+  "$defs": {
+    "SettingsVersionV2": {
+      "type": "integer",
+      "const": 2
+    }
+  }
+}
