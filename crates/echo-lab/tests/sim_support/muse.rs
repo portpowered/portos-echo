@@ -40,8 +40,9 @@ fn check_cases(session: &Session, report: &Value, seeded: bool) -> Result<(), Bo
     assert_eq!(cases.len(), if seeded { 1 } else { 2 });
     for (index, case) in cases.iter().enumerate() {
         check(case, index == 1);
+        let name = case["case"].as_str().ok_or("missing M7 case name")?;
         let read = |kind| {
-            let name = format!("m7-{}-{kind}.json", case["case"].as_str().unwrap());
+            let name = format!("m7-{name}-{kind}.json");
             assert!(
                 report["evidence"]
                     .as_array()

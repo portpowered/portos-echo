@@ -116,7 +116,7 @@ async fn t3_settings_muse_uncertain_clear_refuses_probe_without_contacting_peer(
             cleared.json::<Value>().await.unwrap(),
             json!({"version":2,"message":"File replaced but durability is uncertain; reload before saving again"})
         );
-        let effective = BridgeConfig::load_effective(&fixture.root.path().join("bridge.toml")).unwrap();
+        let effective = BridgeConfig::load_effective(fixture.root.path().join("bridge.toml")).unwrap();
         assert!(effective.warning.is_none());
         assert!(effective.config.muse.is_none());
         assert_eq!(
