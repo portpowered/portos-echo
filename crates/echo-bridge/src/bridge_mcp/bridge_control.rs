@@ -260,6 +260,7 @@ mod tests {
             let root = directory.path();
             let mut config =
                 BridgeConfig::load(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bridge.echo.toml")).unwrap();
+            config.codex.ca_file = None;
             config.mcp.client_id = echo_config::McpConfig::default().client_id;
             config.mcp.state_dir = Some(root.join("grant"));
             config.mcp.operator_listen = ([127, 0, 0, 1], 0).into();
