@@ -1,7 +1,4 @@
-use super::{
-    commands,
-    voice::{View, Voice},
-};
+use super::voice::{View, Voice};
 use echo_contracts::endpoint::{AdjustVolume, SetOutputMute, SetVolume};
 use echo_link::{EchoLink, SpeakerRequest, SpeakerState};
 use serde_json::Value;
@@ -92,28 +89,40 @@ async fn send_requests(client: &impl EchoLink, view: &watch::Sender<View>, mut r
     }
 }
 
-pub(super) async fn command(name: &str, payload: Value, received: Instant) -> Value {
-    if !payload.is_object() {
-        return commands::invalid();
-    }
-    let change = match name {
-        "set-volume" => serde_json::from_value::<SetVolume>(payload)
-            .ok()
-            .filter(|input| input.volume <= 100)
-            .map(|input| Change::Absolute(SpeakerRequest::Volume(input.volume))),
-        "adjust-volume" => serde_json::from_value::<AdjustVolume>(payload)
-            .ok()
-            .map(|input| Change::Relative(input.delta)),
-        "set-mute" => serde_json::from_value::<SetOutputMute>(payload)
-            .ok()
-            .map(|input| Change::Absolute(SpeakerRequest::OutputMute(input.mute))),
-        _ => None,
-    };
-    let Some(change) = change else {
-        return commands::invalid();
+/// Deliver one fire-and-forget speaker command. False when its body is invalid.
+pub(super) async fn command(name: &str, body: Value, received: Instant) -> bool {
+    let Some(change) = change(name, body) else {
+        return false;
     };
     if let Some(voice) = Voice::current() {
         voice.speaker.send(change, received + Duration::from_secs(1)).await;
     }
-    commands::refusal("NOT_SUPPORTED", "The device did not acknowledge speaker control.")
+    true
+}
+
+fn change(name: &str, body: Value) -> Option<Change> {
+    if !body.is_object() {
+        return None;
+    }
+    match name {
+        "set-volume" => serde_json::from_value::<SetVolume>(body)
+            .ok()
+            .filter(|input| (0.0..=100.0).contains(&input.volume))
+            .and_then(|input| u8::try_from(round(input.volume)).ok())
+            .map(|volume| Change::Absolute(SpeakerRequest::Volume(volume))),
+        "adjust-volume" => serde_json::from_value::<AdjustVolume>(body)
+            .ok()
+            .filter(|input| input.volume_delta.is_finite())
+            .map(|input| Change::Relative(round(input.volume_delta.clamp(-100.0, 100.0)))),
+        "set-mute" => serde_json::from_value::<SetOutputMute>(body)
+            .ok()
+            .map(|input| Change::Absolute(SpeakerRequest::OutputMute(input.mute))),
+        _ => None,
+    }
+}
+
+/// Round a bounded volume value to the nearest whole step.
+#[expect(clippy::cast_possible_truncation, reason = "callers bound the value to -100..=100")]
+fn round(value: f64) -> i64 {
+    value.round() as i64
 }

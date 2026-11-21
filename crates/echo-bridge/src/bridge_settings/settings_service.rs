@@ -88,7 +88,7 @@ impl SettingsService {
     #[must_use]
     pub fn resume(host: Box<SettingsHost>) -> (Self, mpsc::Sender<SettingsRequest>) {
         let (send, inbox) = settings_channel();
-        let endpoint = bridge_endpoint::Runtime::configured(host.effective(), None);
+        let endpoint = bridge_endpoint::Runtime::configured(host.effective());
         (
             Self {
                 host,

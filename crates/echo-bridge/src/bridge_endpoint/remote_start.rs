@@ -1,7 +1,6 @@
 //! Command deadlines and one first text turn owned by a voice run.
 use crate::Error;
-use echo_contracts::endpoint::{AssistantState, StartSession, StartSessionOutcome};
-use serde_json::{Value, json};
+use echo_contracts::endpoint::{AssistantState, Reply, StartSession, StartSessionReply};
 use std::{
     future::Future,
     sync::{
@@ -18,7 +17,7 @@ pub(crate) struct Start {
     pub(crate) payload: StartSession,
     pub(crate) received: Instant,
     lease: watch::Receiver<()>,
-    reply: oneshot::Sender<Value>,
+    reply: oneshot::Sender<Reply>,
 }
 
 impl Start {
@@ -26,7 +25,7 @@ impl Start {
         payload: StartSession,
         received: Instant,
         lease: watch::Receiver<()>,
-    ) -> (Self, oneshot::Receiver<Value>) {
+    ) -> (Self, oneshot::Receiver<Reply>) {
         let (reply, outcome) = oneshot::channel();
         (
             Self {
@@ -56,7 +55,7 @@ impl Start {
         self.lease.clone()
     }
 
-    pub(crate) fn refuse(self, outcome: Value) {
+    pub(crate) fn refuse(self, outcome: Reply) {
         let _ = self.reply.send(outcome);
     }
 
@@ -67,9 +66,10 @@ impl Start {
         let reply = if text.is_some() {
             Some(self.reply)
         } else {
-            let _ = self
-                .reply
-                .send(json!(StartSessionOutcome::admitted(id, AssistantState::Listening)));
+            let _ = self.reply.send(Reply::StartSession(StartSessionReply::admitted(
+                id,
+                AssistantState::Listening,
+            )));
             None
         };
         Run {
@@ -94,7 +94,7 @@ pub(crate) struct Run {
 
 struct TextTurn {
     text: String,
-    reply: oneshot::Sender<Value>,
+    reply: oneshot::Sender<Reply>,
 }
 
 tokio::task_local! { static INITIAL: Run; }
@@ -155,7 +155,10 @@ where
     }
     call.append_endpoint_text(&turn.text, deadline).await?;
     turn.reply
-        .send(json!(StartSessionOutcome::admitted(&id, AssistantState::Thinking)))
+        .send(Reply::StartSession(StartSessionReply::admitted(
+            &id,
+            AssistantState::Thinking,
+        )))
         .map_err(|_| Error::Control)?;
     if let Some(voice) = super::voice::Voice::current() {
         voice.remote_admitted(&id);

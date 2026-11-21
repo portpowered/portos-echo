@@ -27,17 +27,19 @@ impl Settings {
         if mcp.scopes.is_empty() || mcp.scopes.iter().any(|s| s.trim().is_empty()) {
             return Err(Error::Input);
         }
+        let client = mcp.client_id.clone().map_or_else(
+            || LinkClient::Automatic {
+                name: mcp.client_name.clone(),
+            },
+            LinkClient::Explicit,
+        );
+        let scopes = requested_scopes(&mcp.scopes, &client);
         Ok(Some(Self {
             ca_pem: Self::ca_pem(config)?,
             options: AuthOptions {
                 resource_url: server.url.clone(),
-                client_id: mcp.client_id.clone().map_or_else(
-                    || LinkClient::Automatic {
-                        name: mcp.client_name.clone(),
-                    },
-                    LinkClient::Explicit,
-                ),
-                scopes: mcp.scopes.clone(),
+                client_id: client,
+                scopes,
                 storage_dir: directory.clone(),
                 request_timeout: Duration::from_secs(5),
             },
@@ -54,6 +56,21 @@ impl Settings {
             .map(|path| std::fs::read(path).map_err(|_| Error::Input))
             .transpose()
     }
+}
+
+/// The bridge's own DCR client registers and requests the configured scopes
+/// plus the endpoint REST scopes, so one sign-in covers both audiences. A
+/// stored client registered without them is replaced on the next link.
+fn requested_scopes(configured: &[String], client: &LinkClient) -> Vec<String> {
+    let mut scopes = configured.to_vec();
+    if matches!(client, LinkClient::Automatic { .. }) {
+        for scope in echo_contracts::endpoint::ENDPOINT_SCOPES {
+            if !scopes.iter().any(|known| known == scope) {
+                scopes.push(scope.into());
+            }
+        }
+    }
+    scopes
 }
 
 fn outside_repository(path: &Path) -> Result<(), Error> {
@@ -115,6 +132,18 @@ mod tests {
         assert_eq!(config.mcp.state_dir, Some(private.join("portos")));
         assert_eq!(config.screen.pairing_token_file, private.join("screen-pairing.txt"));
         assert_eq!(config.codex.home, Some(private.join("codex-home")));
+    }
+
+    #[test]
+    fn dcr_client_requests_the_endpoint_scopes_once() {
+        let configured = vec!["group:read".to_owned(), "endpoint:read".to_owned()];
+        let automatic = LinkClient::Automatic { name: "Echo".into() };
+        assert_eq!(
+            requested_scopes(&configured, &automatic),
+            ["group:read", "endpoint:read", "message:send", "endpoint:write"]
+        );
+        let explicit = LinkClient::Explicit("operator-client".into());
+        assert_eq!(requested_scopes(&configured, &explicit), configured);
     }
 
     #[test]

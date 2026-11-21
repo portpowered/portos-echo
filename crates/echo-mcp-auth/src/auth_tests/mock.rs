@@ -15,6 +15,9 @@ use tokio::{
 
 #[path = "mock_http/mod.rs"]
 mod http;
+#[path = "mock_portos/mod.rs"]
+mod portos;
+pub use portos::{ECHO_ENDPOINT_ID, OTHER_DEVICE, ROUTE_TOKEN};
 #[path = "mock_proofs.rs"]
 #[cfg(test)]
 mod tests;
@@ -24,7 +27,11 @@ pub struct Request {
     pub method: String,
     pub path: String,
     pub headers: BTreeMap<String, String>,
+    /// The last value of each form field.
     pub form: BTreeMap<String, String>,
+    /// Every form field in order, repeats included.
+    pub form_all: Vec<(String, String)>,
+    pub query: BTreeMap<String, String>,
     pub json: Option<Value>,
     pub time: u64,
     pub received: Instant,
@@ -63,6 +70,7 @@ pub struct State {
     pub endpoint: EndpointState,
 }
 
+/// The live Port OS contract, enforced once `enable_endpoint_audience` is called.
 #[derive(Default)]
 pub struct EndpointState {
     access: Option<u64>,
@@ -70,6 +78,28 @@ pub struct EndpointState {
     exchanges: BTreeMap<String, Option<Value>>,
     pub mcp_claimed: bool,
     pub endpoint_claimed: bool,
+    /// Access tokens minted by a refresh after pairing: they carry the auth-link claim.
+    pub claimed: BTreeSet<String>,
+    /// The resources the current device authorization approved, in request order.
+    pub resources: Vec<String>,
+    /// The scope the owner approved; both audiences carry it.
+    pub scope: String,
+    /// The scope the DCR client registered, when one registered.
+    pub registered_scope: Option<String>,
+    /// The audience a refresh without `resource` keeps.
+    last_audience: Option<String>,
+    /// The deviceId the pairing exchange named.
+    pub device_id: Option<String>,
+    /// Route discovery lags pairing: this many `/routes` reads omit the Echo.
+    pub route_delay: usize,
+    /// Other owner routes listed before the Echo's, to exercise pagination.
+    pub route_padding: usize,
+    /// Command ids one report may still answer; any other `requestId` gets 404.
+    pub open_requests: BTreeSet<String>,
+    /// Report idempotency keys already taken.
+    pub report_keys: BTreeSet<String>,
+    /// Why each refused report was refused, for diagnostics.
+    pub refusals: Vec<String>,
 }
 
 pub struct Mock {
@@ -169,6 +199,15 @@ impl Mock {
     }
 }
 
+impl State {
+    /// The device gateway admits a current access token of either audience
+    /// that carries the auth-link claim; it closes any other with 4403.
+    #[must_use]
+    pub fn admits_gateway(&self, bearer: &str) -> bool {
+        portos::admits_gateway(self, bearer)
+    }
+}
+
 impl Drop for Mock {
     fn drop(&mut self) {
         self.task.abort();
@@ -222,8 +261,13 @@ async fn handle(
         release.notified().await;
     }
     let body = body.to_string();
+    let challenge = if status == 403 {
+        "WWW-Authenticate: Bearer error=\"insufficient_scope\"\r\n"
+    } else {
+        ""
+    };
     let response = format!(
-        "HTTP/1.1 {status} mock\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status} mock\r\nContent-Type: application/json\r\n{challenge}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(response.as_bytes()).await
@@ -247,6 +291,7 @@ fn message_status(state: &mut State, request: &Request, status: u16) -> Option<u
 }
 
 fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
+    portos::observe_registration(request, state);
     if let Some((path, status, body)) = &state.fault
         && path == &request.path
     {
@@ -270,52 +315,19 @@ fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
                 && state.bound
                 && state.mcp_access != 0
                 && request.headers.get("authorization") == Some(&format!("Bearer access-{}", state.mcp_access));
-            (if allowed { 200 } else { 401 }, json!({}))
+            if !allowed {
+                (401, json!({}))
+            } else if state.endpoint.enabled {
+                portos::tool_scope(request, state)
+            } else {
+                (200, json!({}))
+            }
         }
-        "/plugin-auth-code-exchanges" | "/messages" if state.endpoint.enabled => endpoint_api(request, state),
+        "/plugin-auth-code-exchanges" | "/messages" | "/routes" if state.endpoint.enabled => {
+            portos::rest(request, state)
+        }
         _ => (404, json!({})),
     }
-}
-
-fn endpoint_api(request: &Request, state: &mut State) -> (u16, Value) {
-    let Some(access) = state.endpoint.access else {
-        return (401, json!({}));
-    };
-    if state.revoked
-        || request.headers.get("authorization") != Some(&format!("Bearer endpoint-access-{access}"))
-        || request.headers.contains_key("dpop")
-    {
-        return (401, json!({}));
-    }
-    if request.path == "/messages" {
-        return if state.endpoint.endpoint_claimed {
-            (202, json!({"receiptId":"synthetic-receipt"}))
-        } else {
-            (401, json!({}))
-        };
-    }
-    let auth_link_id = "loopback link/%";
-    let is_rename = request
-        .json
-        .as_ref()
-        .and_then(|value| value.get("authLinkId"))
-        .and_then(Value::as_str)
-        == Some(auth_link_id);
-    let Some(key) = request.headers.get("idempotency-key") else {
-        return (400, json!({}));
-    };
-    if let Some(prior) = state.endpoint.exchanges.get(key) {
-        if prior != &request.json {
-            return (409, json!({}));
-        }
-    } else if !state.endpoint.exchanges.is_empty() && !is_rename {
-        return (409, json!({}));
-    }
-    state.endpoint.exchanges.insert(key.clone(), request.json.clone());
-    (
-        201,
-        json!({"authLinkId": auth_link_id,"id":"synthetic-install","etag":"synthetic-etag","status":"SUCCEEDED"}),
-    )
 }
 
 fn oauth(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
@@ -342,7 +354,11 @@ fn fail(name: &str) -> (u16, Value) {
 
 fn device(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
     let resource = request.form.get("resource");
-    if resource.is_some_and(|r| r != &format!("{base}/mcp")) {
+    if state.endpoint.enabled {
+        if let Err(error) = portos::authorize(request, base, state) {
+            return fail(error);
+        }
+    } else if resource.is_some_and(|r| r != &format!("{base}/mcp")) {
         return fail("invalid_target");
     }
     let Some(jwk) = proof_key(request) else {
@@ -365,11 +381,11 @@ fn token(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
         return fail("invalid_grant");
     }
     let refresh = request.form.get("grant_type").is_some_and(|g| g == "refresh_token");
-    let endpoint = refresh && state.endpoint.enabled && request.form.get("resource").is_some_and(|r| r == base);
+    let endpoint = match portos::audience(request, base, state, refresh) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return fail(error),
+    };
     if refresh {
-        if state.endpoint.enabled && !endpoint && request.form.get("resource") != Some(&format!("{base}/mcp")) {
-            return fail("invalid_target");
-        }
         if request.form.get("refresh_token") != Some(&format!("refresh-{}", state.generation)) {
             state.revoked = true;
             return fail("invalid_grant");
@@ -378,7 +394,8 @@ fn token(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
         return fail(&error);
     }
     state.generation += 1;
-    let installed = !state.endpoint.exchanges.is_empty();
+    // Only a refresh after pairing mints the auth-link claim.
+    let installed = refresh && !state.endpoint.exchanges.is_empty();
     let audience = if endpoint {
         state.endpoint.access = Some(state.generation);
         state.endpoint.endpoint_claimed = installed;
@@ -388,10 +405,19 @@ fn token(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
         state.endpoint.mcp_claimed = installed;
         ""
     };
+    let access = format!("{audience}access-{}", state.generation);
+    if installed {
+        state.endpoint.claimed.insert(access.clone());
+    }
+    let scope = if state.endpoint.enabled {
+        state.endpoint.scope.clone()
+    } else {
+        "endpoint:read".into()
+    };
     (
         200,
-        json!({"access_token":format!("{audience}access-{}",state.generation),"refresh_token":format!("refresh-{}",state.generation),
-        "token_type":"Bearer","expires_in":state.lifetime,"scope":"endpoint:read"}),
+        json!({"access_token":access,"refresh_token":format!("refresh-{}",state.generation),
+        "token_type":"Bearer","expires_in":state.lifetime,"scope":scope}),
     )
 }
 

@@ -12,8 +12,9 @@ use tokio::sync::Mutex;
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EndpointInstall {
     pub auth_link_id: String,
+    /// The endpoint id route read-back found, for display and logs only.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub route_id: Option<String>,
+    pub endpoint_id: Option<String>,
     pub device_name: String,
 }
 
@@ -129,7 +130,12 @@ impl EndpointRegistration {
         }))
     }
 
-    /// Commit a successful exchange before asking the route resolver.
+    /// The per-install UUID: the pairing `deviceId` and the report route value.
+    pub async fn device_id(&self) -> String {
+        self.record.lock().await.device_id.clone()
+    }
+
+    /// Commit a successful exchange before route read-back.
     ///
     /// # Errors
     /// Refuses an obsolete receipt or failed persistence.
@@ -150,13 +156,13 @@ impl EndpointRegistration {
         {
             return Err(AuthError::Protocol);
         }
-        let route_id = record
+        let endpoint_id = record
             .installation
             .as_ref()
-            .and_then(|install| install.route_id.clone());
+            .and_then(|install| install.endpoint_id.clone());
         let previous = record.installation.replace(EndpointInstall {
             auth_link_id,
-            route_id,
+            endpoint_id,
             device_name: exchange.pending.device_name.clone(),
         });
         record.pending_exchange = None;
@@ -168,13 +174,14 @@ impl EndpointRegistration {
         Ok(())
     }
 
-    /// Save only a nonblank, separately resolved route for this installation.
+    /// Save the endpoint id that `GET /routes` returned for this installation.
+    /// It is never derived and never addresses a message.
     ///
     /// # Errors
-    /// Refuses an invalid route, obsolete install or failed persistence.
-    pub async fn resolve(&self, auth_link_id: &str, route_id: String) -> Result<(), AuthError> {
+    /// Refuses a blank id, an obsolete install or failed persistence.
+    pub async fn remember_endpoint(&self, auth_link_id: &str, endpoint_id: String) -> Result<(), AuthError> {
         let mut record = self.record.lock().await;
-        if !valid_text(&route_id) || route_id == record.device_id {
+        if !valid_text(&endpoint_id) {
             return Err(AuthError::Protocol);
         }
         let mut install = record
@@ -182,7 +189,7 @@ impl EndpointRegistration {
             .clone()
             .filter(|value| value.auth_link_id == auth_link_id)
             .ok_or(AuthError::Protocol)?;
-        install.route_id = Some(route_id);
+        install.endpoint_id = Some(endpoint_id);
         let previous = record.installation.replace(install);
         if let Err(error) = self.save(&record) {
             record.installation = previous;
@@ -211,10 +218,7 @@ impl Record {
         if let Some(install) = &self.installation
             && (!valid_text(&install.auth_link_id)
                 || !valid_text(&install.device_name)
-                || install
-                    .route_id
-                    .as_ref()
-                    .is_some_and(|route| !valid_text(route) || route == &self.device_id))
+                || install.endpoint_id.as_ref().is_some_and(|id| !valid_text(id)))
         {
             return Err(AuthError::Storage);
         }

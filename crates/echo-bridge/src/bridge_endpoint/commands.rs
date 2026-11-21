@@ -1,7 +1,10 @@
-//! Correlate supported-route commands before they reach a local owner.
+//! Correlate gateway command frames before they reach a local owner.
+//!
+//! A frame's `header.id` is the command id; a synchronous command is answered by
+//! one report whose `requestId` is that id. Speaker commands are fire-and-forget.
 use super::snapshot::Camera;
 use crate::bridge_trace::Trace;
-use echo_contracts::endpoint::{CommandHeader, CommandReply, CommandTarget, EndSession, StartSession, Uplink, VERSION};
+use echo_contracts::endpoint::{EndSession, Frame, FrameHeader, Reply, Report, StartSession, VERSION};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use tokio::time::Instant;
@@ -12,77 +15,78 @@ const RECENT_COMMANDS: usize = 256;
 pub(super) struct Receipts(HashMap<String, Instant>);
 
 pub(super) struct Command {
-    header: CommandHeader,
-    payload: Value,
+    header: FrameHeader,
+    body: Value,
     received: Instant,
 }
 
 impl Receipts {
-    pub(super) fn accept(&mut self, route: &str, text: &str, received: Instant, deadline: Instant) -> Option<Command> {
-        let mut received_json: Value = serde_json::from_str(text).ok()?;
-        let envelope = received_json.as_object_mut()?;
-        let header: CommandHeader = serde_json::from_value(envelope.remove("header")?).ok()?;
-        let target: CommandTarget = serde_json::from_value(envelope.remove("target")?).ok()?;
-        if target.value != route
+    /// Accept one frame addressed to this device, once per command id.
+    pub(super) fn accept(
+        &mut self,
+        device_id: &str,
+        text: &str,
+        received: Instant,
+        deadline: Instant,
+    ) -> Option<Command> {
+        let Frame { header, body, context } = serde_json::from_str(text).ok()?;
+        if context.device_id != device_id
             || header.version != VERSION
-            || header.message_id.trim().is_empty()
+            || header.id.trim().is_empty()
             || header.name.trim().is_empty()
             || Instant::now() >= deadline
         {
             return None;
         }
         self.0.retain(|_, expires| *expires > received);
-        if self.0.len() >= RECENT_COMMANDS || self.0.contains_key(&header.message_id) {
+        if self.0.len() >= RECENT_COMMANDS || self.0.contains_key(&header.id) {
             return None;
         }
-        self.0.insert(header.message_id.clone(), deadline);
-        Some(Command {
-            header,
-            payload: envelope.remove("payload").unwrap_or_default(),
-            received,
-        })
+        self.0.insert(header.id.clone(), deadline);
+        Some(Command { header, body, received })
     }
 }
 
 impl Command {
+    /// The report answering this command, or `None` for a fire-and-forget one.
     pub(super) async fn reply(
         self,
-        route: &str,
         lease: tokio::sync::watch::Receiver<()>,
         camera: &Camera,
         trace: Option<&Trace>,
-    ) -> Option<Vec<u8>> {
-        let Self {
-            header,
-            payload,
-            received,
-        } = self;
-        let outcome = if (header.namespace.as_str(), header.name.as_str()) == ("snapshot", "get-snapshot") {
-            match camera.reply(route, &header.message_id, payload, received).await {
-                Ok(body) => {
-                    audit(trace, "get-snapshot", "OK", received);
-                    return Some(body);
-                }
-                Err(outcome) => outcome,
+    ) -> Option<Report> {
+        let Self { header, body, received } = self;
+        let name = audit_name(&header);
+        match (header.interface(), header.name.as_str()) {
+            (Some("speaker"), "set-volume" | "adjust-volume" | "set-mute") => {
+                let accepted = super::speaker::command(&header.name, body, received).await;
+                audit(trace, name, if accepted { "OK" } else { "INVALID_REQUEST" }, received);
+                None
             }
-        } else {
-            correlate(&header, payload, received, lease).await
-        };
-        let code = outcome["failure"]["code"].as_str().unwrap_or("OK");
-        audit(trace, audit_name(&header), code, received);
-        let reply = CommandReply {
-            request_id: &header.message_id,
-            outcome,
-        };
-        serde_json::to_vec(&Uplink::new(&header.name, route, reply)).ok()
+            (Some("snapshot"), "get-snapshot") => {
+                let (reply, sampled_at_ms) = match camera.reply(body, received).await {
+                    Ok((snapshot, sampled_at_ms)) => (Reply::Snapshot(snapshot), Some(sampled_at_ms)),
+                    Err(refusal) => (refusal, None),
+                };
+                audit(trace, name, reply.code(), received);
+                let mut report = Report::reply(&header.id, reply);
+                report.sampled_at_ms = sampled_at_ms;
+                Some(report)
+            }
+            _ => {
+                let reply = correlate(&header, body, received, lease).await;
+                audit(trace, name, reply.code(), received);
+                Some(Report::reply(&header.id, reply))
+            }
+        }
     }
 }
 
-fn audit_name(header: &CommandHeader) -> &str {
-    match (header.namespace.as_str(), header.name.as_str()) {
-        ("assistant-session", "start-session" | "end-session")
-        | ("speaker", "set-volume" | "adjust-volume" | "set-mute")
-        | ("snapshot", "get-snapshot") => &header.name,
+fn audit_name(header: &FrameHeader) -> &str {
+    match (header.interface(), header.name.as_str()) {
+        (Some("assistant-session"), "start-session" | "end-session")
+        | (Some("speaker"), "set-volume" | "adjust-volume" | "set-mute")
+        | (Some("snapshot"), "get-snapshot") => &header.name,
         _ => "unsupported",
     }
 }
@@ -99,14 +103,14 @@ fn audit(trace: Option<&Trace>, name: &str, code: &str, received: Instant) {
 }
 
 async fn correlate(
-    header: &CommandHeader,
-    payload: Value,
+    header: &FrameHeader,
+    body: Value,
     received: Instant,
     lease: tokio::sync::watch::Receiver<()>,
-) -> Value {
-    match (header.namespace.as_str(), header.name.as_str()) {
-        ("assistant-session", "start-session") if payload.is_object() => {
-            let Ok(start) = serde_json::from_value::<StartSession>(payload) else {
+) -> Reply {
+    match (header.interface(), header.name.as_str()) {
+        (Some("assistant-session"), "start-session") if body.is_object() => {
+            let Ok(start) = serde_json::from_value::<StartSession>(body) else {
                 return invalid();
             };
             if let Some(voice) = super::voice::Voice::current() {
@@ -115,11 +119,11 @@ async fn correlate(
                 super::voice::unavailable()
             }
         }
-        ("assistant-session", "end-session") if payload.is_object() => {
-            let Ok(end) = serde_json::from_value::<EndSession>(payload) else {
+        (Some("assistant-session"), "end-session") if body.is_object() => {
+            let Ok(end) = serde_json::from_value::<EndSession>(body) else {
                 return invalid();
             };
-            if end.session_id.trim().is_empty() {
+            if !end.valid() {
                 return invalid();
             }
             if let Some(voice) = super::voice::Voice::current() {
@@ -128,18 +132,16 @@ async fn correlate(
                 super::voice::not_found()
             }
         }
-        ("assistant-session", "start-session" | "end-session") => invalid(),
-        ("speaker", "set-volume" | "adjust-volume" | "set-mute") => {
-            super::speaker::command(&header.name, payload, received).await
-        }
-        _ => refusal("UNSUPPORTED_COMMAND", "This command is unsupported."),
+        (Some("assistant-session"), "start-session" | "end-session") => invalid(),
+        _ => refusal("UNSUPPORTED_COMMAND"),
     }
 }
 
-pub(crate) fn refusal(code: &str, message: &str) -> Value {
-    json!({"ok":false,"failure":{"code":code,"message":message}})
+/// A reason-code refusal; Port OS writes the message.
+pub(crate) fn refusal(code: &'static str) -> Reply {
+    Reply::refused(code)
 }
 
-pub(super) fn invalid() -> Value {
-    refusal("INVALID_REQUEST", "The command payload is invalid.")
+pub(super) fn invalid() -> Reply {
+    refusal("INVALID_REQUEST")
 }

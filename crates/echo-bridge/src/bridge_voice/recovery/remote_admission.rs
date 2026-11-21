@@ -151,7 +151,7 @@ pub(super) async fn prepare<L: EchoLink>(
 enum Capture<R> {
     Wake(R),
     Matched((R, BufferedCapture)),
-    Refused(serde_json::Value),
+    Refused(echo_contracts::endpoint::Reply),
 }
 
 async fn buffer<R: MicrophoneRun>(pending: Option<&mut (R, BufferedCapture)>) -> Result<(), Error> {
@@ -184,7 +184,7 @@ async fn capture<L: EchoLink>(
             _ = lease.changed() => break unavailable(),
             () = gate.wait() => {
                 gate.sync(observe)?;
-                break refusal("DISABLED", "The voice assistant is disabled.");
+                break refusal("DISABLED");
             }
             () = crate::bridge_endpoint::voice::ending() => break no_capture(),
             () = sleep_until(deadline) => {
@@ -232,7 +232,7 @@ fn capture_event<R>(
             *muted = value;
             observe(ServeNotice::Device(LinkEvent::Mute(value)))?;
             if value {
-                return Ok(Some(Capture::Refused(refusal("MUTED", "The microphone is muted."))));
+                return Ok(Some(Capture::Refused(refusal("MUTED"))));
             }
         }
         LinkEvent::RemoteCapture { .. } | LinkEvent::StaleRemoteCapture => {
@@ -244,8 +244,8 @@ fn capture_event<R>(
     Ok(None)
 }
 
-fn no_capture() -> serde_json::Value {
-    refusal("NOT_READY", "Device microphone start is unavailable.")
+fn no_capture() -> echo_contracts::endpoint::Reply {
+    refusal("NOT_READY")
 }
 
 // Text admission and its first reply never wait on capture. Offer one

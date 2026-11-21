@@ -1,7 +1,7 @@
 //! Install/rename uses the endpoint audience on a redirect-free HTTPS client.
 
 use crate::{TokenFuture, discovery, valid_text};
-use echo_contracts::endpoint::{InstallRequest, InstallResult};
+use echo_contracts::endpoint::{InstallRequest, InstallResult, RoutePage};
 use reqwest::{Client, StatusCode, redirect::Policy};
 use std::time::Duration;
 use url::Url;
@@ -12,14 +12,25 @@ pub use registration::{EndpointInstall, EndpointInstallExchange, EndpointRegistr
 
 const EXCHANGE_PATH: &str = "/plugin-auth-code-exchanges";
 const MAX_EXCHANGE_RESPONSE: usize = 16_384;
+const ROUTES_PATH: &str = "/routes";
+const MAX_ROUTES_RESPONSE: usize = 1024 * 1024;
+/// Route pages read before giving up on one discovery attempt.
+const MAX_ROUTE_PAGES: usize = 100;
 
 /// Provides only an endpoint-audience bearer for service REST and gateway.
 pub trait EndpointTokenSource: Send + Sync {
     fn access_token(&self) -> TokenFuture<'_>;
+
+    /// A newly refreshed token, for a gateway that ended the connection's
+    /// token lifetime (close 4000) or refused the current one.
+    fn fresh_token(&self) -> TokenFuture<'_> {
+        self.access_token()
+    }
 }
 
 pub struct EndpointExchange {
     url: Url,
+    routes: Url,
     client: Client,
 }
 
@@ -80,6 +91,12 @@ impl EndpointExchange {
             return Err(ExchangeError::Unavailable);
         }
         url.set_path(EXCHANGE_PATH);
+        let mut routes = url.clone();
+        routes.set_path(ROUTES_PATH);
+        routes
+            .query_pairs_mut()
+            .append_pair("owner", "~caller")
+            .append_pair("maxResults", "100");
         let client = Client::builder()
             .redirect(Policy::none())
             .retry(reqwest::retry::never())
@@ -87,7 +104,7 @@ impl EndpointExchange {
             .timeout(timeout)
             .build()
             .map_err(|_| ExchangeError::Unavailable)?;
-        Ok(Self { url, client })
+        Ok(Self { url, routes, client })
     }
 
     /// Send the committed request with its durable idempotency key.
@@ -132,10 +149,69 @@ impl EndpointExchange {
     }
 }
 
-async fn read_result(mut response: reqwest::Response) -> Result<InstallResult, ExchangeError> {
+impl EndpointExchange {
+    /// Read back the caller's routes and return the endpoint id of the one
+    /// whose plugin route id is this `deviceId`. `None` while discovery lags.
+    /// Pages follow `nextToken` until it is absent or the route is found.
+    /// The id is for display and logs; nothing is derived from it.
+    ///
+    /// # Errors
+    /// Returns a safe diagnostic without including request or response data.
+    pub async fn endpoint_id(
+        &self,
+        tokens: &dyn EndpointTokenSource,
+        device_id: &str,
+    ) -> Result<Option<String>, ExchangeError> {
+        let token = tokens.access_token().await.map_err(|_| ExchangeError::Grant)?;
+        let mut next: Option<String> = None;
+        for _ in 0..MAX_ROUTE_PAGES {
+            let mut url = self.routes.clone();
+            if let Some(next) = &next {
+                url.query_pairs_mut().append_pair("nextToken", next);
+            }
+            let page = self.route_page(url, token.expose()).await?;
+            if let Some(endpoint) = page.endpoint_for(device_id) {
+                return Ok(Some(endpoint.to_owned()));
+            }
+            match page.next_token.filter(|token| !token.is_empty()) {
+                None => return Ok(None),
+                Some(token) if next.as_ref() == Some(&token) => return Err(ExchangeError::Protocol),
+                Some(token) => next = Some(token),
+            }
+        }
+        Err(ExchangeError::Protocol)
+    }
+
+    async fn route_page(&self, url: Url, token: &str) -> Result<RoutePage, ExchangeError> {
+        let response = self
+            .client
+            .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|_| ExchangeError::Transport)?;
+        let status = response.status();
+        if status.is_server_error() {
+            return Err(ExchangeError::Transport);
+        }
+        if !status.is_success() {
+            return Err(ExchangeError::Rejected);
+        }
+        read_json(response, MAX_ROUTES_RESPONSE).await
+    }
+}
+
+async fn read_result(response: reqwest::Response) -> Result<InstallResult, ExchangeError> {
+    read_json(response, MAX_EXCHANGE_RESPONSE).await
+}
+
+async fn read_json<T: serde::de::DeserializeOwned>(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<T, ExchangeError> {
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| ExchangeError::Transport)? {
-        if chunk.len() > MAX_EXCHANGE_RESPONSE - body.len() {
+        if chunk.len() > limit - body.len() {
             return Err(ExchangeError::Protocol);
         }
         body.extend_from_slice(&chunk);

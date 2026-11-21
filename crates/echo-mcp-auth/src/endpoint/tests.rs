@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn endpoint_install_resumes_the_committed_exchange_and_requires_a_distinct_route() {
+async fn endpoint_install_resumes_the_committed_exchange_and_keeps_the_read_back_endpoint() {
     let home = tempfile::tempdir().unwrap();
     let first = EndpointRegistration::open(home.path()).unwrap();
     let pending = first.exchange("Hall Echo").await.unwrap().unwrap();
@@ -18,14 +18,23 @@ async fn endpoint_install_resumes_the_committed_exchange_and_requires_a_distinct
         .complete_exchange(replay, "synthetic-link".into())
         .await
         .unwrap();
+    assert_eq!(reopened.device_id().await, device);
     assert_eq!(
-        reopened.resolve("synthetic-link", device.into()).await,
+        reopened.remember_endpoint("synthetic-link", " ".into()).await,
+        Err(crate::AuthError::Protocol)
+    );
+    assert_eq!(
+        reopened
+            .remember_endpoint("another-link", "synthetic-endpoint".into())
+            .await,
         Err(crate::AuthError::Protocol)
     );
     reopened
-        .resolve("synthetic-link", "separate-route".into())
+        .remember_endpoint("synthetic-link", "synthetic-endpoint".into())
         .await
         .unwrap();
+    let install = reopened.installation().await.unwrap();
+    assert_eq!(install.endpoint_id.as_deref(), Some("synthetic-endpoint"));
     let rename = reopened.exchange("Kitchen").await.unwrap().unwrap();
     let body = serde_json::to_value(rename.request()).unwrap();
     assert_eq!(body["authLinkId"], "synthetic-link");
@@ -107,7 +116,7 @@ async fn t3_endpoint_exchange_uses_one_path_and_endpoint_bearer() {
     let expected = |name: &str| {
         json!({
             "principalId": "~self",
-            "pluginId": "port1/systems/zero/plugins/echo-show",
+            "pluginId": "port1/systems/zero/plugins/15badf8f-fe9b-4bf0-be33-2d7eb287f89f",
             "pluginAuthenticationData": {"deviceId": device_id, "deviceName": name, "model": "Echo Show"}
         })
     };

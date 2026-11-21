@@ -53,6 +53,11 @@ impl Grant {
         self.client.endpoint_grant(api_base)
     }
 
+    /// Whether this grant's sign-in covers the endpoint audience and scopes.
+    pub(crate) async fn endpoint_ready(&self, api_base: &str) -> bool {
+        self.client.endpoint_ready(api_base).await
+    }
+
     fn now(&self) -> u64 {
         self.epoch.saturating_add(self.started.elapsed().as_secs())
     }

@@ -1,4 +1,5 @@
-//! T3: Settings service, registered grants, REST/uplink and gateway over loopback.
+//! T3: Settings service, registered grants, REST/uplink and gateway over loopback,
+//! against the strict live Port OS fake in `echo_mcp_auth::mock`.
 use super::*;
 use crate::{
     bridge_mcp,
@@ -33,22 +34,23 @@ mod voice_tests;
 
 const SETTINGS_TOKEN: &str = "synthetic-paired-settings";
 const LINK: &str = "loopback link/%";
-const ROUTE: &str = "resolved-fake-route";
 const EPOCH: u64 = 1_800_000_000;
+/// The first token minted by a refresh after pairing: it carries the auth-link claim.
+const CLAIMED: &str = "endpoint-access-4";
+/// The bridge's stable deviceId, seeded before pairing so frames can address it.
+const DEVICE: &str = "5e1ec7ed-0000-4000-8000-00000000ec40";
 
-struct Resolver;
-
-impl RouteResolver for Resolver {
-    fn resolve<'a>(&'a self, auth_link_id: &'a str, tokens: &'a dyn EndpointTokenSource) -> Resolve<'a> {
-        Box::pin(async move {
-            assert_eq!(auth_link_id, LINK);
-            assert_eq!(tokens.access_token().await.unwrap().expose(), "endpoint-access-2");
-            Some(ROUTE.into())
-        })
-    }
+fn scopes() -> Vec<String> {
+    echo_contracts::endpoint::ENDPOINT_SCOPES.map(String::from).to_vec()
 }
 
 async fn registered(mock: &Mock, home: &Path) -> bridge_mcp::Runtime {
+    fs::create_dir_all(home.join("portos-endpoint")).unwrap();
+    fs::write(
+        home.join("portos-endpoint/registration.json"),
+        json!({"version":1,"deviceId":DEVICE}).to_string(),
+    )
+    .unwrap();
     let register = "/synthetic-registration";
     {
         let mut state = mock.state.lock().unwrap();
@@ -79,7 +81,7 @@ async fn grant_owner(mock: &Mock, home: &Path, epoch: u64) -> bridge_mcp::Runtim
             client_id: LinkClient::Automatic {
                 name: "Echo Test".into(),
             },
-            scopes: vec!["endpoint:read".into()],
+            scopes: scopes(),
             request_timeout: REQUEST_TIMEOUT,
             storage_dir: home.into(),
         },
@@ -105,18 +107,11 @@ struct Settings {
 
 impl Settings {
     async fn open(home: &Path, mock: &Mock, gateway: &Gateway, grant: Arc<Grant>) -> Self {
-        Self::with_resolver(home, mock, gateway, grant, Arc::new(Resolver), false).await
+        Self::with_base(home, mock, gateway, grant, false).await
     }
 
-    async fn with_resolver(
-        home: &Path,
-        mock: &Mock,
-        gateway: &Gateway,
-        grant: Arc<Grant>,
-        resolver: Arc<dyn RouteResolver>,
-        base_enabled: bool,
-    ) -> Self {
-        let (service, send) = Self::configured(home, mock, gateway, resolver, base_enabled);
+    async fn with_base(home: &Path, mock: &Mock, gateway: &Gateway, grant: Arc<Grant>, base_enabled: bool) -> Self {
+        let (service, send) = Self::configured(home, mock, gateway, base_enabled);
         Self::serve(service, send, grant).await
     }
 
@@ -124,17 +119,15 @@ impl Settings {
         home: &Path,
         mock: &Mock,
         gateway: &Gateway,
-        resolver: Arc<dyn RouteResolver>,
         base_enabled: bool,
     ) -> (SettingsService, mpsc::Sender<echo_screen_server::SettingsRequest>) {
-        Self::with_camera(home, mock, gateway, resolver, base_enabled, None)
+        Self::with_camera(home, mock, gateway, base_enabled, None)
     }
 
     fn with_camera(
         home: &Path,
         mock: &Mock,
         gateway: &Gateway,
-        resolver: Arc<dyn RouteResolver>,
         base_enabled: bool,
         camera: Option<Arc<dyn snapshot::CameraSource>>,
     ) -> (SettingsService, mpsc::Sender<echo_screen_server::SettingsRequest>) {
@@ -145,7 +138,6 @@ impl Settings {
         let runtime = Runtime::new(
             home.into(),
             mock.base.clone(),
-            resolver,
             EndpointExchange::loopback(&mock.base, REQUEST_TIMEOUT).unwrap(),
             transport,
             &desired,
@@ -254,7 +246,7 @@ fn settings_owner(home: &Path, mock: &Mock, base_enabled: bool) -> (SettingsHost
         dir: home.join("settings"),
         agent_tools: AgentTools::default(),
     });
-    config.mcp.scopes = vec!["endpoint:read".into()];
+    config.mcp.scopes = scopes();
     config.portos_endpoint.api_base = Some(mock.base.replacen("http://", "https://", 1));
     config.portos_endpoint.gateway_url = Some("wss://127.0.0.1:1/devices/{authLinkId}".into());
     if base_enabled {
@@ -299,14 +291,14 @@ async fn t3_endpoint_pair_settings_to_gateway_and_report() {
         let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
         let mut grant = registered(&mock, home.path()).await;
-        let mut gateway = Gateway::open().await;
+        let mut gateway = Gateway::open(&mock).await;
         let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
         let before = settings.snapshot().await;
         assert_eq!(before["portos"]["endpoint_enabled"], false);
         assert_eq!(before["portos"]["link_status"], "linked");
         assert!(gateway.received.try_recv().is_err());
         settings.save(true, "Hall Echo").await;
-        gateway.assert_upgrade(4).await;
+        gateway.assert_upgrade(CLAIMED).await;
         assert_eq!(settings.snapshot().await["portos"]["challenge"], Value::Null);
         assert_installed(home.path(), &mock).await;
         let settings = restart_and_rename(settings, home.path(), &mock, &mut gateway, &mut grant, started).await;
@@ -315,7 +307,7 @@ async fn t3_endpoint_pair_settings_to_gateway_and_report() {
         settings.unlink().await;
         gateway.assert_disconnect().await;
         assert_unlinked(home.path(), &settings, device_id).await;
-        setup_tests::assert_wrong_gateway_audience(&gateway).await;
+        setup_tests::assert_unclaimed_gateway_token(&mut gateway).await;
         settings.close().await;
         grant.close().await;
     }))
@@ -333,7 +325,7 @@ async fn restart_and_rename(
     disable_and_resume(&settings, gateway).await;
     settings.save(true, "Kitchen").await;
     gateway.assert_disconnect().await;
-    gateway.assert_upgrade(4).await;
+    gateway.assert_upgrade(CLAIMED).await;
     settings.close().await;
     gateway.assert_disconnect().await;
     grant.close().await;
@@ -341,7 +333,7 @@ async fn restart_and_rename(
     *grant = grant_owner(mock, home, EPOCH + started.elapsed().as_secs()).await;
 
     let reopened = Settings::open(home, mock, gateway, grant.grant.clone()).await;
-    gateway.assert_upgrade(6).await;
+    gateway.assert_upgrade("endpoint-access-6").await;
     assert_eq!(reopened.snapshot().await["portos"]["endpoint_name"], "Kitchen");
     assert_rename(home, mock);
     reopened
@@ -354,7 +346,7 @@ async fn disable_and_resume(settings: &Settings, gateway: &mut Gateway) {
     assert!(gateway.received.try_recv().is_err());
     assert_eq!(settings.snapshot().await["portos"]["endpoint_enabled"], false);
     settings.save(true, "Hall Echo").await;
-    gateway.assert_upgrade(4).await;
+    gateway.assert_upgrade(CLAIMED).await;
 }
 
 fn assert_rename(home: &Path, mock: &Mock) {
@@ -399,43 +391,75 @@ fn read_install(home: &Path) -> Value {
     serde_json::from_slice(&fs::read(home.join("portos-endpoint/registration.json")).unwrap()).unwrap()
 }
 
+/// The installation is stored, the route read-back found this Echo's endpoint,
+/// and the first state report passed the strict report validation.
 async fn assert_installed(home: &Path, mock: &Mock) {
-    let bootstrapped = EndpointRegistration::open(home).unwrap();
-    let install = bootstrapped.installation().await.unwrap();
+    let stored = wait_endpoint(home).await;
+    let install = EndpointRegistration::open(home).unwrap().installation().await.unwrap();
     assert_eq!(install.auth_link_id, LINK);
-    assert_eq!(install.route_id.as_deref(), Some(ROUTE));
     assert_eq!(install.device_name, "Hall Echo");
-    let stored = read_install(home);
-    assert_ne!(stored["deviceId"], ROUTE);
-    assert_initial_report(mock).await;
+    assert_eq!(
+        install.endpoint_id.as_deref(),
+        Some(echo_mcp_auth::mock::ECHO_ENDPOINT_ID)
+    );
+    assert_initial_report(mock, &stored["deviceId"]).await;
     assert_install_exchange(mock, &stored);
 }
 
-async fn assert_initial_report(mock: &Mock) {
-    let report = loop {
-        if let Some(report) = mock
+pub(super) async fn wait_endpoint(home: &Path) -> Value {
+    loop {
+        let stored = read_install(home);
+        if !stored["installation"]["endpointId"].is_null() {
+            return stored;
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
+pub(super) async fn messages(mock: &Mock, count: usize) -> Vec<Value> {
+    loop {
+        let found: Vec<_> = mock
             .state
             .lock()
             .unwrap()
             .requests
             .iter()
-            .find(|r| r.path == "/messages")
-            .cloned()
-        {
-            break report;
+            .filter(|request| request.path == "/messages")
+            .filter_map(|request| request.json.clone())
+            .collect();
+        if found.len() >= count {
+            return found;
         }
         tokio::task::yield_now().await;
-    };
-    assert_eq!(report.headers["authorization"], "Bearer endpoint-access-4");
-    assert!(!report.headers.contains_key("dpop"));
+    }
+}
+
+pub(super) fn assert_no_refusals(mock: &Mock) {
+    assert_eq!(mock.state.lock().unwrap().endpoint.refusals, Vec::<String>::new());
+}
+
+async fn assert_initial_report(mock: &Mock, device_id: &Value) {
+    let report = messages(mock, 1).await.remove(0);
+    let request = mock
+        .state
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .find(|r| r.path == "/messages")
+        .cloned()
+        .unwrap();
+    assert_eq!(request.headers["authorization"], format!("Bearer {CLAIMED}"));
+    assert!(!request.headers.contains_key("dpop"));
     assert_eq!(
-        report.json.unwrap(),
-        json!({
-            "header":{"namespace":echo_contracts::endpoint::ECHO_PLUGIN,"name":"report-state","version":"1.0"},
-            "target":{"type":"ROUTE","value":ROUTE},
-            "payload":{"state":"idle","sessionId":null,"origin":null,"volume":null,"muted":null}
-        })
+        report["header"],
+        json!({"namespace":echo_contracts::endpoint::REPORT_NAMESPACE,"name":"report-state","version":"1.0"})
     );
+    assert_eq!(report["target"], json!({"type":"ROUTE","value":device_id}));
+    assert_eq!(report["payload"]["assistant"], json!({"state":"IDLE"}));
+    assert!(report["payload"]["sampledAtMs"].is_i64());
+    assert_eq!(report["payload"].as_object().unwrap().len(), 2);
+    assert_no_refusals(mock);
 }
 
 fn assert_install_exchange(mock: &Mock, stored: &Value) {
@@ -452,8 +476,10 @@ fn assert_install_exchange(mock: &Mock, stored: &Value) {
     assert_eq!(
         exchange.json.as_ref().unwrap(),
         &json!({
-            "principalId":"~self","pluginId":echo_contracts::endpoint::ECHO_PLUGIN,
+            "principalId":"~self","pluginId":echo_contracts::endpoint::ECHO_PLUGIN_ID,
             "pluginAuthenticationData":{"deviceId":stored["deviceId"],"deviceName":"Hall Echo","model":"Echo Show"}
         })
     );
+    let routes = state.requests.iter().find(|r| r.path == "/routes").unwrap();
+    assert_eq!(routes.query["owner"], "~caller");
 }

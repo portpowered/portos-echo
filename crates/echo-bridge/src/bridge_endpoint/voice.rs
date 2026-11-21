@@ -1,9 +1,9 @@
 //! Projection of the existing voice admission owner.
 use crate::bridge_voice::{Notice, ServeNotice, SessionNotice};
 use echo_contracts::endpoint::{
-    AssistantState, EndSessionOutcome, EndedReason, ReportState, SessionEnded, SessionOrigin,
+    AssistantReport, AssistantState, EndSessionReply, EndedReason, Reply, Report, SessionEnded, SessionOrigin,
+    SpeakerReport,
 };
-use serde_json::{Value, json};
 use std::collections::VecDeque;
 use tokio::{
     sync::{Mutex, Notify, broadcast, mpsc, watch},
@@ -61,12 +61,15 @@ pub(super) struct Ended {
 }
 
 impl Ended {
-    pub(super) fn payload<'a>(&'a self, time: &'a str) -> SessionEnded<'a> {
-        SessionEnded {
-            session_id: &self.session.id,
-            origin: self.session.origin,
-            reason: self.reason,
-            ended_at: time,
+    pub(super) fn report(&self, ended_at: String) -> Report {
+        Report {
+            session_ended: Some(SessionEnded {
+                session_id: self.session.id.clone(),
+                origin: self.session.origin,
+                reason: self.reason,
+                ended_at,
+            }),
+            ..Report::default()
         }
     }
 
@@ -86,18 +89,25 @@ pub(super) struct View {
 }
 
 impl View {
-    pub(super) fn report(&self) -> ReportState<'_> {
+    /// The state report, unstamped. Speaker state is sent once both values are known.
+    pub(super) fn report(&self) -> Report {
         let active = self.active.as_ref().filter(|session| session.admitted);
-        ReportState {
-            state: if self.muted {
-                AssistantState::Muted
-            } else {
-                active.map_or(AssistantState::Idle, |session| session.state)
-            },
-            session_id: active.map(|session| session.id.as_str()),
-            origin: active.map(|session| session.origin),
-            volume: self.speaker.volume,
-            muted: self.speaker.muted,
+        let state = if self.muted {
+            AssistantState::Muted
+        } else {
+            active.map_or(AssistantState::Idle, |session| session.state)
+        };
+        let speaker = self.speaker;
+        Report {
+            speaker: speaker
+                .volume
+                .zip(speaker.muted)
+                .map(|(volume, muted)| SpeakerReport { volume, muted }),
+            assistant: Some(AssistantReport::new(
+                state,
+                active.map(|session| (session.id.as_str(), session.origin)),
+            )),
+            ..Report::default()
         }
     }
 }
@@ -124,7 +134,7 @@ impl Voice {
         payload: echo_contracts::endpoint::StartSession,
         received: Instant,
         lease: watch::Receiver<()>,
-    ) -> Value {
+    ) -> Reply {
         if let Some(refusal) = self.start_refusal() {
             return refusal;
         }
@@ -271,21 +281,16 @@ impl Voice {
         });
     }
 
-    pub(crate) fn start_refusal(&self) -> Option<Value> {
+    pub(crate) fn start_refusal(&self) -> Option<Reply> {
         let view = self.state.borrow();
         if view.muted {
-            return Some(super::commands::refusal("MUTED", "The microphone is muted."));
+            return Some(super::commands::refusal("MUTED"));
         }
         if view.disabled {
-            return Some(super::commands::refusal("DISABLED", "The voice assistant is disabled."));
+            return Some(super::commands::refusal("DISABLED"));
         }
         if let Some(active) = &view.active {
-            return Some(json!({
-                "ok": false,
-                "failure": {"code":"BUSY", "message":"A voice session is already active."},
-                "sessionId": active.id,
-                "origin": active.origin,
-            }));
+            return Some(Reply::busy(&active.id, active.origin));
         }
         (!view.ready).then(unavailable)
     }
@@ -322,7 +327,8 @@ impl Voice {
         }
     }
 
-    pub(super) async fn end(&self, id: &str, received: Instant) -> Value {
+    /// End the session at once, in every state, and answer within 1 s.
+    pub(super) async fn end(&self, id: &str, received: Instant) -> Reply {
         let mut states = self.subscribe();
         let mut found = false;
         self.state.send_if_modified(|view| {
@@ -350,19 +356,16 @@ impl Voice {
     }
 }
 
-fn ended(view: &View, id: &str, found: bool) -> Option<Value> {
-    if let Some((_, reason)) = view.recent.iter().find(|(session, _)| session == id) {
-        return Some(if !found || *reason == EndedReason::Remote {
-            json!(EndSessionOutcome::closed())
-        } else {
-            unavailable()
-        });
+/// Ending a session that already ended succeeds, whatever ended it.
+fn ended(view: &View, id: &str, found: bool) -> Option<Reply> {
+    if view.recent.iter().any(|(session, _)| session == id) {
+        return Some(Reply::EndSession(EndSessionReply::closed(view.muted)));
     }
     (!found).then(not_found)
 }
 
-pub(super) fn not_found() -> Value {
-    super::commands::refusal("NOT_FOUND", "The voice session was not found.")
+pub(super) fn not_found() -> Reply {
+    super::commands::refusal("NOT_FOUND")
 }
 
 pub(crate) async fn ending() {
@@ -385,6 +388,6 @@ pub(crate) async fn start_waiting() {
     }
 }
 
-pub(crate) fn unavailable() -> Value {
-    super::commands::refusal("NOT_READY", "The voice provider is unavailable.")
+pub(crate) fn unavailable() -> Reply {
+    super::commands::refusal("NOT_READY")
 }

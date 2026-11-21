@@ -43,6 +43,10 @@ pub(crate) struct Grant {
     pub refresh_token: String,
     pub expires_at_unix: u64,
     pub scope: String,
+    /// The RFC 8707 resources the owner approved when the sign-in named more
+    /// than one. Empty for a grant approved for the MCP resource alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<String>,
 }
 
 pub(crate) struct Store {

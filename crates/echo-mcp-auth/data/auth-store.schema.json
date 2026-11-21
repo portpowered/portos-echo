@@ -101,6 +101,14 @@
             },
             "scope": {
               "type": "string"
+            },
+            "resources": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "string",
+                "format": "uri"
+              }
             }
           }
         }

@@ -23,8 +23,9 @@ uplink messages through its existing reqwest stack.
 
 The gateway and uplink use the same endpoint-only bearer. The MCP
 resource grant stays in its own store and its bearer never enters the
-endpoint transport. Production activation requires an authoritative
-route resolver. Tests substitute loopback services at the transport edges.
+endpoint transport. Frames and reports address the bridge's `deviceId`;
+route read-back is for display only. Tests substitute a strict loopback
+fake of the live contract at the transport edges.
 
 Required CI builds the ARMv7
 artifact and checks dependencies on the target before release. To roll back,
