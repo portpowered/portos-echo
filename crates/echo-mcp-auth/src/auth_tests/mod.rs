@@ -1,6 +1,7 @@
 //! T3 component tests: real HTTP/ES256/files against one local mock per test.
 //! The harness keeps fake time manual while network I/O progresses, so runtime
 //! auto-advance cannot mistake socket readiness for an expired HTTP deadline.
+mod endpoint;
 mod failures;
 mod lifecycle;
 use crate::mock;

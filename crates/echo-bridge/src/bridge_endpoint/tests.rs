@@ -80,6 +80,11 @@ async fn gateway(listener: TcpListener, events: mpsc::Sender<GatewayEvent>) {
                 .and_then(|header| header.to_str().ok())
                 .unwrap_or_default()
                 .to_owned();
+            if !bearer.starts_with("Bearer endpoint-access-") {
+                let mut refused = tokio_tungstenite::tungstenite::http::Response::new(None);
+                *refused.status_mut() = tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED;
+                return Err(refused);
+            }
             events
                 .try_send(GatewayEvent::Upgrade(
                     request.uri().path().into(),
@@ -294,11 +299,35 @@ async fn t3_endpoint_pair_settings_to_gateway_and_report() {
         settings.unlink().await;
         gateway.assert_disconnect().await;
         assert_unlinked(home.path(), &settings, device_id).await;
+        assert_wrong_audience(&mock, &gateway).await;
         settings.close().await;
         let mut grant = grant;
         grant.close().await;
     })
     .await;
+}
+
+async fn assert_wrong_audience(mock: &Mock, gateway: &Gateway) {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    for route in ["/plugin-auth-code-exchanges", "/messages"] {
+        let response = client
+            .post(format!("{}{route}", mock.base))
+            .bearer_auth("access-1")
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 401);
+    }
+    let address = gateway.template.replace("{authLinkId}", "loopback%20link%2F%25");
+    let mut handshake = address.into_client_request().unwrap();
+    handshake
+        .headers_mut()
+        .insert("Authorization", "Bearer access-1".parse().unwrap());
+    let error = tokio_tungstenite::connect_async(handshake).await.unwrap_err();
+    assert!(matches!(error, tokio_tungstenite::tungstenite::Error::Http(reply) if reply.status() == 401));
 }
 
 impl Gateway {

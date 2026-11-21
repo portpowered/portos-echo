@@ -133,7 +133,12 @@ export function mountPortos(
         const pairing =
             endpointMessage === endpointConnecting ||
             endpointMessage === endpointApproval;
-        if (endpointRefresh || pairing || active() || (waiting && !restartFailed))
+        if (
+            endpointRefresh ||
+            pairing ||
+            active() ||
+            (waiting && !restartFailed)
+        )
             timer = setTimeout(() => void poll(), 500);
     }
 
