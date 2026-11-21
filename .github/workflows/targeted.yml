@@ -2,25 +2,40 @@ name: Targeted
 on:
   workflow_dispatch:
     inputs:
-      nextest_filter:
+      candidate:
         type: string
-        required: false
+        required: true
 permissions:
   contents: read
 jobs:
-  schema:
+  test-unit-screen:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ inputs.candidate }}
           persist-credentials: false
-      - uses: ./.github/actions/setup
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          target: test-contract
-      - name: Regenerate the Settings wire schemas
-        run: UPDATE_SCHEMAS=1 cargo test --locked -p echo-screen-contract --test screen_schema settings_v2_schema_snapshots -- --exact
+          node-version: '24'
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/ms-playwright
+          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}
+      - name: Run the paired Muse browser witness in pinned Chromium
+        working-directory: web/screen
+        run: |
+          git rev-parse HEAD
+          npm ci --offline=false
+          npx --offline playwright install --with-deps chromium
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          npm run build
+          node --test --test-name-pattern='paired Muse settings' tests/settings/page-v2.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
-          name: muse-generated-schemas
-          path: schemas/screen/
+          name: muse-screen-evidence
+          path: web/screen/test-results/screenshots/settings-muse-960x480.png
           if-no-files-found: error
