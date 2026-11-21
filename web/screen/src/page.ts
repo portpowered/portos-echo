@@ -1,6 +1,6 @@
 import type { ScreenFrame, UiAction, UiState } from "./model";
 import { Presentation } from "./state";
-import { endpoints, postAction, watchBuild } from "./transport";
+import { endpoints, Events, postAction, watchBuild } from "./transport";
 import { animate } from "./emotion";
 import { formatExpiry } from "./expiry";
 import { mountSettings } from "./settings/view";
@@ -26,7 +26,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
     clock.append(time, date);
     root.replaceChildren(content, diagnostic);
     const presentation = new Presentation();
-    let stream: EventSource;
+    let stream: Events;
     let urls: ReturnType<typeof endpoints>;
     let pending: AbortController | undefined;
     let disposed = false;
@@ -247,9 +247,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
             'meta[name="echo-packs"][content="v1"]',
         );
         // Only a page that can draw a pack's mouth asks for lip sync.
-        stream = new EventSource(
-            packed ? mouthEvents(urls.events) : urls.events,
-        );
+        stream = new Events(packed ? mouthEvents(urls.events) : urls.events);
         if (packed)
             packs = mountPacks(content, urls.actions, stream, () => {
                 if (presentation.current) render(presentation.current);

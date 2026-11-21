@@ -34,12 +34,20 @@ const bridge = {
     checks: 0,
     seq: 0,
     state: "listening",
+    // Events requests answered 503, as a bridge still stopping answers.
+    refuse: 0,
+    refused: 0,
 };
 const streams = new Set();
 const server = createServer((request, response) => {
     const path = request.url.split("?")[0];
     const headers = { "Cache-Control": "no-store" };
-    if (path === "/events") {
+    if (path === "/events" && bridge.refuse > 0) {
+        bridge.refuse--;
+        bridge.refused++;
+        response.writeHead(503, headers);
+        response.end();
+    } else if (path === "/events") {
         response.writeHead(200, {
             ...headers,
             "Content-Type": "text/event-stream",
@@ -186,5 +194,55 @@ test("restart: a page shows the frames of a bridge that restarted and counts fro
     assert.deepEqual(await shown(), ["muted", "3"]);
     console.log(
         "restart: frame 1 of a restarted bridge replaced frame 41; a stale frame on the same connection stayed out",
+    );
+});
+
+test("refused: a stream the restarting bridge answered with an error opens again and clears the interrupted line", async (t) => {
+    const context = await browser.newContext({ serviceWorkers: "block" });
+    t.after(() => context.close());
+    await context.route("**/*", (route) =>
+        new URL(route.request().url()).origin === origin
+            ? route.continue()
+            : route.abort(),
+    );
+    Object.assign(bridge, {
+        document: A,
+        named: A,
+        state: "listening",
+        seq: 0,
+        refuse: 0,
+        refused: 0,
+    });
+    const page = await context.newPage();
+    const status = () => page.getByRole("status").textContent();
+    await page.goto(`${origin}/?events=%2Fevents&actions=%2Factions`);
+    await page.locator('[data-ui-state="listening"]').waitFor();
+    assert.equal(await status(), "");
+    // The bridge restarts and refuses the first two attempts to connect:
+    // the browser gives up on a refused stream, the page does not.
+    Object.assign(bridge, { seq: 0, state: "speaking", refuse: 2 });
+    const started = Date.now();
+    for (const stream of streams) stream.destroy();
+    await page
+        .getByRole("status")
+        .filter({ hasText: "Screen connection interrupted" })
+        .waitFor();
+    await page.locator('[data-ui-state="speaking"]').waitFor({ timeout: 8000 });
+    const back = Date.now() - started;
+    assert.equal(bridge.refused, 2);
+    assert.equal(await status(), "");
+    // Two refusals are reopened after 1 s and then 2 s: back within 5 s.
+    assert.ok(back < 5000, `back after ${back} ms`);
+    // An open stream resets the delays, and the page holds one stream.
+    bridge.refuse = 1;
+    const again = Date.now();
+    for (const stream of streams) stream.destroy();
+    await until(() => bridge.refused === 3, "the bridge refuses once more");
+    await page.locator('[data-ui-state="speaking"]').waitFor();
+    await until(() => streams.size === 1, `${streams.size} streams open`);
+    assert.equal(await status(), "");
+    assert.ok(Date.now() - again < 2900, "the reopen delay started over");
+    console.log(
+        `refused: two 503 answers, the page was back after ${back} ms and the line cleared; one stream open`,
     );
 });

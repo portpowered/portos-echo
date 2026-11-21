@@ -101,7 +101,11 @@ each message.data must contain one published ScreenFrame JSON object. On one
 connection only a strictly newer unsigned 64-bit seq replaces the presentation.
 A restarted bridge counts from 1 again, so the first frame of each connection
 replaces the presentation unless it is the frame already showing. Reload resets
-ordering. All supplied strings display as inert
+ordering. The browser reconnects a lost stream by itself, but a stream answered
+with an error status (a bridge still stopping, a full client table) stays
+closed, so the page opens a new one 1 s, 2 s, then every 4 s after such a
+closure until one opens. "Screen connection interrupted" shows until then and
+clears when the stream opens. All supplied strings display as inert
 text. Link instructions never navigate automatically.
 
 Actions use fetch with POST, Content-Type application/json and exact UiAction

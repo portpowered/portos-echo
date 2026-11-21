@@ -32,6 +32,84 @@ export async function postAction(
     if (result.status !== 204) throw new Error("Action could not be sent");
 }
 
+// The browser opens a lost events stream again by itself, every few seconds,
+// but not a stream the bridge answered with an error status (a bridge still
+// stopping, a full client table, a refused pairing): that one stays closed,
+// and the screen would show "Screen connection interrupted" until the app
+// restarts. Events opens a new stream then, REOPEN_MS[n] after the nth such
+// closure in a row (the last delay repeats), and keeps every listener and
+// handler on the stream that replaces it. An opened stream resets the count.
+export const REOPEN_MS = [1000, 2000, 4000];
+const CLOSED = 2;
+
+export interface StreamEvents {
+    addEventListener(type: string, listener: EventListener): void;
+    removeEventListener(type: string, listener: EventListener): void;
+}
+
+export class Events implements StreamEvents {
+    onopen: (() => void) | null = null;
+    onmessage: ((event: MessageEvent) => void) | null = null;
+    onerror: (() => void) | null = null;
+    private source!: EventSource;
+    private listeners: [string, EventListener][] = [];
+    private closures = 0;
+    private timer: ReturnType<typeof setTimeout> | undefined;
+    private stopped = false;
+
+    constructor(private url: string) {
+        this.connect();
+    }
+
+    addEventListener(type: string, listener: EventListener): void {
+        this.listeners.push([type, listener]);
+        this.source.addEventListener(type, listener);
+    }
+
+    removeEventListener(type: string, listener: EventListener): void {
+        this.listeners = this.listeners.filter(
+            ([name, own]) => name !== type || own !== listener,
+        );
+        this.source.removeEventListener(type, listener);
+    }
+
+    close(): void {
+        this.stopped = true;
+        clearTimeout(this.timer);
+        this.timer = undefined;
+        this.source.close();
+    }
+
+    private connect(): void {
+        const source = new EventSource(this.url);
+        this.source = source;
+        for (const [type, listener] of this.listeners)
+            source.addEventListener(type, listener);
+        source.onopen = () => {
+            if (source !== this.source) return;
+            this.closures = 0;
+            this.onopen?.();
+        };
+        source.onmessage = (event) => {
+            if (source === this.source) this.onmessage?.(event);
+        };
+        source.onerror = () => {
+            if (source !== this.source || this.stopped) return;
+            this.onerror?.();
+            if (source.readyState !== CLOSED || this.timer !== undefined)
+                return;
+            const delay =
+                REOPEN_MS[Math.min(this.closures++, REOPEN_MS.length - 1)];
+            this.timer = setTimeout(() => {
+                this.timer = undefined;
+                if (this.stopped) return;
+                source.close();
+                this.connect();
+            }, delay);
+        };
+    }
+}
+
 const BUILD_META = 'meta[name="echo-build"]';
 const RELOADED = "echo-screen-reload";
 const BUSY_RETRY_MS = 1000;
@@ -42,7 +120,7 @@ const BUSY_RETRY_MS = 1000;
 // named there is not its own. It reloads at most once per build, waits while
 // `busy` (unsaved Settings edits) and does nothing when either side names none.
 export function watchBuild(
-    stream: EventSource,
+    stream: StreamEvents,
     href: string,
     busy: () => boolean,
 ): () => void {
