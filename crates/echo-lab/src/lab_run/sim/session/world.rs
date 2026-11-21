@@ -338,11 +338,7 @@ impl World {
         }
         if let Some(mut bridge) = self.bridge.take() {
             failures.extend(bridge.close().await.err());
-            failures.extend(self.read_trace().and_then(|()| self.trace.finish()).err());
-            failures.extend(self.retain_trace().err());
-            for record in self.trace.records.iter().filter(|r| r["event"] == "bridge.error") {
-                failures.push(format!("session bridge: {}", record["reason"]));
-            }
+            self.collect_trace_failures(&mut failures);
         }
         if let Some(relay) = self.relay.take() {
             match relay.close().await {
@@ -368,10 +364,17 @@ impl World {
             failures.extend(host.close().await.err());
         }
         self.private.take();
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(failures.join("; "))
+        match failures.as_slice() {
+            [] => Ok(()),
+            _ => Err(failures.join("; ")),
+        }
+    }
+
+    fn collect_trace_failures(&mut self, failures: &mut Vec<String>) {
+        failures.extend(self.read_trace().and_then(|()| self.trace.finish()).err());
+        failures.extend(self.retain_trace().err());
+        for record in self.trace.records.iter().filter(|r| r["event"] == "bridge.error") {
+            failures.push(format!("session bridge: {}", record["reason"]));
         }
     }
 

@@ -48,16 +48,7 @@ impl World {
             1
         };
         self.cross_cutoff(cutoff, milliseconds).await?;
-        self.read_trace()?;
-        let ended = self
-            .trace
-            .records
-            .iter()
-            .find(|row| row["event"] == "run.ended")
-            .ok_or("session: ready without closing the stalled run")?;
-        if ended["reason"] != "session_ceiling" || ended["elapsed_ms"] != cutoff {
-            return Err(format!("session: stalled run did not expire at {cutoff} ms: {ended}"));
-        }
+        self.verify_stalled_end(cutoff)?;
         // Release the old HTTP response after its call generation is closed.
         // The next wake uses a distinct negotiation on the same device link.
         self.provider()?.control(Control::ReleaseGoodbye).await?;
@@ -72,6 +63,20 @@ impl World {
             0,
         )
         .await
+    }
+
+    fn verify_stalled_end(&mut self, cutoff: u64) -> Result<(), String> {
+        self.read_trace()?;
+        let ended = self
+            .trace
+            .records
+            .iter()
+            .find(|row| row["event"] == "run.ended")
+            .ok_or("session: ready without closing the stalled run")?;
+        if ended["reason"] != "session_ceiling" || ended["elapsed_ms"] != cutoff {
+            return Err(format!("session: stalled run did not expire at {cutoff} ms: {ended}"));
+        }
+        Ok(())
     }
 
     async fn cross_cutoff(&mut self, cutoff: u64, milliseconds: u64) -> Result<(), String> {

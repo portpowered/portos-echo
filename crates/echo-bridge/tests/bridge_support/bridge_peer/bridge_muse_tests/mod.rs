@@ -122,31 +122,12 @@ async fn play_reply(
     );
     live.send_acknowledged("synthetic.muse_audio".into()).await;
     if clocked {
-        for _ in 0..250 {
-            if trace(path)
-                .iter()
-                .any(|row| row["event"] == "reply.started" && row["run_id"] == run)
-            {
-                break;
-            }
-            assert!(!playback_tick(bridge, run).await);
-        }
+        clock_to_reply_start(bridge, path, run).await;
     }
     wait(path, "reply.started").await;
     live.send_acknowledged(json!({"type":"response.audio.done"}).to_string())
         .await;
-    let mut completed = false;
-    if clocked {
-        // Allow one poll and ten 20 ms frames. Played comes from the host's
-        // real playout clock, so leave the bridge clock still while it drains.
-        for _ in 0..=10 {
-            if playback_tick(bridge, run).await {
-                completed = true;
-                break;
-            }
-        }
-    }
-    if !completed {
+    if !clocked || !clock_reply_frames(bridge, run).await {
         assert_eq!(
             serde_json::from_str::<Value>(&bridge.line().await).unwrap(),
             json!({"event":"bridge.run_completed","run_id":run})
@@ -154,6 +135,29 @@ async fn play_reply(
     }
     assert_eq!(host.command("pcm").await, "9600 0");
     assert!(live.commentary.try_recv().is_err());
+}
+
+async fn clock_to_reply_start(bridge: &mut Process, path: &Path, run: &str) {
+    for _ in 0..250 {
+        if trace(path)
+            .iter()
+            .any(|row| row["event"] == "reply.started" && row["run_id"] == run)
+        {
+            return;
+        }
+        assert!(!playback_tick(bridge, run).await);
+    }
+}
+
+async fn clock_reply_frames(bridge: &mut Process, run: &str) -> bool {
+    // Allow one poll and ten 20 ms frames. Played comes from the host's
+    // real playout clock, so leave the bridge clock still while it drains.
+    for _ in 0..=10 {
+        if playback_tick(bridge, run).await {
+            return true;
+        }
+    }
+    false
 }
 
 async fn playback_tick(bridge: &mut Process, run: &str) -> bool {

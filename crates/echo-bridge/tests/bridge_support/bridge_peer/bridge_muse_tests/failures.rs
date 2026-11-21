@@ -25,9 +25,7 @@ impl Rig {
         let model = bridge_wire_delegation::Model::start(false, true).await;
         let live = bridge_peer::Live::bind_frames(0).await;
         let mut command = bridge_wire_delegation::run_command(directory.path(), &live.url, &model.origin);
-        if clock {
-            command.arg("--sim-clock");
-        }
+        command.args(clock.then_some("--sim-clock"));
         let mut bridge = Process::spawn(&mut command);
         assert_eq!(bridge.line().await, r#"{"event":"bridge.ready"}"#);
         assert_eq!(host.command("wake").await, "wake");
@@ -152,7 +150,7 @@ async fn muse_run_ceiling_cancels_and_next_wake_plays() {
         .await;
     assert_eq!(
         serde_json::from_str::<Value>(&receipt).unwrap(),
-        json!({"event":"bridge.clock_advanced","milliseconds":600000})
+        json!({"event":"bridge.clock_advanced","milliseconds":600_000})
     );
     let failed = wait(&rig.path(), "run.failed").await;
     assert_eq!(failed["reason"], "session waiting ceiling reached");
@@ -171,6 +169,15 @@ async fn muse_run_ceiling_cancels_and_next_wake_plays() {
     );
     assert!(rig.live.commentary.try_recv().is_err());
     assert_eq!(rig.host.command("pcm").await, "0 0");
+    answer_next_wake(&mut rig).await;
+    assert_eq!(rig.muse.calls().len(), 3);
+    assert_eq!(rig.model.request_count(), 0);
+    rig.bridge.finish(0).await;
+    rig.host.finish(0).await;
+    rig.muse.stop().await;
+}
+
+async fn answer_next_wake(rig: &mut Rig) {
     assert_eq!(rig.host.command("wake").await, "wake");
     let path = rig.path();
     let next = wait_run(&path, "mic.frames", "run-2").await;
@@ -204,15 +211,10 @@ async fn muse_run_ceiling_cancels_and_next_wake_plays() {
             .count(),
         1
     );
-    assert_eq!(rig.muse.calls().len(), 3);
-    assert_eq!(rig.model.request_count(), 0);
-    rig.bridge.finish(0).await;
-    rig.host.finish(0).await;
-    rig.muse.stop().await;
 }
 
 async fn wait_run(path: &Path, event: &str, run: &str) -> Value {
-    tokio::time::timeout(Duration::from_secs(8), async {
+    let result = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             if let Some(row) = trace(path)
                 .into_iter()
@@ -223,8 +225,9 @@ async fn wait_run(path: &Path, event: &str, run: &str) -> Value {
             tokio::time::sleep(POLL_INTERVAL).await;
         }
     })
-    .await
-    .unwrap_or_else(|_| panic!("waiting for {event} in {run}: {:?}", trace(path)))
+    .await;
+    assert!(result.is_ok(), "waiting for {event} in {run}: {:?}", trace(path));
+    result.unwrap()
 }
 
 #[tokio::test]
