@@ -535,7 +535,7 @@ state, so a held pose is a short clip rather than an image.
   are coded in order (`-bf 0`). Otherwise the MP4 comes out at a constant rate
   with its holds dropped, or lists a shorter length than its frames span.
 
-`tests/test_companion_screen_pack.py` (`CompanionHolds`, run by
+`tests/test_companion_holds.py` (`CompanionHolds`, run by
 `make test-unit-python`) encodes every held clip both ways from the same
 frames and decodes both at 30 fps: each VP9 frame of the held clip equals the
 30 fps clip's frame of that time, each H.264 frame is within 1 mean level of it,
