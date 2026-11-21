@@ -94,9 +94,12 @@ async fn assert_backoff(gateway: &mut Gateway) {
             );
             assert!((earliest..=ceiling).contains(&previous.elapsed()));
         } else {
-            let GatewayEvent::Rejected(at) = event else {
-                panic!("unexpected reconnect event {event:?}")
-            };
+            let at = if let GatewayEvent::Rejected(at) = event {
+                Some(at)
+            } else {
+                None
+            }
+            .unwrap();
             assert!((earliest..=ceiling).contains(&(at - previous)));
             previous = at;
         }
@@ -125,19 +128,7 @@ async fn text_and_snapshot(gateway: &Gateway, mock: &Mock, fixture: &mut Fixture
 }
 
 async fn assert_retry(gateway: &Gateway, mock: &Mock) {
-    {
-        let mut state = mock.state.lock().unwrap();
-        state.message_faults.insert(
-            "retry".into(),
-            [MessageFault::Status(503), MessageFault::Disconnect].into(),
-        );
-        state
-            .message_faults
-            .insert("terminal".into(), [MessageFault::Status(400)].into());
-        state
-            .message_faults
-            .insert("expires".into(), (0..60).map(|_| MessageFault::Status(503)).collect());
-    }
+    script_uplink_faults(mock);
     let expiry = Instant::now() + Duration::from_secs(10);
     unknown(gateway, "expires").await;
     let _ = outcome(mock, "expires").await;
@@ -149,7 +140,24 @@ async fn assert_retry(gateway: &Gateway, mock: &Mock) {
     );
     tick_until(Duration::from_secs(5), || attempts(mock, "retry").len() == 3).await;
     assert_attempts(&attempts(mock, "retry"), &[Some(503), None, Some(202)]);
+    assert_retry_window(gateway, mock, expiry).await;
+}
 
+fn script_uplink_faults(mock: &Mock) {
+    let mut state = mock.state.lock().unwrap();
+    state.message_faults.insert(
+        "retry".into(),
+        [MessageFault::Status(503), MessageFault::Disconnect].into(),
+    );
+    state
+        .message_faults
+        .insert("terminal".into(), [MessageFault::Status(400)].into());
+    state
+        .message_faults
+        .insert("expires".into(), (0..60).map(|_| MessageFault::Status(503)).collect());
+}
+
+async fn assert_retry_window(gateway: &Gateway, mock: &Mock, expiry: Instant) {
     while Instant::now() < expiry {
         advance(Duration::from_millis(10)).await;
     }

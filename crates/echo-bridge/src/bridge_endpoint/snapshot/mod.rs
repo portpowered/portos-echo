@@ -7,6 +7,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use echo_contracts::endpoint::{CommandReply, GetSnapshot, Snapshot, SnapshotImage, Uplink};
 use serde_json::Value;
 use std::{
+    fmt::Write as _,
     future::Future,
     pin::Pin,
     sync::Arc,
@@ -106,7 +107,7 @@ fn sample_time(at: SystemTime) -> Result<String, Value> {
     };
     if nanos != 0 {
         timestamp.pop();
-        timestamp.push_str(&format!(".{nanos:09}Z"));
+        write!(timestamp, ".{nanos:09}Z").map_err(|_| camera_error())?;
     }
     Ok(timestamp)
 }
