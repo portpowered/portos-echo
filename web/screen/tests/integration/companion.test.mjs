@@ -8,7 +8,9 @@ import {
     checkCompanionDisplay,
     checkHandoffs,
     checkHeldLinkCode,
+    checkIdleCost,
     checkInterruptedEntry,
+    checkSteadyColour,
     playbackTrace,
     visibleCharacterBoxes,
     viewport as displayViewport,
@@ -518,6 +520,16 @@ test("T3 Companion drops a pending entry clip when the state moves on", async (t
     await installCompanion(f);
     await checkInterruptedEntry(f, () => useCompanion(f.page));
 });
+
+test(
+    "T3 Companion keeps one colour through the blink, the mouth shapes and the still",
+    withSelected(checkSteadyColour),
+);
+
+test(
+    "T3 Companion idle home screen stays cheap to draw",
+    withSelected(checkIdleCost),
+);
 
 test(
     "T3 Companion Link Code stays centered through natural replays",

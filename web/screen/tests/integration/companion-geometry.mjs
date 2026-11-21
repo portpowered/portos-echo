@@ -507,3 +507,234 @@ export async function checkCompanionDisplay(f) {
     }
     assert.deepEqual(f.outside, []);
 }
+
+// Every frame of the pack is a separately generated image of one character.
+// Her skin and jacket must keep one colour through the blink, the mouth
+// shapes and the hand-over from the still, or she flickers. The widest
+// channel range was 10.3 levels before the frames were matched to the neutral
+// one and is 2.4 after; the budget is 5.
+export async function checkSteadyColour({ page }) {
+    const rows = await page
+        .locator(".screen-pack .pack-stage")
+        .evaluate(async (stage) => {
+            const clip = stage.querySelector("video[data-clip]").dataset.clip;
+            const canvas = document.createElement("canvas");
+            canvas.width = 768;
+            canvas.height = 720;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+            // Flat areas of the cheek and the jacket, in clip pixels.
+            const patches = {
+                skin: [412, 204, 18, 18],
+                jacket: [336, 476, 28, 28],
+            };
+            const read = (source) => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(source, 0, 0);
+                return Object.entries(patches).flatMap(([, [x, y, w, h]]) => {
+                    const { data } = ctx.getImageData(x, y, w, h);
+                    const sum = [0, 0, 0];
+                    for (let i = 0; i < data.length; i += 4)
+                        for (let c = 0; c < 3; c++) sum[c] += data[i + c];
+                    return sum.map((value) => value / (w * h));
+                });
+            };
+            const still = stage.querySelector("img:not(.pack-mouth)");
+            await still.decode();
+            const rows = [["rest.png", ...read(still)]];
+            // The lip-sync stills are whole frames of her too.
+            for (const mouth of stage.querySelectorAll(".pack-mouth")) {
+                await mouth.decode();
+                const name = new URL(mouth.src).pathname.split("/").at(-1);
+                rows.push([name, ...read(mouth)]);
+            }
+            const video = document.createElement("video");
+            video.muted = true;
+            video.preload = "auto";
+            const event = (name) =>
+                new Promise((resolve, reject) => {
+                    video.addEventListener(name, resolve, { once: true });
+                    video.addEventListener("error", reject, { once: true });
+                });
+            // Idle frames 14 and 15 are the first blink. She breathes, so
+            // each is read beside frame 26 or 25, the same height on the way
+            // back up. The speaking frames span every mouth shape.
+            const frames = {
+                idle: [0, 14, 26, 15, 25, 40],
+                speaking: Array.from({ length: 41 }, (_, i) => i),
+            };
+            const fps = { idle: 10, speaking: 30 };
+            for (const [role, list] of Object.entries(frames)) {
+                video.src = clip.replace(/[^/?]+\.webm/, `${role}.webm`);
+                await event("loadeddata");
+                for (const frame of list) {
+                    video.currentTime = (frame + 0.5) / fps[role];
+                    await event("seeked");
+                    rows.push([`${role}:${frame}`, ...read(video)]);
+                }
+            }
+            video.removeAttribute("src");
+            video.load();
+            return rows;
+        });
+    const blink = ["idle:14", "idle:26", "idle:15", "idle:25"];
+    const groups = [
+        rows.filter(([name]) => !blink.includes(name)),
+        rows.filter(([name]) => blink.slice(0, 2).includes(name)),
+        rows.filter(([name]) => blink.slice(2).includes(name)),
+    ];
+    const ranges = [0, 1, 2, 3, 4, 5].map((channel) =>
+        Math.max(
+            ...groups.map((group) => {
+                const values = group.map((row) => row[channel + 1]);
+                return Math.max(...values) - Math.min(...values);
+            }),
+        ),
+    );
+    console.log(
+        `B7 colour frames=${rows.length} skin_range=${ranges
+            .slice(0, 3)
+            .map((value) => value.toFixed(2))} jacket_range=${ranges
+            .slice(3)
+            .map((value) => value.toFixed(2))}`,
+    );
+    for (const file of ["mouth-half.png", "mouth-open.png", "mouth-a.png"])
+        assert.ok(
+            rows.some(([name]) => name === file),
+            `${file} is measured`,
+        );
+    assert.ok(
+        Math.max(...ranges) <= 5,
+        `colour moves between frames: ${JSON.stringify(
+            rows.map((row) => [
+                row[0],
+                ...row.slice(1).map((value) => Math.round(value)),
+            ]),
+        )}`,
+    );
+}
+
+// The idle home screen is what the display shows most of the day. On the Echo
+// every video frame that differs from the last costs a software decode and a
+// full redraw, off the page's main thread, so the pack keeps the idle loop
+// slow and the page does no work of its own between frames. Measured here in
+// headless Chromium over seven seconds of the idle loop:
+//
+//                               30 fps idle loop   10 fps idle loop   budget
+//     frames shown per second               30.0               10.0       16
+//     main thread busy, ms/s                 3.1                3.2       30
+//     script, ms/s                          0.62               0.69       10
+//     layout and style, ms/s                0.21               0.23        5
+//
+// The frame rate is what separates the two builds; the main-thread budgets
+// keep per-frame page work from creeping in beside it.
+const idleBudget = { frames: 16, task: 30, script: 10, layout: 5 };
+
+export async function checkIdleCost({ page }) {
+    await page.waitForFunction(
+        (selector) =>
+            document.querySelector(selector)?.currentTime >= 0.4 &&
+            !document.querySelector(".pack-stage video[data-leaving]"),
+        activeVideo,
+    );
+    // The causes, each on its own: nothing recolours or resamples the video
+    // while it plays, and the loop plays at its own rate.
+    const styles = await page.locator(activeVideo).evaluate((video) => {
+        const chain = [];
+        for (let node = video; node; node = node.parentElement) {
+            const style = getComputedStyle(node);
+            chain.push([
+                node.className || node.tagName,
+                style.filter,
+                style.backdropFilter,
+                style.mixBlendMode,
+                style.animationName,
+            ]);
+        }
+        return { chain, paused: video.paused, rate: video.playbackRate };
+    });
+    for (const [label, ...effects] of styles.chain)
+        assert.deepEqual(
+            effects,
+            ["none", "none", "normal", "none"],
+            `${label} adds a per-frame effect to the idle clip`,
+        );
+    assert.deepEqual([styles.paused, styles.rate], [false, 1]);
+
+    const session = await page.context().newCDPSession(page);
+    await session.send("Performance.enable");
+    const metrics = async () =>
+        Object.fromEntries(
+            (await session.send("Performance.getMetrics")).metrics.map(
+                ({ name, value }) => [name, value],
+            ),
+        );
+    // The page runs untouched while its own cost is measured.
+    const before = await metrics();
+    await page.waitForTimeout(4000);
+    const after = await metrics();
+    const seconds = after.Timestamp - before.Timestamp;
+    const rate = (name) => ((after[name] - before[name]) * 1000) / seconds;
+    const cost = {
+        task: rate("TaskDuration"),
+        script: rate("ScriptDuration"),
+        layout: rate("LayoutDuration") + rate("RecalcStyleDuration"),
+    };
+
+    // Then the frames the display is given are counted, with every timer and
+    // frame callback the page arms itself in the same window.
+    const shown = await page.evaluate(async (window_ms) => {
+        const proto = HTMLVideoElement.prototype;
+        const original = {
+            frame: proto.requestVideoFrameCallback,
+            timeout: window.setTimeout,
+            interval: window.setInterval,
+            animation: window.requestAnimationFrame,
+        };
+        let armed = 0;
+        const counted = (call) =>
+            function (...args) {
+                armed++;
+                return call.apply(this, args);
+            };
+        proto.requestVideoFrameCallback = counted(original.frame);
+        window.setTimeout = counted(original.timeout);
+        window.setInterval = counted(original.interval);
+        window.requestAnimationFrame = counted(original.animation);
+        let frames = 0;
+        let done = false;
+        for (const video of document.querySelectorAll(".pack-stage video")) {
+            const tick = () => {
+                if (done) return;
+                frames++;
+                original.frame.call(video, tick);
+            };
+            original.frame.call(video, tick);
+        }
+        const start = performance.now();
+        await new Promise((resolve) =>
+            original.timeout.call(window, resolve, window_ms),
+        );
+        done = true;
+        proto.requestVideoFrameCallback = original.frame;
+        window.setTimeout = original.timeout;
+        window.setInterval = original.interval;
+        window.requestAnimationFrame = original.animation;
+        const seconds = (performance.now() - start) / 1000;
+        return { frames: frames / seconds, armed: armed / seconds };
+    }, 3000);
+    await session.detach();
+    console.log(
+        `B8 idle frames_per_s=${shown.frames.toFixed(1)} armed_per_s=${shown.armed.toFixed(2)} task_ms_per_s=${cost.task.toFixed(1)} script_ms_per_s=${cost.script.toFixed(2)} layout_ms_per_s=${cost.layout.toFixed(2)} layouts=${after.LayoutCount - before.LayoutCount} recalcs=${after.RecalcStyleCount - before.RecalcStyleCount}`,
+    );
+    assert.ok(
+        shown.frames > 2 && shown.frames <= idleBudget.frames,
+        `idle shows ${shown.frames.toFixed(1)} frames a second`,
+    );
+    // A loop that re-arms itself every frame would arm 10 or more a second.
+    assert.ok(shown.armed <= 2, `idle arms ${shown.armed} timers a second`);
+    for (const [name, value] of Object.entries(cost))
+        assert.ok(
+            value <= idleBudget[name],
+            `idle ${name} cost is ${value.toFixed(2)} ms a second`,
+        );
+}
