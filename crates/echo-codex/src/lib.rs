@@ -42,6 +42,7 @@ impl ThreadSettings {
             environments: Vec::new(),
             dynamic_tools,
             config: json!({
+                "features.view_image": false,
                 "features.shell_tool": false,
                 "features.unified_exec": false,
                 "features.multi_agent": false,
@@ -105,6 +106,7 @@ mod tests {
         assert_eq!(
             empty["config"],
             json!({
+                "features.view_image": false,
                 "features.shell_tool": false,
                 "features.unified_exec": false,
                 "features.multi_agent": false,
