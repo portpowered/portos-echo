@@ -538,9 +538,15 @@ export async function checkSteadyColour({ page }) {
                     return sum.map((value) => value / (w * h));
                 });
             };
-            const still = stage.querySelector("img");
+            const still = stage.querySelector("img:not(.pack-mouth)");
             await still.decode();
             const rows = [["rest.png", ...read(still)]];
+            // The lip-sync stills are whole frames of her too.
+            for (const mouth of stage.querySelectorAll(".pack-mouth")) {
+                await mouth.decode();
+                const name = new URL(mouth.src).pathname.split("/").at(-1);
+                rows.push([name, ...read(mouth)]);
+            }
             const video = document.createElement("video");
             video.muted = true;
             video.preload = "auto";
@@ -591,6 +597,11 @@ export async function checkSteadyColour({ page }) {
             .slice(3)
             .map((value) => value.toFixed(2))}`,
     );
+    for (const file of ["mouth-half.png", "mouth-open.png", "mouth-a.png"])
+        assert.ok(
+            rows.some(([name]) => name === file),
+            `${file} is measured`,
+        );
     assert.ok(
         Math.max(...ranges) <= 5,
         `colour moves between frames: ${JSON.stringify(
