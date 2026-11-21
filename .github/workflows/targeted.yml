@@ -162,3 +162,83 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-contract
+      - name: Regenerate the Settings wire schemas
+        run: UPDATE_SCHEMAS=1 cargo test --locked -p echo-screen-contract --test screen_schema settings_v2_schema_snapshots -- --exact
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: muse-generated-schemas
+          path: schemas/screen/
+          if-no-files-found: error
+  test-unit-screen:
+    name: test-unit-screen
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-unit-screen
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/ms-playwright
+          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}
+      - name: Provision locked screen npm cache
+        run: npm --prefix web/screen ci --offline=false
+      - name: Provision pinned screen Chromium
+        run: cd web/screen && npx --offline playwright install --with-deps chromium
+      - name: Chromium sandbox user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: test-unit-screen
+        run: make test-unit-python test-unit-screen
+      - name: Publish screen screenshot evidence
+        if: always()
+        id: screen-evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: screen-evidence-${{ github.sha }}
+          path: |
+            web/screen/test-results/screenshots/**
+            web/screen/test-results/summary.txt
+          if-no-files-found: error
+  lint-rules:
+    name: lint-rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: lint-rules
+      - name: lint-rules
+        run: make lint-rules
+  lint-rust:
+    name: lint-rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: lint-rust
+      - name: lint-rust
+        run: make lint-rust
