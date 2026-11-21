@@ -16,6 +16,8 @@ use tokio::time::{Duration, Instant};
 const RATE: u16 = 24_000;
 /// A batch never holds more than 100 ms of samples.
 const BATCH_MAX: usize = 5;
+/// A pending sample due this long ago belongs to a reply that is over.
+const STALE_MS: u64 = 1000;
 
 /// Where batches go. Neither call may wait.
 pub(crate) trait LipSink: Send {
@@ -113,6 +115,17 @@ impl Lips {
             return;
         }
         let sample = self.analyser.window(frame);
+        // Samples a window that never settled left behind describe sound
+        // long gone: they must not ride out with this reply's first batch.
+        let now_ms = self.clock(now);
+        if self
+            .pending
+            .first()
+            .is_some_and(|first| first.at_ms + STALE_MS <= now_ms)
+        {
+            self.pending.clear();
+            self.handed = None;
+        }
         if sample.open == 0 && !self.moving {
             return;
         }
@@ -161,6 +174,34 @@ impl Lips {
         }
     }
 
+    /// The reply was cut: its queued sound will not be heard. Samples not
+    /// yet sent are dropped, and one sample due now shuts the mouth; the page
+    /// drops whatever it still holds for later than that.
+    fn cut(&mut self, now: Instant) {
+        self.pending.clear();
+        self.handed = None;
+        self.moving = false;
+        self.analyser = analyser();
+        if !self.wanted {
+            return;
+        }
+        let now_ms = self.clock(now);
+        let shut = MouthSample {
+            at_ms: now_ms,
+            open: 0,
+            vowel: MouthVowel::None,
+        };
+        self.stats.batches += 1;
+        self.stats.samples += 1;
+        let batch = MouthBatch {
+            sent_ms: now_ms,
+            samples: vec![shut],
+        };
+        if self.sink.send(&batch) == 0 {
+            self.stats.dropped += 1;
+        }
+    }
+
     /// Close this reply's window. Pending samples still ahead of their sound
     /// leave now; ones already heard are dropped, and the page shuts a mouth
     /// left open when no sample has come for a moment.
@@ -194,6 +235,11 @@ pub(crate) async fn scope<F: Future>(lips: Option<Lips>, work: F) -> F::Output {
 /// queue starts playing it at `start`. Outside a scope this does nothing.
 pub(crate) fn wrote(frame: &[u8], start: Instant, now: Instant) {
     let _ = CURRENT.try_with(|lips| lock(lips).wrote(frame, start, now));
+}
+
+/// The reply was cut at `now`: shut the mouth and forget what was queued.
+pub(crate) fn cut(now: Instant) {
+    let _ = CURRENT.try_with(|lips| lock(lips).cut(now));
 }
 
 /// Close the reply's lip-sync window.

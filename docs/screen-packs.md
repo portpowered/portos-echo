@@ -330,8 +330,10 @@ strongest resonances of the frame. It is plain arithmetic on the PCM the bridge
 already holds: no model, no extra dependency.
 
 Each sample is stamped with the time its sound will be heard: the frame's place
-in the Echo's queue plus `[screen] mouth_delay_ms` (200 ms by default, at most
-1000), the time the Echo takes to play audio it was given. Samples leave in small
+in the Echo's queue plus `[screen] mouth_delay_ms` (40 ms by default, at most
+1000). The Echo plays a frame about 85 ms after its place in the queue and the
+page draws a still about 35 ms after it is due, so 40 puts the picture about
+15 ms ahead of the sound, the side the eye forgives. Samples leave in small
 batches, at most five (100 ms), as a named `mouth` event on `/events`:
 
 ```text
@@ -356,12 +358,20 @@ The page decodes every mouth still before the pack shows. While the pack is
 speaking, the still for the sample due now covers the speaking clip: under 10
 the `closed` still; a vowel still when the sample names a vowel the pack has and
 openness is at least 30; otherwise `half`, or `open` from 55. With no sample for
-150 ms the mouth shuts. A pause between words keeps the shut mouth for as long as
-the speaking clip is held (500 ms), then the pack's own clip shows again; any
-other state shows it at once. Reduced motion shows no mouth stills.
+150 ms the mouth shuts. The speaking clip stays on the stage until the next
+clip's first frame is ready, so the shut mouth stays over it until then: through
+a pause between words, where samples still move it, and after any other state,
+which shuts it at once. A stage that shows no other clip uncovers it after 2 s.
+Reduced motion shows no mouth stills.
+
+When a reply is cut (a barge-in or a stop word), the bridge drops the samples it
+still holds and sends one shut sample stamped now. The page replaces every
+queued sample due later with it, so the mouth never moves for sound that was
+never played.
 
 Tune `mouth_delay_ms` on the device: raise it when the mouth moves before the
-voice, lower it when the mouth trails. Each reply's `reply.quality` trace record
+voice, lower it when the mouth trails. Measure it from a recording of the
+screen and the sound together, never from the bridge's send times. Each reply's `reply.quality` trace record
 carries `lips`: `batches`, `samples`, `dropped` (batches no page took),
 `publish_max_ms` (the longest a sample waited from hand-off to being sent),
 `lead_min_ms` (the least time a sample was sent ahead of its sound) and `late`

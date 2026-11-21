@@ -47,7 +47,7 @@ fn committed_example_loads_with_all_expected_values() {
             listen: "0.0.0.0:16900".parse().unwrap(), // lint-rules: allow-literal configuration loader expected value fixture
             pairing_token_file: "credentials/screen-pairing.txt".into(),
             packs: Vec::new(),
-            mouth_delay_ms: 200,
+            mouth_delay_ms: 40,
         },
         audit: AuditConfig {
             log_dir: "logs/audit".into(),

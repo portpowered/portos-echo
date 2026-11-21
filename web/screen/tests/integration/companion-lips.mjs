@@ -77,8 +77,15 @@ export async function checkCompanionLips(f) {
         assert.equal(await f.mouth(run(70, "a")), 1);
         await shows(page, "mouth-a.png");
     }
-    // Listening shows her own clip again at once.
+    // Listening shuts her mouth at once, mid-word: the shut mouth covers the
+    // speaking clip until the listening clip's first frame shows, then her
+    // own clip shows again.
     await f.update({ state: "listening" });
+    const cut = await shown(page);
+    assert.ok(cut.file === "rest.png" || cut.file === null, cut.file);
+    await page.waitForFunction(
+        () => !document.querySelector(".pack-stage").hasAttribute("data-lips"),
+    );
     assert.deepEqual(await shown(page), {
         lips: false,
         file: null,

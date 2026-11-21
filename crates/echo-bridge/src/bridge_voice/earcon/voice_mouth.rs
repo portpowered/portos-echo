@@ -4,9 +4,10 @@ use std::collections::VecDeque;
 use tokio::time::{Duration, Instant};
 
 pub(super) const FRAME: Duration = Duration::from_millis(20);
-/// Measured on the real Echo: hassmic reports `played` 0.07 to 0.24 s (typically
-/// 0.22 s) after the modelled playout clock below drains.
-pub(super) const OUTPUT_DELAY: Duration = Duration::from_millis(200);
+/// Measured on the real Echo against a recording of its sound: a frame is
+/// heard about 85 ms after its place on the modelled playout clock below.
+/// (hassmic reports `played` later than that: it adds a fixed 120 ms tail.)
+pub(super) const OUTPUT_DELAY: Duration = Duration::from_millis(80);
 
 /// The screen's mouth follows audio the Echo is actually playing, not model
 /// events. Frames written to the Echo play back to back on its clock, which

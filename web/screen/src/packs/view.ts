@@ -137,6 +137,7 @@ export function mountPacks(
                         clear();
                         redraw();
                     },
+                    () => lips?.revealed(player?.showing ?? ""),
                 );
                 const ownedMedia = media;
                 player = new Player(manifest.character, (value) =>

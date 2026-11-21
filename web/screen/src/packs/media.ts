@@ -50,6 +50,8 @@ export function mediaStage(
     asset: (file: string) => string,
     ended: (ticket: number) => void,
     failed: () => void,
+    // The stage has just put the requested clip, or the still, in view.
+    revealed: () => void = () => {},
 ) {
     const stage = document.createElement("div");
     stage.className = "pack-stage";
@@ -174,6 +176,7 @@ export function mediaStage(
         if (stopped) return;
         if (!playback.clip || motion.matches) {
             rest();
+            revealed();
             return;
         }
         const index = front === 0 ? 1 : 0;
@@ -208,6 +211,7 @@ export function mediaStage(
             }
             front = index;
             shownPath = path;
+            revealed();
         };
         video.onloadeddata = () => {
             if (!valid()) return;

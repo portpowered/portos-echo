@@ -168,7 +168,7 @@ fn check(pcm: &[Value], states: &[Value]) -> Result<Value, String> {
     for (name, index, boundary) in [("start", 3, "A"), ("end", 4, "Z")] {
         let timestamp = unsigned(&states[index], "epoch_ms")?;
         let target = unsigned(&report, boundary)?
-            .checked_add(200)
+            .checked_add(80)
             .ok_or("mouth: boundary overflow")?;
         let latest = target.checked_add(20).ok_or("mouth: boundary overflow")?;
         if timestamp < target || timestamp > latest {
@@ -177,7 +177,7 @@ fn check(pcm: &[Value], states: &[Value]) -> Result<Value, String> {
         report[format!("{name}_state_ms")] = json!(timestamp);
         report[format!("{name}_offset_ms")] = json!(i128::from(timestamp) - i128::from(unsigned(&report, boundary)?));
     }
-    report["D"] = json!(200);
+    report["D"] = json!(80);
     report["F"] = json!(20);
     Ok(report)
 }
@@ -190,9 +190,9 @@ fn fixture() -> (Vec<Value>, Vec<Value>) {
         ("ready", 0),
         ("listening", 0),
         ("connected", 0),
-        ("speaking", 200),
-        ("connected", 400),
-        ("ready", 440),
+        ("speaking", 80),
+        ("connected", 280),
+        ("ready", 320),
     ]
     .map(|(state, epoch)| json!({"epoch_ms":epoch,"state":{"state":state}}))
     .to_vec();
@@ -203,13 +203,13 @@ fn fixture() -> (Vec<Value>, Vec<Value>) {
 fn mouth_oracle_accepts_only_exact_audible_pcm_and_bounded_state_offsets() {
     let (pcm, states) = fixture();
     let measured = check(&pcm, &states).unwrap();
-    assert_eq!(measured["start_offset_ms"], 200);
-    assert_eq!(measured["end_offset_ms"], 200);
+    assert_eq!(measured["start_offset_ms"], 80);
+    assert_eq!(measured["end_offset_ms"], 80);
     let mut at_limit = states.clone();
-    at_limit[3]["epoch_ms"] = json!(220);
-    at_limit[4]["epoch_ms"] = json!(420);
-    assert_eq!(check(&pcm, &at_limit).unwrap()["end_offset_ms"], 220);
-    for (index, time) in [(3, 199), (3, 221), (4, 399), (4, 421)] {
+    at_limit[3]["epoch_ms"] = json!(100);
+    at_limit[4]["epoch_ms"] = json!(300);
+    assert_eq!(check(&pcm, &at_limit).unwrap()["end_offset_ms"], 100);
+    for (index, time) in [(3, 79), (3, 101), (4, 279), (4, 301)] {
         let mut wrong = states.clone();
         wrong[index]["epoch_ms"] = json!(time);
         assert!(check(&pcm, &wrong).unwrap_err().contains("expected"));

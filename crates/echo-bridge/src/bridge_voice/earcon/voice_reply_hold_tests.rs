@@ -95,15 +95,15 @@ async fn run(gaps: &[u64], silence: u64) -> Timeline {
 
 #[tokio::test(start_paused = true)]
 async fn a_600_ms_gap_closes_the_mouth_without_leaving_the_run() {
-    // Audio 0-500 ms and 1100-1600 ms: the mouth opens 200 ms after each
-    // phrase starts and closes 200 ms after its last frame has played.
+    // Audio 0-500 ms and 1100-1600 ms: the mouth opens 80 ms after each
+    // phrase starts and closes 80 ms after its last frame has played.
     let expected = [
         (0, UiState::Listening),
-        (200, UiState::Speaking),
-        (700, UiState::Connected),
-        (1300, UiState::Speaking),
-        (1800, UiState::Connected),
-        (1800, ready()),
+        (80, UiState::Speaking),
+        (580, UiState::Connected),
+        (1180, UiState::Speaking),
+        (1680, UiState::Connected),
+        (1680, ready()),
     ];
     assert_eq!(run(&[600], 0).await, expected);
 }
@@ -120,16 +120,16 @@ async fn several_gaps_alternate_speaking_and_connected_and_ready_waits_for_the_e
     assert_eq!(states, expected);
     let times: Vec<_> = timeline.iter().map(|(at, _)| *at).collect();
     // Phrases start at 0, 800, 1900 and 3300 ms.
-    assert_eq!(times, [0, 200, 700, 1000, 1500, 2100, 2600, 3500, 4000, 4000]);
+    assert_eq!(times, [0, 80, 580, 880, 1380, 1980, 2480, 3380, 3880, 3880]);
 }
 
 #[tokio::test(start_paused = true)]
 async fn silence_after_the_reply_holds_connected_until_the_run_completes() {
     let expected = [
         (0, UiState::Listening),
-        (200, UiState::Speaking),
-        (700, UiState::Connected),
-        (2200, ready()),
+        (80, UiState::Speaking),
+        (580, UiState::Connected),
+        (2080, ready()),
     ];
     assert_eq!(run(&[], 1500).await, expected);
 }

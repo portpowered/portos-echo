@@ -103,13 +103,13 @@ fn m6_audio(session: &Session, report: &Value) {
 }
 
 /// Lip sync for the 200 ms reply: samples reached the paired stream, each
-/// sent ahead of its sound. A batch may be dropped when the screen server is
+/// sent ahead of its sound, by the mouth delay at least. A batch may be dropped when the screen server is
 /// busy that instant; the scenario accounts for it.
 fn lips(lips: &Value) {
     assert_eq!(lips["late"], 0, "{lips}");
     assert!(lips["samples"].as_u64().unwrap() >= 5, "{lips}");
     assert!(lips["received_samples"].as_u64().unwrap() >= 1, "{lips}");
-    assert!(lips["lead_ms"]["min"].as_u64().unwrap() >= 100, "{lips}");
+    assert!(lips["lead_ms"]["min"].as_u64().unwrap() >= 40, "{lips}");
 }
 
 fn m4_audio(session: &Session, report: &Value, case: &str) {
