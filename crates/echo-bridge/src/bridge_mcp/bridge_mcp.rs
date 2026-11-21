@@ -15,7 +15,7 @@ pub use bridge_control::{Command, Prepared, parse};
 use bridge_presentation::Presentation;
 pub use bridge_settings::Settings;
 pub(crate) use bridge_token::Token;
-use echo_mcp_auth::{AuthClient, AuthError};
+use echo_mcp_auth::{AuthClient, AuthError, GrantStatus};
 use std::{
     collections::HashSet,
     net::SocketAddr,
@@ -73,8 +73,17 @@ impl Grant {
         if self.blocked() {
             return None;
         }
-        let scopes = self.client.granted_scopes().await;
-        if self.blocked() { None } else { scopes }
+        self.grant_status().await.scopes
+    }
+
+    /// Read the usable committed grant for Settings without exposing its identity.
+    pub(crate) async fn grant_status(&self) -> GrantStatus {
+        let mut status = self.client.grant_status().await;
+        // Linking blocks access while the previous grant is still committed.
+        if self.blocked() {
+            status.scopes = None;
+        }
+        status
     }
 
     pub fn blocked(&self) -> bool {
@@ -150,7 +159,7 @@ impl Runtime {
         let (send, receive) = mpsc::channel(1);
         let operator = bridge_operations::Operator::new(send);
         let grant = Arc::new(Grant {
-            client: AuthClient::open_with_ca(settings.options, epoch, settings.ca_pem.as_deref())
+            client: AuthClient::open_configured(settings.options, epoch, settings.ca_pem.as_deref())
                 .await
                 .map_err(Error::Mcp)?,
             rejected: AtomicBool::new(false),
@@ -206,6 +215,8 @@ impl Drop for Runtime {
 pub(crate) fn category(error: &AuthError) -> &'static str {
     match error {
         AuthError::Discovery => "discovery",
+        AuthError::RegistrationUnavailable => "registration_unavailable",
+        AuthError::RegistrationRefused => "registration_refused",
         AuthError::Transport => "transport",
         AuthError::Protocol => "protocol",
         AuthError::AccessDenied => "access_denied",

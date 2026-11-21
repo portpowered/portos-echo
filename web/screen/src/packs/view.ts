@@ -101,13 +101,14 @@ export function mountPacks(
             layout = applyLayout(host, manifest.layout);
             const ownedLayout = layout;
             const css = document.createElement("link");
-            css.dataset.packPersistent = "";
             css.rel = "stylesheet";
             css.referrerPolicy = "no-referrer";
             if (manifest.layout?.css) {
                 css.onload = () => ownedLayout.refresh();
                 css.href = asset(manifest.layout.css);
-                host.append(css);
+                // Not in the host: every frame re-inserts the host's children,
+                // and a re-inserted link drops its sheet until fetched again.
+                document.head.append(css);
             }
             let media: ReturnType<typeof mediaStage> | undefined;
             cleanup = () => {

@@ -165,7 +165,7 @@ function validatePortos(value: unknown) {
             "scope_choices",
             "tool_choices",
         ],
-        ["server", "challenge"],
+        ["server", "challenge", "relink_advised"],
     );
     if (
         !["unconfigured", "link_required", "linked", "relink_for_scope"].some(
@@ -173,6 +173,8 @@ function validatePortos(value: unknown) {
         ) ||
         !operationState(status.operation_state) ||
         typeof status.link_waiting_for_restart !== "boolean" ||
+        ("relink_advised" in status &&
+            typeof status.relink_advised !== "boolean") ||
         !strings(status.scope_choices) ||
         !strings(status.tool_choices)
     )

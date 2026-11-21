@@ -310,7 +310,9 @@ fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>
     }"#;
     let snapshot = serde_json::from_str::<SettingsSnapshotV2>(wire)?;
     let mut expected = serde_json::from_str::<serde_json::Value>(wire)?;
+    assert!(!snapshot.portos.relink_advised);
     assert_eq!(serde_json::to_value(&snapshot)?, expected);
+    portos_relink_advice_wire(&expected)?;
     preserved(&snapshot)?;
     let codex = "/settings/codex";
     expected.pointer_mut(codex).unwrap()["delegate_fast"] = true.into();
@@ -331,6 +333,29 @@ fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>
     writeln!(std::io::stdout().lock(), "{}", serde_json::to_string(&snapshot)?)?;
     Ok(())
 }
+
+fn portos_relink_advice_wire(omitted: &serde_json::Value) -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::settings_v2::SettingsSnapshotV2;
+    use serde_json::{Value, from_value, to_value};
+
+    let mut wire = omitted.clone();
+    wire["portos"]["relink_advised"] = false.into();
+    let snapshot: SettingsSnapshotV2 = from_value(wire.clone())?;
+    assert!(!snapshot.portos.relink_advised);
+    assert_eq!(&to_value(snapshot)?, omitted);
+
+    wire["portos"]["relink_advised"] = true.into();
+    let snapshot: SettingsSnapshotV2 = from_value(wire.clone())?;
+    assert!(snapshot.portos.relink_advised);
+    assert_eq!(to_value(snapshot)?, wire);
+
+    for invalid in [Value::Null, "true".into()] {
+        wire["portos"]["relink_advised"] = invalid;
+        assert!(from_value::<SettingsSnapshotV2>(wire.clone()).is_err());
+    }
+    Ok(())
+}
+
 #[test]
 fn t2_portos_v2_operation_requires_exact_version_and_confirmation() -> Result<(), Box<dyn Error>> {
     use echo_screen_contract::settings_v2::{

@@ -41,7 +41,9 @@ pub(crate) fn router(
 ) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/tokens.css", get(screen_assets::tokens))
         .route("/screen.css", get(screen_assets::css))
+        .route("/fonts/manrope-latin-wght-normal.woff2", get(screen_assets::font))
         .route("/screen.js", get(screen_assets::js))
         .route("/events", get(events))
         .route("/actions", post(actions_post))

@@ -170,7 +170,7 @@ fn grant() -> Value {
     let point = key.verifying_key().to_sec1_point(false);
     let config = echo_config::BridgeConfig::from_toml_str(CONFIG).unwrap();
     json!({"version":1,"issuer":"https://127.0.0.1:1","resource":config.mcp.server[0].url,
-        "client_id":config.mcp.client_id,"private_key_jwk":{"kty":"EC","crv":"P-256",
+        "client_id":"dcr_synthetic_replay","private_key_jwk":{"kty":"EC","crv":"P-256",
         "x":B64.encode(&point.as_bytes()[1..33]),"y":B64.encode(&point.as_bytes()[33..65]),
         "d":B64.encode([7;32])},"grant":{"refresh_token":"synthetic-consumed"}})
 }
@@ -189,7 +189,12 @@ fn replay(peer: &Peer) {
     let claims: Value = serde_json::from_slice(&B64.decode(parts[1]).unwrap()).unwrap();
     assert_eq!(claims["htu"], format!("{}/token", peer.issuer));
     assert_eq!(claims["htm"], "POST");
-    assert_eq!(rows[0]["form"]["refresh_token"], json!(["synthetic-consumed"]));
+    let committed = grant();
+    assert_eq!(
+        rows[0]["form"],
+        json!({"grant_type":["refresh_token"],"refresh_token":["synthetic-consumed"],
+               "client_id":[committed["client_id"]],"resource":[committed["resource"]]})
+    );
 }
 
 #[test]

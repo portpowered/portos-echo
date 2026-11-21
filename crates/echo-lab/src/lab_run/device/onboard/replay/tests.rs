@@ -10,7 +10,7 @@ fn record() -> Value {
     let public = key.verifying_key().to_sec1_point(false);
     let config = echo_config::BridgeConfig::from_toml_str(CONFIG).unwrap();
     json!({"version":1,"issuer":"https://127.0.0.1:1","resource":config.mcp.server[0].url,
-        "client_id":config.mcp.client_id,"private_key_jwk":{"kty":"EC","crv":"P-256",
+        "client_id":"dcr_synthetic_replay","private_key_jwk":{"kty":"EC","crv":"P-256",
         "x":B64.encode(&public.as_bytes()[1..33]),"y":B64.encode(&public.as_bytes()[33..65]),"d":B64.encode([7;32])},
         "grant":{"refresh_token":"synthetic-consumed","access_token":"synthetic-access"}})
 }
@@ -36,6 +36,23 @@ fn mcp_device_replay_requires_rotated_token_same_key_and_config_identity() {
     }
     for issuer in ["http://127.0.0.1:1", "https://user@127.0.0.1", "https://127.0.0.1/#bad"] {
         assert_eq!(https(issuer), Err(ERROR.into()));
+    }
+}
+
+#[test]
+fn mcp_device_replay_uses_committed_id_or_checks_an_explicit_pin() {
+    let mut old = record();
+    let mut new = old.clone();
+    new["grant"]["refresh_token"] = "synthetic-current".into();
+    let pinned = |id| CONFIG.replacen("[mcp]", &format!("[mcp]\nclient_id = \"{id}\""), 1);
+    let matching = pinned(old["client_id"].as_str().unwrap());
+    assert_eq!(rotated(&bytes(&old), &bytes(&new), &matching).unwrap().expose(), &old);
+    let mismatch = pinned("dcr_different");
+    assert!(matches!(rotated(&bytes(&old), &bytes(&new), &mismatch), Err(e) if e == ERROR));
+    for missing in [Value::Null, json!(""), json!(" ")] {
+        old["client_id"] = missing.clone();
+        new["client_id"] = missing;
+        assert!(matches!(rotated(&bytes(&old), &bytes(&new), CONFIG), Err(e) if e == ERROR));
     }
 }
 
@@ -127,7 +144,7 @@ async fn t3_on_device_mcp_replay_observes_tls_invalid_grant_with_old_token_and_s
     assert_eq!(
         report["form"],
         json!({"grant_type":["refresh_token"],
-        "client_id":[record["client_id"]],"refresh_token":["synthetic-consumed"]})
+        "client_id":[record["client_id"]],"refresh_token":["synthetic-consumed"],"resource":[record["resource"]]})
     );
     let token = report["proof"].as_str().unwrap();
     let parts: Vec<_> = token.split('.').collect();

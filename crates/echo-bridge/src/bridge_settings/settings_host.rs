@@ -6,6 +6,7 @@ mod settings_muse;
 #[path = "settings_host/settings_v2.rs"]
 pub(super) mod settings_v2;
 use echo_config::{BridgeConfig, SettingsOverlay};
+use echo_mcp_auth::GrantStatus;
 use echo_screen_contract::settings_v1::{
     AgentValuesV1, CodexPatchV1, DailyCapV1, LinkStatusV1, PromptTextsV1, SaveResultV1, SettingsErrorV1,
     SettingsFieldsV1, SettingsSnapshotV1, SettingsValuesV1, SettingsVersionV1, VoiceValuesV1,
@@ -77,17 +78,22 @@ impl SettingsHost {
         self.muse.local = true;
     }
 
+    #[cfg(test)]
+    pub(super) fn fail_next_overlay_directory_sync(&mut self) {
+        self.store.fail_next_directory_sync = true;
+    }
+
     /// Call only inside `SettingsRequest::commit`; no detached work or retries.
     /// The returned pending flag records a request, not proof of an actual exec.
     pub fn transaction(&mut self, operation: SettingsOperation, link: LinkStatusV1) -> SettingsReply {
-        self.transaction_with_grant(operation, link, None, None)
+        self.transaction_with_grant(operation, link, GrantStatus::default(), None)
     }
 
     pub(super) fn transaction_with_grant(
         &mut self,
         operation: SettingsOperation,
         link: LinkStatusV1,
-        scopes: Option<Vec<String>>,
+        grant: GrantStatus,
         owner: Option<&Grant>,
     ) -> SettingsReply {
         let result = match operation {
@@ -98,7 +104,7 @@ impl SettingsHost {
             SettingsOperation::PackSelection(catalog, selection) => self.select_pack(catalog, &selection),
             SettingsOperation::Snapshot => self.snapshot(link).map(SettingsReply::Snapshot),
             SettingsOperation::SnapshotV2 { include_muse } => {
-                return self.snapshot_v2(link, scopes, include_muse).map_or_else(
+                return self.snapshot_v2(link, grant, include_muse).map_or_else(
                     |error| error_reply_v2(&error),
                     |snapshot| SettingsReply::SnapshotV2(Box::new(snapshot)),
                 );

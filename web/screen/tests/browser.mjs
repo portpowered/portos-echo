@@ -22,6 +22,14 @@ const css = await readFile(
     new URL("../dist/screen.css", import.meta.url),
     "utf8",
 );
+// The token sheet and the bundled font are the page's own local assets: the
+// harness answers them from the build, like the screen server does.
+const tokens = await readFile(
+    new URL("../dist/tokens.css", import.meta.url),
+    "utf8",
+);
+const FONT = "/fonts/manrope-latin-wght-normal.woff2";
+const font = await readFile(new URL(`../dist${FONT}`, import.meta.url));
 const js = await readFile(
     new URL("../dist/screen.js", import.meta.url),
     "utf8",
@@ -67,6 +75,12 @@ export async function pageFor(
     await context.clock.install({ time: 0 });
     await context.clock.pauseAt(0);
     await context.route("**/*", (route) => {
+        if (new URL(route.request().url()).pathname === FONT)
+            return route.fulfill({
+                body: font,
+                contentType: "font/woff2",
+                headers: { "access-control-allow-origin": "*" },
+            });
         requests.push(route.request().url());
         return route.abort();
     });
@@ -81,6 +95,7 @@ export async function pageFor(
               )
             : html
         )
+            .replace('<link rel="stylesheet" href="tokens.css" />', "")
             .replace('<link rel="stylesheet" href="screen.css" />', "")
             .replace('<script src="screen.js"></script>', "")
             .replace(
@@ -88,7 +103,10 @@ export async function pageFor(
                 `<head><base href="http://127.0.0.1:4173/${query.replaceAll("&", "&amp;")}">`,
             ),
     );
+    await page.addStyleTag({ content: tokens });
     await page.addStyleTag({ content: css });
+    // Settings text is measured and photographed in Manrope, never mid-swap.
+    await page.evaluate(() => document.fonts.load("16px Manrope"));
     await page.evaluate(() => {
         window.calls = [];
         window.streams = [];

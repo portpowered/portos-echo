@@ -141,7 +141,7 @@ fn screen_settings_sparse_merge_preserves_base_and_only_explicit_keys() {
 #[test]
 fn screen_settings_voices_preserve_precedence_and_the_pinned_default() {
     let base = BridgeConfig::from_toml_str(&MINIMAL.replace("[live]", "[live]\nvoice='cedar'")).unwrap();
-    for voice in ["default", "alloy", "marin", "cove", "verse"] {
+    for voice in ["default", "maple", "cove", "vale"] {
         let settings = overlay(&format!("[codex]\nvoice='{voice}'"));
         let config = settings.apply_to(&base).unwrap();
         assert_eq!(config.live.voice.as_deref(), Some("cedar"));
@@ -324,7 +324,7 @@ fn screen_settings_effective_load_overrides_only_the_allowlist_without_writes() 
     let directory = Directory::new().unwrap();
     let (path, input) = home_config(&directory);
     let overlay_path = directory.0.join("settings.toml");
-    let text = "[agent]\nmax_tool_calls=2\ntask_deadline_seconds=5\ndaily_request_cap=9007199254740993\n[voice]\nsession_listen_enabled=false\nsession_listen_seconds=5\n[codex]\nvoice='marin'";
+    let text = "[agent]\nmax_tool_calls=2\ntask_deadline_seconds=5\ndaily_request_cap=9007199254740993\n[voice]\nsession_listen_enabled=false\nsession_listen_seconds=5\n[codex]\nvoice='maple'";
     std::fs::write(&overlay_path, text).unwrap();
     let base = BridgeConfig::from_toml_str(&input).unwrap();
     assert_eq!(BridgeConfig::load(&path).unwrap(), base);
@@ -346,6 +346,78 @@ fn screen_settings_effective_load_overrides_only_the_allowlist_without_writes() 
     assert_eq!(std::fs::read_to_string(path).unwrap(), input);
     assert_eq!(std::fs::read_to_string(overlay_path).unwrap(), text);
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 2);
+}
+
+const RETIRED: [&str; 10] = [
+    "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse",
+];
+
+#[test]
+fn screen_settings_offer_only_the_voices_the_pinned_v3_start_accepts() {
+    let offered: Vec<_> = echo_config::realtime_voices().collect();
+    assert_eq!(
+        offered,
+        [
+            "default", "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"
+        ]
+    );
+    let base = BridgeConfig::from_toml_str(MINIMAL).unwrap();
+    for voice in offered {
+        let saved = SettingsOverlay::from_leaves(None, None, Some(voice.into()), None, None);
+        let expected = (voice != "default").then_some(voice);
+        assert_eq!(saved.apply_to(&base).unwrap().codex_voice(), expected);
+    }
+    for voice in RETIRED {
+        let saved = SettingsOverlay::from_leaves(None, None, Some(voice.into()), None, None);
+        assert_eq!(
+            saved.apply_to(&base).unwrap_err().to_string(),
+            "codex.voice: not supported by the pinned realtime version; choose default or a listed voice"
+        );
+    }
+}
+
+#[test]
+fn screen_settings_stored_retired_voice_loads_as_default_with_one_warning() {
+    const REASON: &str = "not supported by the pinned realtime version; using default";
+    let directory = Directory::new().unwrap();
+    let (path, input) = home_config(&directory);
+    let overlay_path = directory.0.join("settings.toml");
+    for voice in RETIRED {
+        let text = format!("[agent]\ndaily_request_cap=2\n[codex]\nvoice='{voice}'");
+        std::fs::write(&overlay_path, &text).unwrap();
+        let effective = BridgeConfig::load_effective(&path).unwrap();
+        assert_eq!(effective.config.codex_voice(), None);
+        assert_eq!(effective.config.agent.daily_request_cap, 2);
+        assert_eq!(
+            effective.overlay,
+            overlay("[agent]\ndaily_request_cap=2\n[codex]\nvoice='default'")
+        );
+        assert_eq!(
+            effective.warning.unwrap().to_string(),
+            format!("settings.toml: ignored codex.voice: {REASON}")
+        );
+        assert_eq!(std::fs::read_to_string(&overlay_path).unwrap(), text);
+    }
+    std::fs::remove_file(&overlay_path).unwrap();
+    // The operator's own file: a named Codex voice warns, and so does the
+    // legacy fallback once the Codex client would send it.
+    for (extra, field) in [
+        ("[codex]\nvoice='alloy'", Some("codex.voice")),
+        ("[codex]\nhome='/absent/private'", Some("live.voice")),
+        ("", None),
+    ] {
+        let text = format!("{}\n{extra}", input.replace("[live]", "[live]\nvoice='alloy'"));
+        std::fs::write(&path, &text).unwrap();
+        let effective = BridgeConfig::load_effective(&path).unwrap();
+        assert_eq!(effective.config.codex_voice(), None);
+        assert_eq!(effective.base.codex_voice(), None);
+        assert_eq!(effective.config.live.voice.as_deref(), Some("alloy"));
+        assert_eq!(
+            effective.warning.map(|warning| warning.to_string()),
+            field.map(|field| format!("bridge.toml: ignored {field}: {REASON}"))
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
 }
 
 #[test]

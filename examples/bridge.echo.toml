@@ -49,7 +49,8 @@ daily_request_cap = 500
 # The bridge creates portos/ as 0700 and grant.json as 0600.
 [mcp]
 state_dir = "/data/local/echo-bridge/private/portos"
-client_id = "port1/systems/zero/oauth-clients/command-line-interface"
+# Omit client_id to register this Echo on its first Port OS link.
+# client_name = "Port OS Echo"
 scopes = ["endpoint:read", "endpoint:write", "message:send", "group:read", "group:manage", "subscription:read", "subscription:write"]
 operator_listen = "127.0.0.1:16902"
 

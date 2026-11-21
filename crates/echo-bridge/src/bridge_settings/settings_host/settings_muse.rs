@@ -46,13 +46,16 @@ impl SettingsHost {
     }
 
     pub(in crate::bridge_settings) fn prepare_muse_probe(&self) -> impl Future<Output = Result<(), Reason>> + use<> {
-        let transport = self
-            .store
-            .effective()
-            .muse
-            .as_ref()
-            .ok_or(Reason::Unconfigured)
-            .and_then(|config| Http::open(config, self.muse.local).map_err(|_| Reason::InvalidConfiguration));
+        let transport = if self.store.uncertain {
+            Err(Reason::Unavailable)
+        } else {
+            self.store
+                .effective()
+                .muse
+                .as_ref()
+                .ok_or(Reason::Unconfigured)
+                .and_then(|config| Http::open(config, self.muse.local).map_err(|_| Reason::InvalidConfiguration))
+        };
         async move { transport?.probe().await }
     }
 

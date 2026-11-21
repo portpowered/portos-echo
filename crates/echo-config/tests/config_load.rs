@@ -232,6 +232,8 @@ fn default_voice_is_omitted_and_unknown_voices_are_refused_offline() {
     let load = |live, codex| BridgeConfig::from_toml_str(&voices(live, codex));
     assert_eq!(load(Some("alloy"), Some("default")).unwrap().codex_voice(), None);
     assert_eq!(load(Some("alloy"), Some("cove")).unwrap().codex_voice(), Some("cove"));
+    // A retired v2-only voice still parses; `load_effective` replaces it.
+    assert_eq!(load(None, Some("alloy")).unwrap().codex_voice(), Some("alloy"));
     for (live, codex, field) in [
         (Some("Default"), None, "live.voice"),
         (Some("synthetic-voice"), None, "live.voice"),
@@ -321,8 +323,7 @@ fn minimal_config_defaults_match_both_loaders() {
 fn muse_loaders_preserve_literal_paths_and_never_create_credential_files() {
     let directory = Directory::new().unwrap();
     let input = format!(
-        "{}\n[muse]\nurl='https://127.0.0.1:7448/'\nca_file='absent/ca.der'\ncredential_file='~/absent/muse'\n",
-        MINIMAL.replace("[agent]", "[agent]\nbackend='muse'")
+        "{MINIMAL}\n[muse]\nurl='https://127.0.0.1:7448/'\nca_file='absent/ca.der'\ncredential_file='~/absent/muse'\n"
     );
     let path = directory.write(&input).unwrap();
     let expected = BridgeConfig::from_toml_str(&input).unwrap();

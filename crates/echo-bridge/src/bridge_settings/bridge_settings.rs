@@ -71,6 +71,8 @@ pub struct SettingsStore {
     home: PathBuf,
     uncertain: bool,
     restart_allowed: bool,
+    #[cfg(test)]
+    fail_next_directory_sync: bool,
 }
 
 impl SettingsStore {
@@ -92,6 +94,8 @@ impl SettingsStore {
             home,
             uncertain: false,
             restart_allowed: true,
+            #[cfg(test)]
+            fail_next_directory_sync: false,
         })
     }
 
@@ -107,6 +111,16 @@ impl SettingsStore {
     /// # Errors
     /// Returns echo-config's validation error or a fixed persistence diagnostic.
     pub fn save(&mut self, patch: &SettingsOverlay) -> Result<bool, SettingsError> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_directory_sync) {
+            return self.save_with(patch, |stage| {
+                if stage == settings_atomic::Stage::DirectorySync {
+                    Err(std::io::Error::other("injected sync failure"))
+                } else {
+                    Ok(())
+                }
+            });
+        }
         self.save_with(patch, |_| Ok(()))
     }
 

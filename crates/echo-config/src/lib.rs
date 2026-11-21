@@ -193,7 +193,8 @@ pub struct AgentConfig {
 pub struct McpConfig {
     pub server: Vec<McpServer>,
     pub state_dir: Option<PathBuf>,
-    pub client_id: String,
+    pub client_id: Option<String>,
+    pub client_name: String,
     pub scopes: Vec<String>,
     pub operator_listen: SocketAddr,
 }
@@ -214,7 +215,8 @@ impl Default for McpConfig {
         Self {
             server: Vec::new(),
             state_dir: None,
-            client_id: "port1/systems/zero/oauth-clients/command-line-interface".into(),
+            client_id: None,
+            client_name: "Port OS Echo".into(),
             scopes: PORTOS_MCP_SCOPES.map(String::from).into(),
             operator_listen: (std::net::Ipv4Addr::LOCALHOST, 16902).into(),
         }

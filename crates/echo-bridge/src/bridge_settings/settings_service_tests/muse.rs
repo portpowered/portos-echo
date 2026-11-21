@@ -1,32 +1,45 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
-use std::{io::Write, os::unix::fs::PermissionsExt, process::Stdio};
+use std::{io::Write, net::Ipv4Addr, os::unix::fs::PermissionsExt, process::Stdio};
 use tokio::{io::AsyncBufReadExt, process::Command};
 
 const PEER: &str = r"
-import http.server, json, ssl, sys
+import http.server, json, select, ssl, sys
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args): pass
+    def do_POST(self):
+        print('unexpected POST', flush=True)
+        self.send_error(405)
     def do_GET(self):
         assert self.path == '/v1/tasks'
         assert self.headers.get('Content-Length', '0') == '0'
         assert self.headers.get('DPoP') is None
         accepted = self.headers.get('Authorization') == 'Bearer ' + 'x' * 32
-        status, code = (405, 'method_not_allowed') if accepted else (401, 'unauthorized')
+        if accepted:
+            self.server.authenticated += 1
+            status = 405
+            code = 'method_not_allowed' if self.server.authenticated == 1 else 'unexpected'
+        else:
+            status, code = 401, 'unauthorized'
         body = json.dumps({'error': code, 'fixture': 'private-remote-detail'}).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-        print(status, flush=True)
+        print(status, code, flush=True)
 server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+server.authenticated = 0
 tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 tls.load_cert_chain('cert.pem', 'key.pem')
 server.socket = tls.wrap_socket(server.socket, server_side=True)
 print(server.server_address[1], flush=True)
-for _ in range(2):
-    server.handle_request()
+while True:
+    ready, _, _ = select.select([server, sys.stdin], [], [])
+    if server in ready:
+        server.handle_request()
+    if sys.stdin in ready:
+        break
 ";
 
 #[tokio::test]
@@ -40,9 +53,12 @@ async fn t3_settings_muse_save_probe_rotate_and_reload_private_connection() {
     let owner = owner.with_trace(crate::bridge_trace::Trace::open(&trace, "chatgpt").unwrap());
     let journey = async {
         save_and_test(&fixture, &origin, &der).await;
-        assert_eq!(receipts.next_line().await.unwrap().as_deref(), Some("405"));
-        assert_eq!(receipts.next_line().await.unwrap().as_deref(), Some("401"));
+        drop(peer.stdin.take());
         assert!(peer.wait().await.unwrap().success());
+        for expected in ["405 method_not_allowed", "405 unexpected", "401 unauthorized"] {
+            assert_eq!(receipts.next_line().await.unwrap().as_deref(), Some(expected));
+        }
+        assert_eq!(receipts.next_line().await.unwrap(), None);
         probe(&fixture, json!({"version":2,"reachable":false,"reason":"unavailable"})).await;
         let effective = BridgeConfig::load_effective(&base_path).unwrap();
         assert!(effective.warning.is_none());
@@ -72,9 +88,53 @@ async fn t3_settings_muse_save_probe_rotate_and_reload_private_connection() {
     fixture.server.shutdown().await.unwrap();
     writeln!(
         std::io::stdout().lock(),
-        "Muse probe GET receipts=405,401; down=unavailable; mode=0600; durable reload; base and sibling retained"
+        "Muse probe GET receipts=405 method_not_allowed,405 unexpected,401 unauthorized; down=unavailable; mode=0600"
     )
     .unwrap();
+}
+
+#[tokio::test]
+async fn t3_settings_muse_uncertain_clear_refuses_probe_without_contacting_peer() {
+    let (mut fixture, owner, _) = Fixture::open("").await;
+    let (origin, mut peer, mut receipts, der) = peer(fixture.root.path()).await;
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let save = async {
+        save_connection(&fixture, &origin, &der).await;
+        stop.send(()).unwrap();
+    };
+    let (((), mut completion), ()) = tokio::join!(
+        owner.scope(async { stopped.await.unwrap() }, || LinkStatusV1::Unconfigured),
+        save
+    );
+    completion.host.fail_next_overlay_directory_sync();
+    let owner = fixture.remount(completion.host).await;
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let clear_and_probe = async {
+        let cleared = patch(&fixture, json!({"clear":true})).await;
+        assert_eq!(cleared.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            cleared.json::<Value>().await.unwrap(),
+            json!({"version":2,"message":"File replaced but durability is uncertain; reload before saving again"})
+        );
+        let effective = BridgeConfig::load_effective(&fixture.root.path().join("bridge.toml")).unwrap();
+        assert!(effective.warning.is_none());
+        assert!(effective.config.muse.is_none());
+        assert_eq!(
+            snapshot(&fixture, true).await["muse"],
+            json!({"configured":true,"url":origin,"reachability":"unchecked"})
+        );
+        probe(&fixture, json!({"version":2,"reachable":false,"reason":"unavailable"})).await;
+        stop.send(()).unwrap();
+    };
+    let (((), completion), ()) = tokio::join!(
+        owner.scope(async { stopped.await.unwrap() }, || LinkStatusV1::Unconfigured),
+        clear_and_probe
+    );
+    assert!(!completion.restart_requested);
+    drop(peer.stdin.take());
+    assert!(peer.wait().await.unwrap().success());
+    assert_eq!(receipts.next_line().await.unwrap(), None);
+    fixture.server.shutdown().await.unwrap();
 }
 
 async fn save_and_test(fixture: &Fixture, origin: &str, der: &[u8]) {
@@ -116,6 +176,17 @@ async fn save_connection(fixture: &Fixture, origin: &str, der: &[u8]) -> Value {
 async fn rotate_credential(fixture: &Fixture, unchecked: &Value) {
     probe(fixture, json!({"version":2,"reachable":true})).await;
     assert_eq!(snapshot(fixture, true).await["muse"]["reachability"], "reachable");
+    let before = fixture.overlay();
+    probe(
+        fixture,
+        json!({"version":2,"reachable":false,"reason":"unexpected_response"}),
+    )
+    .await;
+    assert_eq!(fixture.overlay(), before);
+    assert_eq!(
+        snapshot(fixture, true).await["muse"],
+        json!({"configured":true,"url":unchecked["url"],"reachability":"unreachable","reason":"unexpected_response"})
+    );
     let rotated = patch(fixture, json!({"credential":"y".repeat(32)})).await;
     assert_eq!(rotated.status(), StatusCode::OK);
     assert_eq!(&snapshot(fixture, true).await["muse"], unchecked);
@@ -260,11 +331,13 @@ async fn peer(
     let mut child = Command::new("python3")
         .args(["-u", "-c", PEER])
         .current_dir(root)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .unwrap();
     let mut output = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
     let port: u16 = output.next_line().await.unwrap().unwrap().parse().unwrap();
-    (format!("https://127.0.0.1:{port}"), child, output, der.stdout)
+    let address = std::net::SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    (format!("https://{address}"), child, output, der.stdout)
 }

@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*_v{1,2}.json by tools/screen-schema.mjs.
-// Schema SHA-256: fb61a0c7cd9ee05acf6583f56f96520a01c9896e7cc693f524fbc4a47bd78b44
+// Schema SHA-256: 693833494730a9f1e6371973d5cbedd066ff3a58b82221140385f2ff97f4eaff
 export type AgentValuesV1 = {
     daily_request_cap: DailyCapV1;
     max_tool_calls: number;
@@ -105,6 +105,7 @@ export type PortosStatusV2 = {
     scope_choices: Array<PortosScopeV2>;
     tool_choices: Array<PortosToolV2>;
     challenge?: PortosChallengeV2;
+    relink_advised?: boolean;
     server?: PortosServerV2;
 };
 export type PortosToolV2 =

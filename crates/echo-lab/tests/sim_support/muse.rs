@@ -40,14 +40,18 @@ fn check_cases(session: &Session, report: &Value, seeded: bool) -> Result<(), Bo
     assert_eq!(cases.len(), if seeded { 1 } else { 2 });
     for (index, case) in cases.iter().enumerate() {
         check(case, index == 1);
-        let name = format!("m7-{}-audible.json", if index == 1 { "no_report" } else { "success" });
-        assert!(
-            report["evidence"]
-                .as_array()
-                .is_some_and(|evidence| evidence.contains(&json!(name)))
-        );
-        let audio: Value = serde_json::from_slice(&std::fs::read(session.0.join("artifacts").join(name))?)?;
-        check_audio(&audio);
+        let read = |kind| {
+            let name = format!("m7-{}-{kind}.json", case["case"].as_str().unwrap());
+            assert!(
+                report["evidence"]
+                    .as_array()
+                    .is_some_and(|evidence| evidence.contains(&json!(name)))
+            );
+            serde_json::from_slice(&std::fs::read(session.0.join("artifacts").join(name))?)
+                .map_err(std::io::Error::from)
+        };
+        check_audio(&read("audible")?);
+        check_native(&read("native")?, case);
     }
     Ok(())
 }
@@ -58,18 +62,26 @@ fn check(case: &Value, negative: bool) {
         "delegation_count",
         "muse_submit_count",
         "terminal_count",
-        "native_tool_call_count",
-        "native_append_count",
+        "commentary_count",
         "spoken_reply_count",
         "gadget_submit_count",
     ] {
         assert_eq!(case[field], 1, "{field}");
     }
-    for field in ["client_tool_call_count", "legacy_dispatch_count"] {
+    for field in ["client_tool_call_count", "responses_request_count"] {
         assert_eq!(case[field], 0, "{field}");
     }
-    assert_eq!(case["responses_request_count"], 2);
     check_terminal(case, negative);
+}
+
+fn check_native(native: &Value, case: &Value) {
+    assert_eq!(native["appends"], json!([case["delegation_id"]]));
+    assert_eq!(native["tool_output"], case["transcript"]);
+    let catalog = json!(["extend_session", "end_session", "ask_muse"]);
+    assert_eq!(
+        native["models"],
+        json!([{"outputs":0,"tools":catalog},{"outputs":1,"tools":catalog}])
+    );
 }
 
 fn check_terminal(case: &Value, negative: bool) {

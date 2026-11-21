@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 19
+last modified: 2026, november, 20
 status: active; accepted bridge configuration reference
 ---
 
@@ -175,7 +175,15 @@ Use stop/mute for operator control and preserve the hardware mute latch's author
 
 Start with narrow read scopes, a small explicit `allow_tools`, local home groups disabled unless needed,
 the default caps, loopback listeners and private credentials. The example includes `control`; remove it for
-a read-only installation. Use a dedicated Echo OAuth client before broader use as the decision log requires.
+a read-only installation.
+
+When you link Port OS with `mcp.client_id` omitted, the bridge registers its own public client. The approval page
+uses the configured `mcp.client_name`, which defaults to `Port OS Echo`. Set `mcp.client_id` to use an existing
+registered public client.
+
+Settings > Accounts > Port OS advises relinking when the current grant uses the built-in CLI client. If an older
+installation set `mcp.client_id` to that client, remove the line and restart the bridge before relinking. The
+existing grant keeps its original client until you approve a replacement link or remove the link.
 
 ## Configuration reference
 
@@ -222,7 +230,8 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `muse.enabled` | Settings overlay only. A lone `false` masks the base Muse connection and immediately withdraws the tool. | withdraw immediately / yes |
 | `mcp` | Required server/grant table. | restart / no |
 | `mcp.state_dir` | Optional nonempty path; runtime Port OS requires private state outside a repository, no parent traversal. | restart / no |
-| `mcp.client_id` | Default `port1/systems/zero/oauth-clients/command-line-interface` (public development client); nonblank text without controls. Use your registered client for broader deployment. | restart / no |
+| `mcp.client_id` | Optional override for an already registered public client. Omit it to register this Echo when you link Port OS. Accepts nonblank text without control characters. | restart / no |
+| `mcp.client_name` | Display name for automatic registration. Defaults to `Port OS Echo`. Accepts nonblank text without control characters. | restart / no |
 | `mcp.scopes` | Defaults to all seven supported Port OS scopes; nonempty array of nonempty names without whitespace/control characters. Grant consent can further constrain access. | withdraw immediately, other changes at boundary / yes |
 | `mcp.operator_listen` | Socket address on literal IPv4 loopback, default 127.0.0.1:16902; local grant-owner commands. | restart / no |
 | `mcp.server` | Optional array of tables, default empty. | restart / no |
@@ -274,8 +283,11 @@ Defaults are independent constants: changing issuer alone does not derive new de
 The public client defaults are defined in
 [config_auth.rs](../crates/echo-config/src/config_auth.rs) and [lib.rs](../crates/echo-config/src/lib.rs).
 
-Pinned realtime voices: `default`, `alloy`, `arbor`, `ash`, `ballad`, `breeze`, `cedar`, `coral`, `cove`,
-`echo`, `ember`, `juniper`, `maple`, `marin`, `sage`, `shimmer`, `sol`, `spruce`, `vale`, `verse`.
+Pinned realtime voices: `default`, `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`, `sol`, `spruce`, `vale`.
+The list is bound to the realtime version the bridge sends (`v3`) at the Codex pin; the pinned app server refuses
+any other voice when the call starts. A voice that earlier builds offered (`alloy`, `ash`, `ballad`, `cedar`, `coral`,
+`echo`, `marin`, `sage`, `shimmer`, `verse`) still loads from an existing `bridge.toml` or `settings.toml`, as
+`default` with one settings warning; Settings no longer offers or saves it.
 An unknown voice is rejected offline. `live.voice` is a legacy fallback; use `codex.voice` for the screen editor.
 
 ## Checking changes

@@ -19,9 +19,11 @@ mod tests;
 
 #[derive(Clone)]
 pub struct Request {
+    pub method: String,
     pub path: String,
     pub headers: BTreeMap<String, String>,
     pub form: BTreeMap<String, String>,
+    pub json: Option<Value>,
     pub time: u64,
 }
 
@@ -175,11 +177,9 @@ async fn read(stream: &mut TcpStream, start: Instant) -> std::io::Result<Request
     };
     let text = String::from_utf8(bytes).map_err(|_| invalid())?;
     let mut lines = text.split("\r\n");
-    let path = lines
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .ok_or_else(invalid)?
-        .into();
+    let mut line = lines.next().ok_or_else(invalid)?.split_whitespace();
+    let method = line.next().ok_or_else(invalid)?.into();
+    let path = line.next().ok_or_else(invalid)?.into();
     let headers: BTreeMap<String, String> = lines
         .filter_map(|line| line.split_once(':'))
         .map(|(k, v)| (k.to_lowercase(), v.trim().into()))
@@ -196,9 +196,11 @@ async fn read(stream: &mut TcpStream, start: Instant) -> std::io::Result<Request
         return Err(invalid());
     }
     Ok(Request {
+        method,
         path,
         headers,
         form: url::form_urlencoded::parse(&body).into_owned().collect(),
+        json: serde_json::from_slice(&body).ok(),
         time: start.elapsed().as_secs(),
     })
 }

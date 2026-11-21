@@ -3,6 +3,7 @@ use super::openai_account::Account;
 use super::{SettingsError, SettingsHost, portos_permissions::PortosPermissions, settings_restart::Restart};
 use crate::bridge_mcp::Grant;
 use echo_config::EffectiveConfig;
+use echo_mcp_auth::GrantStatus;
 use echo_screen_contract::{
     settings_v1::{LinkStatusV1, PromptTextsV1, SettingsErrorV1, SettingsVersionV1},
     settings_v2::{PortosChallengeV2, PortosOperationStateV2, SettingsErrorV2, SettingsVersionV2},
@@ -31,7 +32,7 @@ pub struct SettingsCompletion {
 
 #[derive(Default)]
 struct GrantView {
-    scopes: Option<Vec<String>>,
+    status: GrantStatus,
     operation: Option<(PortosOperationStateV2, Option<PortosChallengeV2>)>,
 }
 
@@ -41,8 +42,8 @@ impl GrantView {
             // Sample the receipt before the grant. A terminal receipt implies
             // the subsequent read can observe the committed grant.
             let operation = Some(owner.screen_operation());
-            let scopes = owner.granted_scopes().await;
-            return Self { scopes, operation };
+            let status = owner.grant_status().await;
+            return Self { status, operation };
         }
         Self::default()
     }
@@ -217,7 +218,7 @@ fn commit(
         SettingsOperation::SaveV2(patch) if super::settings_host::settings_v2::legacy_only(&patch.settings)
     );
     let legacy_v1 = legacy_v1_cap_only(&operation);
-    let mut reply = host.transaction_with_grant(operation, link, view.scopes, owner);
+    let mut reply = host.transaction_with_grant(operation, link, view.status, owner);
     if legacy_v2 {
         return reply;
     }

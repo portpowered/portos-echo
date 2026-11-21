@@ -18,7 +18,7 @@ import {
 } from "./harness.mjs";
 import { sheet, matchReference } from "./sheet.mjs";
 import { glideRuns } from "./glide.mjs";
-import { settingsBody } from "./settings.mjs";
+import { settingsBody, settingsLook, token } from "./settings.mjs";
 
 const generated = process.env.SCREEN_PACK_DEFAULT_FIXTURE;
 assert.ok(generated, "suite owner must prepare default@0.3.0");
@@ -223,6 +223,47 @@ test("render: Settings with linked, unlinked and link-required accounts", async 
         renders.push(await shoot(page, `settings-${status}`));
     }
     await matchReference("settings", await sheet(renders));
+});
+
+test("render: Settings wears the Port OS tokens in Manrope and fits 960x600 and 1280x800", async (t) => {
+    const page = await openScreen(t, {
+        pack: { id, dir, manifest },
+        settings: settingsBody("linked"),
+    });
+    await page.getByRole("button", { name: "Settings", exact: true }).tap();
+    await settingsLayout(page);
+    await page
+        .getByText("OpenAI", { exact: true })
+        .and(page.locator("summary"))
+        .tap();
+    for (const [width, height] of [
+        [960, 600],
+        [1280, 800],
+    ]) {
+        await page.setViewportSize({ width, height });
+        const look = await settingsLook(page);
+        console.log(
+            `RENDER Settings tokens ${width}x${height} ${JSON.stringify(look)}`,
+        );
+        assert.deepEqual(look.families, ["Manrope"]);
+        assert.deepEqual(look.manrope, ["200 800 loaded"]);
+        assert.equal(look.primary, token("PRIMARY"));
+        assert.equal(look.primary, "rgb(255, 218, 54)");
+        assert.equal(look.primaryText, token("PRIMARY_FOREGROUND"));
+        assert.equal(look.background, token("BACKGROUND"));
+        assert.equal(look.foreground, token("FOREGROUND"));
+        assert.equal(look.inputBorder, token("INPUT"));
+        assert.equal(look.inputRadius, "6px");
+        assert.equal(look.saveRadius, "999px");
+        assert.deepEqual(look.outside, []);
+        // Settings keeps its 24 px side margins and 12 px top edge, and the
+        // fields bleed to the screen edges; nothing scrolls the page itself.
+        assert.deepEqual(look.panel.slice(0, 3), [24, 12, width - 24]);
+        assert.ok(look.panel[3] <= height, JSON.stringify(look.panel));
+        assert.deepEqual([look.fields[0], look.fields[2]], [0, width]);
+        assert.ok(look.fields[3] <= height, JSON.stringify(look.fields));
+        assert.deepEqual(look.page, [width, height]);
+    }
 });
 
 test("render: keyboard Settings keeps status above Accounts and returns to the live Link Code", async (t) => {

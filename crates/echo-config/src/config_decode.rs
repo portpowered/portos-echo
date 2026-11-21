@@ -224,7 +224,8 @@ fn mcp(value: Value<'_>) -> Result<McpConfig, ConfigError> {
     let result = McpConfig {
         server,
         state_dir: f.optional("state_dir")?,
-        client_id: f.optional("client_id")?.unwrap_or(defaults.client_id),
+        client_id: f.optional("client_id")?,
+        client_name: f.optional("client_name")?.unwrap_or(defaults.client_name),
         scopes: f.optional("scopes")?.unwrap_or(defaults.scopes),
         operator_listen: listen
             .parse()

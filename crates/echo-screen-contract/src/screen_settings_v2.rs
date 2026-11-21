@@ -368,6 +368,8 @@ pub struct PortosStatusV2 {
     pub link_status: LinkStatusV2,
     pub operation_state: PortosOperationStateV2,
     pub link_waiting_for_restart: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub relink_advised: bool,
     pub scope_choices: Vec<PortosScopeV2>,
     pub tool_choices: Vec<PortosToolV2>,
     #[schemars(with = "PortosServerV2")]

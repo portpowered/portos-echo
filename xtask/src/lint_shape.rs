@@ -4,8 +4,9 @@ use std::process::Command;
 #[path = "shape_json.rs"]
 mod shape_json;
 
-// docs/program/decisions.md: coordinator lint-domain decision, 2026-11-15.
-const VENDORED_ROOTS: [&str; 1] = ["factory/"];
+// docs/program/decisions.md: coordinator lint-domain decision, 2026-11-15; the generated Port OS tokens crate,
+// vendored byte for byte and checked by scripts/sync-portos-tokens.sh --check, 2026-11-20.
+const VENDORED_ROOTS: [&str; 2] = ["factory/", "third_party/portos-tokens/"];
 type Members = BTreeMap<String, String>;
 
 pub fn header() -> String {
@@ -316,10 +317,18 @@ mod tests {
 
     #[test]
     fn vendored_boundary_is_visible_and_exact() {
-        assert_eq!(header(), "lint-shape: vendored roots excluded: factory/");
-        let paths = tracked("factory/example.py\0scripts/example.py\0factory-extra/example.py\0").unwrap();
+        assert_eq!(
+            header(),
+            "lint-shape: vendored roots excluded: factory/, third_party/portos-tokens/"
+        );
+        let paths = tracked(
+            "factory/example.py\0scripts/example.py\0factory-extra/example.py\0\
+             third_party/portos-tokens/src/lib.rs\0third_party/codex/example.py\0",
+        )
+        .unwrap();
         let got = check_files(&paths, |p| {
             assert_ne!(p, "factory/example.py");
+            assert_ne!(p, "third_party/portos-tokens/src/lib.rs");
             Ok(b"\n".repeat(501))
         })
         .unwrap();
@@ -327,10 +336,14 @@ mod tests {
             got,
             [
                 "factory-extra/example.py: file-lines: 501 lines exceeds 500",
-                "scripts/example.py: file-lines: 501 lines exceeds 500"
+                "scripts/example.py: file-lines: 501 lines exceeds 500",
+                "third_party/codex/example.py: file-lines: 501 lines exceeds 500"
             ]
         );
-        let vendor = members(&[("vendor", "factory/vendor")]);
+        let vendor = members(&[
+            ("vendor", "factory/vendor"),
+            ("portos-tokens", "third_party/portos-tokens"),
+        ]);
         assert_eq!(check_members(&vendor, &Members::new()), Vec::<String>::new());
         assert_eq!(check_members(&Members::new(), &vendor), Vec::<String>::new());
     }

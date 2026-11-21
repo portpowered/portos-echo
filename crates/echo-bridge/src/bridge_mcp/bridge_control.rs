@@ -183,6 +183,8 @@ pub(crate) fn pairing(path: &Path) -> Result<Secret<String>, Error> {
 fn error(category: &str) -> Result<AuthError, Error> {
     match category {
         "discovery" => Ok(AuthError::Discovery),
+        "registration_unavailable" => Ok(AuthError::RegistrationUnavailable),
+        "registration_refused" => Ok(AuthError::RegistrationRefused),
         "transport" => Ok(AuthError::Transport),
         "protocol" => Ok(AuthError::Protocol),
         "access_denied" => Ok(AuthError::AccessDenied),
@@ -196,6 +198,7 @@ fn error(category: &str) -> Result<AuthError, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod registration;
 
     struct Probe(tokio::sync::mpsc::UnboundedSender<Vec<u8>>, Vec<u8>);
 
@@ -231,7 +234,7 @@ mod tests {
             ca_pem: None,
             options: echo_mcp_auth::AuthOptions {
                 resource_url: format!("{}/mcp", mock.base),
-                client_id: "synthetic-cli".into(),
+                client_id: echo_mcp_auth::LinkClient::Explicit("synthetic-cli".into()),
                 scopes: vec!["endpoint:read".into()],
                 storage_dir: root.join("grant"),
                 request_timeout: Duration::from_secs(5),

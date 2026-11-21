@@ -266,6 +266,9 @@
         "operation_state": {
           "$ref": "#/$defs/PortosOperationStateV2"
         },
+        "relink_advised": {
+          "type": "boolean"
+        },
         "scope_choices": {
           "type": "array",
           "items": {

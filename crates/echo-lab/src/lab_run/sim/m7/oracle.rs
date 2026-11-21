@@ -42,17 +42,19 @@ pub fn observe(world: &World, negative: bool) -> Result<Value, String> {
     let report = report(&world.muse.reports, task, negative)?;
     let text = dialogue(world, delegation, negative)?;
     playback(world, run)?;
+    // The old report counts the spoken commentary handoff and direct client
+    // Responses requests. The pinned Codex turn's receipts live in the evidence.
+    let commentary_count = world.dialogue["appends"].as_array().map_or(0, Vec::len);
     Ok(
         json!({"event":"m7.case","case":if negative {"no_report"} else {"success"},
         "run_id":run,"delegation_id":delegation,"task_id":task,"gadget_session_id":session,
         "report_task_id":report,"transcript":text,"delegation_count":1,"muse_submit_count":1,
         "progress_count":progress,"terminal_count":1,"completed_count":usize::from(!negative),
-        "failed_count":usize::from(negative),"spoken_reply_count":1,"native_tool_call_count":1,
-        "native_append_count":1,"legacy_dispatch_count":0,"model_tool_output":world.dialogue["tool_output"],
+        "failed_count":usize::from(negative),"spoken_reply_count":1,"commentary_count":commentary_count,
         "gadget_submit_count":world.muse.calls.len(),"report_accepted_count":world.muse.reports.len(),
         "report_attempt_count":world.muse.reports.len(),"reply_pcm_bytes":world.playback["pcm_bytes"],
         "audibility":world.audibility,"ui_states":world.ui_states,
-        "client_tool_call_count":world.tool_calls,"responses_request_count":2,
+        "client_tool_call_count":world.tool_calls,"responses_request_count":world.dialogue["external"],
         "retryable":if negative {json!(false)} else {Value::Null},"deadline_seconds":deadline}),
     )
 }
@@ -187,7 +189,7 @@ fn gadget(world: &World, task: &str, delegation: &str) -> Result<(String, u64), 
     )?;
     let deadline = record["task"]["deadline_seconds"]
         .as_u64()
-        .filter(|seconds| (1..=10).contains(seconds))
+        .filter(|seconds| (5..=10).contains(seconds))
         .ok_or("m7: invalid admitted deadline")?;
     equal(
         "daemon absolute deadline",

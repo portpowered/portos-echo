@@ -18,6 +18,7 @@ const types = {
     ".png": "image/png",
     ".webm": "video/webm",
     ".mp4": "video/mp4",
+    ".woff2": "font/woff2",
 };
 export const browser = await chromium.launch({
     headless: true,
@@ -75,7 +76,14 @@ async function serve(route, { pack, settings }) {
     const json = (value) => route.fulfill({ json: value });
     if (path === "/")
         return route.fulfill({ body: index, contentType: "text/html" });
-    if (path === "/screen.css" || path === "/screen.js")
+    if (
+        [
+            "/tokens.css",
+            "/screen.css",
+            "/screen.js",
+            "/fonts/manrope-latin-wght-normal.woff2",
+        ].includes(path)
+    )
         return route.fulfill({
             body: await readFile(new URL(path.slice(1), dist)),
             contentType: types[extname(path)],
@@ -126,6 +134,8 @@ export async function openScreen(t, { pack, settings, pauseClock } = {}) {
     await page.goto(
         `${origin}/?events=%2Fevents%3Ftoken%3Drender&actions=%2Factions%3Ftoken%3Drender`,
     );
+    // Settings is photographed in Manrope, never mid-swap.
+    await page.evaluate(() => document.fonts.load("16px Manrope"));
     await page.evaluate(() => document.fonts.ready);
     return page;
 }

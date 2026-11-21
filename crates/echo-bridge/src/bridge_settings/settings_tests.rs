@@ -37,16 +37,16 @@ fn screen_settings_store_sparse_saves_preserve_siblings_base_and_effective_value
         fs::read_to_string(store.home.join("settings.toml")).unwrap(),
         "[agent]\ndaily_request_cap = 4\n"
     );
-    assert!(store.save(&patch("[codex]\nvoice='marin'")).unwrap());
+    assert!(store.save(&patch("[codex]\nvoice='maple'")).unwrap());
     let persisted = fs::read_to_string(store.home.join("settings.toml")).unwrap();
     assert_eq!(
         persisted,
-        "[agent]\ndaily_request_cap = 4\n\n[codex]\nvoice = \"marin\"\n"
+        "[agent]\ndaily_request_cap = 4\n\n[codex]\nvoice = \"maple\"\n"
     );
     let effective = patch(&persisted).apply_to(&store.base).unwrap();
     assert_eq!(effective, *store.effective());
     assert_eq!(effective.agent.daily_request_cap, 4);
-    assert_eq!(effective.codex_voice(), Some("marin"));
+    assert_eq!(effective.codex_voice(), Some("maple"));
     assert_eq!(effective.voice.session_listen_seconds, 15);
     assert_eq!(fs::read_to_string(root.path().join("bridge.toml")).unwrap(), BASE);
     assert_eq!(files(&store.home), ["settings.toml"]);
@@ -274,7 +274,7 @@ fn screen_settings_store_shared_owner_serializes_sparse_concurrent_saves() {
     let (_root, store) = setup();
     let shared = std::sync::Mutex::new(store);
     std::thread::scope(|scope| {
-        for input in ["[agent]\ndaily_request_cap=4", "[codex]\nvoice='marin'"] {
+        for input in ["[agent]\ndaily_request_cap=4", "[codex]\nvoice='maple'"] {
             let shared = &shared;
             scope.spawn(move || assert!(shared.lock().unwrap().save(&patch(input)).unwrap()));
         }
@@ -283,7 +283,7 @@ fn screen_settings_store_shared_owner_serializes_sparse_concurrent_saves() {
     let persisted = fs::read_to_string(store.home.join("settings.toml")).unwrap();
     assert_eq!(patch(&persisted).apply_to(&store.base).unwrap(), *store.effective());
     assert_eq!(store.effective().agent.daily_request_cap, 4);
-    assert_eq!(store.effective().codex_voice(), Some("marin"));
+    assert_eq!(store.effective().codex_voice(), Some("maple"));
     assert_eq!(files(&store.home), ["settings.toml"]);
 }
 

@@ -13,6 +13,7 @@ import { archivePeer } from "./pack-peer.mjs";
 export const token = "synthetic-pack-pair";
 export const activeVideo =
     ".pack-stage video:not([hidden]):not([data-leaving])";
+const packStyles = 'link[rel="stylesheet"][href*="/screen-packs/v1/"]';
 
 // Use the prebuilt production bridge/settings fixture and the existing TLS peer.
 // Each journey owns its local home, listener, browser context and shutdown.
@@ -90,6 +91,22 @@ export async function open(
     });
     await context.addInitScript(() => {
         window.packRevision = 0;
+        // A pack's stylesheet arrives after its layout is mounted, and the
+        // page repositions its slots in that link's load handler. Capture runs
+        // before the handler in the same dispatch, so a counted link means
+        // the slots are already in their styled place.
+        window.packStyles = new WeakMap();
+        document.addEventListener(
+            "load",
+            ({ target }) => {
+                if (target instanceof HTMLLinkElement)
+                    window.packStyles.set(
+                        target,
+                        (window.packStyles.get(target) ?? 0) + 1,
+                    );
+            },
+            true,
+        );
         const NativeEventSource = window.EventSource;
         window.EventSource = class extends NativeEventSource {
             constructor(...args) {
@@ -121,18 +138,31 @@ export async function open(
     return { page, context, home, peer, sha256, update, api, next, outside };
 }
 
+// The named clip of the named pack is decoding and the pack's own stylesheet
+// has been applied, so slot geometry read after this is the styled layout.
 export async function playing(page, name, identity) {
-    await page.waitForFunction(
-        ({ selector, name, identity }) => {
+    const loads = await page.waitForFunction(
+        ({ selector, name, identity, styles }) => {
             const video = document.querySelector(selector);
+            const loads = [...document.querySelectorAll(styles)].map(
+                (link) => window.packStyles.get(link) ?? 0,
+            );
             return (
                 video &&
                 new URL(video.src).pathname.endsWith(`/${identity}/${name}`) &&
                 video.readyState >= 2 &&
-                video.getVideoPlaybackQuality().totalVideoFrames > 0
+                video.getVideoPlaybackQuality().totalVideoFrames > 0 &&
+                loads.every((count) => count > 0) &&
+                loads
             );
         },
-        { selector: activeVideo, name, identity },
+        { selector: activeVideo, name, identity, styles: packStyles },
+    );
+    // A second load means the page detached the link, which leaves the pack
+    // unstyled until the sheet is fetched again.
+    assert.ok(
+        (await loads.jsonValue()).every((count) => count === 1),
+        "a mounted pack loads its stylesheet once",
     );
     return page
         .locator(activeVideo)
