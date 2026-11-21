@@ -1,14 +1,18 @@
 use crate::{
-    AuthError, AuthOptions, TokenFuture, TokenProvider,
+    AuthError, AuthOptions, LinkClient, TokenFuture, TokenProvider,
     discovery::{self, Metadata},
-    store::{Record, Store},
+    proof::PrivateJwk,
+    store::{Grant, Record, Registration, Store},
     wire::{self, Pair, Reply},
 };
 use echo_contracts::secret::Secret;
 use reqwest::{Client, redirect::Policy};
 use serde::Deserialize;
 use std::{
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use tokio::{sync::Mutex, time::Instant};
@@ -17,17 +21,31 @@ use tokio::{sync::Mutex, time::Instant};
 #[path = "auth_tests/mod.rs"]
 mod tests;
 
-/// Display only the public user code, verification URI and expiry to the user.
 #[derive(Deserialize)]
+struct DeviceChallenge {
+    device_code: Secret<String>,
+    user_code: String,
+    verification_uri: String,
+    expires_in: u64,
+    #[serde(default = "default_interval")]
+    interval: u64,
+}
+
+/// Display only the public user code, verification URI and expiry to the user.
 pub struct LinkInstructions {
     device_code: Secret<String>,
     pub user_code: String,
     pub verification_uri: String,
     pub expires_in: u64,
-    #[serde(default = "default_interval")]
     pub interval: u64,
-    #[serde(skip, default = "Instant::now")]
     created: Instant,
+    identity: LinkIdentity,
+    key: Arc<Secret<PrivateJwk>>,
+}
+
+struct LinkIdentity {
+    client_id: String,
+    registration: Option<Registration>,
 }
 
 fn default_interval() -> u64 {
@@ -39,8 +57,15 @@ struct State {
     uncertain: bool,
 }
 
+/// Public presentation facts from one usable committed grant.
+#[derive(Default)]
+pub struct GrantStatus {
+    pub scopes: Option<Vec<String>>,
+    pub uses_legacy_cli: bool,
+}
+
 pub struct AuthClient {
-    options: AuthOptions,
+    options: AuthOptions<LinkClient>,
     metadata: Metadata,
     http: Client,
     store: Store,
@@ -76,6 +101,17 @@ impl AuthClient {
         epoch: Option<u64>,
         ca_pem: Option<&[u8]>,
     ) -> Result<Self, AuthError> {
+        Self::open_configured(options.explicit(), epoch, ca_pem).await
+    }
+
+    /// Discover a configured client or prepare to register on explicit link.
+    /// # Errors
+    /// Returns safe discovery, transport, binding or storage categories.
+    pub async fn open_configured(
+        options: AuthOptions<LinkClient>,
+        epoch: Option<u64>,
+        ca_pem: Option<&[u8]>,
+    ) -> Result<Self, AuthError> {
         options.validate()?;
         let mut builder = Client::builder()
             .redirect(Policy::none())
@@ -92,7 +128,7 @@ impl AuthClient {
             }
         }
         let http = builder.build().map_err(|_| AuthError::Transport)?;
-        let metadata = discovery::discover(&http, &options).await?;
+        let metadata = discovery::discover(&http, &options.resource_url).await?;
         let (store, record) = Store::open(&options, &metadata.issuer)?;
         Ok(Self {
             options,
@@ -123,19 +159,27 @@ impl AuthClient {
 
     /// Copy only the scopes of the locally committed usable grant.
     pub async fn granted_scopes(&self) -> Option<Vec<String>> {
+        self.grant_status().await.scopes
+    }
+
+    /// Read presentation facts without acquiring a token or changing the grant.
+    pub async fn grant_status(&self) -> GrantStatus {
         let state = self.state.lock().await;
-        if !self.has_grant() {
-            return None;
+        let Some(grant) = state.record.grant.as_ref().filter(|_| self.has_grant()) else {
+            return GrantStatus::default();
+        };
+        GrantStatus {
+            scopes: Some(
+                grant
+                    .expose()
+                    .scope
+                    .split_ascii_whitespace()
+                    .map(str::to_owned)
+                    .collect(),
+            ),
+            uses_legacy_cli: state.record.client_id.as_deref()
+                == Some("port1/systems/zero/oauth-clients/command-line-interface"),
         }
-        let grant = state.record.grant.as_ref()?;
-        Some(
-            grant
-                .expose()
-                .scope
-                .split_ascii_whitespace()
-                .map(str::to_owned)
-                .collect(),
-        )
     }
 
     fn now(&self) -> u64 {
@@ -147,16 +191,17 @@ impl AuthClient {
     pub async fn begin_link(&self) -> Result<LinkInstructions, AuthError> {
         let state = self.state.lock().await;
         let scope = self.options.scopes.join(" ");
+        let identity = self.link_identity(&state.record, &scope).await?;
         let form = [
-            ("client_id", self.options.client_id.as_str()),
+            ("client_id", identity.client_id.as_str()),
             ("scope", &scope),
             ("resource", self.options.resource_url.as_str()),
         ];
-        let Reply::Value(mut link) = wire::post::<LinkInstructions>(
+        let Reply::Value(link) = wire::post::<DeviceChallenge>(
             &self.http,
             &self.metadata.device_authorization_endpoint,
             &form,
-            Some(&state.record),
+            Some(state.record.private_key_jwk.expose()),
             self.now(),
         )
         .await?
@@ -171,8 +216,39 @@ impl AuthClient {
         {
             return Err(AuthError::Protocol);
         }
-        link.created = Instant::now();
-        Ok(link)
+        Ok(LinkInstructions {
+            device_code: link.device_code,
+            user_code: link.user_code,
+            verification_uri: link.verification_uri,
+            expires_in: link.expires_in,
+            interval: link.interval,
+            created: Instant::now(),
+            identity,
+            key: state.record.private_key_jwk.clone(),
+        })
+    }
+
+    async fn link_identity(&self, record: &Record, scope: &str) -> Result<LinkIdentity, AuthError> {
+        let LinkClient::Automatic { name } = &self.options.client_id else {
+            let client_id = record.client_id.clone().ok_or(AuthError::Storage)?;
+            return Ok(LinkIdentity {
+                client_id,
+                registration: record.registration.clone(),
+            });
+        };
+        let registration = Registration {
+            name: name.clone(),
+            scope: scope.into(),
+        };
+        let client_id = if record.registration.as_ref() == Some(&registration) {
+            record.client_id.clone().ok_or(AuthError::Storage)?
+        } else {
+            wire::register(&self.http, self.metadata.registration_url()?, name, scope).await?
+        };
+        Ok(LinkIdentity {
+            client_id,
+            registration: Some(registration),
+        })
     }
 
     /// Poll at the advertised interval, adding five seconds after `slow_down`.
@@ -195,10 +271,13 @@ impl AuthClient {
             }
             tokio::time::sleep_until(next).await;
             let mut state = self.state.lock().await;
+            if !Arc::ptr_eq(&link.key, &state.record.private_key_jwk) {
+                return Err(AuthError::Protocol);
+            }
             let form = [
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                ("grant_type", wire::DEVICE_GRANT),
                 ("device_code", link.device_code.expose().as_str()),
-                ("client_id", self.options.client_id.as_str()),
+                ("client_id", link.identity.client_id.as_str()),
             ];
             let reply = tokio::time::timeout_at(
                 expires,
@@ -206,7 +285,7 @@ impl AuthClient {
                     &self.http,
                     &self.metadata.token_endpoint,
                     &form,
-                    Some(&state.record),
+                    Some(link.key.expose()),
                     self.now(),
                 ),
             )
@@ -218,21 +297,37 @@ impl AuthClient {
                     interval = interval.checked_add(5).ok_or(AuthError::Protocol)?;
                 }
                 Reply::Value(pair) => {
-                    self.publish(&mut state, Some(pair.grant(self.now())?))?;
+                    self.publish(&mut state, Some(pair.grant(self.now())?), Some(link.identity))?;
                     return Ok(());
                 }
             }
         }
     }
 
-    fn publish(&self, state: &mut State, grant: Option<Secret<crate::store::Grant>>) -> Result<(), AuthError> {
+    fn publish(
+        &self,
+        state: &mut State,
+        grant: Option<Secret<Grant>>,
+        identity: Option<LinkIdentity>,
+    ) -> Result<(), AuthError> {
         self.linked.store(false, Ordering::Release);
         state.uncertain = true;
-        let old = std::mem::replace(&mut state.record.grant, grant);
-        if let Err(error) = self.store.save(&state.record) {
-            state.record.grant = old;
-            return Err(error);
-        }
+        let current = &state.record;
+        let (client_id, registration) = match identity {
+            Some(identity) => (Some(identity.client_id), identity.registration),
+            None => (current.client_id.clone(), current.registration.clone()),
+        };
+        let record = Record {
+            version: current.version,
+            issuer: current.issuer.clone(),
+            resource: current.resource.clone(),
+            client_id,
+            registration,
+            private_key_jwk: current.private_key_jwk.clone(),
+            grant,
+        };
+        self.store.save(&record)?;
+        state.record = record;
         state.uncertain = false;
         self.linked.store(state.record.grant.is_some(), Ordering::Release);
         self.generation.fetch_add(1, Ordering::Release);
@@ -247,7 +342,11 @@ impl AuthClient {
         let form = [
             ("grant_type", "refresh_token"),
             ("refresh_token", grant.expose().refresh_token.as_str()),
-            ("client_id", self.options.client_id.as_str()),
+            (
+                "client_id",
+                state.record.client_id.as_deref().ok_or(AuthError::Storage)?,
+            ),
+            ("resource", state.record.resource.as_str()),
         ];
         // Mark before the request: cancellation/transport failure can mean the
         // server rotated. Never replay an ambiguous refresh in this process.
@@ -257,14 +356,14 @@ impl AuthClient {
             &self.http,
             &self.metadata.token_endpoint,
             &form,
-            Some(&state.record),
+            Some(state.record.private_key_jwk.expose()),
             self.now(),
         )
         .await
         {
-            Ok(Reply::Value(pair)) => self.publish(state, Some(pair.grant(self.now())?)),
+            Ok(Reply::Value(pair)) => self.publish(state, Some(pair.grant(self.now())?), None),
             Err(AuthError::RelinkRequired) => {
-                self.publish(state, None)?;
+                self.publish(state, None, None)?;
                 Err(AuthError::RelinkRequired)
             }
             Err(error) => Err(error),
@@ -291,7 +390,10 @@ impl AuthClient {
         };
         let form = [
             ("token", grant.expose().refresh_token.as_str()),
-            ("client_id", self.options.client_id.as_str()),
+            (
+                "client_id",
+                state.record.client_id.as_deref().ok_or(AuthError::Storage)?,
+            ),
         ];
         let request = self.http.post(&self.metadata.revocation_endpoint).form(&form);
         self.linked.store(false, Ordering::Release);
@@ -300,7 +402,7 @@ impl AuthClient {
         if !response.status().is_success() {
             return Err(AuthError::Transport);
         }
-        self.publish(&mut state, None)
+        self.publish(&mut state, None, None)
     }
 }
 

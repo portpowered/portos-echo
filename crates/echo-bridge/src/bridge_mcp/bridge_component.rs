@@ -1,7 +1,7 @@
 //! T3 component boundary: actual auth and MCP HTTP clients against local controlled peers.
 use super::*;
 use echo_config::{McpAuth, McpServer};
-use echo_mcp_auth::{AuthOptions, mock::Mock};
+use echo_mcp_auth::{AuthOptions, LinkClient, mock::Mock};
 use echo_mcp_client::{McpClient, McpError, TokenProvider};
 use echo_screen_contract::UiState;
 use std::{future::Future, task::Poll, time::Duration};
@@ -100,7 +100,7 @@ async fn linked(mock: &Mock, directory: &std::path::Path) -> (Runtime, tokio::sy
         ca_pem: None,
         options: AuthOptions {
             resource_url: format!("{}/mcp", mock.base),
-            client_id: "synthetic-cli".into(),
+            client_id: LinkClient::Explicit("synthetic-cli".into()),
             scopes: vec!["endpoint:read".into()],
             storage_dir: directory.join("grant"),
             request_timeout: Duration::from_secs(5),
@@ -199,6 +199,7 @@ impl TlsPeer {
                 .unwrap();
         let origin = "https://127.0.0.1";
         config.mcp.server[0].url = format!("{origin}:{port}/mcp");
+        config.mcp.client_id = Some("synthetic-cli".into());
         config.mcp.scopes = scopes;
         config.mcp.state_dir = Some(root.join("grant"));
         config.mcp.operator_listen = ([127, 0, 0, 1], 0).into();

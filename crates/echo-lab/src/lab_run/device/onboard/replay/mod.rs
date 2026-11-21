@@ -79,10 +79,14 @@ fn rotated(initial: &Secret<Vec<u8>>, current: &Secret<Vec<u8>>, config: &str) -
     let [server] = config.mcp.server.as_slice() else {
         return Err(ERROR.into());
     };
+    let client_id = old["client_id"]
+        .as_str()
+        .filter(|id| !id.trim().is_empty())
+        .ok_or(ERROR)?;
     if old["version"] != 1
         || new["version"] != 1
         || old["resource"] != server.url
-        || old["client_id"] != config.mcp.client_id
+        || config.mcp.client_id.as_deref().is_some_and(|id| id != client_id)
         || ["issuer", "resource", "client_id", "private_key_jwk"]
             .iter()
             .any(|key| old[key] != new[key])
@@ -131,6 +135,7 @@ async fn reject(python: &str, record: &Secret<Value>, pem: &[u8]) -> Result<(), 
             .append_pair("grant_type", "refresh_token")
             .append_pair("client_id", record["client_id"].as_str().ok_or(ERROR)?)
             .append_pair("refresh_token", record["grant"]["refresh_token"].as_str().ok_or(ERROR)?)
+            .append_pair("resource", record["resource"].as_str().ok_or(ERROR)?)
             .finish(),
     );
     let (status, value) = transport::request(python, "POST", endpoint, proof.expose(), body.expose(), pem).await?;

@@ -7,9 +7,11 @@ fn request(header: &Value, claims: &Value, key: &SigningKey) -> Request {
     let input = format!("{}.{}", B64.encode(header.to_string()), B64.encode(claims.to_string()));
     let signature: Signature = key.sign(input.as_bytes());
     Request {
+        method: "POST".into(),
         path: "/custom/token".into(),
         headers: BTreeMap::from([("dpop".into(), format!("{input}.{}", B64.encode(signature.to_bytes())))]),
         form: BTreeMap::new(),
+        json: None,
         time: 0,
     }
 }
@@ -87,9 +89,11 @@ fn mock_refuses_truncated_or_missing_proofs() {
         Some("e30.e30.bad"),
     ] {
         let request = Request {
+            method: "POST".into(),
             path: "/custom/token".into(),
             headers: proof.into_iter().map(|p| ("dpop".into(), p.into())).collect(),
             form: BTreeMap::new(),
+            json: None,
             time: 0,
         };
         assert!(!verify(&request, "http://127.0.0.1", &mut fixture_state()));

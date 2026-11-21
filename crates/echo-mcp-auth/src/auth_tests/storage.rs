@@ -61,7 +61,7 @@ fn t2_private_store_schema_roundtrip_and_invalid_versions_or_keys() {
     let dir = tempfile::tempdir().unwrap();
     let mock_options = AuthOptions {
         resource_url: "https://example.invalid/mcp".into(), // lint-rules: allow-literal store identity fixture serialized locally without network access
-        client_id: "synthetic-cli".into(),
+        client_id: LinkClient::Explicit("synthetic-cli".into()),
         scopes: vec![],
         storage_dir: dir.path().into(),
         request_timeout: Duration::from_secs(1),
@@ -110,7 +110,7 @@ fn corrupt_and_mismatched_records_are_never_replaced() {
     let dir = tempfile::tempdir().unwrap();
     let mut options = AuthOptions {
         resource_url: "https://example.invalid/mcp".into(), // lint-rules: allow-literal store identity fixture serialized locally without network access
-        client_id: "synthetic-cli".into(),
+        client_id: LinkClient::Explicit("synthetic-cli".into()),
         scopes: vec![],
         storage_dir: dir.path().into(),
         request_timeout: Duration::from_secs(1),
@@ -118,7 +118,7 @@ fn corrupt_and_mismatched_records_are_never_replaced() {
     Store::open(&options, "https://example.invalid").unwrap(); // lint-rules: allow-literal store identity fixture serialized locally without network access
     let path = dir.path().join("grant.json");
     let before = std::fs::read(&path).unwrap();
-    options.client_id = "another-client".into();
+    options.client_id = LinkClient::Explicit("another-client".into());
     error(
         Store::open(&options, "https://example.invalid"), // lint-rules: allow-literal store identity fixture serialized locally without network access
         AuthError::RelinkRequired,
@@ -136,7 +136,7 @@ fn private_replacement_files_are_owner_only() {
     let dir = tempfile::tempdir().unwrap();
     let options = AuthOptions {
         resource_url: "https://example.invalid/mcp".into(), // lint-rules: allow-literal store identity fixture serialized locally without network access
-        client_id: "synthetic-cli".into(),
+        client_id: LinkClient::Explicit("synthetic-cli".into()),
         scopes: vec![],
         storage_dir: dir.path().into(),
         request_timeout: Duration::from_secs(1),

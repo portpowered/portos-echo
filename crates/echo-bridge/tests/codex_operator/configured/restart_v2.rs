@@ -3,6 +3,133 @@ use super::{restart, *};
 use echo_lab::lab_mcp::Fixture as MockPortos;
 
 const ACCOUNT_OVERLAY: &str = "[agent]\ndaily_request_cap = 8\n";
+const LEGACY_CLI: &str = "port1/systems/zero/oauth-clients/command-line-interface";
+const REGISTERED_CLIENT: &str = "synthetic-echo-registration";
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt Linux echo-bridge, local Python and loopback OAuth"]
+async fn t3_settings_v2_portos_advises_relink_until_own_client_is_committed() {
+    let fixture = Fixture::new("chatgpt");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock = echo_mcp_auth::mock::Mock::bind().await.unwrap();
+    prepare_legacy_grant(&fixture, &mock).await;
+    let base = configure(&fixture, listener.local_addr().unwrap().port(), &mock.base);
+    let base = String::from_utf8(base)
+        .unwrap()
+        .replace("client_id = \"echo-lab\"\n", "")
+        .replace(
+            r#"scopes = ["endpoint:read", "message:send"]"#,
+            r#"scopes = ["endpoint:read"]"#,
+        );
+    std::fs::write(fixture.directory.path().join("bridge.toml"), base).unwrap();
+    std::fs::create_dir(fixture.directory.path().join("agent-home")).unwrap();
+
+    let mut process = Process::spawn(&mut super::super::voice_entry::command(&fixture));
+    let _satellite = restart::binary_ready(&listener, &mut process).await;
+    relink_with_settings(&fixture, &mock).await;
+    drop(process.input.take());
+    process.collect(0).await;
+    assert_eq!(process.stderr().await, "");
+    super::super::host::released(&fixture).await;
+}
+
+async fn prepare_legacy_grant(fixture: &Fixture, mock: &echo_mcp_auth::mock::Mock) {
+    let resource = format!("{}/mcp", mock.base);
+    let mut metadata = echo_mcp_auth::mock::metadata(&mock.base);
+    metadata["registration_endpoint"] = format!("{}/register", mock.base).into();
+    {
+        let mut state = mock.state.lock().unwrap();
+        state.metadata = Some(metadata);
+        state.fault = Some(("/register".into(), 201, json!({"client_id":REGISTERED_CLIENT})));
+    }
+    let auth = echo_mcp_auth::AuthClient::open(echo_mcp_auth::AuthOptions {
+        resource_url: resource,
+        client_id: LEGACY_CLI.into(),
+        scopes: vec!["endpoint:read".into()],
+        storage_dir: fixture.directory.path().join("grant"),
+        request_timeout: Duration::from_secs(5),
+    })
+    .await
+    .unwrap();
+    let instructions = auth.begin_link().await.unwrap();
+    auth.await_approval(instructions).await.unwrap();
+}
+
+async fn relink_with_settings(fixture: &Fixture, mock: &echo_mcp_auth::mock::Mock) {
+    let client = reqwest::Client::new();
+    let url = settings_runtime_url(fixture, "/settings/v2");
+    let requests = mock.state.lock().unwrap().requests.len();
+    let legacy = legacy_portos_snapshot(&client, &url).await;
+    assert_eq!(mock.state.lock().unwrap().requests.len(), requests);
+
+    let pending = start_portos_relink(fixture, &client, &url).await;
+    let linked = approved_portos_snapshot(&client, &url).await;
+
+    assert_client_identity_omitted(&[legacy, pending, linked]);
+    assert_registered_client_used(mock, requests);
+    writeln!(
+        std::io::stdout().lock(),
+        "Port OS Settings: legacy advice=true, pending advice=true, approved advice=omitted, client identifiers=0"
+    )
+    .unwrap();
+}
+
+async fn legacy_portos_snapshot(client: &reqwest::Client, url: &reqwest::Url) -> Value {
+    let mut unpaired = url.clone();
+    unpaired.set_query(None);
+    assert_eq!(client.get(unpaired).send().await.unwrap().status(), 401);
+    let legacy = snapshot(client, url).await;
+    assert_eq!(legacy["portos"]["link_status"], "linked");
+    assert_eq!(legacy["portos"]["server"]["granted_scopes"], json!(["endpoint:read"]));
+    assert_eq!(legacy["portos"]["relink_advised"], true);
+    legacy
+}
+
+async fn start_portos_relink(fixture: &Fixture, client: &reqwest::Client, url: &reqwest::Url) -> Value {
+    let operation = settings_runtime_url(fixture, "/settings/v2/portos");
+    let response = client
+        .post(operation)
+        .json(&json!({"version":2,"operation":"link"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 202);
+    let pending = wait_account(client, url, |value| value["portos"].get("challenge").is_some()).await;
+    assert_eq!(pending["portos"]["operation_state"], "linking");
+    assert_eq!(pending["portos"]["relink_advised"], true);
+    pending
+}
+
+async fn approved_portos_snapshot(client: &reqwest::Client, url: &reqwest::Url) -> Value {
+    let linked = wait_account(client, url, |value| value["portos"]["operation_state"] != "linking").await;
+    assert_eq!(linked["portos"]["operation_state"], "idle");
+    assert_eq!(linked["portos"]["link_status"], "linked");
+    assert_eq!(linked["portos"]["server"]["granted_scopes"], json!(["endpoint:read"]));
+    assert_eq!(linked["portos"].get("relink_advised"), None);
+    assert_eq!(linked["portos"].get("challenge"), None);
+    linked
+}
+
+fn assert_client_identity_omitted(snapshots: &[Value]) {
+    for value in snapshots {
+        let body = value.to_string();
+        for private in [LEGACY_CLI, REGISTERED_CLIENT, "client_id"] {
+            assert!(!body.contains(private), "client identity reached Settings");
+        }
+    }
+}
+
+fn assert_registered_client_used(mock: &echo_mcp_auth::mock::Mock, requests: usize) {
+    let state = mock.state.lock().unwrap();
+    assert_eq!(
+        state.requests[requests..]
+            .iter()
+            .map(|request| request.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/register", "/custom/link", "/custom/token"]
+    );
+    assert_eq!(state.requests[requests + 2].form["client_id"], REGISTERED_CLIENT);
+}
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt Linux echo-bridge, local Python and echo-lab OAuth"]

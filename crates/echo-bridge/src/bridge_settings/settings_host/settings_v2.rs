@@ -6,6 +6,7 @@ use crate::bridge_mcp::{
 };
 use crate::bridge_settings::portos_permissions::portos_server;
 use echo_config::{BridgeConfig, SettingsOptions, SettingsOverlay, SettingsServerTools, WebSearch};
+use echo_mcp_auth::GrantStatus;
 use echo_screen_contract::{
     settings_v1::LinkStatusV1,
     settings_v2::{
@@ -114,7 +115,7 @@ impl SettingsHost {
     pub(super) fn snapshot_v2(
         &self,
         link: LinkStatusV1,
-        grant: Option<Vec<String>>,
+        grant: GrantStatus,
     ) -> Result<SettingsSnapshotV2, SettingsError> {
         let accepted = self.snapshot(link)?;
         let config = self.store.effective();
@@ -196,29 +197,31 @@ fn operation_error(message: &str) -> SettingsErrorV2 {
     }
 }
 
-fn portos_status(config: &BridgeConfig, launch_scopes: &[String], grant: Option<Vec<String>>) -> PortosStatusV2 {
+fn portos_status(config: &BridgeConfig, launch_scopes: &[String], grant: GrantStatus) -> PortosStatusV2 {
     let mut status = PortosStatusV2 {
         link_status: LinkStatusV2::Unconfigured,
         operation_state: PortosOperationStateV2::Idle,
         link_waiting_for_restart: false,
+        relink_advised: false,
         scope_choices: PortosScopeV2::ALL.into(),
         tool_choices: PortosToolV2::ALL.into(),
         server: None,
         challenge: None,
     };
     if let Some(server) = portos_server(config) {
-        status.link_status = match grant.as_ref() {
+        status.link_status = match grant.scopes.as_ref() {
             None => LinkStatusV2::LinkRequired,
             Some(scopes) if config.mcp.scopes.iter().all(|scope| scopes.contains(scope)) => LinkStatusV2::Linked,
             Some(_) => LinkStatusV2::RelinkForScope,
         };
         status.link_waiting_for_restart = config.mcp.scopes != launch_scopes;
+        status.relink_advised = grant.uses_legacy_cli;
         let url = server.url.split(['?', '#']).next().unwrap_or_default();
         status.server = Some(PortosServerV2 {
             name: server.name.clone(),
             url: url.into(),
             requested_scopes: config.mcp.scopes.clone(),
-            granted_scopes: grant.unwrap_or_default(),
+            granted_scopes: grant.scopes.unwrap_or_default(),
             allow_tools: server.allow_tools.clone(),
         });
     }

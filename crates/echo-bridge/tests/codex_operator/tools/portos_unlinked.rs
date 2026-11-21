@@ -11,7 +11,7 @@ async fn t3_portos_unlinked_call_starts_without_server_tools_and_plays_reply() {
     let mock = echo_mcp_auth::mock::Mock::bind().await.unwrap();
     let mut config = config(&fixture, &format!("{}/mcp", mock.base));
     config.mcp.server[0].auth = echo_config::McpAuth::PortosDeviceCode;
-    config.mcp.client_id = "synthetic-cli".into();
+    config.mcp.client_id = Some("synthetic-cli".into());
     config.mcp.state_dir = Some(fixture.directory.path().join("grant"));
     config.mcp.operator_listen = ([127, 0, 0, 1], 0).into();
     let server = config.mcp.server[0].name.clone();

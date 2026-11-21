@@ -5,6 +5,7 @@ mod failures;
 mod lifecycle;
 use crate::mock;
 mod protocol;
+mod registration;
 mod storage;
 
 use super::*;

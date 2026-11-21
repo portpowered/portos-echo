@@ -1,11 +1,52 @@
-use crate::{
-    AuthError, proof,
-    store::{Grant, Record},
-};
+use crate::{AuthError, proof, store::Grant};
 use echo_contracts::secret::Secret;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+pub(crate) const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+
+pub(crate) async fn register(
+    client: &Client,
+    endpoint: url::Url,
+    name: &str,
+    scope: &str,
+) -> Result<String, AuthError> {
+    #[derive(Deserialize)]
+    struct RegistrationReply {
+        client_id: String,
+    }
+    let response = client
+        .post(endpoint)
+        .json(&serde_json::json!({
+            "client_name": name,
+            "token_endpoint_auth_method": "none",
+            "grant_types": [DEVICE_GRANT, "refresh_token"],
+            "scope": scope,
+        }))
+        .send()
+        .await
+        .map_err(|_| AuthError::Transport)?;
+    match response.status() {
+        StatusCode::CREATED => {
+            let result: RegistrationReply = response.json().await.map_err(|_| AuthError::Protocol)?;
+            if crate::valid_text(&result.client_id) {
+                Ok(result.client_id)
+            } else {
+                Err(AuthError::Protocol)
+            }
+        }
+        StatusCode::BAD_REQUEST => {
+            let failure: Failure = response.json().await.map_err(|_| AuthError::Protocol)?;
+            if failure.error == "invalid_client_metadata" {
+                Err(AuthError::RegistrationRefused)
+            } else {
+                Err(AuthError::Protocol)
+            }
+        }
+        _ => Err(AuthError::Transport),
+    }
+}
 
 #[derive(Deserialize)]
 pub(crate) struct Pair {
@@ -49,12 +90,12 @@ pub(crate) async fn post<T: serde::de::DeserializeOwned>(
     client: &Client,
     endpoint: &str,
     form: &[(&str, &str)],
-    key: Option<&Record>,
+    key: Option<&proof::PrivateJwk>,
     now: u64,
 ) -> Result<Reply<T>, AuthError> {
     let mut request = client.post(endpoint).form(form);
-    if let Some(record) = key {
-        let proof = proof::sign(record.private_key_jwk.expose(), endpoint, now)?;
+    if let Some(key) = key {
+        let proof = proof::sign(key, endpoint, now)?;
         request = request.header("DPoP", proof.expose());
     }
     let reply = request.send().await.map_err(|_| AuthError::Transport)?;

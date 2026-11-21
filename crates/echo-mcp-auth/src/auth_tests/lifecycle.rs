@@ -127,7 +127,7 @@ async fn t3_replay_revokes_and_clears_local_grant() {
             &h.client.http,
             &h.client.metadata.token_endpoint,
             &form,
-            Some(&state.record),
+            Some(state.record.private_key_jwk.expose()),
             h.client.now(),
         ))
         .await,
