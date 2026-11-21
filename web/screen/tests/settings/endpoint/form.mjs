@@ -78,8 +78,24 @@ test("paired Port OS endpoint form validates and saves only endpoint fields", as
         });
         await page.evaluate(() => {
             window.settingsV2Body.warnings.push(
-                "Port OS endpoint connection is unavailable.",
+                "Approve this Echo's Port OS endpoint connection.",
             );
+            window.settingsV2Body.portos.challenge = {
+                verification_uri: "https://portos.example/approve",
+                user_code: "TEST-CODE",
+                expires_at_unix: 1800000000,
+            };
+        });
+        await page.clock.runFor(500);
+        await row
+            .getByText("Approve this Echo's Port OS endpoint connection.")
+            .waitFor();
+        await row.getByText(/Code: TEST-CODE/).waitFor();
+        await page.evaluate(() => {
+            window.settingsV2Body.warnings = [
+                "Port OS endpoint connection is unavailable.",
+            ];
+            delete window.settingsV2Body.portos.challenge;
         });
         await page.clock.runFor(500);
         await row

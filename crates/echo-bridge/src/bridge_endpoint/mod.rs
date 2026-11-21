@@ -124,7 +124,11 @@ impl Runtime {
         initial: &echo_config::PortosEndpoint,
     ) -> (Self, Control) {
         let (desired_send, desired) = watch::channel(Desired { name: None, unlink: 0 });
-        let (status, status_view) = watch::channel(Status::Off);
+        let (status, status_view) = watch::channel(if initial.enabled {
+            Status::Connecting
+        } else {
+            Status::Off
+        });
         let control = Control {
             desired: desired_send,
             status: status_view,
@@ -244,7 +248,9 @@ impl Runtime {
         let route = if let Some(route) = install.route_id {
             route
         } else {
-            let Some(route) = self.resolver.resolve(&install.auth_link_id, &tokens).await else {
+            let Ok(Some(route)) =
+                tokio::time::timeout(REQUEST_TIMEOUT, self.resolver.resolve(&install.auth_link_id, &tokens)).await
+            else {
                 return Ok(Status::Unavailable);
             };
             store.resolve(&install.auth_link_id, route.clone()).await?;

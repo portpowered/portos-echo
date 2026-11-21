@@ -73,7 +73,7 @@ pub struct EndpointGrant {
 }
 
 impl EndpointGrant {
-    pub(super) async fn open(
+    pub(crate) async fn open(
         registration: Arc<EndpointRegistration>,
         metadata: Metadata,
         http: Client,

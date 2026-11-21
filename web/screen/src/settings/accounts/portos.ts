@@ -105,7 +105,8 @@ export function mountPortos(
                     : "Linking is available after the bridge restarts."
                 : "");
         operationStatus.hidden = operationStatus.textContent === "";
-        endpointStatus.textContent = endpointMessage ?? "";
+        if (endpointStatus.textContent !== (endpointMessage ?? ""))
+            endpointStatus.textContent = endpointMessage ?? "";
         endpointStatus.hidden = !endpointMessage;
         challenge.render(status.challenge);
         buttons.render(

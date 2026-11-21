@@ -151,14 +151,14 @@ struct Settings {
 
 impl Settings {
     async fn open(home: &Path, mock: &Mock, gateway: &Gateway, grant: Arc<Grant>) -> Self {
-        let owner = settings_owner(home, mock);
+        let (owner, desired) = settings_owner(home, mock);
         let (service, send) = SettingsService::resume(Box::new(owner));
         let runtime = Runtime::new(
             home.into(),
             Arc::new(Resolver),
             EndpointExchange::loopback(&mock.base, REQUEST_TIMEOUT).unwrap(),
             Transport::new(&gateway.template, &mock.base, true).unwrap(),
-            &Default::default(),
+            &desired,
         );
         let (stop, done) = oneshot::channel();
         let owner = tokio::spawn(async move {
@@ -214,6 +214,21 @@ impl Settings {
         response.json().await.unwrap()
     }
 
+    async fn unlink(&self) {
+        let response = self
+            .client
+            .post(self.actions.replace("/settings/v2?", "/settings/v2/portos?"))
+            .json(&json!({"version":2, "operation":"unlink", "confirm":true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 202);
+        assert_eq!(
+            response.json::<Value>().await.unwrap(),
+            json!({"version":2, "operation":"unlink"})
+        );
+    }
+
     async fn close(mut self) {
         self.stop.send(()).unwrap();
         self.owner.await.unwrap();
@@ -221,7 +236,7 @@ impl Settings {
     }
 }
 
-fn settings_owner(home: &Path, mock: &Mock) -> SettingsHost {
+fn settings_owner(home: &Path, mock: &Mock) -> (SettingsHost, echo_config::PortosEndpoint) {
     let mut config = BridgeConfig::from_toml_str(include_str!("../../../../examples/bridge.echo.toml")).unwrap();
     config.home = Some(HomeConfig {
         dir: home.join("settings"),
@@ -235,16 +250,23 @@ fn settings_owner(home: &Path, mock: &Mock) -> SettingsHost {
         bearer_file: None,
         allow_tools: vec![],
     }];
-    SettingsHost::open(
+    let overlay = match fs::read_to_string(home.join("settings/settings.toml")) {
+        Ok(text) => SettingsOverlay::from_toml_str(&text).unwrap(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => SettingsOverlay::default(),
+        Err(error) => panic!("failed to load fixture overlay: {error}"),
+    };
+    let desired = overlay.apply_to(&config).unwrap().portos_endpoint;
+    let owner = SettingsHost::open(
         config,
-        SettingsOverlay::default(),
+        overlay,
         PromptTextsV1 {
             voice: echo_config::LIVE_INSTRUCTIONS.into(),
             runner: echo_config::RUNNER_INSTRUCTIONS.into(),
         },
         vec![],
     )
-    .unwrap()
+    .unwrap();
+    (owner, desired)
 }
 
 #[tokio::test(start_paused = true)]
@@ -265,23 +287,98 @@ async fn t3_endpoint_pair_settings_to_gateway_and_report() {
         assert_eq!(approval["portos"]["challenge"]["user_code"], "TEST-CODE");
         assert_eq!(approval["portos"]["link_status"], "linked");
         advance(Duration::from_secs(5)).await;
-        let first = GatewayEvent::Upgrade(
-            "/devices/loopback%20link%2F%25".into(),
-            "Bearer endpoint-access-2".into(),
-            false,
-        );
-        assert_eq!(gateway.received.recv().await, Some(first));
+        gateway.assert_upgrade(2).await;
         assert_installed(home.path(), &mock).await;
-        settings.save(false, "Hall Echo").await;
-        assert_eq!(gateway.received.recv().await, Some(GatewayEvent::Disconnected));
-        advance(Duration::from_secs(61)).await;
-        assert!(gateway.received.try_recv().is_err());
-        assert_eq!(settings.snapshot().await["portos"]["endpoint_enabled"], false);
+        let settings = restart_and_rename(settings, home.path(), &mock, &mut gateway, &grant).await;
+        let device_id = read_install(home.path())["deviceId"].clone();
+        settings.unlink().await;
+        gateway.assert_disconnect().await;
+        assert_unlinked(home.path(), &settings, device_id).await;
         settings.close().await;
         let mut grant = grant;
         grant.close().await;
     })
     .await;
+}
+
+impl Gateway {
+    async fn assert_upgrade(&mut self, generation: usize) {
+        let wanted = GatewayEvent::Upgrade(
+            "/devices/loopback%20link%2F%25".into(),
+            format!("Bearer endpoint-access-{generation}"),
+            false,
+        );
+        assert_eq!(self.received.recv().await, Some(wanted));
+    }
+
+    async fn assert_disconnect(&mut self) {
+        assert_eq!(self.received.recv().await, Some(GatewayEvent::Disconnected));
+    }
+}
+
+async fn restart_and_rename(
+    settings: Settings,
+    home: &Path,
+    mock: &Mock,
+    gateway: &mut Gateway,
+    grant: &bridge_mcp::Runtime,
+) -> Settings {
+    settings.save(false, "Hall Echo").await;
+    gateway.assert_disconnect().await;
+    advance(Duration::from_secs(61)).await;
+    assert!(gateway.received.try_recv().is_err());
+    assert_eq!(settings.snapshot().await["portos"]["endpoint_enabled"], false);
+    settings.save(true, "Hall Echo").await;
+    gateway.assert_upgrade(3).await;
+    settings.save(true, "Kitchen").await;
+    gateway.assert_disconnect().await;
+    gateway.assert_upgrade(4).await;
+    settings.close().await;
+    gateway.assert_disconnect().await;
+
+    let reopened = Settings::open(home, mock, gateway, grant.grant.clone()).await;
+    gateway.assert_upgrade(5).await;
+    assert_eq!(reopened.snapshot().await["portos"]["endpoint_name"], "Kitchen");
+    let stored = read_install(home);
+    let state = mock.state.lock().unwrap();
+    let exchanges: Vec<_> = state
+        .requests
+        .iter()
+        .filter(|request| request.path == "/plugin-auth-code-exchanges")
+        .collect();
+    assert_eq!(exchanges.len(), 2);
+    let rename = exchanges[1].json.as_ref().unwrap();
+    assert_eq!(rename["authLinkId"], LINK);
+    assert_eq!(rename["pluginAuthenticationData"]["deviceId"], stored["deviceId"]);
+    assert_eq!(rename["pluginAuthenticationData"]["deviceName"], "Kitchen");
+    assert_ne!(
+        exchanges[0].headers["idempotency-key"],
+        exchanges[1].headers["idempotency-key"]
+    );
+    assert_eq!(
+        state
+            .requests
+            .iter()
+            .filter(|request| request.path == "/custom/link")
+            .count(),
+        2
+    );
+    reopened
+}
+
+async fn assert_unlinked(home: &Path, settings: &Settings, device_id: Value) {
+    let state = read_install(home);
+    assert_eq!(state, json!({"version":1,"deviceId":device_id}));
+    for _ in 0..50 {
+        if settings.snapshot().await["portos"]["link_status"] == "link_required" {
+            return;
+        }
+    }
+    panic!("MCP unlink never settled");
+}
+
+fn read_install(home: &Path) -> Value {
+    serde_json::from_slice(&fs::read(home.join("portos-endpoint/registration.json")).unwrap()).unwrap()
 }
 
 async fn wait_approval(settings: &Settings) -> Value {
@@ -300,8 +397,7 @@ async fn assert_installed(home: &Path, mock: &Mock) {
     assert_eq!(install.auth_link_id, LINK);
     assert_eq!(install.route_id.as_deref(), Some(ROUTE));
     assert_eq!(install.device_name, "Hall Echo");
-    let stored: Value =
-        serde_json::from_slice(&fs::read(home.join("portos-endpoint/registration.json")).unwrap()).unwrap();
+    let stored = read_install(home);
     assert_ne!(stored["deviceId"], ROUTE);
     let report = loop {
         if let Some(report) = mock

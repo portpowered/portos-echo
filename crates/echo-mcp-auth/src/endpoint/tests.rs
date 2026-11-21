@@ -1,4 +1,45 @@
 use super::*;
+
+#[tokio::test]
+async fn endpoint_install_resumes_the_committed_exchange_and_requires_a_distinct_route() {
+    let home = tempfile::tempdir().unwrap();
+    let first = EndpointRegistration::open(home.path()).unwrap();
+    let pending = first.exchange("Hall Echo").await.unwrap().unwrap();
+    let key = pending.key().to_owned();
+    let body = serde_json::to_value(pending.request()).unwrap();
+    let device = body["pluginAuthenticationData"]["deviceId"].as_str().unwrap();
+    drop(first);
+
+    let reopened = EndpointRegistration::open(home.path()).unwrap();
+    let replay = reopened.exchange("Kitchen").await.unwrap().unwrap();
+    assert_eq!(replay.key(), key);
+    assert_eq!(serde_json::to_value(replay.request()).unwrap(), body);
+    reopened
+        .complete_exchange(replay, "synthetic-link".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened.resolve("synthetic-link", device.into()).await,
+        Err(crate::AuthError::Protocol)
+    );
+    reopened
+        .resolve("synthetic-link", "separate-route".into())
+        .await
+        .unwrap();
+    let rename = reopened.exchange("Kitchen").await.unwrap().unwrap();
+    let body = serde_json::to_value(rename.request()).unwrap();
+    assert_eq!(body["authLinkId"], "synthetic-link");
+    assert_eq!(body["pluginAuthenticationData"]["deviceId"], device);
+    assert_eq!(body["pluginAuthenticationData"]["deviceName"], "Kitchen");
+    assert_ne!(rename.key(), key);
+
+    reopened.unlink().await.unwrap();
+    assert!(reopened.installation().await.is_none());
+    assert_eq!(
+        reopened.complete_exchange(rename, "synthetic-link".into()).await,
+        Err(crate::AuthError::Protocol)
+    );
+}
 use crate::mock::Mock;
 use echo_contracts::secret::Secret;
 use serde_json::json;
