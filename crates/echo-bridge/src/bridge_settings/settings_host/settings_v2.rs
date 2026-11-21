@@ -45,7 +45,7 @@ impl SettingsHost {
         }
     }
 
-    pub(super) fn save_v2(&mut self, fields: SettingsFieldsV2) -> Result<SettingsReply, SettingsError> {
+    pub(super) fn save_v2(&mut self, mut fields: SettingsFieldsV2) -> Result<SettingsReply, SettingsError> {
         if !fields.valid_shape() {
             return Err(SettingsError::Prompt("settings: expected an editable field"));
         }
@@ -53,6 +53,13 @@ impl SettingsHost {
         if legacy_only(&fields) {
             return Ok(self.saved_v2());
         }
+        let muse = fields.muse.take();
+        let patch = self.patch_v2(fields)?;
+        self.restart_pending |= self.persist_muse(patch, muse)?;
+        Ok(self.saved_v2())
+    }
+
+    fn patch_v2(&self, fields: SettingsFieldsV2) -> Result<SettingsOverlay, SettingsError> {
         let codex = fields.codex.unwrap_or_default();
         let agent = fields.agent.unwrap_or_default();
         let voice = fields.voice.unwrap_or_default();
@@ -73,7 +80,7 @@ impl SettingsHost {
                 })
             })
             .transpose()?;
-        let patch = SettingsOverlay::from_leaves(
+        Ok(SettingsOverlay::from_leaves(
             voice.session_listen_enabled,
             voice.session_listen_seconds,
             codex.voice,
@@ -99,9 +106,7 @@ impl SettingsHost {
                 .scopes
                 .map(|scopes| scopes.into_iter().map(|scope| scope.as_str().into()).collect()),
             server,
-        });
-        self.restart_pending |= self.persist(&patch)?;
-        Ok(self.saved_v2())
+        }))
     }
 
     fn saved_v2(&self) -> SettingsReply {
@@ -115,6 +120,7 @@ impl SettingsHost {
         &self,
         link: LinkStatusV1,
         grant: Option<Vec<String>>,
+        include_muse: bool,
     ) -> Result<SettingsSnapshotV2, SettingsError> {
         let accepted = self.snapshot(link)?;
         let config = self.store.effective();
@@ -150,6 +156,7 @@ impl SettingsHost {
             allowed_voices: accepted.allowed_voices,
             prompts: accepted.prompts,
             portos: portos_status(config, &self.launch_scopes, grant),
+            muse: include_muse.then(|| self.muse_status()),
             bridge_version: accepted.bridge_version,
             restart_pending: accepted.restart_pending,
             warnings: accepted.warnings,
@@ -162,6 +169,7 @@ pub(in crate::bridge_settings) fn legacy_only(fields: &SettingsFieldsV2) -> bool
         && fields.codex.is_none()
         && fields.home.is_none()
         && fields.portos.is_none()
+        && fields.muse.is_none()
         && fields.agent.as_ref().is_some_and(|agent| {
             agent.daily_request_cap.is_none()
                 && (agent.max_tool_calls.is_some() || agent.task_deadline_seconds.is_some())

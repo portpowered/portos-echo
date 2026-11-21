@@ -96,6 +96,17 @@ impl SettingsService {
         self.host.permissions()
     }
 
+    pub(crate) fn muse_access(&self) -> crate::bridge_muse::Access {
+        self.host.muse_access()
+    }
+
+    pub(crate) fn with_local_muse(mut self, local: bool) -> Self {
+        if local {
+            self.host.restrict_muse_to_loopback();
+        }
+        self
+    }
+
     pub(crate) fn with_trace(mut self, trace: crate::bridge_trace::Trace) -> Self {
         self.trace = Some(trace);
         self
@@ -140,6 +151,12 @@ impl SettingsService {
                         result = &mut work => return result,
                         Some(request) = inbox.recv() => {
                             let handle = async {
+                                if request.is_muse_probe() {
+                                    request.probe_muse(
+                                        host.as_mut(), SettingsHost::prepare_muse_probe, SettingsHost::finish_muse_probe,
+                                    ).await;
+                                    return;
+                                }
                                 let grant = current_grant();
                                 let view = GrantView::read(grant.as_deref(), request.reads_portos()).await;
                                 request.commit(|operation| {

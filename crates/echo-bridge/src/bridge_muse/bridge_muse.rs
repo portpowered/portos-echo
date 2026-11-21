@@ -3,16 +3,38 @@ mod bridge_http;
 mod bridge_state;
 
 use crate::Error;
-use bridge_http::Http;
+pub(crate) use bridge_http::Http;
 use bridge_state::{Session, admission};
 use echo_agent_api::{AgentBackend, AgentError, Task};
 use echo_config::MuseConfig;
 use echo_contracts::{ids::TaskId, task::TaskEvent};
 use reqwest::Method;
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::Mutex;
 
 pub(crate) const TOOL: &str = "ask_muse";
+
+/// Clear withdraws the launch generation's authority even if exec fails.
+/// A later save never re-enables that generation.
+#[derive(Clone, Default)]
+pub(crate) struct Access(Arc<AtomicBool>);
+
+impl Access {
+    pub(crate) fn allows(&self) -> bool {
+        !self.0.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn withdraw(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
 
 pub(crate) fn tool_spec() -> echo_agent_api::ToolSpec {
     echo_agent_api::ToolSpec {

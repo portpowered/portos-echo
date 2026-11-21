@@ -52,6 +52,7 @@ pub(crate) fn router(
             get(settings_http::snapshot_v2).patch(settings_http::save_v2),
         )
         .route("/settings/v2/portos", post(settings_http::portos_v2))
+        .route("/settings/v2/muse", post(settings_http::muse_v2))
         .route(
             "/settings/v2/openai",
             get(settings_http::openai_v2).post(settings_http::openai_operation_v2),

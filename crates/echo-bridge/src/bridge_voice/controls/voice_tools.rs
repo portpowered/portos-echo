@@ -18,6 +18,7 @@ use echo_screen_contract::settings_v1::LinkStatusV1;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot};
+mod muse;
 #[path = "voice_tools/runner_skills.rs"]
 mod runner_skills;
 use runner_skills::READ_SKILL;
@@ -199,6 +200,7 @@ pub(super) struct Tools {
     pub budget: ToolBudget,
     pub(super) skills: RunnerSkills,
     muse: Option<Arc<crate::bridge_muse::Backend>>,
+    muse_access: Option<crate::bridge_muse::Access>,
     allowed: Vec<String>,
     server: Option<String>,
     specs: Option<Vec<ToolSpec>>,
@@ -215,6 +217,7 @@ impl Tools {
             budget: ToolBudget::new(config.agent.daily_request_cap, move || Ok(utc_day())),
             skills: RunnerSkills::default(),
             muse: None,
+            muse_access: None,
             allowed: config
                 .mcp
                 .server
@@ -227,26 +230,6 @@ impl Tools {
             portos_permissions: None,
             trace: None,
         }
-    }
-
-    pub(super) fn muse_enabled(&self) -> bool {
-        self.muse.is_some()
-    }
-
-    fn muse_for_call(&self) -> Option<crate::bridge_codex::MuseTool> {
-        Some(crate::bridge_codex::MuseTool::new(
-            self.muse.clone()?,
-            self.trace.clone()?,
-        ))
-    }
-
-    pub(super) fn with_muse(mut self, config: &BridgeConfig, local: bool) -> Self {
-        self.muse = config
-            .muse
-            .as_ref()
-            .and_then(|muse| crate::bridge_muse::Backend::open(muse, local).ok())
-            .map(Arc::new);
-        self
     }
 
     pub(super) fn with_portos_permissions(mut self, permissions: Option<PortosPermissions>) -> Self {
@@ -333,7 +316,7 @@ impl Tools {
         let mut local = session_specs().to_vec();
         local.extend(self.host.as_ref().ok_or(Error::Unavailable)?.notes.specs());
         local.extend(self.skills.spec());
-        local.extend(self.muse.as_ref().map(|_| crate::bridge_muse::tool_spec()));
+        local.extend(self.muse_enabled().then(crate::bridge_muse::tool_spec));
         local_catalog(self.specs.clone().unwrap_or_default(), &self.allowed, local)
     }
 

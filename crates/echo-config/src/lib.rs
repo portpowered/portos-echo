@@ -18,7 +18,7 @@ pub use config_codex::{
 };
 pub use config_muse::MuseConfig;
 pub use config_screen::ScreenPackDownload;
-pub use config_settings::{EffectiveConfig, SettingsOptions, SettingsOverlay, SettingsServerTools};
+pub use config_settings::{EffectiveConfig, SettingsMuse, SettingsOptions, SettingsOverlay, SettingsServerTools};
 pub use config_voice::VoiceConfig;
 
 #[cfg(test)]

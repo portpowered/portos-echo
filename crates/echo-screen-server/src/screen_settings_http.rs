@@ -2,13 +2,13 @@ use super::{HttpState, SettingsOperation, authorized};
 use crate::{PromptKind, cancelled};
 use axum::{
     body::to_bytes,
-    extract::{Path, Request, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
 use echo_screen_contract::{
     settings_v1::{PromptSaveV1, SettingsPatchV1},
-    settings_v2::{PortosOperationV2, SettingsPatchV2},
+    settings_v2::{MuseProbeRequestV2, PortosOperationV2, SettingsPatchV2},
 };
 
 async fn guard(state: &HttpState, uri: &Uri, headers: &HeaderMap) -> Result<(), StatusCode> {
@@ -33,7 +33,11 @@ pub(super) async fn snapshot(State(state): State<HttpState>, request: Request) -
 }
 
 pub(super) async fn snapshot_v2(State(state): State<HttpState>, request: Request) -> Response {
-    read(state, request, SettingsOperation::SnapshotV2).await
+    let include_muse = Query::<Vec<(String, String)>>::try_from_uri(request.uri()).is_ok_and(|Query(pairs)| {
+        let mut values = pairs.iter().filter(|(key, _)| key == "include_muse");
+        values.next().is_some_and(|(_, value)| value == "true") && values.next().is_none()
+    });
+    read(state, request, SettingsOperation::SnapshotV2 { include_muse }).await
 }
 
 async fn read(state: HttpState, request: Request, operation: SettingsOperation) -> Response {
@@ -75,6 +79,15 @@ pub(super) async fn portos_v2(State(state): State<HttpState>, request: Request) 
 
 pub(super) async fn openai_v2(State(state): State<HttpState>, request: Request) -> Response {
     read(state, request, SettingsOperation::OpenAiSnapshot).await
+}
+
+pub(super) async fn muse_v2(State(state): State<HttpState>, request: Request) -> Response {
+    submit(state, request, 1024, |bytes| {
+        serde_json::from_slice::<MuseProbeRequestV2>(bytes)
+            .ok()
+            .map(|_| SettingsOperation::MuseProbe)
+    })
+    .await
 }
 
 pub(super) async fn openai_operation_v2(State(state): State<HttpState>, request: Request) -> Response {

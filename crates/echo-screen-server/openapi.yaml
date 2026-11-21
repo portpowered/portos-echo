@@ -210,7 +210,12 @@ paths:
   /settings/v2:
     get:
       security: [{ pairingToken: [] }]
-      description: Accepted non-secret settings plus a passive Port OS projection and pending restart state. settings.codex.delegate_fast is the accepted runner fast-mode boolean. Success is no-store.
+      parameters:
+        - name: include_muse
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      description: Accepted non-secret settings plus a passive Port OS projection and pending restart state. With include_muse=true, includes a passive Muse status projection. settings.codex.delegate_fast is the accepted runner fast-mode boolean. Success is no-store.
       responses:
         '200':
           description: Version 2 settings snapshot without the retired delegated-task limits
@@ -222,7 +227,7 @@ paths:
         '503': { description: Settings host absent, stopping or saturated; empty body }
     patch:
       security: [{ pairingToken: [] }]
-      description: Sparse save with auth checked before decoding and again at commit. Successful permission withdrawals apply before the receipt. Uses the existing atomic 0600 settings.toml writer and idle restart gate for effective changes. Legacy agent.max_tool_calls and agent.task_deadline_seconds are accepted and ignored. A patch containing only those fields returns the normal save receipt without writing settings.toml. An optional settings.codex.delegate_fast boolean selects runner fast mode at that boundary.
+      description: Sparse save with auth checked before decoding and again at commit. Successful permission withdrawals apply before the receipt. Uses the existing atomic 0600 settings.toml writer and idle restart gate for effective changes. Legacy agent.max_tool_calls and agent.task_deadline_seconds are accepted and ignored. A patch containing only those fields returns the normal save receipt without writing settings.toml. An optional settings.codex.delegate_fast boolean selects runner fast mode at that boundary. An optional settings.muse section saves a configured origin and private inputs or clears Muse.
       requestBody:
         required: true
         content:
@@ -256,6 +261,27 @@ paths:
               schema: { $ref: '#/components/schemas/SettingsErrorV2' }
         '503':
           description: Settings host unavailable, or a restart is required in the fixed-clock simulator. Empty body. Nothing written or queued.
+  /settings/v2/muse:
+    post:
+      security: [{ pairingToken: [] }]
+      description: Test the accepted Muse configuration once. No task is submitted. Success is no-store.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MuseProbeRequestV2' }
+      responses:
+        '200':
+          description: Finished reachability check, including safe failure reasons
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MuseProbeResultV2' }
+        '400': { description: Invalid probe request; no operation }
+        '401': { description: Invalid or revoked pairing token; empty body }
+        '403': { description: Supplied foreign Origin; empty body }
+        '413': { description: JSON exceeds 1024 bytes; no operation }
+        '415': { description: Content-Type is not application/json; no operation }
+        '503': { description: Settings host unavailable; no queued retry }
   /settings/v2/openai:
     get:
       security: [{ pairingToken: [] }]
@@ -533,6 +559,10 @@ components:
       $ref: ../../schemas/screen/portos_operation_started_v2.json
     OpenAiAccountV2:
       $ref: ../../schemas/screen/openai_account_v2.json
+    MuseProbeRequestV2:
+      $ref: ../../schemas/screen/muse_probe_request_v2.json
+    MuseProbeResultV2:
+      $ref: ../../schemas/screen/muse_probe_result_v2.json
   responses:
     PackUnauthorized: { description: Missing, wrong, empty, duplicate or revoked token; empty body, no effect }
     PackForeignOrigin: { description: Supplied Origin differs from server origin; empty body, no effect }

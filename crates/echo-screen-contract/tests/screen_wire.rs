@@ -366,3 +366,44 @@ fn t2_portos_v2_operation_requires_exact_version_and_confirmation() -> Result<()
     )?;
     Ok(())
 }
+#[test]
+fn muse_v2_patch_and_probe_are_typed_and_sparse() -> Result<(), Box<dyn std::error::Error>> {
+    use echo_screen_contract::settings_v2::{MuseProbeRequestV2, MuseProbeResultV2, SettingsPatchV2};
+    use serde_json::{from_value, json, to_value};
+
+    let request = |muse| json!({"version":2,"settings":{"muse":muse}});
+    for muse in [
+        json!({"clear":true}),
+        json!({"url":"https://127.0.0.1:1","ca":"c3ludGhldGlj","credential":"fixture"}),
+        json!({"credential":"fixture"}),
+    ] {
+        let expected = request(muse);
+        let patch: SettingsPatchV2 = from_value(expected.clone())?;
+        assert!(patch.settings.valid_shape());
+        assert_eq!(to_value(patch)?, expected);
+    }
+    for invalid in [
+        json!(null),
+        json!({}),
+        json!({"clear":false}),
+        json!({"clear":true,"credential":"fixture"}),
+        json!({"credential":null}),
+        json!({"ca":""}),
+        json!({"ca_file":"private"}),
+    ] {
+        assert!(from_value::<SettingsPatchV2>(request(invalid)).map_or(true, |patch| !patch.settings.valid_shape()));
+    }
+    let probe = json!({"version":2,"operation":"probe"});
+    assert_eq!(to_value(from_value::<MuseProbeRequestV2>(probe.clone())?)?, probe);
+    for invalid in [
+        json!({"version":2,"operation":"submit"}),
+        json!({"version":2,"operation":"probe","url":"https://127.0.0.1:1"}),
+        json!({"version":1,"operation":"probe"}),
+    ] {
+        assert!(from_value::<MuseProbeRequestV2>(invalid).is_err());
+    }
+    let reply = json!({"version":2,"reachable":false,"reason":"unauthorized"});
+    assert_eq!(to_value(from_value::<MuseProbeResultV2>(reply.clone())?)?, reply);
+    assert!(from_value::<MuseProbeResultV2>(json!({"version":2,"reachable":true,"credential":"fixture"})).is_err());
+    Ok(())
+}

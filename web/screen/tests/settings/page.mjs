@@ -87,7 +87,7 @@ test("settings: gear/back preserves the exact authoritative frame and focus, wit
     );
     assert.deepEqual(await calls(page), [
         {
-            url: "http://127.0.0.1:4173/settings/v2?token=synthetic-screen-pair",
+            url: "http://127.0.0.1:4173/settings/v2?token=synthetic-screen-pair&include_muse=true",
             method: "GET",
             headers: undefined,
             body: undefined,

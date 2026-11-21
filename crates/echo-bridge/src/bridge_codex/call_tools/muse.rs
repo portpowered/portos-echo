@@ -1,5 +1,10 @@
 //! Muse authority is bound to a native handoff, turn and live Wyoming run.
-use crate::{Error, bridge_muse::Backend, bridge_runtime::bridge_muse_work, bridge_trace::Trace};
+use crate::{
+    Error,
+    bridge_muse::{Access, Backend},
+    bridge_runtime::bridge_muse_work,
+    bridge_trace::Trace,
+};
 use echo_agent_api::{AgentBackend, Task};
 use echo_codex::codex_protocol::{ToolContent, ToolResult};
 use echo_contracts::ids::DelegationId;
@@ -11,6 +16,7 @@ pub(crate) struct MuseTool {
     backend: Arc<Backend>,
     trace: Trace,
     run: Option<Run>,
+    access: Option<Access>,
 }
 
 struct Run {
@@ -22,11 +28,12 @@ struct Run {
 }
 
 impl MuseTool {
-    pub(crate) fn new(backend: Arc<Backend>, trace: Trace) -> Self {
+    pub(crate) fn new(backend: Arc<Backend>, trace: Trace, access: Option<Access>) -> Self {
         Self {
             backend,
             trace,
             run: None,
+            access,
         }
     }
 
@@ -70,6 +77,9 @@ impl MuseTool {
     }
 
     pub(super) fn invocation(&self, turn: &str) -> Option<Invocation<Backend>> {
+        if self.access.as_ref().is_some_and(|access| !access.allows()) {
+            return None;
+        }
         let run = self.run.as_ref().filter(|run| run.turn.as_deref() == Some(turn))?;
         Some(Invocation {
             backend: self.backend.clone(),

@@ -39,7 +39,7 @@ pub(crate) enum PackObservation {
 
 pub(crate) struct Core {
     digest: Secret<[u8; 32]>,
-    revoked: bool,
+    revoked: watch::Sender<bool>,
     draining: bool,
     seq: u64,
     pub pack_revision: u64,
@@ -53,7 +53,7 @@ impl Core {
     pub fn new(token: &Secret<String>) -> Self {
         Self {
             digest: Secret::new(Sha256::digest(token.expose().as_bytes()).into()),
-            revoked: false,
+            revoked: watch::channel(false).0,
             draining: false,
             seq: 0,
             pack_revision: 0,
@@ -70,12 +70,16 @@ impl Core {
             .iter()
             .zip(self.digest.expose())
             .fold(0, |sum, (a, b)| sum | (a ^ b));
-        !self.revoked && !token.is_empty() && difference == 0
+        !*self.revoked.borrow() && !token.is_empty() && difference == 0
     }
 
     pub fn revoke(&mut self) {
-        self.revoked = true;
+        self.revoked.send_replace(true);
         self.close_clients();
+    }
+
+    pub fn revocation(&self) -> watch::Receiver<bool> {
+        self.revoked.subscribe()
     }
 
     pub fn drain(&mut self) {
@@ -83,7 +87,7 @@ impl Core {
     }
 
     pub fn accepting(&self) -> bool {
-        !self.draining && !self.revoked
+        !self.draining && !*self.revoked.borrow()
     }
 
     fn close_clients(&mut self) {

@@ -16,6 +16,7 @@ export function settingsUrl(
     actions: string,
     suffix = "",
     version: 1 | 2 = 1,
+    includeMuse = false,
 ): string {
     const url = new URL(actions);
     const tokens = url.searchParams.getAll("token");
@@ -23,6 +24,7 @@ export function settingsUrl(
         throw new Error("Settings configuration is invalid");
     const endpoint = new URL(`/settings/v${version}${suffix}`, url.origin);
     endpoint.searchParams.set("token", tokens[0]);
+    if (includeMuse) endpoint.searchParams.set("include_muse", "true");
     return endpoint.href;
 }
 

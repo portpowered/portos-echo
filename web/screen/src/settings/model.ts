@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*_v{1,2}.json by tools/screen-schema.mjs.
-// Schema SHA-256: ee38d5fe6f3310ef2698b4719f809cbbbb5c9f6a413a46376b25ea2ceaf08ba4
+// Schema SHA-256: fb61a0c7cd9ee05acf6583f56f96520a01c9896e7cc693f524fbc4a47bd78b44
 export type AgentValuesV1 = {
     daily_request_cap: DailyCapV1;
     max_tool_calls: number;
@@ -63,6 +63,19 @@ export type HomeSettingsV2 = { agent_tools: Array<HomeToolGroupV2> };
 export type HomeToolGroupV2 = "notes" | "prompts";
 export type LinkStatusV2 =
     "unconfigured" | "link_required" | "linked" | "relink_for_scope";
+export type MuseProbeReasonV2 =
+    | "unconfigured"
+    | "invalid_configuration"
+    | "unauthorized"
+    | "unavailable"
+    | "unexpected_response";
+export type MuseReachabilityV2 = "unchecked" | "reachable" | "unreachable";
+export type MuseStatusV2 = {
+    configured: boolean;
+    reachability: MuseReachabilityV2;
+    reason?: MuseProbeReasonV2;
+    url?: string;
+};
 export type PortosChallengeV2 = {
     verification_uri: string;
     user_code: string;
@@ -123,6 +136,7 @@ export type SettingsSnapshotV2 = {
     bridge_version: string;
     restart_pending: boolean;
     warnings: Array<string>;
+    muse?: MuseStatusV2;
 };
 export type AgentPatchV2 = {
     daily_request_cap?: DailyCapV1;
@@ -136,6 +150,12 @@ export type CodexPatchV2 = {
     voice?: string;
     web_search?: WebSearchV2;
 };
+export type MusePatchV2 = {
+    ca?: string;
+    clear?: true;
+    credential?: string;
+    url?: string;
+};
 export type PortosPermissionsPatchV2 = {
     allow_tools?: Array<PortosToolV2>;
     scopes?: Array<PortosScopeV2>;
@@ -144,6 +164,7 @@ export type SettingsFieldsV2 = {
     agent?: AgentPatchV2;
     codex?: CodexPatchV2;
     home?: HomeSettingsV2;
+    muse?: MusePatchV2;
     portos?: PortosPermissionsPatchV2;
     voice?: VoicePatchV1;
 };
@@ -176,4 +197,13 @@ export type OpenAiAccountV2 = {
     link_status: OpenAiLinkStatusV2;
     operation_state: PortosOperationStateV2;
     challenge?: PortosChallengeV2;
+};
+export type MuseProbeRequestV2 = {
+    operation: "probe";
+    version: SettingsVersionV2;
+};
+export type MuseProbeResultV2 = {
+    version: SettingsVersionV2;
+    reachable: boolean;
+    reason?: MuseProbeReasonV2;
 };

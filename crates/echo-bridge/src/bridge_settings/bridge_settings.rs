@@ -158,6 +158,7 @@ fn same_values(first: &BridgeConfig, second: &BridgeConfig) -> bool {
         && first.codex.delegate_fast == second.codex.delegate_fast
         && first.home == second.home
         && first.mcp == second.mcp
+        && first.muse == second.muse
 }
 
 #[cfg(test)]

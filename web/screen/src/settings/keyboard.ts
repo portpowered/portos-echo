@@ -44,7 +44,8 @@ const NAMED: Record<string, [label: string, name: string]> = {
 function editable(node: unknown): node is Field {
     return (
         node instanceof HTMLTextAreaElement ||
-        (node instanceof HTMLInputElement && node.type === "text")
+        (node instanceof HTMLInputElement &&
+            (node.type === "text" || node.type === "password"))
     );
 }
 

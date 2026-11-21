@@ -60,6 +60,7 @@ struct SettingsLink<'a> {
     health: &'a Health,
     portos: bool,
     permissions: Option<PortosPermissions>,
+    muse_access: Option<crate::bridge_muse::Access>,
     account: Option<Account>,
     retained: OnceCell<Option<crate::bridge_mcp::Runtime>>,
 }
@@ -69,6 +70,7 @@ impl<'a> SettingsLink<'a> {
         config: Option<&echo_config::BridgeConfig>,
         health: &'a Health,
         permissions: Option<PortosPermissions>,
+        muse_access: Option<crate::bridge_muse::Access>,
         account: Option<Account>,
     ) -> Self {
         let portos = config.is_some_and(|config| {
@@ -85,6 +87,7 @@ impl<'a> SettingsLink<'a> {
             health,
             portos,
             permissions,
+            muse_access,
             account,
             retained: OnceCell::new(),
         }
@@ -222,10 +225,12 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
         .with_screen_account(service.is_some() && options.host.mode == LiveMode::Chatgpt);
     let requested = Cell::new(false);
     let account = service.as_ref().map(|_| Account::new(options.host.mode));
+    let local_muse = options.host.routes.is_some();
     let mut link = SettingsLink::new(
         options.delegation,
         &health,
         service.as_ref().map(SettingsService::permissions),
+        service.as_ref().map(SettingsService::muse_access),
         account.clone(),
     );
     let work = Box::pin(work(
@@ -234,6 +239,7 @@ async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     let (result, settings) = if let Some((service, account)) = service.zip(account) {
         let (result, completion) = Box::pin(
             service
+                .with_local_muse(local_muse)
                 .with_trace(settings_trace)
                 .with_account(account)
                 .scope_with_grant(work, || link.status(), || link.health.mcp_grant()),
@@ -392,6 +398,7 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
                     .map(|config| {
                         super::voice_tools::Tools::new(config, options.utc_day.clone())
                             .with_muse(config, options.host.routes.is_some())
+                            .with_muse_access(grant.muse_access.clone())
                             .with_portos_permissions(grant.permissions.clone())
                             .with_runner_skills(options.runner_skills)
                     });
