@@ -114,7 +114,10 @@ impl Trace {
         }
         if let Value::Object(mut fields) = fields {
             if delegation_payload::event(event) {
-                delegation_payload::prepare(&mut fields, self.payloads)?;
+                delegation_payload::prepare(
+                    &mut fields,
+                    self.payloads && !crate::bridge_endpoint::remote_start::remote(),
+                )?;
             }
             entry.extend(fields);
         }

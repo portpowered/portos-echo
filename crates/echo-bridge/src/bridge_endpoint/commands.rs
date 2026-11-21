@@ -9,8 +9,14 @@ const RECENT_COMMANDS: usize = 256;
 #[derive(Default)]
 pub(super) struct Receipts(HashMap<String, Instant>);
 
+pub(super) struct Command {
+    header: CommandHeader,
+    payload: Value,
+    received: Instant,
+}
+
 impl Receipts {
-    pub(super) fn reply(&mut self, route: &str, text: &str, received: Instant, deadline: Instant) -> Option<Vec<u8>> {
+    pub(super) fn accept(&mut self, route: &str, text: &str, received: Instant, deadline: Instant) -> Option<Command> {
         let mut received_json: Value = serde_json::from_str(text).ok()?;
         let envelope = received_json.as_object_mut()?;
         let header: CommandHeader = serde_json::from_value(envelope.remove("header")?).ok()?;
@@ -27,44 +33,67 @@ impl Receipts {
         if self.0.len() >= RECENT_COMMANDS || self.0.contains_key(&header.message_id) {
             return None;
         }
-        // A valid header and target permit a refusal even without a payload.
-        let outcome = correlate(&header, envelope.remove("payload").unwrap_or_default());
+        self.0.insert(header.message_id.clone(), deadline);
+        Some(Command {
+            header,
+            payload: envelope.remove("payload").unwrap_or_default(),
+            received,
+        })
+    }
+}
+
+impl Command {
+    pub(super) async fn reply(self, route: &str, lease: tokio::sync::watch::Receiver<()>) -> Option<Vec<u8>> {
+        let Self {
+            header,
+            payload,
+            received,
+        } = self;
+        let outcome = correlate(&header, payload, received, lease).await;
         let reply = CommandReply {
             request_id: &header.message_id,
             outcome,
         };
-        let body = serde_json::to_vec(&Uplink::new(&header.name, route, reply)).ok()?;
-        self.0.insert(header.message_id, deadline);
-        Some(body)
+        serde_json::to_vec(&Uplink::new(&header.name, route, reply)).ok()
     }
 }
 
-fn correlate(header: &CommandHeader, payload: Value) -> Value {
-    // Until the shared voice owner is attached, a valid start cannot open a
-    // session and no end can match a locally owned session.
+async fn correlate(
+    header: &CommandHeader,
+    payload: Value,
+    received: Instant,
+    lease: tokio::sync::watch::Receiver<()>,
+) -> Value {
     match (header.namespace.as_str(), header.name.as_str()) {
         ("assistant-session", "start-session") if payload.is_object() => {
-            serde_json::from_value::<StartSession>(payload).map_or_else(
-                |_| invalid(),
-                |_| refusal("NOT_READY", "The voice provider is unavailable."),
-            )
+            let Ok(start) = serde_json::from_value::<StartSession>(payload) else {
+                return invalid();
+            };
+            if let Some(voice) = super::voice::Voice::current() {
+                voice.start(start, received, lease).await
+            } else {
+                super::voice::unavailable()
+            }
         }
-        ("assistant-session", "end-session") if payload.is_object() => serde_json::from_value::<EndSession>(payload)
-            .map_or_else(
-                |_| invalid(),
-                |end| {
-                    if end.session_id.trim().is_empty() {
-                        return invalid();
-                    }
-                    refusal("NOT_FOUND", "The voice session was not found.")
-                },
-            ),
+        ("assistant-session", "end-session") if payload.is_object() => {
+            let Ok(end) = serde_json::from_value::<EndSession>(payload) else {
+                return invalid();
+            };
+            if end.session_id.trim().is_empty() {
+                return invalid();
+            }
+            if let Some(voice) = super::voice::Voice::current() {
+                voice.end(&end.session_id, received).await
+            } else {
+                super::voice::not_found()
+            }
+        }
         ("assistant-session", "start-session" | "end-session") => invalid(),
         _ => refusal("UNSUPPORTED_COMMAND", "This command is unsupported."),
     }
 }
 
-fn refusal(code: &str, message: &str) -> Value {
+pub(crate) fn refusal(code: &str, message: &str) -> Value {
     json!({"ok":false,"failure":{"code":code,"message":message}})
 }
 

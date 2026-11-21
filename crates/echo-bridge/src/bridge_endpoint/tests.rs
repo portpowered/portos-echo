@@ -24,6 +24,8 @@ mod command_tests;
 mod gateway_test_peer;
 #[path = "setup_tests.rs"]
 mod setup_tests;
+#[path = "voice_tests.rs"]
+mod voice_tests;
 
 const SETTINGS_TOKEN: &str = "synthetic-paired-settings";
 const LINK: &str = "loopback link/%";
@@ -110,6 +112,20 @@ impl Settings {
         resolver: Arc<dyn RouteResolver>,
         base_enabled: bool,
     ) -> Self {
+        let (service, send) = Self::configured(home, mock, gateway, resolver, base_enabled);
+        Self::serve(service, send, grant, |done| async {
+            let _ = done.await;
+        })
+        .await
+    }
+
+    fn configured(
+        home: &Path,
+        mock: &Mock,
+        gateway: &Gateway,
+        resolver: Arc<dyn RouteResolver>,
+        base_enabled: bool,
+    ) -> (SettingsService, mpsc::Sender<echo_screen_server::SettingsRequest>) {
         let (owner, desired) = settings_owner(home, mock, base_enabled);
         let (service, send) = SettingsService::resume(Box::new(owner));
         let runtime = Runtime::new(
@@ -120,24 +136,20 @@ impl Settings {
             Transport::new(&gateway.template, &mock.base, true).unwrap(),
             &desired,
         );
-        Self::serve(service.with_endpoint(runtime), send, grant).await
+        (service.with_endpoint(runtime), send)
     }
 
-    async fn serve(
+    async fn serve<F: Future<Output = ()> + Send + 'static>(
         service: SettingsService,
         send: mpsc::Sender<echo_screen_server::SettingsRequest>,
         grant: Arc<Grant>,
+        work: impl FnOnce(oneshot::Receiver<()>) -> F,
     ) -> Self {
         let (stop, done) = oneshot::channel();
+        let work = work(done);
         let owner = tokio::spawn(async move {
             service
-                .scope_with_grant(
-                    async {
-                        let _ = done.await;
-                    },
-                    || grant.link_status(),
-                    || Some(grant.clone()),
-                )
+                .scope_with_grant(work, || grant.link_status(), || Some(grant.clone()))
                 .await;
         });
         let (states, input) = mpsc::channel(8);

@@ -1,6 +1,10 @@
 //! Idle supervision and first-wake admission on the authenticated IO borrower.
-use super::{Notice, SessionNotice, SessionOptions, voice_kill::Gate};
-use crate::{Error, bridge_codex};
+use super::{
+    Notice, SessionNotice, SessionOptions,
+    remote_admission::{self, Admission},
+    voice_kill::Gate,
+};
+use crate::{Error, bridge_codex, bridge_endpoint::voice::Voice};
 use echo_codex::{DynamicTool, codex_io::RpcIo, codex_protocol::Message};
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
 use echo_media::MediaPeer;
@@ -9,6 +13,15 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     time::{Instant, timeout, timeout_at},
 };
+
+type DeviceRun<L> = <<L as EchoLink>::Events as LinkEvents>::Run;
+type Context<'a, R> = (
+    Option<&'a mut super::voice_tools::Tools>,
+    Option<crate::bridge_trace::Trace>,
+    bool,
+    Option<&'a super::voice_kill::Termination>,
+    Option<remote_admission::Options<R>>,
+);
 
 #[derive(Clone)]
 pub struct ServeOptions<'a> {
@@ -67,7 +80,7 @@ where
         peer,
         cancelled,
         observe,
-        (None, None, false, None),
+        (None, None, false, None, None),
     ))
     .await
 }
@@ -79,12 +92,7 @@ pub(super) async fn service<L, R, W, P>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(ServeNotice) -> Result<(), Error>,
-    context: (
-        Option<&mut super::voice_tools::Tools>,
-        Option<crate::bridge_trace::Trace>,
-        bool,
-        Option<&super::voice_kill::Termination>,
-    ),
+    context: Context<'_, DeviceRun<L>>,
 ) -> Result<(), Error>
 where
     L: EchoLink,
@@ -92,7 +100,17 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
-    let (mut tools, trace, wake_earcon, termination) = context;
+    let (mut tools, trace, wake_earcon, termination, remote) = context;
+    let endpoint = remote.as_ref().and_then(|_| Voice::current());
+    if let Some(endpoint) = &endpoint {
+        endpoint.seed_mute(options.session.muted);
+    }
+    let mut publish = |notice| {
+        if let Some(endpoint) = &endpoint {
+            endpoint.observe(&notice)?;
+        }
+        observe(notice)
+    };
     validate_service(&options)?;
     let mut events = client.events()?;
     // Heap-own the service to keep scoped supervision within the Windows stack.
@@ -106,29 +124,32 @@ where
         tokio::pin!(cancelled);
         let mut gate = Gate::new(options.kill_path);
         loop {
-            gate.sync(&mut observe)?;
-            observe(ServeNotice::Ready)?;
-            let Some(microphone) = wait(
+            gate.sync(&mut publish)?;
+            publish(ServeNotice::Ready)?;
+            let Some(admission) = select_admission(
                 client,
                 &mut events,
                 io,
                 (&mut options.session.muted, &mut gate),
+                endpoint.as_ref().zip(remote.as_ref()),
                 cancelled.as_mut(),
-                &mut observe,
+                &mut publish,
             )
             .await?
             else {
                 return Ok(());
             };
+            let stopped = std::cell::Cell::new(false);
             let killed = std::cell::Cell::new(false);
-            let result = Box::pin(admitted(
-                (&*client, &mut events, microphone),
+            let lease = admission.remote.as_ref().map(|remote| remote.lease.clone());
+            let result = Box::pin(serve_admitted(
+                (&*client, &mut events, admission),
                 io,
                 &mut options,
                 &mut peer,
-                gate.cancel(cancelled.as_mut(), &killed),
-                &mut observe,
-                (tools.as_deref_mut(), super::voice_config::wake_time, trace.clone()),
+                gate.cancel(remote_stop(cancelled.as_mut(), lease, &stopped), &killed),
+                &mut publish,
+                (tools.as_deref_mut(), trace.clone()),
             ))
             .await;
             if killed.get()
@@ -137,20 +158,128 @@ where
                 termination.trip();
             }
             if killed.get() && result == Err(Error::Control) {
-                // Cancelled negotiation can invalidate IO. Never resume that
-                // generation or present readiness after an unsuccessful stop.
-                timeout(Duration::from_secs(2), io.flush())
-                    .await
-                    .map_err(|_| Error::Deadline)?
-                    .map_err(bridge_codex::rpc_error)?;
-                client.fail_run(echo_link::RunFailure::KillSwitch).await?;
-                gate.tripped(&mut observe)?;
+                settle_kill(client, io).await?;
+                gate.tripped(&mut publish)?;
+            } else if stopped.get() && result == Err(Error::Control) {
+                client.end_run().await?;
+                if let Some(endpoint) = &endpoint {
+                    endpoint.remote_failed();
+                }
             } else {
-                report_run_end(client, result, &mut observe).await?;
+                report_run_end(client, result, &mut publish).await?;
             }
         }
     });
-    super::earcon::scope(client, wake_earcon, work).await
+    let result = super::earcon::scope(client, wake_earcon, work).await;
+    if let Some(endpoint) = &endpoint {
+        endpoint.unavailable();
+    }
+    result
+}
+
+async fn serve_admitted<L, R, W, P>(
+    (client, events, admission): (&L, &mut L::Events, Admission<DeviceRun<L>>),
+    io: &mut RpcIo<R, W>,
+    options: &mut ServeOptions<'_>,
+    peer: &mut impl AsyncFnMut() -> Result<P, Error>,
+    cancelled: impl Future<Output = ()>,
+    observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+    (tools, trace): (
+        Option<&mut super::voice_tools::Tools>,
+        Option<crate::bridge_trace::Trace>,
+    ),
+) -> Result<(), Error>
+where
+    L: EchoLink,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    P: MediaPeer,
+{
+    let (listen, idle) = (options.session.listen_timeout, options.session.idle);
+    if !admission.followup {
+        options.session.listen_timeout = None;
+    }
+    if admission.remote.is_some() {
+        options.session.idle = Duration::ZERO;
+    }
+    let work = Box::pin(admitted(
+        (client, events, admission.microphone),
+        io,
+        options,
+        peer,
+        cancelled,
+        observe,
+        (tools, super::voice_config::wake_time, trace),
+    ));
+    let result = match admission.remote {
+        Some(run) => run.scope(work).await,
+        None => work.await,
+    };
+    (options.session.listen_timeout, options.session.idle) = (listen, idle);
+    result
+}
+
+async fn settle_kill<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+    client: &impl EchoLink,
+    io: &mut RpcIo<R, W>,
+) -> Result<(), Error> {
+    // Cancelled negotiation can invalidate IO. Never resume that generation
+    // or present readiness after an unsuccessful stop.
+    timeout(Duration::from_secs(2), io.flush())
+        .await
+        .map_err(|_| Error::Deadline)?
+        .map_err(bridge_codex::rpc_error)?;
+    client
+        .fail_run(echo_link::RunFailure::KillSwitch)
+        .await
+        .map_err(Error::from)
+}
+
+async fn remote_stop(
+    cancelled: impl Future<Output = ()>,
+    lease: Option<tokio::sync::watch::Receiver<()>>,
+    stopped: &std::cell::Cell<bool>,
+) {
+    if let Some(mut lease) = lease {
+        tokio::select! {
+            () = cancelled => {}
+            _ = lease.changed() => stopped.set(true),
+        }
+    } else {
+        cancelled.await;
+    }
+}
+
+async fn select_admission<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+    client: &L,
+    events: &mut L::Events,
+    io: &mut RpcIo<R, W>,
+    policy: (&mut bool, &mut Gate<'_>),
+    remote: Option<(&Voice, &remote_admission::Options<DeviceRun<L>>)>,
+    cancelled: impl Future<Output = ()>,
+    observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+) -> Result<Option<Admission<DeviceRun<L>>>, Error> {
+    let (muted, gate) = policy;
+    tokio::pin!(cancelled);
+    loop {
+        let start = tokio::select! {
+            biased;
+            result = wait(client, events, io, (muted, gate), cancelled.as_mut(), observe) => {
+                return result.map(|wake| wake.map(Admission::wake));
+            }
+            start = remote_admission::next(remote.map(|(endpoint, _)| endpoint), remote.is_some()) => start,
+        };
+        if let Some(remote) = remote {
+            let admission = tokio::select! {
+                biased;
+                () = cancelled.as_mut() => return Err(Error::Control),
+                result = remote_admission::prepare((client, events), (remote.0, start), remote.1, (muted, gate), observe) => result?,
+            };
+            if admission.is_some() {
+                return Ok(admission);
+            }
+        }
+    }
 }
 
 async fn report_run_end(
@@ -201,7 +330,9 @@ where
         tools.budget.check_call()?;
     }
     observe(ServeNotice::Listening)?;
-    super::earcon::start()?;
+    if !crate::bridge_endpoint::remote_start::remote() {
+        super::earcon::start()?;
+    }
     let deadline = Instant::now()
         .checked_add(options.connect_timeout)
         .ok_or(Error::Input)?;
@@ -345,6 +476,43 @@ async fn probe(client: &impl EchoLink) -> Result<(), Error> {
 #[cfg(test)]
 #[path = "earcon/voice_admission_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) async fn endpoint_fixture(
+    connector: impl echo_link::LinkConnector,
+    stream: tokio::io::DuplexStream,
+    cancelled: impl Future<Output = ()>,
+    ready: &tokio::sync::Notify,
+) -> Result<(), Error> {
+    use super::voice_config::tests::{MemoryPeer, admission_options};
+    use echo_link::LinkConnector as _;
+    let (read, write) = tokio::io::split(stream);
+    let mut io = RpcIo::new(read, write, echo_codex::codex_rpc::Limits::default()).unwrap();
+    let retained = super::retained_link::Retained::new(connector);
+    let mut link = retained.connect().await.unwrap();
+    link.enable_capture(30).await.unwrap();
+    let remote = remote_admission::Options {
+        silent: super::retained_link::Capture::Silent,
+        remote_mic: true,
+    };
+    let result = service(
+        &mut link,
+        &mut io,
+        admission_options(),
+        async || Ok(MemoryPeer),
+        cancelled,
+        |notice| {
+            if matches!(notice, ServeNotice::Ready) {
+                ready.notify_one();
+            }
+            Ok(())
+        },
+        (None, None, false, None, Some(remote)),
+    )
+    .await;
+    retained.close().await;
+    result
+}
 
 #[cfg(test)]
 #[path = "controls/prompts/admission_tests.rs"]

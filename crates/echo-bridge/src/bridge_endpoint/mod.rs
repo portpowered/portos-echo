@@ -1,8 +1,11 @@
 //! Endpoint ownership is scoped to the configured Settings generation.
 mod commands;
+pub(crate) use commands::refusal;
+pub(crate) mod remote_start;
 #[cfg(test)]
 mod tests;
 mod transport;
+pub(crate) mod voice;
 
 use crate::bridge_mcp::Grant;
 use echo_config::{BridgeConfig, McpAuth};
@@ -151,6 +154,12 @@ impl Runtime {
         work: impl Future<Output = T>,
         current_grant: impl Fn() -> Option<Arc<Grant>>,
     ) -> T {
+        voice::CURRENT
+            .scope(voice::Voice::default(), self.supervise(work, current_grant))
+            .await
+    }
+
+    async fn supervise<T>(self, work: impl Future<Output = T>, current_grant: impl Fn() -> Option<Arc<Grant>>) -> T {
         let mut unlinked = 0;
         let mut store = None;
         let mut changes = self.desired.clone();

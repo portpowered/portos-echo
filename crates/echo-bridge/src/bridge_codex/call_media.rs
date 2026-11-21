@@ -51,6 +51,11 @@ pub struct MediaCall<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPe
 }
 
 impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a, R, W, P> {
+    pub(crate) async fn append_endpoint_text(&mut self, text: &str, deadline: Instant) -> Result<(), Error> {
+        self.call
+            .append_text("user", text, deadline, std::future::pending())
+            .await
+    }
     pub(super) fn trace_timeout(&mut self, turn: &str) {
         if let Some(trace) = &mut self.call.tool_trace {
             trace.timeout(turn);

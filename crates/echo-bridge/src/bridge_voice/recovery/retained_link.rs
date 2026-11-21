@@ -1,5 +1,8 @@
 //! One device connection outlives the authenticated generations that use it.
-use echo_link::{CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, PcmFormat, PlayOutcome, RunFailure};
+use echo_link::{
+    CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
+    RunFailure, RunStats,
+};
 use std::{
     num::NonZeroUsize,
     sync::{
@@ -88,7 +91,9 @@ impl<C: LinkConnector> Retained<C> {
                 };
                 match event {
                     Ok(Some(LinkEvent::Wake(run))) => {
-                        *lock(&events.kept.pending) = Some(run);
+                        if let Capture::Device(run) = run {
+                            *lock(&events.kept.pending) = Some(run);
+                        }
                         return;
                     }
                     Ok(Some(LinkEvent::Mute(value))) => observe(LinkEvent::Mute(value)),
@@ -225,12 +230,12 @@ impl<L: EchoLink> Drop for Shared<L> {
 }
 
 impl<L: EchoLink> LinkEvents for Shared<L> {
-    type Run = Run<L>;
+    type Run = Capture<Run<L>>;
 
     async fn recv(&mut self) -> Result<Option<LinkEvent<Self::Run>>, Error> {
         let held = lock(&self.kept.pending).take();
         if let Some(run) = held {
-            return Ok(Some(LinkEvent::Wake(run)));
+            return Ok(Some(LinkEvent::Wake(Capture::Device(run))));
         }
         let event = self.inner.as_mut().ok_or(Error::Closed)?.recv().await?;
         match &event {
@@ -241,6 +246,45 @@ impl<L: EchoLink> LinkEvents for Shared<L> {
             }
             _ => (),
         }
-        Ok(event)
+        Ok(event.map(|event| match event {
+            LinkEvent::Wake(run) => LinkEvent::Wake(Capture::Device(run)),
+            LinkEvent::RemoteCapture { request_id, run } => LinkEvent::RemoteCapture {
+                request_id,
+                run: Capture::Device(run),
+            },
+            LinkEvent::Mute(value) => LinkEvent::Mute(value),
+            LinkEvent::MicrophoneDropped(count) => LinkEvent::MicrophoneDropped(count),
+            LinkEvent::Played => LinkEvent::Played,
+            LinkEvent::Other => LinkEvent::Other,
+            LinkEvent::StaleRemoteCapture => LinkEvent::StaleRemoteCapture,
+        }))
+    }
+}
+
+pub(in crate::bridge_voice) enum Capture<R> {
+    Device(R),
+    Silent,
+}
+
+impl<R: MicrophoneRun> MicrophoneRun for Capture<R> {
+    fn wake_phrase(&self) -> &str {
+        match self {
+            Self::Device(run) => run.wake_phrase(),
+            Self::Silent => "",
+        }
+    }
+
+    async fn recv(&mut self) -> Result<Option<MicFrame>, Error> {
+        match self {
+            Self::Device(run) => run.recv().await,
+            Self::Silent => Ok(None),
+        }
+    }
+
+    fn stats(&self) -> RunStats {
+        match self {
+            Self::Device(run) => run.stats(),
+            Self::Silent => RunStats::default(),
+        }
     }
 }

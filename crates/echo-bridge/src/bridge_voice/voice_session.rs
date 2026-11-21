@@ -133,7 +133,8 @@ where
                         if Instant::now() >= options.deadline { return Err(Error::Deadline); }
                         validate(&options.session)?;
                         if let Some(trace) = trace { call.trace_setup(trace)?; }
-                        call.start(&options.call, options.tools, options.deadline).await
+                        call.start(&options.call, options.tools, options.deadline).await?;
+                        crate::bridge_endpoint::remote_start::append(&mut call).await
                     } => result?,
                 }
                 Ok(())
@@ -426,6 +427,7 @@ async fn wait<E: LinkEvents>(
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
             () = crate::bridge_settings::settings_restart::requested() => return Ok(None),
+            () = crate::bridge_endpoint::voice::start_waiting() => return Ok(None),
             () = expiry(expires) => return Ok(None),
             result = idle_step(events, call, muted, observe) => {
                 if let Some(run) = result? { return Ok(Some(run)); }

@@ -266,12 +266,22 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         deadline: Instant,
         cancelled: impl Future<Output = ()>,
     ) -> Result<(), Error> {
+        let text = crate::bridge_voice::wake_time_context(self.time_zone.as_deref())?;
+        self.append_text("developer", &text, deadline, cancelled).await
+    }
+
+    pub(super) async fn append_text(
+        &mut self,
+        role: &str,
+        text: &str,
+        deadline: Instant,
+        cancelled: impl Future<Output = ()>,
+    ) -> Result<(), Error> {
         tokio::pin!(cancelled);
         if self.phase != Phase::Active {
             return Err(Error::Unavailable);
         }
-        let text = crate::bridge_voice::wake_time_context(self.time_zone.as_deref())?;
-        let params = json!({"threadId":self.thread, "role":"developer", "text":text});
+        let params = json!({"threadId":self.thread, "role":role, "text":text});
         let id = self
             .io
             .begin_request("thread/realtime/appendText", &params)

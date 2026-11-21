@@ -1,5 +1,5 @@
-use super::{Status, commands::Receipts};
-use echo_contracts::endpoint::{AssistantState, ReportState, Uplink};
+use super::{Status, commands::Receipts, voice::Voice};
+use echo_contracts::endpoint::Uplink;
 use echo_mcp_auth::{EndpointTokenSource, new_request_id};
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use reqwest::{Client, Url};
@@ -157,22 +157,29 @@ impl Transport {
         tokens: &dyn EndpointTokenSource,
         intake: &mpsc::Sender<Frame>,
     ) {
-        let report = Uplink::new(
-            "report-state",
-            route,
-            ReportState {
-                state: AssistantState::Idle,
-                session_id: None,
-                origin: None,
-                volume: None,
-                muted: None,
-            },
-        );
-        let receive = Self::receive(socket, intake);
-        tokio::pin!(receive);
         tokio::select! {
-            () = &mut receive => {}
-            () = self.send(tokens, serde_json::to_vec(&report).ok(), Instant::now() + REPLY_WINDOW) => receive.await,
+            () = Self::receive(socket, intake) => {}
+            () = self.report(route, tokens) => {}
+        }
+    }
+
+    async fn report(&self, route: &str, tokens: &dyn EndpointTokenSource) {
+        let voice = Voice::current().unwrap_or_default();
+        let mut states = voice.subscribe();
+        let mut sent = None;
+        loop {
+            let body = {
+                let view = states.borrow_and_update();
+                serde_json::to_vec(&Uplink::new("report-state", route, view.report())).ok()
+            };
+            if body != sent {
+                sent.clone_from(&body);
+                self.send(tokens, body, Instant::now() + REPLY_WINDOW).await;
+            }
+            if states.changed().await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
 
@@ -196,16 +203,33 @@ impl Transport {
     }
 
     async fn respond(&self, mut frames: mpsc::Receiver<Frame>, route: &str, tokens: &dyn EndpointTokenSource) {
+        let (_generation, lease) = tokio::sync::watch::channel(());
+        let voice = Voice::current().unwrap_or_default();
+        let mut terminal = voice.terminal();
         let mut receipts = Receipts::default();
         let mut replies = FuturesUnordered::new();
         loop {
             tokio::select! {
                 _ = replies.next(), if !replies.is_empty() => {}
+                ended = terminal.recv(), if replies.len() < IN_FLIGHT_REPLIES => {
+                    if let Ok(ended) = ended {
+                        replies.push(Box::pin(async move {
+                            let body = ended.time().ok().and_then(|at| {
+                                serde_json::to_vec(&Uplink::new("session-ended", route, ended.payload(&at))).ok()
+                            });
+                            self.send(tokens, body, ended.instant + REPLY_WINDOW).await;
+                        }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>);
+                    }
+                }
                 frame = frames.recv(), if replies.len() < IN_FLIGHT_REPLIES => {
                     let Some(frame) = frame else { return };
                     let deadline = frame.received + REPLY_WINDOW;
-                    if let Some(body) = receipts.reply(route, &frame.text, frame.received, deadline) {
-                        replies.push(self.send(tokens, Some(body), deadline));
+                    if let Some(command) = receipts.accept(route, &frame.text, frame.received, deadline) {
+                        let lease = lease.clone();
+                        replies.push(Box::pin(async move {
+                            let body = command.reply(route, lease).await;
+                            self.send(tokens, body, deadline).await;
+                        }));
                     }
                 }
             }

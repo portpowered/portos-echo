@@ -110,7 +110,7 @@ fn assert_unique_replies(mock: &Mock) {
     assert_eq!(ids, ["first", "invalid", "last", "unknown"]);
 }
 
-fn command(name: &str, id: &str, route: &str, payload: &Value) -> Value {
+pub(super) fn command(name: &str, id: &str, route: &str, payload: &Value) -> Value {
     json!({
         "header":{"namespace":"assistant-session","name":name,"version":"1.0","messageId":id},
         "target":{"type":"ROUTE","value":route},
@@ -118,11 +118,11 @@ fn command(name: &str, id: &str, route: &str, payload: &Value) -> Value {
     })
 }
 
-async fn send(gateway: &Gateway, frame: &Value) {
+pub(super) async fn send(gateway: &Gateway, frame: &Value) {
     gateway.frames.send(Message::text(frame.to_string())).await.unwrap();
 }
 
-async fn assert_reply(mock: &Mock, id: &str, name: &str, code: &str, message: &str) {
+pub(super) async fn assert_reply(mock: &Mock, id: &str, name: &str, code: &str, message: &str) {
     let reply = loop {
         if let Some(reply) = receipts(mock).into_iter().find(|request| {
             request
@@ -147,7 +147,7 @@ async fn assert_reply(mock: &Mock, id: &str, name: &str, code: &str, message: &s
     );
 }
 
-fn receipts(mock: &Mock) -> Vec<HttpRequest> {
+pub(super) fn receipts(mock: &Mock) -> Vec<HttpRequest> {
     mock.state
         .lock()
         .unwrap()

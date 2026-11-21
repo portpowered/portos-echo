@@ -157,6 +157,13 @@ impl<'a> View<'a> {
         self.trace
             .record("wyoming.run_started", self.run.as_deref(), json!({}))?;
         self.trace.record("run.started", self.run.as_deref(), json!({}))?;
+        if let Some(reason) = crate::bridge_endpoint::remote_start::reason() {
+            self.trace.record(
+                "endpoint.session_started",
+                self.run.as_deref(),
+                json!({"reason":reason}),
+            )?;
+        }
         self.health
             .state
             .send_modify(|state| state.live = if self.connected { "connected" } else { "connecting" });
@@ -323,7 +330,8 @@ impl<'a> View<'a> {
                 "fade_ins":quality.fade_ins, "drained_frames":quality.drained_frames,
                 "cuts":{"count":quality.cuts, "trigger":quality.cut_trigger.map(BargeTrigger::name),
                     "holds":quality.holds, "hold_ms":quality.hold_ms, "silent_ms":cut.map(|cut| cut.silent_ms),
-                    "cut_ms":cut.map(|cut| cut.yield_ms), "text":cut.map(|cut| cut.text.as_str())},
+                    "cut_ms":cut.map(|cut| cut.yield_ms),
+                    "text":cut.filter(|_| !crate::bridge_endpoint::remote_start::remote()).map(|cut| cut.text.as_str())},
                 "mic":{"onsets":quality.mic.onsets, "echo_max":quality.mic.echo_max,
                     "level_max":quality.mic.level_max, "coupling":quality.mic.coupling,
                     "echo_mean":quality.mic.echo_mean, "noise":quality.mic.noise},

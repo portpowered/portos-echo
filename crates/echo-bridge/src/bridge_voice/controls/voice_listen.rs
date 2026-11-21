@@ -1,6 +1,6 @@
 //! Keep capture and the run owned while a settled reply waits for activity.
 use super::{Error, Event, MediaEvent, Notice, Options, Source, VoicePort};
-use echo_link::{EchoLink, LinkEvent, LinkEvents};
+use echo_link::{EchoLink, LinkEvent, LinkEvents, ReplySink};
 use std::{future::Future, time::Duration};
 use tokio::time::Instant;
 
@@ -10,6 +10,22 @@ pub(super) async fn until(deadline: Option<Instant>) {
     } else {
         std::future::pending::<()>().await;
     }
+}
+
+pub(super) fn remote_cut(port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
+    source.session.request_end();
+    source.controller.cut();
+    port.retire_audio();
+    Err(Error::Control)
+}
+
+pub(super) async fn forward(sink: Option<&impl ReplySink>, pending: Option<&[u8]>) -> Result<(), Error> {
+    let sink = sink.ok_or(Error::Wyoming)?;
+    let frame = pending.ok_or(Error::Audio)?;
+    super::earcon::preempt();
+    super::earcon::idle().await?;
+    // Retain the single frame across cancelled bounded sends.
+    sink.send(frame.to_vec()).await.map_err(Error::from)
 }
 
 pub(super) async fn replies<L: EchoLink>(
@@ -267,6 +283,11 @@ async fn listen<E: LinkEvents>(
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
+            () = crate::bridge_endpoint::voice::ending() => {
+                source.session.request_end();
+                port.retire_audio();
+                return Ok(false);
+            }
             // Playback has settled before entering listen. A running delegated
             // turn still owns this reply; finish it before admitting cleanup.
             () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),

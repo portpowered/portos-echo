@@ -300,7 +300,7 @@ async fn wake_earcon_enabled_service_refuses_muted_killed_and_unconfirmed_traffi
                 }
                 Ok(())
             },
-            (None, None, true, None),
+            (None, None, true, None, None),
         )
         .await;
         assert_eq!(result, Err(Error::Control));
