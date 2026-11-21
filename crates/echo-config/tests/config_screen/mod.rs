@@ -167,7 +167,7 @@ fn screen_pack_sparse_merge_retains_voice_siblings_and_explicit_disable() {
     let base = BridgeConfig::from_toml_str(MINIMAL).unwrap();
     let effective = merged.apply_to(&base).unwrap();
     assert!(!effective.voice.session_listen_enabled);
-    assert_eq!(effective.agent.max_tool_calls, 4);
+    assert_eq!(merged.legacy_tool_cap(), Some(4));
     let disabled = merged.merge(&SettingsOverlay::from_toml_str("screen_pack=''").unwrap());
     assert_eq!(disabled.screen_pack(), Some(""));
     assert_eq!(disabled.apply_to(&base).unwrap(), effective);
@@ -191,13 +191,13 @@ fn screen_pack_effective_load_keeps_selection_and_rejects_bad_overlay_wholly() {
     .unwrap();
     let effective = BridgeConfig::load_effective(&config_path).unwrap();
     assert_eq!(effective.overlay.screen_pack(), Some("template@0.1.0"));
-    assert_eq!(effective.config.agent.max_tool_calls, 4);
+    assert_eq!(effective.overlay.legacy_tool_cap(), Some(4));
     assert!(effective.warning.is_none());
     let text = "screen_pack='../SYNTHETIC_VALUE'\n[agent]\nmax_tool_calls=2";
     std::fs::write(&settings_path, text).unwrap();
     let effective = BridgeConfig::load_effective(&config_path).unwrap();
     assert_eq!(effective.overlay.screen_pack(), None);
-    assert_eq!(effective.config.agent.max_tool_calls, 8);
+    assert_eq!(effective.overlay.legacy_tool_cap(), None);
     assert_eq!(effective.config, effective.base);
     let error = effective.warning.unwrap();
     assert!(!format!("{error:?}").contains("SYNTHETIC_VALUE"));

@@ -322,7 +322,7 @@ impl Configured {
                         .then(|| Duration::from_secs(u64::from(self.config.voice.session_listen_seconds))),
                     session_max: Duration::from_secs(u64::from(self.config.voice.session_max_seconds)),
                     idle: Duration::from_secs(self.config.live.session_idle_seconds),
-                    response_timeout: Duration::from_secs(self.config.agent.task_deadline_seconds),
+                    response_timeout: super::voice_session::NO_ANSWER_TIMEOUT,
                     played_timeout: Duration::from_secs(5),
                     reply_lead_ms: self.config.audio.reply_lead_ms,
                     muted: false,

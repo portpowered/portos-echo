@@ -26,7 +26,11 @@ use std::{
     },
     time::Duration,
 };
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+    time::Instant,
+};
 
 enum Observation {
     Trace(TraceEvent),
@@ -71,6 +75,7 @@ impl TraceSink for Sink {
 }
 
 pub(super) const MAX_DELEGATIONS: u32 = 1024;
+const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 type Runner = DelegationRunner<Token, Credentials, Sink>;
 type Completion = (Runner, Result<Option<LiveEvent>, echo_delegation::DelegationError>);
@@ -83,6 +88,7 @@ pub(in crate::bridge_runtime) struct Client {
     utc_day: Arc<dyn Fn() -> u64 + Send + Sync>,
     credentials: Option<Arc<Credentials>>,
     runner: Option<Runner>,
+    stop: Option<oneshot::Sender<()>>,
     pending: Option<JoinHandle<Completion>>,
     completed: Option<Result<Completion, tokio::task::JoinError>>,
     sink: Arc<Sink>,
@@ -110,6 +116,7 @@ impl Client {
             utc_day,
             credentials: None,
             runner: None,
+            stop: None,
             pending: None,
             completed: None,
             sink: Arc::new(Sink {
@@ -124,8 +131,8 @@ impl Client {
         }
     }
 
-    pub fn new_call(&mut self) {
-        self.abandon();
+    pub async fn new_call(&mut self) {
+        self.abandon().await;
         self.seen.clear();
     }
 
@@ -154,7 +161,7 @@ impl Client {
         let host = McpClient::new(
             server.clone(),
             Token::new(server.clone(), self.grant.clone()),
-            Duration::from_secs(config.task_deadline_seconds),
+            MCP_REQUEST_TIMEOUT,
         )
         .map_err(|_| Error::Input)?;
         let runner = Runner::new(
@@ -170,7 +177,7 @@ impl Client {
         Ok(runner)
     }
 
-    pub fn dispatch(&mut self, event: LiveEvent, run: &str, trace: &mut Trace) -> Result<bool, Error> {
+    pub fn dispatch(&mut self, event: LiveEvent, run: &str, trace: &mut Trace, cutoff: Instant) -> Result<bool, Error> {
         if let Some(grant) = &self.grant {
             grant.check()?;
             if grant.blocked() {
@@ -217,16 +224,23 @@ impl Client {
             server,
         )?;
         self.active = Some((run.into(), id));
-        self.start(runner, event);
+        self.start(runner, event, cutoff);
         Ok(true)
     }
 
-    fn start(&mut self, mut runner: Runner, event: LiveEvent) {
+    fn start(&mut self, mut runner: Runner, event: LiveEvent, cutoff: Instant) {
+        let (stop, receive) = oneshot::channel();
+        self.stop = Some(stop);
         self.pending = Some(tokio::spawn(async move {
             let output = runner
-                .run(
+                .run_until_cancelled(
                     event,
                     "Execute the delegated request using only the configured tools.".into(),
+                    async {
+                        if Instant::now() < cutoff {
+                            let _ = receive.await;
+                        }
+                    },
                 )
                 .await;
             (runner, output)
@@ -261,6 +275,7 @@ impl Client {
         let Some(completed) = self.completed.take() else {
             return Ok(());
         };
+        self.stop = None;
         let result = self.complete(completed, call, trace, screen).await;
         if result.is_err() {
             let _ = self.sink.trace.finish(Some("worker_failed"), "unobserved", None);
@@ -348,26 +363,40 @@ impl Client {
         Ok(())
     }
 
-    /// Aborting the owner drops the runner and its backend workers; no late result is reusable.
-    pub fn abandon(&mut self) -> bool {
-        let pending = self.pending.take();
-        let abandoned = pending.is_some() || self.completed.take().is_some();
-        if let Some(task) = pending {
-            task.abort();
+    fn cancel(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
         }
-        // A retained completed runner keeps its backend accounting. A cancelled
-        // runner is rebuilt with the host's still-retained request reservations.
+    }
+
+    /// Signal and join work before another run can use the call.
+    pub async fn abandon(&mut self) -> bool {
+        self.cancel();
+        let abandoned = self.pending.is_some() || self.completed.is_some();
+        if let Some(task) = self.pending.as_mut() {
+            let _ = task.await;
+        }
+        self.pending = None;
+        self.completed = None;
+        self.discard();
+        abandoned
+    }
+
+    fn discard(&mut self) {
+        // The next runner still uses the host's retained request reservations.
         let _ = self.sink.trace.finish(None, "unobserved", None);
         self.active = None;
         self.observed = None;
         while self.receive.try_recv().is_ok() {}
-        abandoned
     }
 }
 
 impl Drop for Client {
     fn drop(&mut self) {
-        self.abandon();
+        if let Some(task) = self.pending.take() {
+            task.abort();
+        }
+        self.discard();
     }
 }
 

@@ -166,25 +166,25 @@ fn wyoming_port_nonzero_and_u16_boundaries() {
 }
 
 #[test]
-fn tool_cap_inclusive_limits_and_types() {
-    for value in ["0", "33", "-1", "4294967296", "\"SYNTHETIC_VALUE\""] {
-        error(&change("max_tool_calls", "8", value), "agent.max_tool_calls");
-    }
-    for value in [1, 32] {
-        let config = BridgeConfig::from_toml_str(&change("max_tool_calls", "8", &value.to_string())).unwrap();
-        assert_eq!(config.agent.max_tool_calls, value);
-    }
-}
-
-#[test]
-fn deadline_inclusive_limits_and_types() {
-    for value in ["4", "601", "-1", "18446744073709551616", "\"SYNTHETIC_VALUE\""] {
-        let field = "agent.task_deadline_seconds";
-        error(&change("task_deadline_seconds", "60", value), field);
-    }
-    for value in [5, 600] {
-        let config = BridgeConfig::from_toml_str(&change("task_deadline_seconds", "60", &value.to_string())).unwrap();
-        assert_eq!(config.agent.task_deadline_seconds, value);
+fn retired_agent_keys_are_ignored_with_one_safe_warning_per_key() {
+    let expected = [
+        "agent.max_tool_calls: deprecated and ignored",
+        "agent.task_deadline_seconds: deprecated and ignored",
+    ];
+    let base = BridgeConfig::from_toml_str(EXAMPLE).unwrap();
+    for (fields, warnings) in [
+        ("", &[][..]),
+        ("max_tool_calls = 0", &expected[..1]),
+        ("task_deadline_seconds = 'SYNTHETIC_VALUE'", &expected[1..]),
+        ("max_tool_calls = 1\ntask_deadline_seconds = 5", &expected[..]),
+    ] {
+        let text = EXAMPLE.replacen("[agent]\n", &format!("[agent]\n{fields}\n"), 1);
+        let (parsed, diagnostics) = BridgeConfig::from_toml_str_with_warnings(&text).unwrap();
+        assert_eq!(parsed, base);
+        assert_eq!(
+            diagnostics.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            warnings
+        );
     }
 }
 

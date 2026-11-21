@@ -1,11 +1,10 @@
-//! One admitted task, original deadline and terminal; no worker owns a Live writer.
+//! One admitted task and terminal; the run owner controls cancellation.
 use super::bridge_resolution::Outcome;
 use crate::{Error, bridge_trace::Trace};
 use echo_agent_api::{AgentBackend, Task};
 use echo_contracts::{ids::TaskId, task::TaskEvent};
 use serde_json::json;
-use std::time::Duration;
-use tokio::{sync::oneshot, time::Instant};
+use tokio::sync::oneshot;
 
 pub(super) struct Prepared {
     pub text: String,
@@ -31,7 +30,6 @@ pub(super) async fn execute(
     mut trace: Trace,
     mut stop: oneshot::Receiver<()>,
 ) -> Result<Option<Prepared>, Error> {
-    let deadline = Instant::now() + Duration::from_secs(task.deadline_seconds);
     let delegation = task.delegation_id.clone();
     // Admission is a bounded single mutation. Do not drop an uncertain request on
     // cancellation: retain its admitted ID if possible and then cancel it.
@@ -49,20 +47,14 @@ pub(super) async fn execute(
             json!({"delegation_id":delegation,"task_id":id}),
         )?;
         loop {
-            let (event, expired) = tokio::select! {
+            let event = tokio::select! {
                 biased;
                 _ = &mut stop => return Ok(None),
-                () = tokio::time::sleep_until(deadline) => (TaskEvent::Failed {
-                    task_id: id.clone(), retryable: false, message: DEADLINE.into()
-                }, true),
-                event = backend.next_event(&id) => (event.unwrap_or_else(|| TaskEvent::Failed {
+                event = backend.next_event(&id) => event.unwrap_or_else(|| TaskEvent::Failed {
                     task_id: id.clone(), retryable: false, message: UNAVAILABLE.into()
-                }), false),
+                }),
             };
-            if let Some(mut prepared) = observe(event, &id, &delegation, run, &mut trace)? {
-                if expired {
-                    prepared.outcome = Outcome::TimedOut;
-                }
+            if let Some(prepared) = observe(event, &id, &delegation, run, &mut trace)? {
                 return Ok(Some(prepared));
             }
         }

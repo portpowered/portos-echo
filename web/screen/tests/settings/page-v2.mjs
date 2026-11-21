@@ -44,9 +44,7 @@ export function v2Snapshot() {
                 delegate_fast: false,
             },
             agent: {
-                ...base.settings.agent,
-                max_tool_calls: 6,
-                task_deadline_seconds: 45,
+                daily_request_cap: base.settings.agent.daily_request_cap,
             },
             home: { agent_tools: ["notes", "prompts"] },
         },
@@ -136,8 +134,6 @@ test("settings V2 displays configured options and submits only changed requested
         ["Web search", "cached"],
         ["Delegated model", "synthetic-runner"],
         ["Delegated reasoning effort", "low"],
-        ["Tool calls per task", "6"],
-        ["Task deadline (seconds)", "45"],
         ["Follow-up window (seconds)", "15"],
         ["Daily request cap", "9223372036854775807"],
         ["voice.md", "Voice instructions"],
@@ -231,6 +227,17 @@ test("settings V2 displays configured options and submits only changed requested
 test("settings V2 observes replacement without resending a successful save", async (t) => {
     const page = await open(t, v2Snapshot());
     await section(page, "OpenAI").tap();
+    const search = page.getByLabel("Web search", { exact: true });
+    for (const label of ["Tool calls per task", "Task deadline (seconds)"])
+        assert.equal(await page.getByLabel(label).count(), 0);
+    const cap = page.getByLabel("Daily request cap", { exact: true });
+    await cap.focus();
+    await cap.press("Tab");
+    await page.keyboard.press("Tab");
+    assert.equal(
+        await search.evaluate((node) => node === document.activeElement),
+        true,
+    );
     const fast = page.getByRole("checkbox", { name: "Delegated fast mode" });
     assert.equal(await fast.isChecked(), false);
     const save = page.getByRole("button", {
@@ -255,9 +262,7 @@ test("settings V2 observes replacement without resending a successful save", asy
         path: "test-results/screenshots/settings-fast-on-960x480.png",
     });
     await response(page, { version: 2, restart_pending: true });
-    await page
-        .getByRole("button", { name: "Save settings", exact: true })
-        .tap();
+    await save.press("Enter");
     const status = page.getByRole("status");
     const saved =
         "Saved. The bridge will restart after the current reply finishes.";

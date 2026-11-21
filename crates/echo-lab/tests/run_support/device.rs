@@ -10,9 +10,9 @@ fn device_unsafe_or_unreadable_config_never_invokes_bench_tools() {
     for template in [
         None,
         Some("malformed TOML".into()),
-        Some(original.replace("max_tool_calls = 8", "max_tool_calls = 0")),
-        Some(original.replace("max_tool_calls = 8", "unexpected_field = 8")),
-        Some(original.replace("max_tool_calls = 8", "max_tool_calls = \"invalid\"")),
+        Some(original.replace("daily_request_cap = 500", "daily_request_cap = -1")),
+        Some(original.replace("daily_request_cap = 500", "unexpected_field = 8")),
+        Some(original.replace("daily_request_cap = 500", "daily_request_cap = \"invalid\"")),
         Some(original.replace("host = \"127.0.0.1\"", "host = \"localhost\"")),
         Some(original.replace("http://127.0.0.1:18080/mcp", "https://mcp.example.invalid/mcp")), // lint-rules: allow-literal inert rejected config; no tool is invoked
         Some(original.replace("auth = \"none\"", "auth = \"bearer_file\"")),
@@ -110,13 +110,17 @@ pub(crate) fn configured(session: &Session, steps: &serde_json::Value) -> std::p
 
 #[test]
 fn device_schema_rejection_precedes_even_the_projection_child() {
-    for change in ["max_tool_calls = 0", "max_tool_calls = \"invalid\"", "unknown = 8"] {
+    for change in [
+        "daily_request_cap = -1",
+        "daily_request_cap = \"invalid\"",
+        "unknown = 8",
+    ] {
         let session = Session::new(&json!({}));
         let mut command = configured(&session, &json!([{ "say":"utterance.wav" }]));
         let path = session.0.join("bridge.toml");
         let contents = std::fs::read_to_string(&path)
             .unwrap()
-            .replace("max_tool_calls = 8", change);
+            .replace("daily_request_cap = 500", change);
         std::fs::write(path, contents).unwrap();
         failed(
             &command.output().unwrap(),

@@ -24,7 +24,6 @@ pub struct SettingsOptions {
     pub delegate_model: Option<String>,
     pub delegate_effort: Option<String>,
     pub delegate_fast: Option<bool>,
-    pub task_deadline_seconds: Option<u64>,
     pub agent_tools: Option<Vec<String>>,
     pub scopes: Option<Vec<String>>,
     pub server: Option<SettingsServerTools>,
@@ -47,6 +46,7 @@ pub struct EffectiveConfig {
     pub config: BridgeConfig,
     pub overlay: SettingsOverlay,
     pub warning: Option<ConfigError>,
+    pub deprecations: Vec<ConfigError>,
 }
 
 impl SettingsOverlay {
@@ -114,8 +114,8 @@ impl SettingsOverlay {
         }
         if let Some(mut agent) = fields.section("agent")? {
             result.daily_cap = agent.optional("daily_request_cap")?;
-            result.tool_cap = agent.optional("max_tool_calls")?;
-            result.options.task_deadline_seconds = agent.optional("task_deadline_seconds")?;
+            result.tool_cap = agent.compatibility_value("max_tool_calls")?;
+            agent.discard("task_deadline_seconds");
             agent.finish()?;
         }
         if let Some(mut home) = fields.section("home")? {
@@ -162,8 +162,8 @@ impl SettingsOverlay {
             i64::try_from(value).map_err(|_| ConfigError::new("agent.daily_request_cap", "must fit a TOML integer"))?;
             config.agent.daily_request_cap = value;
         }
-        if let Some(value) = self.tool_cap {
-            config.agent.max_tool_calls = value;
+        if self.tool_cap.is_some_and(|value| !(1..=32).contains(&value)) {
+            return Err(ConfigError::new("agent.max_tool_calls", "must be within 1..=32"));
         }
         self.options.apply_to(&mut config)?;
         crate::config_validate::validate(&config)?;
@@ -239,6 +239,12 @@ impl SettingsOverlay {
         Ok(text)
     }
 
+    /// Stored tool cap for Settings V1 compatibility.
+    #[must_use]
+    pub fn legacy_tool_cap(&self) -> Option<u32> {
+        self.tool_cap
+    }
+
     /// Omitted means automatic template selection; empty explicitly disables it.
     /// Resolution against installed packs belongs to the screen owner.
     #[must_use]
@@ -265,9 +271,6 @@ impl SettingsOptions {
         }
         if let Some(fast) = self.delegate_fast {
             config.codex.delegate_fast = fast;
-        }
-        if let Some(deadline) = self.task_deadline_seconds {
-            config.agent.task_deadline_seconds = deadline;
         }
         if let Some(groups) = &self.agent_tools {
             let home = config
@@ -307,7 +310,6 @@ impl SettingsOptions {
             delegate_model: patch.delegate_model.clone().or_else(|| self.delegate_model.clone()),
             delegate_effort: patch.delegate_effort.clone().or_else(|| self.delegate_effort.clone()),
             delegate_fast: patch.delegate_fast.or(self.delegate_fast),
-            task_deadline_seconds: patch.task_deadline_seconds.or(self.task_deadline_seconds),
             agent_tools: patch.agent_tools.clone().or_else(|| self.agent_tools.clone()),
             scopes: patch.scopes.clone().or_else(|| self.scopes.clone()),
             server: patch.server.clone().or_else(|| self.server.clone()),
@@ -324,12 +326,6 @@ impl SettingsOptions {
         leaf("codex", "delegate_model", self.delegate_model.clone().map(Into::into));
         leaf("codex", "delegate_effort", self.delegate_effort.clone().map(Into::into));
         leaf("codex", "delegate_fast", self.delegate_fast.map(Into::into));
-        let deadline = self
-            .task_deadline_seconds
-            .map(i64::try_from)
-            .transpose()
-            .map_err(|_| ConfigError::new("agent.task_deadline_seconds", "must fit a TOML integer"))?;
-        leaf("agent", "task_deadline_seconds", deadline.map(Into::into));
         leaf("home", "agent_tools", self.agent_tools.clone().map(toml_array));
         leaf("mcp", "scopes", self.scopes.clone().map(toml_array));
         if let Some(server) = &self.server {
@@ -375,7 +371,7 @@ impl BridgeConfig {
     /// # Errors
     /// An invalid or unreadable base remains a startup error.
     pub fn load_effective(path: impl AsRef<Path>) -> Result<EffectiveConfig, ConfigError> {
-        let base = Self::load(path)?;
+        let (base, deprecations) = Self::load_with_warnings(path)?;
         let overlay = base.home.as_ref().map_or_else(
             || Ok(SettingsOverlay::default()),
             |home| read_overlay(&home.dir.join("settings.toml")),
@@ -386,12 +382,14 @@ impl BridgeConfig {
                 config,
                 overlay,
                 warning: None,
+                deprecations,
             }),
             Err(error) => Ok(EffectiveConfig {
                 base: base.clone(),
                 config: base,
                 overlay: SettingsOverlay::default(),
                 warning: Some(ConfigError::new("settings.toml", format!("ignored overlay: {error}"))),
+                deprecations,
             }),
         }
     }

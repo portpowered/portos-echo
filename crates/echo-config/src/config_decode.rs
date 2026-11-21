@@ -58,6 +58,15 @@ impl<'a> Fields<'a> {
             .transpose()
     }
 
+    pub(super) fn discard(&mut self, key: &str) -> bool {
+        self.table.remove(key).is_some()
+    }
+
+    // Decode stored compatibility metadata alongside the supported settings.
+    pub(super) fn compatibility_value<T: DeserializeOwned>(&mut self, key: &str) -> Result<Option<T>, ConfigError> {
+        self.optional(key)
+    }
+
     pub(super) fn reject(&self, key: &str, message: &str) -> Result<(), ConfigError> {
         if self.table.contains_key(key) {
             return Err(ConfigError::new(self.field(key), message));
@@ -82,9 +91,10 @@ impl<'a> Fields<'a> {
     }
 }
 
-pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
+pub(super) fn decode(value: Value<'_>) -> Result<(BridgeConfig, Vec<ConfigError>), ConfigError> {
     let mut root = Fields::new(value, "config")?;
     let home = root.table.remove("home").map(|v| home(v.into_inner())).transpose()?;
+    let mut warnings = Vec::new();
     let agent_backend;
     let result = BridgeConfig {
         home,
@@ -117,7 +127,7 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
             .unwrap_or_default(),
         clock: crate::config_clock::decode(root.table.remove("clock").map(Spanned::into_inner))?,
         agent: {
-            let (agent, backend) = agent(root.node("agent")?)?;
+            let (agent, backend) = agent(root.node("agent")?, &mut warnings)?;
             agent_backend = backend;
             agent
         },
@@ -138,7 +148,7 @@ pub(super) fn decode(value: Value<'_>) -> Result<BridgeConfig, ConfigError> {
             .unwrap_or_default(),
     };
     root.finish()?;
-    Ok(result)
+    Ok((result, warnings))
 }
 
 fn trace(value: Value<'_>) -> Result<crate::TraceConfig, ConfigError> {
@@ -181,12 +191,20 @@ fn audio(value: Value<'_>) -> Result<crate::AudioConfig, ConfigError> {
     Ok(result)
 }
 
-fn agent(value: Value<'_>) -> Result<(AgentConfig, crate::AgentBackend), ConfigError> {
+fn agent(value: Value<'_>, warnings: &mut Vec<ConfigError>) -> Result<(AgentConfig, crate::AgentBackend), ConfigError> {
     let mut f = Fields::new(value, "agent")?;
+    for (present, field) in [
+        (f.discard("max_tool_calls"), "agent.max_tool_calls"),
+        (f.discard("task_deadline_seconds"), "agent.task_deadline_seconds"),
+    ] {
+        if present {
+            warnings.push(ConfigError::new(field, "deprecated and ignored"));
+        }
+    }
     let backend = f.optional("backend")?.unwrap_or_default();
     let result = AgentConfig {
-        max_tool_calls: f.optional("max_tool_calls")?.unwrap_or(8),
-        task_deadline_seconds: f.optional("task_deadline_seconds")?.unwrap_or(60),
+        max_tool_calls: 8,
+        task_deadline_seconds: 60,
         daily_request_cap: f.optional("daily_request_cap")?.unwrap_or(500),
         model: f.optional("model")?,
     };

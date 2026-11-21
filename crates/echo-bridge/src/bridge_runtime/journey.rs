@@ -11,11 +11,17 @@ use bridge_live::{LivePort, send};
 use echo_audio::FrameQueue;
 use echo_contracts::live::LiveEvent;
 use echo_link::{EchoLink, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PlayOutcome, ReplySink};
-use echo_live::call::CallError;
 use serde_json::json;
 use std::{future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
 use tokio::time::Instant;
 type CutReceipt<'a> = Pin<Box<dyn Future<Output = Result<echo_link::CutStats, echo_link::Error>> + Send + 'a>>;
+
+#[derive(PartialEq, Eq)]
+enum UserSpeech {
+    Quiet,
+    Active,
+}
+
 struct Source {
     mic: Option<Microphone>,
     chunks: u64,
@@ -26,6 +32,7 @@ struct Source {
     acknowledged: u64,
     finished: bool,
     audio_done: bool,
+    user_speech: UserSpeech,
     cancelled: bool,
     reply: Reply,
     queue: FrameQueue<Vec<u8>>,
@@ -43,6 +50,7 @@ impl Source {
             acknowledged: 0,
             finished: false,
             audio_done: false,
+            user_speech: UserSpeech::Quiet,
             cancelled: false,
             reply: Reply::new()?,
             queue: FrameQueue::new(NonZeroUsize::new(128).ok_or(Error::Audio)?),
@@ -177,6 +185,14 @@ impl Source {
     fn event(&mut self, event: LiveEvent, lab: bool) -> Result<(), Error> {
         match event {
             LiveEvent::Error { .. } => Err(Error::Unavailable),
+            LiveEvent::Other(value) if value["type"] == "input_audio_buffer.speech_started" => {
+                self.user_speech = UserSpeech::Active;
+                Ok(())
+            }
+            LiveEvent::Other(value) if value["type"] == "input_audio_buffer.speech_stopped" => {
+                self.user_speech = UserSpeech::Quiet;
+                Ok(())
+            }
             LiveEvent::Other(value)
                 if value["type"] == "response.done" && value["response"]["status"] == "cancelled" =>
             {
@@ -234,7 +250,7 @@ struct PlaybackContext<'a, L: EchoLink> {
     played: bool,
     cancellation: Cancellation,
     cut: Option<(CutReceipt<'a>, u64, u64, u64)>,
-    deadline: Instant,
+    wait: bridge_timing::Wait,
     delegation: &'a mut super::bridge_delegation::Host,
     kill: &'a super::bridge_kill::Kill<'a>,
 }
@@ -374,8 +390,10 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
     }
     fn event(&mut self, event: LiveEvent, source: &mut Source, lab: bool) -> Result<(), Error> {
         if matches!(event, LiveEvent::DelegationCreated { .. }) {
-            if self.delegation.dispatch(event, self.id, self.trace)? {
-                self.deadline += bridge_timing::task(self.kill.settings);
+            if Instant::now() < self.wait.cutoff
+                && self.delegation.dispatch(event, self.id, self.trace, self.wait.cutoff)?
+            {
+                self.wait.delegation_started();
             }
             Ok(())
         } else {
@@ -413,75 +431,6 @@ impl<L: EchoLink> PlaybackContext<'_, L> {
                 "bridge_evicted":bridge_evicted, "reply_frames":framed
             }),
         )
-    }
-}
-async fn produce<L: EchoLink>(
-    source: &mut Source,
-    run: &mut <L::Events as LinkEvents>::Run,
-    events: &mut L::Events,
-    call: &mut impl LivePort,
-    tx: &L::ReplySink,
-    lab: (bool, u64),
-    context: &mut PlaybackContext<'_, L>,
-) -> Result<(), Error> {
-    // Keep the rotating owner future boxed without changing response lifecycle.
-    Box::pin(produce_turns(source, run, events, call, tx, lab, context)).await
-}
-async fn produce_turns<L: EchoLink>(
-    source: &mut Source,
-    run: &mut <L::Events as LinkEvents>::Run,
-    events: &mut L::Events,
-    call: &mut impl LivePort,
-    tx: &L::ReplySink,
-    lab: (bool, u64),
-    context: &mut PlaybackContext<'_, L>,
-) -> Result<(), Error> {
-    let mut pacer = LeadPacer::new(context.lead_ms);
-    let mut output = Output::<L>::new(tx);
-    let mut completed = false;
-    let mut ended = false;
-    let mut pressure_reported = false;
-    let mut arbiter = Arbiter::default();
-    loop {
-        if context.cancelled(source, call, &mut output, run, events).await? {
-            return Ok(());
-        }
-        context.delegation.service(call, context.trace, context.screen).await?;
-        context.screen.presentation.expire_emotion()?;
-        let drained = source.receive(call).await?;
-        context.pressure(source, &mut pressure_reported)?;
-        let echo_done = source.echo_done(lab);
-        completed = source
-            .completion(completed, drained, echo_done, call, context.screen)
-            .await?;
-        context.microphone_activity(source)?;
-        if completed && source.queue.is_empty() && output.is_empty() {
-            return Ok(());
-        }
-        bridge_timing::check_deadline(context.deadline)?;
-        tokio::select! {
-            biased;
-            () = context.delegation.ready() => (),
-            () = context.screen.presentation.emotion_deadline() => (),
-            work = arbiter.next(
-                async { if ended { std::future::pending().await } else { run.recv().await } },
-                call.receive_event((Instant::now() + Duration::from_millis(20)).min(context.deadline).into_std()),
-                output.next(&mut pacer, &mut source.queue, source.sent),
-                events.recv(),
-            ) => match work {
-                Work::Device(event) => {
-                    let event = event?.ok_or(Error::Wyoming)?;
-                    context.device(source, &event)?;
-                },
-                Work::Microphone(frame) => { ended = context.capture(source, frame?, call, lab.0).await?; },
-                Work::Control(event) => match event {
-                Ok(event) => context.event(event, source, lab.0)?,
-                Err(CallError::Deadline) => (),
-                Err(error) => return Err(error.into()),
-                },
-                Work::Reply(receipt) => { if let Some(sent) = receipt? { context.admitted(sent)?; } },
-            }
-        }
     }
 }
 #[cfg(test)]

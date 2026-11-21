@@ -1,5 +1,5 @@
 import { groups, searchModes } from "./api-v2";
-import { element, field, number } from "./forms";
+import { element, field } from "./forms";
 import type { PatchV2, SnapshotV2 } from "./api";
 
 function choices<T extends string>(
@@ -32,7 +32,7 @@ function choices<T extends string>(
 }
 
 export function openAIOptions(settings: SnapshotV2["settings"]) {
-    const { codex, agent, home } = settings;
+    const { codex, home } = settings;
     const search = element("select");
     for (const mode of searchModes) search.append(element("option", mode));
     search.value = codex.web_search;
@@ -45,13 +45,6 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
     const fast = element("input");
     fast.type = "checkbox";
     fast.checked = codex.delegate_fast;
-    const deadline = number(
-        "Task deadline (seconds)",
-        agent.task_deadline_seconds,
-        5,
-        600,
-        10n,
-    );
     const local =
         home && choices("Local agent tools", groups, home.agent_tools);
     return {
@@ -60,7 +53,6 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
             field("Delegated model", model),
             field("Delegated reasoning effort", effort),
             field("Delegated fast mode", fast),
-            deadline.label,
             local?.fieldset ?? element("p", "Local agent tools unavailable"),
         ],
         addPatch(patch: PatchV2) {
@@ -73,9 +65,6 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
                 (patch.codex ??= {}).delegate_effort = effort.value;
             if (fast.checked !== codex.delegate_fast)
                 (patch.codex ??= {}).delegate_fast = fast.checked;
-            if (deadline.input.valueAsNumber !== agent.task_deadline_seconds)
-                (patch.agent ??= {}).task_deadline_seconds =
-                    deadline.input.valueAsNumber;
             if (local?.changed())
                 patch.home = { agent_tools: local.selected() };
         },

@@ -53,6 +53,7 @@
           "$ref": "#/$defs/DailyCapV1"
         },
         "max_tool_calls": {
+          "description": "Legacy Settings V1 value. Accepted and stored for wire compatibility. Ignored by delegated execution.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0

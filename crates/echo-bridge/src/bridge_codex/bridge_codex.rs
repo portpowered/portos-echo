@@ -58,6 +58,7 @@ pub enum Event {
     },
     ReplyHandoff,
     SpeechStarted,
+    SpeechStopped,
     Session(SessionRequest),
     Closed,
     Other,

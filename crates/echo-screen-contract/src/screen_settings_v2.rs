@@ -191,9 +191,11 @@ pub struct AgentPatchV2 {
     #[schemars(with = "DailyCapV1")]
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub daily_request_cap: Option<DailyCapV1>,
+    /// Deprecated compatibility input. Accepted and ignored without updating the settings overlay.
     #[schemars(with = "u32", range(min = 1, max = 32))]
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub max_tool_calls: Option<u32>,
+    /// Deprecated compatibility input. Accepted and ignored without updating the settings overlay.
     #[schemars(with = "u32", range(min = 5, max = 600))]
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub task_deadline_seconds: Option<u64>,
@@ -297,10 +299,6 @@ pub struct CodexValuesV2 {
 #[serde(deny_unknown_fields)]
 pub struct AgentValuesV2 {
     pub daily_request_cap: DailyCapV1,
-    #[schemars(range(min = 1, max = 32))]
-    pub max_tool_calls: u32,
-    #[schemars(with = "u32", range(min = 5, max = 600))]
-    pub task_deadline_seconds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

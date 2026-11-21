@@ -211,6 +211,15 @@ test("render: Settings with linked, unlinked and link-required accounts", async 
             await page.locator("main").innerText(),
             /settings loaded/i,
         );
+        if (status === "linked") {
+            await page
+                .getByText("OpenAI", { exact: true })
+                .and(page.locator("summary"))
+                .tap();
+            await page
+                .getByLabel("Web search", { exact: true })
+                .scrollIntoViewIfNeeded();
+        }
         renders.push(await shoot(page, `settings-${status}`));
     }
     await matchReference("settings", await sheet(renders));

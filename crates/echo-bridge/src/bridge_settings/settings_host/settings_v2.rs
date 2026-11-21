@@ -9,7 +9,7 @@ use echo_config::{BridgeConfig, SettingsOptions, SettingsOverlay, SettingsServer
 use echo_screen_contract::{
     settings_v1::LinkStatusV1,
     settings_v2::{
-        AgentValuesV2, CodexValuesV2, HomeSettingsV2, HomeToolGroupV2, LinkStatusV2, PortosActionV2,
+        AgentPatchV2, AgentValuesV2, CodexValuesV2, HomeSettingsV2, HomeToolGroupV2, LinkStatusV2, PortosActionV2,
         PortosOperationStartedV2, PortosOperationStateV2, PortosOperationV2, PortosScopeV2, PortosServerV2,
         PortosStatusV2, PortosToolV2, SaveResultV2, SettingsErrorV2, SettingsFieldsV2, SettingsSnapshotV2,
         SettingsValuesV2, SettingsVersionV2, WebSearchV2,
@@ -49,6 +49,10 @@ impl SettingsHost {
         if !fields.valid_shape() {
             return Err(SettingsError::Prompt("settings: expected an editable field"));
         }
+        validate_legacy_inputs(fields.agent.as_ref())?;
+        if legacy_only(&fields) {
+            return Ok(self.saved_v2());
+        }
         let codex = fields.codex.unwrap_or_default();
         let agent = fields.agent.unwrap_or_default();
         let voice = fields.voice.unwrap_or_default();
@@ -74,7 +78,7 @@ impl SettingsHost {
             voice.session_listen_seconds,
             codex.voice,
             daily_cap,
-            agent.max_tool_calls,
+            None,
         )
         .with_options(SettingsOptions {
             web_search: codex.web_search.map(|mode| match mode {
@@ -85,7 +89,6 @@ impl SettingsHost {
             delegate_model: codex.delegate_model,
             delegate_effort: codex.delegate_effort,
             delegate_fast: codex.delegate_fast,
-            task_deadline_seconds: agent.task_deadline_seconds,
             agent_tools: fields.home.map(|home| {
                 home.agent_tools
                     .into_iter()
@@ -98,10 +101,14 @@ impl SettingsHost {
             server,
         });
         self.restart_pending |= self.persist(&patch)?;
-        Ok(SettingsReply::SavedV2(SaveResultV2 {
+        Ok(self.saved_v2())
+    }
+
+    fn saved_v2(&self) -> SettingsReply {
+        SettingsReply::SavedV2(SaveResultV2 {
             version: SettingsVersionV2,
             restart_pending: self.restart_pending,
-        }))
+        })
     }
 
     pub(super) fn snapshot_v2(
@@ -137,8 +144,6 @@ impl SettingsHost {
                 },
                 agent: AgentValuesV2 {
                     daily_request_cap: accepted.settings.agent.daily_request_cap,
-                    max_tool_calls: accepted.settings.agent.max_tool_calls,
-                    task_deadline_seconds: config.agent.task_deadline_seconds,
                 },
                 home,
             },
@@ -150,6 +155,34 @@ impl SettingsHost {
             warnings: accepted.warnings,
         })
     }
+}
+
+pub(in crate::bridge_settings) fn legacy_only(fields: &SettingsFieldsV2) -> bool {
+    fields.voice.is_none()
+        && fields.codex.is_none()
+        && fields.home.is_none()
+        && fields.portos.is_none()
+        && fields.agent.as_ref().is_some_and(|agent| {
+            agent.daily_request_cap.is_none()
+                && (agent.max_tool_calls.is_some() || agent.task_deadline_seconds.is_some())
+        })
+}
+
+fn validate_legacy_inputs(agent: Option<&AgentPatchV2>) -> Result<(), SettingsError> {
+    if let Some(agent) = agent {
+        if agent.max_tool_calls.is_some_and(|cap| !(1..=32).contains(&cap)) {
+            return Err(SettingsError::Prompt("agent.max_tool_calls: must be within 1..=32"));
+        }
+        if agent
+            .task_deadline_seconds
+            .is_some_and(|seconds| !(5..=600).contains(&seconds))
+        {
+            return Err(SettingsError::Prompt(
+                "agent.task_deadline_seconds: must be within 5..=600",
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn portos_busy() -> SettingsReply {

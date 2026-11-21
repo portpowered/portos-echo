@@ -213,7 +213,7 @@ paths:
       description: Accepted non-secret settings plus a passive Port OS projection and pending restart state. settings.codex.delegate_fast is the accepted runner fast-mode boolean. Success is no-store.
       responses:
         '200':
-          description: Version 2 settings snapshot
+          description: Version 2 settings snapshot without the retired delegated-task limits
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SettingsSnapshotV2' }
@@ -222,7 +222,7 @@ paths:
         '503': { description: Settings host absent, stopping or saturated; empty body }
     patch:
       security: [{ pairingToken: [] }]
-      description: Sparse save with auth checked before decoding and again at commit. Successful permission withdrawals apply before the receipt. Uses the existing atomic 0600 settings.toml writer and idle restart gate. An optional settings.codex.delegate_fast boolean selects runner fast mode at that boundary.
+      description: Sparse save with auth checked before decoding and again at commit. Successful permission withdrawals apply before the receipt. Uses the existing atomic 0600 settings.toml writer and idle restart gate for effective changes. Legacy agent.max_tool_calls and agent.task_deadline_seconds are accepted and ignored. A patch containing only those fields returns the normal save receipt without writing settings.toml. An optional settings.codex.delegate_fast boolean selects runner fast mode at that boundary.
       requestBody:
         required: true
         content:
@@ -454,7 +454,7 @@ components:
           required: [daily_request_cap, max_tool_calls]
           properties:
             daily_request_cap: { type: string, pattern: '^(0|[1-9][0-9]*)$', maxLength: 19, description: Lossless unsigned decimal; maximum TOML integer 9223372036854775807; zero refuses new admissions }
-            max_tool_calls: { type: integer, minimum: 1, maximum: 32 }
+            max_tool_calls: { type: integer, minimum: 1, maximum: 32, description: Legacy Settings V1 value stored for compatibility and ignored by delegated execution }
     SettingsPatchV1:
       type: object
       additionalProperties: false
@@ -485,7 +485,7 @@ components:
               minProperties: 1
               properties:
                 daily_request_cap: { type: string, pattern: '^(0|[1-9][0-9]*)$', maxLength: 19 }
-                max_tool_calls: { type: integer, minimum: 1, maximum: 32 }
+                max_tool_calls: { type: integer, minimum: 1, maximum: 32, description: Legacy Settings V1 value stored for compatibility and ignored by delegated execution }
     SettingsSnapshotV1:
       type: object
       additionalProperties: false

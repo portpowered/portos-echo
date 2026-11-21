@@ -134,7 +134,7 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
             presentation_owned(&path);
             assert!(!observer.commands().contains(&Command::Close));
             if restart {
-                let response = settings_runtime_patch(&fixture, json!({"agent":{"max_tool_calls":3}})).await;
+                let response = settings_runtime_patch(&fixture, json!({"agent":{"daily_request_cap":"3"}})).await;
                 assert_eq!(response, json!({"version":1,"restart_pending":true}));
                 assert_eq!(
                     bridge_wire_screen::state(&mut screen).await,
@@ -182,17 +182,17 @@ fn settings_startup(fixture: &Fixture) -> echo_config::EffectiveConfig {
     std::fs::create_dir_all(home.join("prompts")).unwrap();
     std::fs::write(home.join("prompts/voice.md"), "admitted voice").unwrap();
     std::fs::write(home.join("prompts/runner.md"), "admitted runner").unwrap();
-    base.agent.max_tool_calls = 6;
-    let overlay = echo_config::SettingsOverlay::from_toml_str("[agent]\nmax_tool_calls = 8\n").unwrap();
+    base.agent.daily_request_cap = 6;
+    let overlay = echo_config::SettingsOverlay::from_toml_str("[agent]\ndaily_request_cap = 8\n").unwrap();
     std::fs::write(home.join("settings.toml"), overlay.to_toml_string().unwrap()).unwrap();
     echo_config::EffectiveConfig {
         config: overlay.apply_to(&base).unwrap(),
         base,
         overlay,
         warning: None,
+        deprecations: Vec::new(),
     }
 }
-
 fn retained_settings(host: &mut echo_bridge::bridge_settings::SettingsHost, restart: bool) {
     use echo_screen_contract::settings_v1::LinkStatusV1;
     use echo_screen_server::{SettingsOperation, SettingsReply};
@@ -201,11 +201,11 @@ fn retained_settings(host: &mut echo_bridge::bridge_settings::SettingsHost, rest
         unreachable!("retained host refused snapshot")
     };
     assert_eq!(snapshot.restart_pending, restart);
-    assert_eq!(snapshot.settings.agent.max_tool_calls, if restart { 3 } else { 8 });
+    let agent = snapshot.settings.agent;
+    assert_eq!(agent.daily_request_cap.as_str(), if restart { "3" } else { "8" });
     assert_eq!(snapshot.prompts.voice, "saved voice\n");
     assert_eq!(snapshot.prompts.runner, "admitted runner");
 }
-
 pub(super) fn settings_runtime_url(fixture: &Fixture, path: &str) -> reqwest::Url {
     assert_eq!(fixture.screen.ip(), std::net::Ipv4Addr::LOCALHOST);
     let mut url = reqwest::Url::parse("http://127.0.0.1").unwrap();
@@ -248,13 +248,13 @@ async fn settings_runtime_snapshot(fixture: &Fixture) {
             snapshot["prompts"],
             json!({"voice":"admitted voice","runner":"admitted runner"})
         );
-        assert_eq!(snapshot["settings"]["agent"]["max_tool_calls"], 8);
+        assert_eq!(snapshot["settings"]["agent"]["daily_request_cap"], "8");
     }
 }
 
 async fn settings_runtime_saves(fixture: &Fixture, home: &Path, client: &reqwest::Client, url: &reqwest::Url) {
     assert_eq!(
-        settings_runtime_patch(fixture, json!({"agent":{"max_tool_calls":8}})).await,
+        settings_runtime_patch(fixture, json!({"agent":{"daily_request_cap":"8"}})).await,
         json!({"version":1,"restart_pending":false})
     );
     let previous = std::fs::read(home.join("settings.toml")).unwrap();

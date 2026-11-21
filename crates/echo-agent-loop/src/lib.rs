@@ -95,7 +95,15 @@ impl<H: ToolHost + Send + Sync + 'static, C: ModelCredential + Send + Sync + 'st
     for ResponsesBackend<H, C>
 {
     fn submit(&self, task: Task) -> impl Future<Output = Result<TaskId, AgentError>> + Send {
-        std::future::ready(self.start(task))
+        let deadline = tokio::time::Instant::now().checked_add(std::time::Duration::from_secs(
+            task.deadline_seconds.min(self.config.task_deadline_seconds),
+        ));
+        let cap = task.max_tool_calls.min(self.config.max_tool_calls);
+        std::future::ready(
+            deadline
+                .ok_or(AgentError::UnscriptedTask)
+                .and_then(|deadline| self.start(task, Some((deadline, cap)))),
+        )
     }
 
     async fn next_event(&self, id: &TaskId) -> Option<TaskEvent> {
@@ -117,7 +125,14 @@ impl<H: ToolHost + Send + Sync + 'static, C: ModelCredential + Send + Sync + 'st
 }
 
 impl<H: ToolHost + Send + Sync + 'static, C: ModelCredential + Send + Sync + 'static> ResponsesBackend<H, C> {
-    fn start(&self, task: Task) -> Result<TaskId, AgentError> {
+    /// Submit work whose lifetime and cancellation belong to the bridge's run.
+    /// # Errors
+    /// Returns an error if the backend cannot allocate a task identifier.
+    pub fn submit_for_run(&self, task: Task) -> Result<TaskId, AgentError> {
+        self.start(task, None)
+    }
+
+    fn start(&self, task: Task, limits: Option<(tokio::time::Instant, u32)>) -> Result<TaskId, AgentError> {
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
         let id = TaskId::new(format!("task-{sequence}")).map_err(|_| AgentError::UnscriptedTask)?;
         let events = Arc::new(events::Events::new(&id));
@@ -127,12 +142,18 @@ impl<H: ToolHost + Send + Sync + 'static, C: ModelCredential + Send + Sync + 'st
         let transport = self.transport.clone();
         let config = self.config.clone();
         let budget = self.budget.clone();
-        let deadline = tokio::time::Instant::now()
-            + std::time::Duration::from_secs(task.deadline_seconds.min(config.task_deadline_seconds));
         let worker_id = id.clone();
         let worker = tokio::spawn(async move {
-            let run = conversation::run(&worker_id, task, &config, &transport, &*host, &*credential, &budget);
-            let result = worker_events.drive(run, deadline).await;
+            let run = conversation::run(
+                &worker_id,
+                task,
+                (&config, limits.map(|(_, cap)| cap)),
+                &transport,
+                &*host,
+                &*credential,
+                &budget,
+            );
+            let result = worker_events.drive(run, limits.map(|(deadline, _)| deadline)).await;
             worker_events.finish(&worker_id, result);
         });
         events.set_worker(worker);

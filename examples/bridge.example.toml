@@ -43,8 +43,6 @@ session_idle_seconds = 120
 # Remove these new keys before rolling back to a binary that predates them.
 
 [agent]
-max_tool_calls = 8
-task_deadline_seconds = 60
 daily_request_cap = 500
 
 [[mcp.server]]
@@ -63,7 +61,7 @@ pairing_token_file = "credentials/screen-pairing.txt"
 # Remove this table before rolling back to a binary that predates voice configuration.
 [voice]
 session_listen_seconds = 15 # Integer 3..300.
-session_max_seconds = 600 # Integer 3..2147483647, at least listen; bounds tool-granted waiting.
+session_max_seconds = 600 # Integer 3..2147483647, at least listen; bounds delegated waiting and tool-granted listening extensions.
 
 # Private delegation payload capture. Restart to apply; remove this table before rollback.
 [trace]

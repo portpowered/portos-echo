@@ -52,15 +52,23 @@ impl BridgeConfig {
     /// # Errors
     /// Returns a safe field-specific diagnostic for invalid configuration.
     pub fn from_toml_str(input: &str) -> Result<Self, ConfigError> {
+        Self::from_toml_str_with_warnings(input).map(|(config, _)| config)
+    }
+
+    /// Parse the base and return fixed diagnostics for any deprecated keys.
+    ///
+    /// # Errors
+    /// Returns the same safe diagnostics as [`Self::from_toml_str`].
+    pub fn from_toml_str_with_warnings(input: &str) -> Result<(Self, Vec<ConfigError>), ConfigError> {
         let table = toml::de::DeTable::parse(input).map_err(|error| {
             let offset = error.span().map_or(0, |span| span.start);
             ConfigError::new("config", format!("invalid TOML syntax at byte {offset}"))
         })?;
         let value = toml::de::DeValue::Table(table.into_inner());
         config_validate::reject_secrets(&value, "")?;
-        let config = config_decode::decode(value)?;
+        let (config, warnings) = config_decode::decode(value)?;
         config_validate::validate(&config)?;
-        Ok(config)
+        Ok((config, warnings))
     }
 
     /// Read only `path`, then use the same validation as [`Self::from_toml_str`].
@@ -69,9 +77,17 @@ impl BridgeConfig {
     /// # Errors
     /// Returns a safe config diagnostic for I/O/encoding errors, or a field error.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        Self::load_with_warnings(path).map(|(config, _)| config)
+    }
+
+    /// Read the base once and preserve its deprecation diagnostics.
+    ///
+    /// # Errors
+    /// Returns the same safe diagnostics as [`Self::load`].
+    pub fn load_with_warnings(path: impl AsRef<Path>) -> Result<(Self, Vec<ConfigError>), ConfigError> {
         let input = std::fs::read_to_string(path)
             .map_err(|_| ConfigError::new("config", "cannot read UTF-8 configuration file"))?;
-        Self::from_toml_str(&input)
+        Self::from_toml_str_with_warnings(&input)
     }
 }
 
@@ -166,7 +182,9 @@ pub enum LiveMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentConfig {
+    /// Budget for explicit, single-task Agent Loop calls.
     pub max_tool_calls: u32,
+    /// Deadline for explicit, single-task Agent Loop calls.
     pub task_deadline_seconds: u64,
     pub daily_request_cap: u64,
     pub model: Option<String>,

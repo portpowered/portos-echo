@@ -34,6 +34,8 @@ mod voice_source;
 #[path = "controls/voice_tools.rs"]
 mod voice_tools;
 mod voice_view;
+#[path = "recovery/voice_wait.rs"]
+mod voice_wait;
 pub use voice_admission::{ServeNotice, ServeOptions, serve};
 pub use voice_config::Configured;
 pub use voice_entry::execute_process;
@@ -55,8 +57,8 @@ use crate::{
 use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun, PlayOutcome, ReplySink};
 use echo_media::PcmFrame;
 use std::{future::Future, num::NonZeroUsize, time::Duration};
-use tokio::time::{Instant, timeout, timeout_at};
-use voice_source::Source;
+use tokio::time::{Instant, timeout};
+use voice_source::{Source, UserSpeech};
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
     /// Bind the run identity, preserving queued tools' original binding.
@@ -140,24 +142,41 @@ pub struct Stats {
 /// Run an already connected call without creating a second process or IO reader.
 /// Success requires assistant transcript/done, local accepted-media drain, PCM
 /// handoff, the device Played event AND the playback operation's Played result.
-/// Poll control/capture while pacing, under playback backpressure and awaiting
-/// played. A stopped source, empty queue or transcript alone cannot finish.
 /// An admitted listen interval retains capture after each reply; ordered user
 /// speech or assistant activity starts the next response window. Idle media
 /// cannot renew it. None keeps the explicit one-reply lifetime.
 ///
 /// # Errors
-/// Tools without a dispatcher, unexpected
-/// wake, EOF, cancellation and fixed deadlines fail closed. Error cleanup
-/// requests a bounded cut; the host must then await call and device close.
-/// Drop/cancellation also requires host cleanup. This owner does not close a
-/// healthy call, allowing the host to retain it for the idle conversation.
+/// Tools without a dispatcher, unexpected wakes, EOF, cancellation and fixed deadlines fail closed.
+/// Error cleanup requests a bounded cut. The host then awaits call and device close.
+/// The host may retain a healthy call after the reply.
 pub async fn run<L: EchoLink>(
+    client: &L,
+    events: &mut L::Events,
+    microphone: <L::Events as LinkEvents>::Run,
+    port: &mut impl VoicePort,
+    options: Options,
+    cancelled: impl Future<Output = ()>,
+    observe: impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<Stats, Error> {
+    run_opened(
+        client,
+        events,
+        microphone,
+        port,
+        (options, Instant::now()),
+        cancelled,
+        observe,
+    )
+    .await
+}
+
+async fn run_opened<L: EchoLink>(
     client: &L,
     events: &mut L::Events,
     mut microphone: <L::Events as LinkEvents>::Run,
     port: &mut impl VoicePort,
-    options: Options,
+    (options, opened): (Options, Instant),
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<Stats, Error> {
@@ -166,11 +185,12 @@ pub async fn run<L: EchoLink>(
         || options
             .listen_timeout
             .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
-        || Instant::now().checked_add(options.session_max).is_none()
+        || opened.checked_add(options.session_max).is_none()
     {
         return Err(Error::Deadline);
     }
     let mut source = Source::new(options.reply_lead_ms, options.muted)?;
+    source.run_ceiling = opened.checked_add(options.session_max);
     source.session = session_tools::Grants::new(options.listen_timeout, options.session_max);
     port.bind_session(Some(source.session.run.clone()));
     source.controller.admit_response(options.response_deadline)?;
@@ -234,7 +254,12 @@ async fn generation<L: EchoLink>(
     // Keep the producer alive until cut is acknowledged. Closing it first can
     // race the cut command with an ordinary audio-stop in the device owner.
     let mut sink = Some(sink);
-    let ceiling = options.response_deadline.saturating_duration_since(Instant::now()) + options.played_timeout;
+    // The transport still has a fixed lifetime, with room for active media
+    // after the run's delegated waiting cutoff.
+    let now = Instant::now();
+    let response_window = options.response_deadline.saturating_duration_since(now);
+    let ceiling =
+        source.run_ceiling.unwrap_or(now).saturating_duration_since(now) + response_window + options.played_timeout;
     let playback_result = std::cell::Cell::new(None);
     let playback_started = std::cell::Cell::new(false);
     let playback = async {
@@ -257,11 +282,7 @@ async fn generation<L: EchoLink>(
             result = drive((client, events, microphone), port, &mut sink, (source, drain), options, observe) => result,
         }
     };
-    let result = timeout_at(options.response_deadline + options.played_timeout, async {
-        tokio::try_join!(&mut playback, producer).map(|_| ())
-    })
-    .await
-    .unwrap_or(Err(Error::Deadline));
+    let result = tokio::try_join!(&mut playback, producer).map(|_| ());
     if let Err(error) = result {
         if error == Error::Wyoming {
             voice_source::playback_failure(source.failure, &error, source, sink.is_some(), playback_result.get());
@@ -303,7 +324,7 @@ async fn drive<L: EchoLink>(
     let (client, events, microphone) = link;
     let (source, drain) = context;
     let mut pending = None;
-    let mut deadline = options.response_deadline;
+    let mut played = None;
     loop {
         if source.controller.cutting() {
             return Err(Error::Control);
@@ -312,28 +333,16 @@ async fn drive<L: EchoLink>(
         let barge = source.barge_due();
         if source.reply.drained() && pending.is_none() && sink.is_some() {
             drop(sink.take());
-            deadline = Instant::now() + options.played_timeout;
+            played = Some(Instant::now() + options.played_timeout);
         }
+        let (deadline, on_timeout) = voice_wait::deadline(source, options, played);
         tokio::select! {
             // Timeouts cannot be starved by a continuously ready peer.
             biased;
             duration = earcon::completed() => observe(Notice::EarconPlayed(duration))?,
-            () = tokio::time::sleep_until(deadline) => {
-                if sink.is_none() {
-                    return Err(Error::Deadline);
-                }
-                if !source.delegation.held() {
-                    // The device is healthy; only this run goes unanswered.
-                    return Err(Error::NoResponse);
-                }
-                // The filler played; a delegated answer missing the response
-                // deadline is dropped instead of failing the whole run.
-                source.delegation.abandon();
-                source.reply.finish()?;
-                deadline = Instant::now() + options.played_timeout;
-            },
-            () = tokio::time::sleep_until(barge.unwrap_or(deadline)), if barge.is_some() => source.interrupt(port)?,
-            () = tokio::time::sleep_until(source.mouth.due().unwrap_or(deadline)), if source.mouth.due().is_some() => {
+            () = voice_listen::until(deadline) => return Err(on_timeout),
+            () = voice_listen::until(barge) => source.interrupt(port)?,
+            () = voice_listen::until(source.mouth.due()) => {
                 if let Some(notice) = voice_listen::playout_notice(&mut source.mouth, source.delegation.in_flight()) {
                     observe(notice)?;
                 }
@@ -476,6 +485,10 @@ async fn media(
         }
         MediaEvent::Control(Event::SpeechStarted) => {
             source.heard_user(BargeTrigger::SpeechStarted, "", false);
+            Ok(())
+        }
+        MediaEvent::Control(Event::SpeechStopped) => {
+            source.user_speech = UserSpeech::Quiet;
             Ok(())
         }
         MediaEvent::Control(Event::Session(request)) => {

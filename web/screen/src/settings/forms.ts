@@ -87,20 +87,19 @@ export function settingsForm(
         required: true,
         value: values.agent.daily_request_cap,
     });
-    const tools = number(
-        "Tool calls per task",
-        values.agent.max_tool_calls,
-        1,
-        32,
-        1n,
-    );
+    const legacyCap =
+        snapshot.version === 1 ? snapshot.settings.agent.max_tool_calls : null;
+    const tools =
+        legacyCap === null
+            ? null
+            : number("Tool calls per task", legacyCap, 1, 32, 1n);
     form.append(
         ...(extra ? [] : [element("h2", "Conversation")]),
         field("Follow-up listening", enabled),
         seconds.label,
         field("Live voice", voice),
         field("Daily request cap", stepper(cap, 0n, CAP_MAX, 10n), cap),
-        tools.label,
+        ...(tools ? [tools.label] : []),
         ...(extra?.rows ?? []),
         element(
             "p",
@@ -120,7 +119,7 @@ export function settingsForm(
             patch.codex = { voice: voice.value };
         if (cap.value !== values.agent.daily_request_cap)
             (patch.agent ??= {}).daily_request_cap = cap.value;
-        if (tools.input.valueAsNumber !== values.agent.max_tool_calls)
+        if (tools && tools.input.valueAsNumber !== legacyCap)
             (patch.agent ??= {}).max_tool_calls = tools.input.valueAsNumber;
         extra?.addPatch(patch);
         save(patch);

@@ -221,9 +221,10 @@ def decoder_keys(source, name):
                 if method == "finish":
                     continue
                 argument = re.match(r'"(\w+)"', body[call.end():])
-                if method not in {"required", "optional", "node", "remove", "section", "reject"} or not argument:
+                compatibility = {"reject", "discard", "compatibility_value"}
+                if method not in {"required", "optional", "node", "remove", "section"} | compatibility or not argument:
                     raise ValueError(f"config coverage: unsupported key access in {name}")
-                if method != "reject":
+                if method not in compatibility:
                     key = ".".join(filter(None, [path, argument[1]]))
                     keys.add(key)
             check_receiver_uses(body, alias, accesses, name)

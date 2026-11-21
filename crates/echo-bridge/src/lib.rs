@@ -53,6 +53,9 @@ pub enum Error {
     /// The model finished no reply inside the response window. Ends that run only.
     #[error("no response")]
     NoResponse,
+    /// Delegated work still owed a reply at the run's waiting ceiling.
+    #[error("session waiting ceiling reached")]
+    SessionCeiling,
     #[error("decode")]
     Decode,
     #[error("trace")]

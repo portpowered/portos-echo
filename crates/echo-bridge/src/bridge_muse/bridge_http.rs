@@ -6,7 +6,7 @@ use reqwest::{Client, Method, StatusCode, Url, header};
 use std::{io::Read, path::Path, time::Duration};
 
 pub(super) const MAX_BODY: usize = 1_048_576;
-pub(super) const OPERATION: Duration = Duration::from_secs(5);
+const OPERATION: Duration = Duration::from_secs(5);
 
 pub(super) struct Http {
     client: Client,

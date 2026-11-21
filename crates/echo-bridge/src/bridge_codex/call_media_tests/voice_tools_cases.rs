@@ -5,7 +5,6 @@ use crate::{
     bridge_voice::VoicePort,
 };
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
-use echo_config::AgentConfig;
 use echo_delegation::codex_dispatch::Catalog;
 use serde_json::Value;
 use std::future::Future;
@@ -55,14 +54,6 @@ fn catalog() -> Catalog {
     )
     .unwrap()
 }
-fn config(limit: u32) -> AgentConfig {
-    AgentConfig {
-        model: None,
-        max_tool_calls: limit,
-        task_deadline_seconds: 5,
-        daily_request_cap: 1,
-    }
-}
 fn budget() -> ToolBudget {
     ToolBudget::new(100, || Ok(10))
 }
@@ -92,6 +83,7 @@ async fn acknowledge_interrupt(server: &mut Server) {
     assert_eq!(interrupt["params"], json!({"threadId":"thread-1","turnId":"turn-1"}));
     write(server, json!({"id":interrupt["id"],"result":{}})).await;
 }
+
 async fn finish<R, W, P, H>(session: &mut ToolSession<'_, '_, R, W, P, H>)
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -127,7 +119,7 @@ async fn tools_correlate_original_ids_no_replay_and_sanitize_host_failure() {
                 stalled: false,
                 error,
             };
-            let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget()).unwrap();
+            let mut session = ToolSession::new(&mut call, host, catalog(), budget()).unwrap();
             finish(&mut session).await;
             drop(session);
             call.close(deadline()).await.unwrap();
@@ -173,10 +165,11 @@ async fn tools_correlate_original_ids_no_replay_and_sanitize_host_failure() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn tools_deadline_interrupts_matching_turn_without_blocking_pcm_or_transcript() {
+async fn tools_pending_request_does_not_block_pcm_or_transcript_before_cancellation() {
     let (mut io, mut server) = fixture();
     let (peer, state, tx) = peer(true, None);
     let host_state = Arc::new(HostState::default());
+    let pcm_sent = Notify::new();
     let client = async {
         let mut call = MediaCall::new(&mut io, peer);
         call.start(&options(), catalog().tools().to_vec(), deadline())
@@ -187,17 +180,16 @@ async fn tools_deadline_interrupts_matching_turn_without_blocking_pcm_or_transcr
             stalled: true,
             error: false,
         };
-        let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget()).unwrap();
-        let began = Instant::now();
+        let mut session = ToolSession::new(&mut call, host, catalog(), budget()).unwrap();
         let mut transcripts = Vec::new();
         loop {
             match session.next().await.unwrap() {
                 MediaEvent::Audio(frame) => {
                     assert_eq!(*frame, [17; 320]);
                     session.send([23; 320]).unwrap();
+                    pcm_sent.notify_one();
                 }
                 MediaEvent::Control(Event::Transcript { text, .. }) => {
-                    assert!(Instant::now() < began + std::time::Duration::from_secs(5));
                     transcripts.push(text);
                 }
                 MediaEvent::Control(Event::ReplyDone { .. }) => break,
@@ -221,64 +213,19 @@ async fn tools_deadline_interrupts_matching_turn_without_blocking_pcm_or_transcr
             json!({"threadId":"thread-1","role":"assistant","delta":"pending tool"}),
         )
         .await;
+        pcm_sent.notified().await;
+        turn(&mut server, "turn/completed", "turn-1").await;
         let failure = read(&mut server).await;
         assert_eq!(
             failure,
-            json!({"id":"slow","result":{"contentItems":[{"type":"inputText","text":"delegated turn deadline exceeded"}],"success":false}})
+            json!({"id":"slow","result":{"contentItems":[{"type":"inputText","text":"tool request cancelled"}],"success":false}})
         );
-        acknowledge_interrupt(&mut server).await;
-        turn(&mut server, "turn/completed", "turn-1").await;
         done(&mut server).await;
         stop(&mut server).await;
     };
     tokio::join!(client, remote);
     assert_eq!(state.sent.lock().unwrap().as_slice(), &[[23; 320]]);
     assert_eq!(host_state.calls.lock().unwrap().len(), 1);
-}
-
-#[tokio::test(start_paused = true)]
-async fn tools_silent_turn_expires_and_budget_refuses_extra_effects() {
-    for silent in [true, false] {
-        let (mut io, mut server) = fixture();
-        let (peer, _, _tx) = peer(true, None);
-        let state = Arc::new(HostState::default());
-        let client = async {
-            let mut call = MediaCall::new(&mut io, peer);
-            call.start(&options(), catalog().tools().to_vec(), deadline())
-                .await
-                .unwrap();
-            let host = Host {
-                state: state.clone(),
-                stalled: false,
-                error: false,
-            };
-            let mut session = ToolSession::new(&mut call, host, catalog(), config(1), budget()).unwrap();
-            finish(&mut session).await;
-            drop(session);
-            call.close(deadline()).await.unwrap();
-        };
-        let remote = async {
-            start(&mut server).await;
-            turn(&mut server, "turn/started", "turn-1").await;
-            if !silent {
-                tool(&mut server, json!(1), "turn-1", "call-1").await;
-                assert_eq!(read(&mut server).await["result"]["success"], true);
-                tool(&mut server, json!(2), "turn-1", "call-2").await;
-                assert_eq!(
-                    read(&mut server).await,
-                    json!({"id":2,"result":{"contentItems":[{"type":"inputText","text":"delegated turn budget exhausted"}],"success":false}})
-                );
-            }
-            acknowledge_interrupt(&mut server).await;
-            tool(&mut server, json!(3), "turn-1", "call-late").await;
-            assert_eq!(read(&mut server).await["result"]["success"], false);
-            turn(&mut server, "turn/completed", "turn-1").await;
-            done(&mut server).await;
-            stop(&mut server).await;
-        };
-        tokio::join!(client, remote);
-        assert_eq!(state.calls.lock().unwrap().len(), usize::from(!silent));
-    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -296,14 +243,13 @@ async fn tools_completed_turn_cancels_pending_and_queued_work_before_new_turn() 
             stalled: true,
             error: false,
         };
-        let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget()).unwrap();
+        let mut session = ToolSession::new(&mut call, host, catalog(), budget()).unwrap();
         assert_eq!(
             conversation::lifecycle(&mut session).await,
             [
                 (true, "turn-1".into()),
                 (false, "turn-1".into()),
                 (true, "turn-2".into()),
-                (false, "old-turn".into()),
                 (false, "turn-2".into())
             ]
         );
@@ -336,7 +282,7 @@ async fn tools_completed_turn_cancels_pending_and_queued_work_before_new_turn() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn tools_queued_distinct_calls_execute_once_and_new_turn_resets_only_turn_budget() {
+async fn tools_queued_distinct_calls_execute_once_and_call_ids_are_scoped_to_turn() {
     let (mut io, mut server) = fixture();
     let (peer, _, _tx) = peer(true, None);
     let state = Arc::new(HostState::default());
@@ -350,7 +296,7 @@ async fn tools_queued_distinct_calls_execute_once_and_new_turn_resets_only_turn_
             stalled: false,
             error: false,
         };
-        let mut session = ToolSession::new(&mut call, host, catalog(), config(2), budget()).unwrap();
+        let mut session = ToolSession::new(&mut call, host, catalog(), budget()).unwrap();
         finish(&mut session).await;
         drop(session);
         call.close(deadline()).await.unwrap();
@@ -403,7 +349,7 @@ async fn tools_pending_queue_overflow_fails_and_cleanup_reaps_media_without_extr
             stalled: true,
             error: false,
         };
-        let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget()).unwrap();
+        let mut session = ToolSession::new(&mut call, host, catalog(), budget()).unwrap();
         loop {
             match session.next().await {
                 Ok(MediaEvent::Control(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => (),

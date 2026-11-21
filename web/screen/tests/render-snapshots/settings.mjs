@@ -20,8 +20,6 @@ export function settingsBody(portos) {
                 },
                 agent: {
                     daily_request_cap: "1000",
-                    max_tool_calls: 6,
-                    task_deadline_seconds: 45,
                 },
                 home: { agent_tools: ["notes", "prompts"] },
             },

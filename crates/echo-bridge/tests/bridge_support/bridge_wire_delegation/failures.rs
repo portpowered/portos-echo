@@ -1,4 +1,4 @@
-//! Component T3: configured limits and an actual MCP HTTP 500, without replay.
+//! Component T3: daily admission and an actual MCP HTTP 500, without replay.
 use super::*;
 
 pub(super) async fn scripted(items: Vec<Value>) -> Model {
@@ -43,7 +43,9 @@ pub(super) fn answer(text: &str) -> Value {
     json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]})
 }
 
-async fn limits(tool_cap: bool) {
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge"]
+async fn bridge_wire_delegation_daily_cap_retained_across_tasks() {
     let directory = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let spoof = Spoof::start(Options::default()).await.unwrap();
@@ -55,7 +57,7 @@ async fn limits(tool_cap: bool) {
         true,
     )
     .await;
-    configure_cap(directory.path(), tool_cap);
+    configure_cap(directory.path());
     let model = scripted(vec![tool("call-1"), tool("call-2")]).await;
     let mut live = bridge_peer::Live::bind_frames(0).await;
     let mut bridge = Process::spawn(&mut run_command(directory.path(), &live.url, &model.origin));
@@ -63,14 +65,14 @@ async fn limits(tool_cap: bool) {
     bridge_short::register(&mut satellite, &mut bridge).await;
     let mut satellite = bridge_short::Satellite::new(satellite);
     assert_eq!(bridge_short::read_reply(&mut satellite).await.0["type"], "audio-start");
-    exercise_limits(&mut live, tool_cap).await;
+    exercise_limits(&mut live).await;
     bridge.finish(0).await;
-    check_limits(directory.path(), &model, &spoof, &live, tool_cap);
+    check_limits(directory.path(), &model, &spoof, &live);
     spoof.shutdown().await.unwrap();
 }
 
-fn check_limits(directory: &Path, model: &Model, spoof: &Spoof, live: &bridge_peer::Live, tool_cap: bool) {
-    assert_eq!(model.requests.lock().unwrap().len(), if tool_cap { 3 } else { 1 });
+fn check_limits(directory: &Path, model: &Model, spoof: &Spoof, live: &bridge_peer::Live) {
+    assert_eq!(model.requests.lock().unwrap().len(), 1);
     assert_eq!(spoof.snapshot().unwrap().calls.len(), 1);
     let entries = trace(&directory.join("trace"));
     assert_eq!(
@@ -87,53 +89,28 @@ fn check_limits(directory: &Path, model: &Model, spoof: &Spoof, live: &bridge_pe
     assert_eq!(live.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
-async fn exercise_limits(live: &mut bridge_peer::Live, tool_cap: bool) {
+async fn exercise_limits(live: &mut bridge_peer::Live) {
     for id in ["limit-1", "limit-2"] {
         live.events.send(event(id, "client")).await.unwrap();
         let value = tokio::time::timeout(OBSERVATION_TIMEOUT, live.commentary.recv())
             .await
             .unwrap()
             .unwrap();
-        let expected = limit_message(tool_cap, id);
         assert_eq!(
             serde_json::from_str::<Value>(&value).unwrap(),
             json!({
-                "type":"session.commentary.append","delegation_id":id,"text":expected
+                "type":"session.commentary.append","delegation_id":id,"text":"daily request limit reached"
             })
         );
     }
 }
 
-fn configure_cap(directory: &Path, tool_cap: bool) {
+fn configure_cap(directory: &Path) {
     let path = directory.join("bridge.toml");
-    let (before, after) = if tool_cap {
-        ("max_tool_calls = 8", "max_tool_calls = 1")
-    } else {
-        ("daily_request_cap = 500", "daily_request_cap = 1")
-    };
+    let (before, after) = ("daily_request_cap = 500", "daily_request_cap = 1");
     let content = std::fs::read_to_string(&path).unwrap();
     assert!(content.contains(before));
     std::fs::write(path, content.replace(before, after)).unwrap();
-}
-
-fn limit_message(tool_cap: bool, id: &str) -> &'static str {
-    match (tool_cap, id) {
-        (true, "limit-1") => "tool call limit reached",
-        (true, _) => "model request failed",
-        (false, _) => "daily request limit reached",
-    }
-}
-
-#[tokio::test]
-#[ignore = "T3 requires prebuilt echo-bridge"]
-async fn bridge_wire_delegation_daily_cap_retained_across_tasks() {
-    limits(false).await;
-}
-
-#[tokio::test]
-#[ignore = "T3 requires prebuilt echo-bridge"]
-async fn bridge_wire_delegation_tool_cap_refuses_one_additional_tool() {
-    limits(true).await;
 }
 
 #[tokio::test]

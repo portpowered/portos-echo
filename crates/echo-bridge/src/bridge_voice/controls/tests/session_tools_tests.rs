@@ -396,7 +396,7 @@ async fn session_tools_old_run_delivery_after_new_wake_is_refused_without_effect
 }
 
 #[tokio::test(start_paused = true)]
-async fn session_tools_dispatch_timeout_before_controller_delivery_cannot_apply() {
+async fn session_tools_cancelled_dispatch_before_controller_delivery_cannot_apply() {
     use echo_codex::codex_protocol::ToolCall;
     use echo_delegation::codex_dispatch::Dispatcher;
     let (mut grants, mut controller) = listening().await;
@@ -405,13 +405,7 @@ async fn session_tools_dispatch_timeout_before_controller_delivery_cannot_apply(
     let (_run, active) = tokio::sync::watch::channel(Some(grants.run.clone()));
     let host = Session::new(Inner::default(), RunnerSkills::default(), requests, active);
     let catalog = session_catalog(vec![], &[]).unwrap();
-    let config = echo_config::AgentConfig {
-        task_deadline_seconds: 1,
-        max_tool_calls: 8,
-        daily_request_cap: 100,
-        model: None,
-    };
-    let mut dispatcher = Dispatcher::new(host, catalog, "thread".into(), config).unwrap();
+    let mut dispatcher = Dispatcher::new(host, catalog, "thread".into()).unwrap();
     dispatcher.start_turn("thread", "turn").unwrap();
     let call = ToolCall {
         thread_id: "thread".into(),
@@ -421,14 +415,14 @@ async fn session_tools_dispatch_timeout_before_controller_delivery_cannot_apply(
         arguments: json!({}),
         namespace: None,
     };
-    let queued = async {
-        let request = receiver.recv().await.unwrap();
-        tokio::time::advance(Duration::from_secs(1)).await;
-        request
+    let request = {
+        let pending = dispatcher.dispatch(&call);
+        tokio::pin!(pending);
+        tokio::select! {
+            request = receiver.recv() => request.unwrap(),
+            _ = &mut pending => unreachable!("dispatch must await the controller"),
+        }
     };
-    let (outcome, request) = tokio::join!(dispatcher.dispatch(&call), queued);
-    assert!(!outcome.result.success);
-    assert!(outcome.interrupt.is_some());
     assert!(request.reply.is_closed());
     let mut receipts = Receipts::new();
     answer_one(request, &mut grants, &mut controller, &mut receipts).unwrap();

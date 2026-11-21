@@ -58,7 +58,12 @@ impl SettingsService {
         config: EffectiveConfig,
         prompts: PromptTextsV1,
     ) -> Result<(Self, mpsc::Sender<SettingsRequest>), SettingsError> {
-        let warnings = config.warning.into_iter().map(|error| error.to_string()).collect();
+        let warnings = config
+            .warning
+            .into_iter()
+            .chain(config.deprecations)
+            .map(|error| error.to_string())
+            .collect();
         let host = SettingsHost::open(config.base, config.overlay, prompts, warnings)?;
         Ok(Self::resume(Box::new(host)))
     }
@@ -190,7 +195,15 @@ fn commit(
         SettingsOperation::Prompt(echo_screen_server::PromptKind::Runner, _) => Some("runner"),
         _ => None,
     };
+    let legacy_v2 = matches!(
+        &operation,
+        SettingsOperation::SaveV2(patch) if super::settings_host::settings_v2::legacy_only(&patch.settings)
+    );
+    let legacy_v1 = legacy_v1_cap_only(&operation);
     let mut reply = host.transaction_with_grant(operation, link, view.scopes, owner);
+    if legacy_v2 {
+        return reply;
+    }
     if let (SettingsReply::SnapshotV2(snapshot), Some((state, challenge))) = (&mut reply, view.operation) {
         snapshot.portos.operation_state = state;
         snapshot.portos.challenge = challenge;
@@ -200,7 +213,7 @@ fn commit(
         SettingsReply::SavedV2(saved) => (saved.restart_pending, true),
         _ => return reply,
     };
-    let pending = !pack_only && prompt.is_none() && restart_pending && !restart.pending();
+    let pending = !pack_only && !legacy_v1 && prompt.is_none() && restart_pending && !restart.pending();
     let recorded = trace.map_or(Ok(()), |trace| {
         let (event, fields) = prompt.map_or_else(
             || ("settings.saved", serde_json::json!({"restart_pending":restart_pending})),
@@ -232,6 +245,17 @@ fn commit(
         };
     }
     reply
+}
+
+fn legacy_v1_cap_only(operation: &SettingsOperation) -> bool {
+    matches!(
+        operation,
+        SettingsOperation::Save(patch)
+            if patch.settings.voice.is_none() && patch.settings.codex.is_none()
+                && patch.settings.agent.as_ref().is_some_and(|agent| {
+                    agent.daily_request_cap.is_none() && agent.max_tool_calls.is_some()
+                })
+    )
 }
 
 #[cfg(test)]

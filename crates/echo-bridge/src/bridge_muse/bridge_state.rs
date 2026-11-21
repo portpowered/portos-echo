@@ -1,21 +1,17 @@
 use crate::Error;
 use echo_contracts::{ids::TaskId, task::TaskEvent};
-use tokio::time::Instant;
 
 pub(super) const UNAVAILABLE: &str = "Muse is unavailable. Please try again.";
-pub(super) const DEADLINE: &str = "Muse did not report a result in time";
 
 pub(super) struct Session {
-    pub deadline: Instant,
     pub terminal: bool,
     pub cancelled: bool,
     pub pending: bool,
 }
 
 impl Session {
-    pub fn new(deadline: Instant) -> Self {
+    pub fn new() -> Self {
         Self {
-            deadline,
             terminal: false,
             cancelled: false,
             pending: false,
@@ -23,9 +19,6 @@ impl Session {
     }
 
     pub fn before_poll(&mut self, id: &TaskId) -> Option<TaskEvent> {
-        if Instant::now() >= self.deadline {
-            return Some(self.fail(id, DEADLINE));
-        }
         if self.pending {
             // A dropped poll future may have consumed a persisted event. Never replay it.
             return Some(self.fail(id, UNAVAILABLE));
@@ -35,9 +28,6 @@ impl Session {
     }
 
     pub fn event(&mut self, id: &TaskId, bytes: &[u8]) -> TaskEvent {
-        if Instant::now() >= self.deadline {
-            return self.fail(id, DEADLINE);
-        }
         let Ok(event) = serde_json::from_slice::<TaskEvent>(bytes) else {
             return self.fail(id, UNAVAILABLE);
         };

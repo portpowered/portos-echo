@@ -3,8 +3,7 @@ use super::{Event, MediaCall, MediaEvent, RetainedCall};
 use crate::{Error, bridge_voice::VoicePort};
 use echo_agent_api::ToolHost;
 use echo_codex::codex_protocol::{RequestId, ToolContent, ToolResult};
-use echo_config::AgentConfig;
-use echo_delegation::codex_dispatch::{Catalog, DailyBudget, Dispatcher, Outcome};
+use echo_delegation::codex_dispatch::{Catalog, DailyBudget, Dispatcher};
 use echo_media::{MediaPeer, PcmFrame};
 use std::{
     collections::VecDeque,
@@ -19,7 +18,7 @@ use tokio::{
     time::Instant,
 };
 
-type Work<H> = Pin<Box<dyn Future<Output = (Dispatcher<H>, Option<Outcome>)>>>;
+type Work<H> = Pin<Box<dyn Future<Output = (Dispatcher<H>, Option<ToolResult>)>>>;
 
 /// Validated bridge-owned session control; raw arguments never leave the host.
 /// `Invalid` carries rejected arguments for the named builtin (`end` for
@@ -113,11 +112,10 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         port: &'p mut MediaCall<'a, R, W, P>,
         host: H,
         catalog: Catalog,
-        config: AgentConfig,
         budget: ToolBudget,
     ) -> Result<Self, Error> {
         let thread = port.thread_id().ok_or(Error::Input)?.to_owned();
-        let dispatcher = Dispatcher::new(host, catalog, thread, config).map_err(|_| Error::Input)?;
+        let dispatcher = Dispatcher::new(host, catalog, thread).map_err(|_| Error::Input)?;
         Ok(Self {
             port,
             dispatcher: Some(dispatcher),
@@ -158,7 +156,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         self
     }
 
-    /// Poll PCM, process IO, absolute turn expiry and tool work fairly.
+    /// Poll PCM, process IO and tool work fairly.
     /// Turn lifecycle remains observable after dispatch/cancellation accounting;
     /// an interrupted turn need not produce a realtime reply transcript.
     /// # Errors
@@ -170,16 +168,8 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         {
             return self.observed_control(event);
         }
-        let deadline = self.dispatcher.as_ref().and_then(Dispatcher::deadline);
         tokio::select! {
             biased;
-            () = expiry(deadline) => {
-                if let Some(params) = self.dispatcher.as_mut().and_then(Dispatcher::expire) {
-                    self.port.trace_timeout(&params.turn_id);
-                    self.port.interrupt(&params, Instant::now() + Duration::from_secs(2))?;
-                }
-                Ok(other())
-            },
             result = completed(&mut self.work) => {
                 self.settle(result)?;
                 Ok(other())
@@ -203,20 +193,45 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         // Publish lifecycle only after the dispatcher has consumed it. Deferred
         // completion must still cancel pending effects before the caller sees it.
         let observed = match &event {
-            Event::TurnStarted { thread, turn } => Event::TurnStarted {
-                thread: thread.clone(),
-                turn: turn.clone(),
+            Event::TurnStarted { thread, turn }
+                if self
+                    .active
+                    .as_ref()
+                    .is_none_or(|active| active.0 != *thread || active.1 != *turn) =>
+            {
+                Event::TurnStarted {
+                    thread: thread.clone(),
+                    turn: turn.clone(),
+                }
+            }
+            Event::Tool { call, .. } if self.active.is_none() => Event::TurnStarted {
+                thread: call.thread_id.clone(),
+                turn: call.turn_id.clone(),
             },
-            Event::TurnCompleted { thread, turn, answered } => Event::TurnCompleted {
-                thread: thread.clone(),
-                turn: turn.clone(),
-                answered: *answered,
-            },
+            Event::TurnCompleted { thread, turn, answered }
+                if self
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| active.0 == *thread && active.1 == *turn) =>
+            {
+                Event::TurnCompleted {
+                    thread: thread.clone(),
+                    turn: turn.clone(),
+                    answered: *answered,
+                }
+            }
             _ => Event::Other,
         };
         let deferred = self.work.is_some();
         self.control(event)?;
-        Ok(if deferred {
+        let rejected_start = match &observed {
+            Event::TurnStarted { thread, turn } => self
+                .active
+                .as_ref()
+                .is_none_or(|active| active.0 != *thread || active.1 != *turn),
+            _ => false,
+        };
+        Ok(if deferred || rejected_start {
             other()
         } else {
             MediaEvent::Control(observed)
@@ -309,26 +324,19 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         Ok(())
     }
 
-    fn settle(&mut self, (dispatcher, outcome): (Dispatcher<H>, Option<Outcome>)) -> Result<(), Error> {
+    fn settle(&mut self, (dispatcher, result): (Dispatcher<H>, Option<ToolResult>)) -> Result<(), Error> {
         self.work = None;
         self.session_answer_pending = false;
         self.cancel = None;
         self.dispatcher = Some(dispatcher);
         let id = self.request.take().ok_or(Error::Unavailable)?;
-        let outcome = outcome.unwrap_or_else(|| Outcome {
-            result: ToolResult {
-                content_items: vec![ToolContent::InputText {
-                    text: "tool request cancelled".into(),
-                }],
-                success: false,
-            },
-            interrupt: None,
+        let result = result.unwrap_or_else(|| ToolResult {
+            content_items: vec![ToolContent::InputText {
+                text: "tool request cancelled".into(),
+            }],
+            success: false,
         });
-        self.port.answer_tool(&id, &outcome.result)?;
-        if let Some(params) = outcome.interrupt {
-            self.port.interrupt(&params, Instant::now() + Duration::from_secs(2))?;
-        }
-        Ok(())
+        self.port.answer_tool(&id, &result)
     }
 }
 
@@ -376,7 +384,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
     }
 }
 
-async fn completed<H>(work: &mut Option<Work<H>>) -> (Dispatcher<H>, Option<Outcome>) {
+async fn completed<H>(work: &mut Option<Work<H>>) -> (Dispatcher<H>, Option<ToolResult>) {
     match work {
         Some(work) => work.await,
         None => std::future::pending().await,
@@ -389,13 +397,6 @@ async fn requested(session: &mut Option<mpsc::Receiver<SessionRequest>>) -> Sess
             Some(request) => request,
             None => std::future::pending().await,
         },
-        None => std::future::pending().await,
-    }
-}
-
-async fn expiry(deadline: Option<Instant>) {
-    match deadline {
-        Some(deadline) => tokio::time::sleep_until(deadline).await,
         None => std::future::pending().await,
     }
 }

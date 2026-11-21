@@ -56,6 +56,7 @@ async fn m6_result_wakes_owner_before_terminal_and_abandon_discards_observation(
         utc_day: Arc::new(|| 0),
         credentials: None,
         runner: None,
+        stop: None,
         pending: Some(tokio::spawn(std::future::pending())),
         completed: None,
         sink: sink.clone(),
@@ -69,10 +70,11 @@ async fn m6_result_wakes_owner_before_terminal_and_abandon_discards_observation(
     assert!(host.completed.is_none());
     assert!(!host.pending.as_ref().unwrap().is_finished());
     assert!(matches!(host.observed, Some(Observation::Emotion(_, _))));
-    assert!(host.abandon());
+    host.pending.as_ref().unwrap().abort();
+    assert!(host.abandon().await);
     assert!(host.observed.is_none());
     assert!(host.active.is_none());
     assert!(host.pending.is_none());
     assert!(host.receive.try_recv().is_err());
-    assert!(!host.abandon());
+    assert!(!host.abandon().await);
 }

@@ -134,15 +134,7 @@ async fn drive(
         control = commands.recv() => {if let Some(Control::Quiesce(done)) = control {let _ = done.send(());} None},
     };
     if let Some(offer) = offer {
-        let mut remote = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
-            .await
-            .map_err(|_| "session: media bind")?;
-        let answer = remote
-            .answer(offer["offer"].as_str().ok_or("session: missing offer")?)
-            .await
-            .map_err(|_| "session: SDP answer")?;
-        process.send(&json!({"answer":answer})).await?;
-        *peer = Some(remote);
+        *peer = Some(answer_offer(process, &offer).await?);
         conversation(
             process,
             commands,
@@ -161,6 +153,18 @@ async fn drive(
         }
         observation(observed, &value)?;
     }
+}
+
+async fn answer_offer(process: &mut Process, offer: &Value) -> Result<LivePeer, String> {
+    let mut remote = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
+        .await
+        .map_err(|_| "session: media bind")?;
+    let answer = remote
+        .answer(offer["offer"].as_str().ok_or("session: missing offer")?)
+        .await
+        .map_err(|_| "session: SDP answer")?;
+    process.send(&json!({"answer":answer})).await?;
+    Ok(remote)
 }
 
 async fn conversation(
@@ -196,7 +200,13 @@ async fn conversation(
             }
         };
         if let Some(value) = value {
-            observation(observed, &value)?;
+            if value["event"] == "provider.offer" && !quiesced {
+                peer.close();
+                *peer = answer_offer(process, &value).await?;
+                sequence = Sequence::default();
+            } else {
+                observation(observed, &value)?;
+            }
             continue;
         }
         if !control(action, process, peer, &mut sequence, &mut question, &mut quiesced).await? {

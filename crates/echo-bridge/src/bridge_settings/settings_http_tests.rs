@@ -113,7 +113,7 @@ async fn t3_settings_host_http_sparse_merge_validation_permissions_and_base_pres
     assert!(!original.restart_pending);
     assert_eq!(
         fixture.patch(serde_json::json!({"agent":{"max_tool_calls":4}})).await,
-        (StatusCode::OK, serde_json::json!({"version":1,"restart_pending":true}))
+        (StatusCode::OK, serde_json::json!({"version":1,"restart_pending":false}))
     );
     assert_eq!(
         fs::read_to_string(fixture.path("settings.toml")).unwrap(),
@@ -371,7 +371,7 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     let original_base = fs::read(&base).unwrap();
     let path = fixture.path("settings.toml");
     fs::create_dir(&path).unwrap();
-    let fields = json!({"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner","delegate_fast":true},"agent":{"max_tool_calls":6}}});
+    let fields = json!({"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner","delegate_fast":true},"agent":{"daily_request_cap":"6","max_tool_calls":6,"task_deadline_seconds":45}}});
     let response = fixture.client.patch(&url).json(&fields).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body: Value = response.json().await.unwrap();
@@ -392,7 +392,7 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     let data = snapshot_v2(&fixture, &url).await;
     assert_eq!(data["settings"]["codex"]["delegate_fast"], true);
     assert_eq!(data["restart_pending"], true);
-    assert_eq!(data["settings"]["agent"]["max_tool_calls"], 6);
+    assert_eq!(data["settings"]["agent"], json!({"daily_request_cap":"6"}));
     assert_eq!(data["settings"]["codex"]["delegate_model"], "synthetic-runner");
     assert_eq!(data["settings"]["codex"]["web_search"], "cached");
     assert_eq!(data["portos"]["link_status"], "unconfigured");
@@ -402,7 +402,11 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
         serde_json::to_value(&v1.settings.voice).unwrap()
     );
     assert_eq!(data["prompts"], serde_json::to_value(&v1.prompts).unwrap());
-    assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 6);
+    assert_eq!(fixture.snapshot().await.settings.agent.max_tool_calls, 8);
+    let persisted = fs::read_to_string(&path).unwrap();
+    let decoded = SettingsOverlay::from_toml_str(&persisted).unwrap();
+    assert_eq!(decoded.legacy_tool_cap(), None);
+    assert!(!persisted.contains("task_deadline_seconds"));
     disable_fast_mode(&fixture, &url, &path).await;
     assert_eq!(fs::read(base).unwrap(), original_base);
     owner_only(&path);
@@ -414,6 +418,9 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     .unwrap();
     fixture.close().await;
 }
+
+#[path = "settings_http_tests/legacy.rs"]
+mod legacy;
 
 async fn disable_fast_mode(fixture: &Fixture, url: &str, path: &Path) {
     use serde_json::{Value, json};
@@ -433,7 +440,7 @@ async fn disable_fast_mode(fixture: &Fixture, url: &str, path: &Path) {
     assert_eq!(after["settings"]["codex"]["delegate_fast"], false);
     assert_eq!(after["settings"]["codex"]["delegate_model"], "synthetic-runner");
     assert_eq!(after["settings"]["codex"]["web_search"], "cached");
-    assert_eq!(after["settings"]["agent"]["max_tool_calls"], 6);
+    assert_eq!(after["settings"]["agent"], json!({"daily_request_cap":"6"}));
     let overlay = fs::read_to_string(path).unwrap();
     assert!(overlay.contains("delegate_fast = false\n"));
 }

@@ -235,7 +235,7 @@ fn settings_v2_sparse_wire_preserves_decimal_cap_and_refuses_other_shapes() -> R
     use echo_screen_contract::settings_v1::SettingsPatchV1;
     use echo_screen_contract::settings_v2::SettingsPatchV2;
 
-    let wire = r#"{"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner"},"agent":{"daily_request_cap":"9223372036854775807","max_tool_calls":6},"portos":{"scopes":["endpoint:read"],"allow_tools":["endpoint_query"]}}}"#;
+    let wire = r#"{"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner"},"agent":{"daily_request_cap":"9223372036854775807","max_tool_calls":6,"task_deadline_seconds":45},"portos":{"scopes":["endpoint:read"],"allow_tools":["endpoint_query"]}}}"#;
     let patch = serde_json::from_str::<SettingsPatchV2>(wire)?;
     assert!(patch.settings.valid_shape());
     round_trip(&patch, wire)?;
@@ -293,7 +293,7 @@ fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>
         "settings":{
             "voice":{"session_listen_enabled":true,"session_listen_seconds":15},
             "codex":{"voice":"marin","web_search":"cached","delegate_model":"synthetic-runner","delegate_effort":"low","delegate_fast":false},
-            "agent":{"daily_request_cap":"9223372036854775807","max_tool_calls":6,"task_deadline_seconds":45},
+            "agent":{"daily_request_cap":"9223372036854775807"},
             "home":{"agent_tools":["notes","prompts"]}
         },
         "allowed_voices":["default","marin"],

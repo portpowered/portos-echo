@@ -36,6 +36,11 @@ fn main() -> ExitCode {
             return input_error(&error);
         }
     };
+    if let Some(startup) = &settings.startup {
+        for warning in &startup.deprecations {
+            let _ = writeln!(std::io::stderr(), "echo-bridge: {warning}");
+        }
+    }
     if settings.sim_clock {
         return outcome(bridge_mcp::bridge_clock::execute(settings));
     }

@@ -26,7 +26,9 @@ pub enum ServeNotice {
     Listening,
     Probe,
     /// The run ended without a reply; the device was told and service continues.
-    Unanswered,
+    Unanswered {
+        reason: &'static str,
+    },
     Device(LinkEvent<()>),
     Session(SessionNotice),
 }
@@ -143,14 +145,26 @@ where
                     .map_err(bridge_codex::rpc_error)?;
                 client.fail_run(echo_link::RunFailure::KillSwitch).await?;
                 gate.tripped(&mut observe)?;
-            } else if result == Err(Error::NoResponse) {
-                unanswered(&*client, &mut observe).await?;
             } else {
-                result?;
+                report_run_end(client, result, &mut observe).await?;
             }
         }
     });
     super::earcon::scope(client, wake_earcon, work).await
+}
+
+async fn report_run_end(
+    client: &impl EchoLink,
+    result: Result<(), Error>,
+    observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let reason = match result {
+        Err(Error::SessionCeiling) => "session_ceiling",
+        Err(Error::NoResponse) => "no_response",
+        other => return other,
+    };
+    client.fail_run(echo_link::RunFailure::Unavailable).await?;
+    observe(ServeNotice::Unanswered { reason })
 }
 
 fn validate_service(options: &ServeOptions<'_>) -> Result<(), Error> {
@@ -159,16 +173,6 @@ fn validate_service(options: &ServeOptions<'_>) -> Result<(), Error> {
         return Err(Error::Input);
     }
     Ok(())
-}
-
-/// Only that run failed, and its call is already closed. End the device's run
-/// and stay connected for the next wake.
-async fn unanswered<L: EchoLink>(
-    client: &L,
-    observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
-) -> Result<(), Error> {
-    client.fail_run(echo_link::RunFailure::Unavailable).await?;
-    observe(ServeNotice::Unanswered)
 }
 
 async fn admitted<L, R, W, P>(
@@ -191,6 +195,7 @@ where
     P: MediaPeer,
 {
     let (tools, clock, mut trace) = context;
+    let opened = Instant::now();
     tokio::pin!(cancelled);
     if let Some(tools) = &tools {
         tools.budget.check_call()?;
@@ -223,7 +228,7 @@ where
             device,
             io,
             media,
-            (options_call, tools),
+            (options_call, tools, opened),
             cancelled.as_mut(),
             &mut observer,
         ))
@@ -234,7 +239,7 @@ where
         device,
         io,
         media,
-        (options_call, trace),
+        (options_call, trace, opened),
         cancelled.as_mut(),
         &mut observer,
     )

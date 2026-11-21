@@ -41,10 +41,10 @@ async fn deadline_precedes_ready_work_including_zero_and_cancelled_poll() {
             polled.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok("too late".into())
         };
-        assert_eq!(events.drive(run, deadline).await, Err("task timed out"));
+        assert_eq!(events.drive(run, Some(deadline)).await, Err("task timed out"));
         assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
         events.cancel(&id()).await;
-        assert_eq!(events.drive(pending(), deadline).await, Err("task cancelled"));
+        assert_eq!(events.drive(pending(), Some(deadline)).await, Err("task cancelled"));
     }
 }
 

@@ -3,7 +3,7 @@
 use super::*;
 use echo_agent_api::ToolHost;
 use echo_bridge::bridge_codex::{ToolBudget, ToolSession};
-use echo_config::{AgentConfig, McpAuth, McpServer};
+use echo_config::{McpAuth, McpServer};
 use echo_delegation::codex_dispatch::Catalog;
 use echo_mcp_client::{McpClient, TokenError, TokenProvider};
 use echo_spoof_mcp::{Fault, Spoof};
@@ -370,14 +370,8 @@ async fn dispatch<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Un
     (negative, exhausted): (bool, bool),
     budget: ToolBudget,
 ) {
-    let config = AgentConfig {
-        max_tool_calls: 8,
-        task_deadline_seconds: 10,
-        daily_request_cap: 1,
-        model: None,
-    };
     let call_thread = call.thread_id().map(str::to_owned);
-    let mut session = ToolSession::new(call, host, catalog, config, budget).unwrap();
+    let mut session = ToolSession::new(call, host, catalog, budget).unwrap();
     let mut started = None;
     let expected = if negative {
         "I couldn't call test echo."

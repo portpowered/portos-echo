@@ -41,8 +41,6 @@ launch = "standalone"
 ca_file = "/data/local/echo-bridge/cacert.pem"
 
 [agent]
-max_tool_calls = 8
-task_deadline_seconds = 60
 daily_request_cap = 500
 
 # Public pilot endpoints; replace with your deployment's MCP resource URL.

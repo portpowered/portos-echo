@@ -22,11 +22,9 @@ async fn delegation_trace_configured_native_managed_exits_close_once_without_eff
 
 #[tokio::test]
 #[ignore = "T3 controlled child and loopback MCP"]
-async fn delegation_trace_configured_native_deadline_and_actual_interrupt_keep_first_outcome() {
-    for cause in ["timeout", "interrupt"] {
-        let fixture = Fixture::new("chatgpt");
-        journey(&fixture, cause).await;
-    }
+async fn delegation_trace_configured_native_session_ceiling_keeps_first_outcome() {
+    let fixture = Fixture::new("chatgpt");
+    journey(&fixture, "timeout").await;
 }
 
 async fn journey(fixture: &Fixture, cause: &str) {
@@ -35,11 +33,8 @@ async fn journey(fixture: &Fixture, cause: &str) {
         .await
         .unwrap();
     let mut config = config(fixture, spoof.url());
-    if cause == "interrupt" {
-        config.agent.max_tool_calls = 1;
-    }
     if cause == "timeout" {
-        config.agent.task_deadline_seconds = 1;
+        config.voice.session_max_seconds = 1;
     }
     let observer = Observer::default();
     let closed = Arc::new(AtomicUsize::new(0));
@@ -119,7 +114,7 @@ async fn settle(fixture: &Fixture, cause: &str, observer: &Observer, stop: Optio
                 .iter()
                 .find(|row| row["event"] == "run.ended")
                 .unwrap()["reason"],
-            "no_response"
+            "session_ceiling"
         );
         stop.unwrap().send(()).unwrap();
         while observer.commands().last() != Some(&echo_link::fake::Command::Close) {
@@ -187,7 +182,8 @@ fn assert_rows(fixture: &Fixture, cause: &str) {
     assert_eq!(resolved.len(), 1);
     writeln!(std::io::stdout(), "native exit {cause}: {}", resolved[0]).unwrap();
     assert_terminal(resolved[0], created[0], cause);
-    assert_counts(&rows, resolved[0], cause);
+    assert_eq!(rows.iter().filter(|row| row["event"] == "delegation.tool").count(), 0);
+    assert_eq!(resolved[0]["tool_counts"], json!({}));
     assert!(
         !std::fs::read_to_string(fixture.directory.path().join("tool-trace"))
             .unwrap()
@@ -206,7 +202,6 @@ fn expected(cause: &str) -> (&str, Option<&str>) {
         "media" => ("failed", Some("media_failed")),
         "empty" => ("completed", None),
         "timeout" => ("timed_out", None),
-        "interrupt" => ("interrupted", None),
         _ => ("cancelled", None),
     }
 }
@@ -223,21 +218,4 @@ fn assert_terminal(resolved: &Value, created: &Value, cause: &str) {
     assert_eq!(resolved["thread_id"], "fixture-thread");
     assert_eq!(resolved["run_id"], "run-1");
     assert!(resolved.get("answer").is_none());
-}
-
-fn assert_counts(rows: &[Value], resolved: &Value, cause: &str) {
-    let tools: Vec<_> = rows.iter().filter(|row| row["event"] == "delegation.tool").collect();
-    if cause == "interrupt" {
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["status"], "failed");
-        assert_eq!(resolved["tool_counts"], json!({"mcp":1}));
-        for event in ["turn/interrupt", "turn.interrupt_acknowledged", "turn.interrupted"] {
-            let receipts: Vec<_> = rows.iter().filter(|row| row["event"] == event).collect();
-            assert_eq!(receipts.len(), 1);
-            assert_eq!(receipts[0]["turn_id"], "fixture-turn");
-        }
-    } else {
-        assert_eq!(tools.len(), 0);
-        assert_eq!(resolved["tool_counts"], json!({}));
-    }
 }

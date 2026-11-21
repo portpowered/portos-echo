@@ -50,7 +50,8 @@ fn screen_settings_sparse_merge_preserves_base_and_only_explicit_keys() {
     let second = first.merge(&overlay("[voice]\nsession_listen_enabled=false\n"));
     let third = second.merge(&overlay("[agent]\nmax_tool_calls=1\n"));
     let applied = third.apply_to(&base).unwrap();
-    assert_eq!(applied.agent.max_tool_calls, 1);
+    assert_eq!(third.legacy_tool_cap(), Some(1));
+    assert_eq!(applied.agent, base.agent);
     assert!(!applied.voice.session_listen_enabled);
     assert_eq!(applied.voice.session_listen_seconds, 15);
     assert_eq!(applied.voice.session_max_seconds, 600);
@@ -172,7 +173,7 @@ fn screen_settings_range_boundaries_and_cross_field_validation_use_real_config()
         let settings = overlay(&format!("[agent]\ndaily_request_cap={cap}\nmax_tool_calls=32"));
         let config = settings.apply_to(&base).unwrap();
         assert_eq!(config.agent.daily_request_cap, cap);
-        assert_eq!(config.agent.max_tool_calls, 32);
+        assert_eq!(settings.legacy_tool_cap(), Some(32));
         assert_eq!(overlay(&settings.to_toml_string().unwrap()), settings);
     }
     let short = BridgeConfig::from_toml_str(&format!("{MINIMAL}\n[voice]\nsession_max_seconds=20")).unwrap();
@@ -255,7 +256,7 @@ fn screen_settings_effective_load_overrides_only_the_allowlist_without_writes() 
     let directory = Directory::new().unwrap();
     let (path, input) = home_config(&directory);
     let overlay_path = directory.0.join("settings.toml");
-    let text = "[agent]\nmax_tool_calls=2\ndaily_request_cap=9007199254740993\n[voice]\nsession_listen_enabled=false\nsession_listen_seconds=5\n[codex]\nvoice='marin'";
+    let text = "[agent]\nmax_tool_calls=2\ntask_deadline_seconds=5\ndaily_request_cap=9007199254740993\n[voice]\nsession_listen_enabled=false\nsession_listen_seconds=5\n[codex]\nvoice='marin'";
     std::fs::write(&overlay_path, text).unwrap();
     let base = BridgeConfig::from_toml_str(&input).unwrap();
     assert_eq!(BridgeConfig::load(&path).unwrap(), base);
@@ -265,6 +266,12 @@ fn screen_settings_effective_load_overrides_only_the_allowlist_without_writes() 
         assert!(effective.warning.is_none());
         assert_eq!(effective.base, base);
         assert_eq!(effective.overlay, overlay(text));
+        assert_eq!(effective.overlay.legacy_tool_cap(), Some(2));
+        assert_eq!(
+            effective.config.agent.task_deadline_seconds,
+            base.agent.task_deadline_seconds
+        );
+        assert_eq!(effective.config.agent.max_tool_calls, base.agent.max_tool_calls);
         assert_eq!(effective.config, overlay(text).apply_to(&base).unwrap());
         assert_eq!(effective.config.agent.daily_request_cap, 9_007_199_254_740_993);
     }
@@ -362,4 +369,40 @@ fn screen_settings_symlink_overlay_cannot_read_a_different_file() {
         "settings.toml: ignored overlay: settings.toml: expected regular file"
     );
     assert_eq!(std::fs::read_to_string(target).unwrap(), text);
+}
+
+#[test]
+fn load_reports_legacy_agent_keys_without_applying_values() {
+    let input = EXAMPLE;
+    let directory = Directory::new().unwrap();
+    let path = directory.0.join("bridge.toml");
+    let legacy = input.replacen(
+        "[agent]\n",
+        "[agent]\nmax_tool_calls = 1\ntask_deadline_seconds = 5\n",
+        1,
+    );
+    std::fs::write(&path, &legacy).unwrap();
+    let (base, diagnostics) = BridgeConfig::load_with_warnings(&path).unwrap();
+    let updated = BridgeConfig::from_toml_str(input).unwrap();
+    assert_eq!(base, updated);
+    assert_eq!(base.agent.daily_request_cap, 500);
+    assert_eq!(base.voice.session_max_seconds, 600);
+    assert_eq!(
+        diagnostics.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        [
+            "agent.max_tool_calls: deprecated and ignored",
+            "agent.task_deadline_seconds: deprecated and ignored",
+        ]
+    );
+    let effective = BridgeConfig::load_effective(&path).unwrap();
+    assert_eq!(effective.config, updated);
+    assert_eq!(
+        effective
+            .deprecations
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        diagnostics.iter().map(ToString::to_string).collect::<Vec<_>>()
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
 }

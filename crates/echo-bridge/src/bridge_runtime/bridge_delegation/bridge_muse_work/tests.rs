@@ -3,11 +3,12 @@ use super::*;
 use echo_agent_api::AgentError;
 use echo_contracts::ids::DelegationId;
 use serde_json::Value;
+use std::time::Duration;
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
-use tokio::sync::Notify;
+use tokio::{sync::Notify, time::Instant};
 #[path = "trace_tests.rs"]
 mod trace_tests;
 
@@ -56,6 +57,9 @@ impl AgentBackend for Fake {
         self.state.cancels.lock().unwrap().push(id.clone());
         std::future::ready(Ok(()))
     }
+}
+fn cutoff() -> Instant {
+    Instant::now() + Duration::from_millis(4_999)
 }
 fn id() -> TaskId {
     TaskId::new("task-raw-7").unwrap()
@@ -160,23 +164,23 @@ async fn muse_work_rejected_admission_has_no_remote_id_or_fabricated_terminal() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn muse_work_original_deadline_is_nonretryable_and_never_cancels_an_expired_terminal() {
+async fn bridge_muse_waits_for_owner_after_the_legacy_deadline() {
     let fake = fake(vec![]);
+    let state = fake.state.clone();
     let witness = Witness::new();
-    let (_stop, receive) = oneshot::channel();
-    let start = Instant::now();
+    let trace = witness.trace.clone();
+    let (stop, receive) = oneshot::channel();
+    let worker = tokio::spawn(async move { execute(&fake, task(), "run-7", trace, receive).await });
+    state.polled.notified().await;
+    tokio::time::advance(Duration::from_secs(61)).await;
+    assert!(!worker.is_finished());
+    stop.send(()).unwrap();
     assert_eq!(
-        execute(&fake, task(), "run-7", witness.trace.clone(), receive)
-            .await
-            .map(|value| value.map(|prepared| prepared.text)),
-        Ok(Some(DEADLINE.into()))
+        worker.await.unwrap().map(|value| value.map(|prepared| prepared.text)),
+        Ok(None)
     );
-    assert_eq!(Instant::now() - start, Duration::from_secs(5));
-    let terminal = witness.records().pop().unwrap();
-    assert_eq!(terminal["status"], "failed");
-    assert_eq!(terminal["retryable"], false);
-    assert_eq!(terminal["elapsed_ms"], 5000);
-    assert_eq!(*fake.state.cancels.lock().unwrap(), vec![]);
+    assert_eq!(*state.cancels.lock().unwrap(), vec![id()]);
+    assert_eq!(witness.records(), vec![fields("muse.submit")]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -282,14 +286,6 @@ impl crate::bridge_runtime::journey::bridge_live::LivePort for Live {
     }
 }
 
-fn config() -> echo_config::AgentConfig {
-    echo_config::AgentConfig {
-        max_tool_calls: 8,
-        task_deadline_seconds: 5,
-        daily_request_cap: 1,
-        model: None,
-    }
-}
 fn delegation(id: &str, target: &str) -> echo_contracts::live::LiveEvent {
     serde_json::from_value(
         json!({"type":"session.delegation.created","delegation":{"id":id,"target":target,"input":"private request"}}),
@@ -298,26 +294,31 @@ fn delegation(id: &str, target: &str) -> echo_contracts::live::LiveEvent {
 }
 
 #[tokio::test(start_paused = true)]
-async fn muse_host_delivers_once_on_owner_and_deduplicates_busy_or_unsupported_work() {
+async fn bridge_muse_host_delivers_once_on_owner_and_deduplicates_busy_or_unsupported_work() {
     use super::super::bridge_muse_host::Muse;
     let fake = fake(vec![TaskEvent::Completed {
         task_id: id(),
         summary: "completed test job".into(),
     }]);
     let state = fake.state.clone();
-    let mut host = Muse::new(fake, config(), Arc::new(|| 7));
+    let mut host = Muse::new(fake, 1, Arc::new(|| 7));
     let mut witness = Witness::new();
     let event = delegation("delegation-raw-7", "client");
-    assert!(host.dispatch(&event, "run-7", &mut witness.trace).unwrap());
-    assert!(!host.dispatch(&event, "run-7", &mut witness.trace).unwrap());
+    assert!(host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap());
+    assert!(!host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap());
     assert!(
         !host
-            .dispatch(&delegation("busy", "client"), "run-7", &mut witness.trace)
+            .dispatch(&delegation("busy", "client"), "run-7", &mut witness.trace, cutoff())
             .unwrap()
     );
     assert!(
         !host
-            .dispatch(&delegation("responses", "responses"), "run-7", &mut witness.trace)
+            .dispatch(
+                &delegation("responses", "responses"),
+                "run-7",
+                &mut witness.trace,
+                cutoff()
+            )
             .unwrap()
     );
     host.ready().await;
@@ -341,15 +342,31 @@ async fn muse_host_delivers_once_on_owner_and_deduplicates_busy_or_unsupported_w
 }
 
 #[tokio::test(start_paused = true)]
-async fn muse_host_abandon_joins_cancel_and_suppresses_late_commentary() {
+async fn bridge_muse_host_abandon_joins_cancel_and_suppresses_late_commentary() {
     use super::super::bridge_muse_host::Muse;
     let fake = fake(vec![]);
     let state = fake.state.clone();
-    let mut host = Muse::new(fake, config(), Arc::new(|| 7));
+    let mut host = Muse::new(fake, 1, Arc::new(|| 7));
     let mut witness = Witness::new();
     assert!(
-        host.dispatch(&delegation("delegation-raw-7", "client"), "run-7", &mut witness.trace)
+        !host
+            .dispatch(
+                &delegation("expired", "client"),
+                "run-7",
+                &mut witness.trace,
+                Instant::now()
+            )
             .unwrap()
+    );
+    assert!(state.tasks.lock().unwrap().is_empty());
+    assert!(
+        host.dispatch(
+            &delegation("delegation-raw-7", "client"),
+            "run-7",
+            &mut witness.trace,
+            cutoff()
+        )
+        .unwrap()
     );
     state.polled.notified().await;
     assert!(host.abandon().await);
@@ -369,21 +386,21 @@ async fn muse_host_abandon_joins_cancel_and_suppresses_late_commentary() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn muse_host_budget_survives_new_calls_and_cancellation_then_rolls_over_at_new_day() {
+async fn bridge_muse_host_budget_survives_new_calls_and_cancellation_then_rolls_over_at_new_day() {
     use super::super::bridge_muse_host::Muse;
     use std::sync::atomic::{AtomicU64, Ordering};
     let fake = fake(vec![]);
     let state = fake.state.clone();
     let day = Arc::new(AtomicU64::new(7));
     let clock = day.clone();
-    let mut host = Muse::new(fake, config(), Arc::new(move || clock.load(Ordering::Relaxed)));
+    let mut host = Muse::new(fake, 1, Arc::new(move || clock.load(Ordering::Relaxed)));
     let mut witness = Witness::new();
     let event = delegation("delegation-raw-7", "client");
-    assert!(host.dispatch(&event, "run-7", &mut witness.trace).unwrap());
+    assert!(host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap());
     state.polled.notified().await;
     assert!(host.abandon().await);
     host.new_call();
-    assert!(host.dispatch(&event, "run-8", &mut witness.trace).unwrap());
+    assert!(host.dispatch(&event, "run-8", &mut witness.trace, cutoff()).unwrap());
     let mut live = Live::default();
     host.service(&mut live, &mut witness.trace).await.unwrap();
     assert_eq!(
@@ -393,7 +410,7 @@ async fn muse_host_budget_survives_new_calls_and_cancellation_then_rolls_over_at
     assert_eq!(state.tasks.lock().unwrap().len(), 1);
     day.store(8, Ordering::Relaxed);
     host.new_call();
-    assert!(host.dispatch(&event, "run-9", &mut witness.trace).unwrap());
+    assert!(host.dispatch(&event, "run-9", &mut witness.trace, cutoff()).unwrap());
     state.polled.notified().await;
     assert!(host.abandon().await);
     assert_eq!(state.tasks.lock().unwrap().len(), 2);

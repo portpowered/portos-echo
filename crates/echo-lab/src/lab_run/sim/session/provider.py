@@ -97,6 +97,7 @@ class Script:
         if step.get('wait_for_release'):
             emit({'event': 'provider.waiting', 'turn': turn})
             assert release_goodbye.wait(20), 'runner was not released at the scripted boundary'
+            release_goodbye.clear()
         if 'call' in step:
             item = {'type': 'function_call', 'id': f'fc-{turn}-{self.step}', 'call_id': f'session-{turn}-{self.step}',
                     'name': step['call'], 'arguments': json.dumps(step['arguments']), 'status': 'completed'}
@@ -144,7 +145,10 @@ class Script:
         assert turn == len(observed['delegations']), 'unexpected delegation identity'
         if turn:
             assert self.step == len(self.turns[turn - 1]), 'overlapping delegation'
-            if 'say' in self.turns[turn - 1][-1]:
+            prior = self.turns[turn - 1][-1]
+            if prior.get('abandoned'):
+                assert f'session-turn-{turn - 1}' not in observed['appends'], 'abandoned turn had a handback'
+            elif 'say' in prior:
                 assert f'session-turn-{turn - 1}' in observed['appends'], 'ordinary handback is missing'
         self.step = 0
         name = f'session-turn-{turn}'

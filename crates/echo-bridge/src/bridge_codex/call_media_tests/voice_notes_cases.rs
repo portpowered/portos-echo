@@ -7,7 +7,7 @@ use crate::{
     bridge_trace::Trace,
 };
 use echo_agent_api::{ToolError, ToolHost, ToolResult, ToolSpec};
-use echo_config::{AgentConfig, AgentTools, HomeConfig};
+use echo_config::{AgentTools, HomeConfig};
 use echo_delegation::codex_dispatch::Catalog;
 use serde_json::Value;
 use std::time::Duration;
@@ -29,15 +29,6 @@ impl ToolHost for NoMcp {
 fn catalog(notes: &Notes) -> Catalog {
     Catalog::with_local(vec![], &[], notes.specs(), &NAMES).unwrap()
 }
-fn config() -> AgentConfig {
-    AgentConfig {
-        model: None,
-        max_tool_calls: 8,
-        task_deadline_seconds: 5,
-        daily_request_cap: 100,
-    }
-}
-
 async fn opened(server: &mut Server, thread: &str, expected: &Catalog) {
     let request = read(server).await;
     assert_eq!(request["method"], "thread/start");
@@ -127,14 +118,7 @@ async fn two_calls(io: &mut Io, home: &HomeConfig, trace: &Trace) {
             host: NoMcp,
             notes: notes.clone(),
         };
-        let mut session = ToolSession::new(
-            &mut call,
-            host,
-            catalog(&notes),
-            config(),
-            ToolBudget::new(100, || Ok(0)),
-        )
-        .unwrap();
+        let mut session = ToolSession::new(&mut call, host, catalog(&notes), ToolBudget::new(100, || Ok(0))).unwrap();
         settled(&mut session).await;
         drop(session);
         call.close(deadline()).await.unwrap();
@@ -172,7 +156,6 @@ async fn drive(io: &mut Io, notes: &Notes, trace: &Trace) {
             notes: notes.clone(),
         },
         catalog(notes),
-        config(),
         ToolBudget::new(100, || Ok(0)),
     )
     .unwrap();
@@ -291,7 +274,6 @@ async fn t3_agent_tools_notes_disabled_forged_request_has_zero_effects() {
                 notes: notes.clone(),
             },
             catalog(&notes),
-            config(),
             ToolBudget::new(100, || Ok(0)),
         )
         .unwrap();

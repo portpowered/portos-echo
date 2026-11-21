@@ -373,8 +373,8 @@ mod tests {
         assert!(!config.voice.session_listen_enabled);
         assert_eq!(config.codex_voice(), Some("coral"));
         assert_eq!(config.agent.daily_request_cap, 0);
-        assert_eq!(config.agent.max_tool_calls, 3);
-        assert_eq!(loaded.delegation.unwrap().0.max_tool_calls, 3);
+        assert_eq!(loaded.startup.as_ref().unwrap().overlay.legacy_tool_cap(), Some(3));
+        assert_eq!(loaded.delegation.unwrap().0.daily_request_cap, 0);
         assert_eq!(loaded.settings_warning, None);
         std::fs::write(
             &settings,

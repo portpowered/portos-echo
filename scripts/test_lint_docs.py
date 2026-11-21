@@ -115,9 +115,11 @@ class ConfigCoverageTests(unittest.TestCase):
     def test_overlay_and_sorted_diagnostics(self):
         source = '''let mut fields = Fields::new(value, "config")?;
         if let Some(mut agent) = fields.section("agent")? {
-            agent.optional("max_tool_calls")?; agent.finish()?;
+            agent.compatibility_value("max_tool_calls")?;
+            agent.discard("task_deadline_seconds");
+            agent.optional("daily_request_cap")?; agent.finish()?;
         } fields.finish()?;'''
-        self.assertEqual(lint.decoder_keys(source, "overlay"), {"agent", "agent.max_tool_calls"})
+        self.assertEqual(lint.decoder_keys(source, "overlay"), {"agent", "agent.daily_request_cap"})
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "docs").mkdir()

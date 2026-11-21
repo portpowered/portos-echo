@@ -359,6 +359,16 @@ pub(in crate::lab_run::sim) async fn collect_playout_for(
     milliseconds: u64,
     run_id: &str,
 ) -> Result<Option<Value>, String> {
+    collect_run_playout(bridge, clock, milliseconds, run_id, false).await
+}
+
+pub(in crate::lab_run::sim) async fn collect_run_playout(
+    bridge: &mut Process,
+    clock: &mut Value,
+    milliseconds: u64,
+    run_id: &str,
+    allow_ready: bool,
+) -> Result<Option<Value>, String> {
     bridge
         .send(&json!({"action":"advance_playout","milliseconds":milliseconds}))
         .await?;
@@ -367,6 +377,7 @@ pub(in crate::lab_run::sim) async fn collect_playout_for(
         let row = bridge.line().await?;
         match row["event"].as_str() {
             Some("bridge.run_completed") if row["run_id"] == run_id => completed = Some(row),
+            Some("bridge.ready") if allow_ready => (),
             Some("bridge.clock_advanced") if row["milliseconds"] == milliseconds => {
                 let previous = clock["epoch_ms"].as_u64().unwrap_or(0);
                 if row["epoch_ms"].as_u64() != previous.checked_add(milliseconds) {
@@ -379,7 +390,7 @@ pub(in crate::lab_run::sim) async fn collect_playout_for(
                 collect_observations(clock, &row)?;
                 return Ok(completed);
             }
-            _ => return Err("playout: unexpected bridge clock observation".into()),
+            event => return Err(format!("playout: unexpected bridge clock observation {event:?}")),
         }
     }
 }

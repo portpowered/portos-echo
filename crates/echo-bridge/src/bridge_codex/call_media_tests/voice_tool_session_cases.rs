@@ -147,7 +147,6 @@ async fn tools_conversation_dispatches_during_run_and_idle_then_reuses_call() {
                     error: false,
                 },
                 catalog(),
-                config(8),
                 budget(),
             ),
             settings(),
@@ -203,7 +202,6 @@ async fn tools_conversation_cancels_pending_effect_before_stop_without_result_re
                     error: false,
                 },
                 catalog(),
-                config(8),
                 budget(),
             ),
             settings(),
@@ -230,7 +228,7 @@ async fn tools_conversation_cancels_pending_effect_before_stop_without_result_re
 }
 
 #[tokio::test(start_paused = true)]
-async fn tools_conversation_invalid_dispatch_or_observer_still_stops_media() {
+async fn tools_conversation_invalid_session_or_observer_still_stops_media() {
     for invalid in [false, true] {
         let (mut io, mut server) = fixture();
         let (peer, media, _audio) = peer(true, None);
@@ -240,6 +238,10 @@ async fn tools_conversation_invalid_dispatch_or_observer_still_stops_media() {
             call.start(&options(), catalog().tools().to_vec(), deadline())
                 .await
                 .unwrap();
+            let mut session = settings();
+            if invalid {
+                session.session_max = Duration::ZERO;
+            }
             tool_conversation(
                 (&link, &mut events, microphone),
                 &mut call,
@@ -250,10 +252,9 @@ async fn tools_conversation_invalid_dispatch_or_observer_still_stops_media() {
                         error: false,
                     },
                     catalog(),
-                    config(if invalid { 0 } else { 8 }),
                     budget(),
                 ),
-                settings(),
+                session,
                 std::future::pending(),
                 |_| Err(Error::Screen),
             )
@@ -300,7 +301,7 @@ async fn tools_daily_budget_survives_generations_interrupts_without_effect_and_r
                 stalled: false,
                 error: false,
             };
-            let mut session = ToolSession::new(&mut call, host, catalog(), config(8), budget.clone()).unwrap();
+            let mut session = ToolSession::new(&mut call, host, catalog(), budget.clone()).unwrap();
             finish(&mut session).await;
             drop(session);
             call.close(deadline()).await.unwrap();

@@ -2,7 +2,7 @@
 use super::{restart, *};
 use echo_lab::lab_mcp::Fixture as MockPortos;
 
-const ACCOUNT_OVERLAY: &str = "[agent]\nmax_tool_calls = 8\n";
+const ACCOUNT_OVERLAY: &str = "[agent]\ndaily_request_cap = 8\n";
 
 #[tokio::test]
 #[ignore = "T3 requires prebuilt Linux echo-bridge, local Python and echo-lab OAuth"]
@@ -27,7 +27,7 @@ async fn t3_settings_v2_restart_installs_overlay_and_links_with_saved_scopes() {
         json!([
             "live",
             "original-runner",
-            8,
+            "500",
             ["endpoint:read", "message:send"],
             ["endpoint_query", "control"]
         ])
@@ -45,7 +45,7 @@ async fn t3_settings_v2_restart_installs_overlay_and_links_with_saved_scopes() {
     let after = leaves(&active);
     assert_eq!(
         after,
-        json!(["cached", "synthetic-runner", 6, ["endpoint:read"], ["endpoint_query"]])
+        json!(["cached", "synthetic-runner", "6", ["endpoint:read"], ["endpoint_query"]])
     );
     assert_eq!(active["settings"]["voice"]["session_listen_seconds"], 4);
     overlay(&fixture, &home, &base);
@@ -70,7 +70,7 @@ async fn save(client: &reqwest::Client, url: &reqwest::Url) {
             "version":2,
             "settings":{
                 "codex":{"web_search":"cached","delegate_model":"synthetic-runner"},
-                "agent":{"max_tool_calls":6},
+                "agent":{"daily_request_cap":"6"},
                 "portos":{"scopes":["endpoint:read"],"allow_tools":["endpoint_query"]}
             }
         }))
@@ -124,7 +124,7 @@ fn leaves(snapshot: &Value) -> Value {
     json!([
         snapshot["settings"]["codex"]["web_search"],
         snapshot["settings"]["codex"]["delegate_model"],
-        snapshot["settings"]["agent"]["max_tool_calls"],
+        snapshot["settings"]["agent"]["daily_request_cap"],
         snapshot["portos"]["server"]["requested_scopes"],
         snapshot["portos"]["server"]["allow_tools"],
     ])
@@ -143,7 +143,7 @@ fn overlay(fixture: &Fixture, home: &Path, base: &[u8]) {
 web_search = "cached"
 delegate_model = "synthetic-runner"
 [agent]
-max_tool_calls = 6
+daily_request_cap = 6
 [mcp]
 scopes = ["endpoint:read"]
 [[mcp.server]]
@@ -223,13 +223,13 @@ async fn assert_fixed_clock_save_refused(fixture: &Fixture, client: &reqwest::Cl
     let v2 = settings_runtime_url(fixture, "/settings/v2");
     let before = snapshot(client, &v2).await;
     assert_eq!(before["restart_pending"], false);
-    assert_eq!(before["settings"]["agent"]["max_tool_calls"], 8);
+    assert_eq!(before["settings"]["agent"]["daily_request_cap"], "8");
     for (request, version) in [
         (client.patch(v2.clone()), 2),
         (client.post(settings_runtime_url(fixture, "/settings/v1")), 1),
     ] {
         let response = request
-            .json(&json!({"version":version,"settings":{"agent":{"max_tool_calls":6}}}))
+            .json(&json!({"version":version,"settings":{"agent":{"daily_request_cap":"6"}}}))
             .send()
             .await
             .unwrap();
@@ -241,7 +241,7 @@ async fn assert_fixed_clock_save_refused(fixture: &Fixture, client: &reqwest::Cl
     assert_fixed_clock_noop_accepted(client, v2).await;
     writeln!(
         std::io::stdout().lock(),
-        "Fixed clock: V2 PATCH=503 V1 POST=503 overlay_unchanged=true max_tool_calls=8 restart_pending=false noop=200"
+        "Fixed clock: V2 PATCH=503 V1 POST=503 overlay_unchanged=true daily_request_cap=8 restart_pending=false noop=200"
     )
     .unwrap();
 }
@@ -249,7 +249,7 @@ async fn assert_fixed_clock_save_refused(fixture: &Fixture, client: &reqwest::Cl
 async fn assert_fixed_clock_noop_accepted(client: &reqwest::Client, v2: reqwest::Url) {
     let noop = client
         .patch(v2)
-        .json(&json!({"version":2,"settings":{"agent":{"max_tool_calls":8}}}))
+        .json(&json!({"version":2,"settings":{"agent":{"daily_request_cap":"8"}}}))
         .send()
         .await
         .unwrap();
