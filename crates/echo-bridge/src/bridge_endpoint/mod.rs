@@ -35,6 +35,8 @@ enum Status {
     Connected,
     Unavailable,
     Relink,
+    ApprovalRequired,
+    ClearFailed,
     Denied,
     Expired,
 }
@@ -84,6 +86,10 @@ impl Control {
             Status::Connected => "This Echo is connected to Port OS.",
             Status::Unavailable => UNAVAILABLE,
             Status::Relink => "Link this Echo with its own Port OS client to connect the endpoint.",
+            Status::ApprovalRequired => {
+                "Port OS endpoint approval is required again. Turn the connection off and back on."
+            }
+            Status::ClearFailed => "Port OS endpoint data could not be cleared.",
             Status::Denied => "Port OS denied the endpoint connection.",
             Status::Expired => "The Port OS endpoint approval expired.",
         };
@@ -185,7 +191,7 @@ impl Runtime {
     async fn clear(&self, store: &mut Option<Arc<EndpointRegistration>>) {
         let status = match self.store(store) {
             Ok(store) if store.unlink().await.is_ok() => Status::Off,
-            _ => Status::Unavailable,
+            _ => Status::ClearFailed,
         };
         self.status.send_replace(status);
     }
@@ -208,13 +214,16 @@ impl Runtime {
         if let Some(name) = name {
             self.status.send_replace(Status::Connecting);
             let status = match self.store(store) {
-                Ok(store) => self.pair(name, &store, current_grant).await.unwrap_or_else(auth_status),
-                Err(error) => auth_status(error),
+                Ok(store) => self
+                    .pair(name, &store, current_grant)
+                    .await
+                    .unwrap_or_else(|error| auth_status(&error)),
+                Err(error) => auth_status(&error),
             };
             self.status.send_replace(status);
         } else {
             self.status.send_if_modified(|status| {
-                if matches!(status, Status::Off | Status::Unavailable) {
+                if matches!(status, Status::Off | Status::ClearFailed) {
                     return false;
                 }
                 *status = Status::Off;
@@ -240,7 +249,7 @@ impl Runtime {
             match result {
                 Ok(result) => store.complete_exchange(exchange, result.auth_link_id).await?,
                 Err(ExchangeError::Transport) => sleep(Duration::from_secs(1)).await,
-                Err(ExchangeError::Grant) => return Ok(Status::Relink),
+                Err(ExchangeError::Grant) => return Ok(Status::ApprovalRequired),
                 Err(_) => return Ok(Status::Unavailable),
             }
         }
@@ -256,7 +265,9 @@ impl Runtime {
             store.resolve(&install.auth_link_id, route.clone()).await?;
             route
         };
-        tokens.refresh_installation().await?;
+        if tokens.refresh_installation().await.is_err() {
+            return Ok(Status::ApprovalRequired);
+        }
         Ok(self
             .transport
             .serve(&install.auth_link_id, &route, &tokens, &self.status)
@@ -294,7 +305,7 @@ async fn linked_owner(current_grant: &impl Fn() -> Option<Arc<Grant>>) -> Arc<Gr
     }
 }
 
-fn auth_status(error: AuthError) -> Status {
+fn auth_status(error: &AuthError) -> Status {
     match error {
         AuthError::RelinkRequired => Status::Relink,
         AuthError::AccessDenied => Status::Denied,

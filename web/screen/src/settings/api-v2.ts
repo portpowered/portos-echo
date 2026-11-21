@@ -55,6 +55,8 @@ export const endpointMessages: ReadonlySet<string> = new Set([
     endpointApproval,
     "This Echo is connected to Port OS.",
     "Link this Echo with its own Port OS client to connect the endpoint.",
+    "Port OS endpoint approval is required again. Turn the connection off and back on.",
+    "Port OS endpoint data could not be cleared.",
     "Port OS denied the endpoint connection.",
     "The Port OS endpoint approval expired.",
 ]);

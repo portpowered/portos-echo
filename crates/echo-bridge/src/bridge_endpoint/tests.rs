@@ -22,6 +22,9 @@ use tokio_tungstenite::{
     tungstenite::handshake::server::{Request, Response},
 };
 
+#[path = "setup_tests.rs"]
+mod setup_tests;
+
 const SETTINGS_TOKEN: &str = "synthetic-paired-settings";
 const LINK: &str = "loopback link/%";
 const ROUTE: &str = "resolved-fake-route";
@@ -156,19 +159,36 @@ struct Settings {
 
 impl Settings {
     async fn open(home: &Path, mock: &Mock, gateway: &Gateway, grant: Arc<Grant>) -> Self {
+        Self::with_resolver(home, mock, gateway, grant, Arc::new(Resolver)).await
+    }
+
+    async fn with_resolver(
+        home: &Path,
+        mock: &Mock,
+        gateway: &Gateway,
+        grant: Arc<Grant>,
+        resolver: Arc<dyn RouteResolver>,
+    ) -> Self {
         let (owner, desired) = settings_owner(home, mock);
         let (service, send) = SettingsService::resume(Box::new(owner));
         let runtime = Runtime::new(
             home.into(),
-            Arc::new(Resolver),
+            resolver,
             EndpointExchange::loopback(&mock.base, REQUEST_TIMEOUT).unwrap(),
             Transport::new(&gateway.template, &mock.base, true).unwrap(),
             &desired,
         );
+        Self::serve(service.with_endpoint(runtime), send, grant).await
+    }
+
+    async fn serve(
+        service: SettingsService,
+        send: mpsc::Sender<echo_screen_server::SettingsRequest>,
+        grant: Arc<Grant>,
+    ) -> Self {
         let (stop, done) = oneshot::channel();
         let owner = tokio::spawn(async move {
             service
-                .with_endpoint(runtime)
                 .scope_with_grant(
                     async {
                         let _ = done.await;
@@ -248,6 +268,8 @@ fn settings_owner(home: &Path, mock: &Mock) -> (SettingsHost, echo_config::Porto
         agent_tools: Default::default(),
     });
     config.mcp.scopes = vec!["endpoint:read".into()];
+    config.portos_endpoint.api_base = Some(mock.base.replacen("http://", "https://", 1));
+    config.portos_endpoint.gateway_url = Some("wss://127.0.0.1:1/devices/{authLinkId}".into());
     config.mcp.server = vec![McpServer {
         name: "portos".into(),
         url: format!("{}/mcp", mock.base),

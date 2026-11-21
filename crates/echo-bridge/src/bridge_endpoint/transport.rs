@@ -73,8 +73,9 @@ impl Transport {
     async fn handshake(&self, auth_link: &str, tokens: &dyn EndpointTokenSource) -> Result<Socket, Status> {
         let url = addressed(&self.gateway, auth_link);
         let mut request = url.into_client_request().map_err(|_| Status::Unavailable)?;
-        let token = tokens.access_token().await.map_err(|_| Status::Relink)?;
-        let mut bearer = HeaderValue::from_str(&format!("Bearer {}", token.expose())).map_err(|_| Status::Relink)?;
+        let token = tokens.access_token().await.map_err(|_| Status::ApprovalRequired)?;
+        let mut bearer =
+            HeaderValue::from_str(&format!("Bearer {}", token.expose())).map_err(|_| Status::ApprovalRequired)?;
         bearer.set_sensitive(true);
         request.headers_mut().insert(AUTHORIZATION, bearer);
         let config = WebSocketConfig::default()
@@ -82,7 +83,9 @@ impl Transport {
             .max_message_size(Some(MAX_COMMAND));
         match timeout(REQUEST_TIMEOUT, connect_async_with_config(request, Some(config), false)).await {
             Ok(Ok((socket, _))) => Ok(socket),
-            Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response))) if response.status().is_client_error() => {
+            Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response)))
+                if response.status().is_client_error() || response.status().is_redirection() =>
+            {
                 Err(Status::Unavailable)
             }
             _ => Err(Status::Connecting),
