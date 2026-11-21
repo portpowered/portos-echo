@@ -219,6 +219,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `muse.url` | Required HTTPS origin without credentials, query, fragment or non-root path; optional valid u16 port. | restart / yes |
 | `muse.ca_file` | Required nonblank literal CA path. | restart / no |
 | `muse.credential_file` | Required nonblank literal credential path. | restart / no |
+| `muse.enabled` | Settings overlay only. A lone `false` masks the base Muse connection and immediately withdraws the tool. | withdraw immediately / yes |
 | `mcp` | Required server/grant table. | restart / no |
 | `mcp.state_dir` | Optional nonempty path; runtime Port OS requires private state outside a repository, no parent traversal. | restart / no |
 | `mcp.client_id` | Default `port1/systems/zero/oauth-clients/command-line-interface` (public development client); nonblank text without controls. Use your registered client for broader deployment. | restart / no |

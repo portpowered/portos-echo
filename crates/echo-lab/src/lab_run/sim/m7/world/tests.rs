@@ -104,19 +104,7 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
     let mut failures = Vec::new();
     world.close_bridge(&mut failures).await;
     assert_eq!(failures, Vec::<String>::new());
-    let id = task.unwrap();
-    let response = world.muse.report(&id).await.unwrap();
-    assert_eq!(response["exit"], 1);
-    assert_eq!(response["stdout"], "");
-    assert!(response["stderr"].as_str().unwrap().contains("cancelled task_id"));
-    world.muse.collect().unwrap();
-    let calls = &world.muse.calls;
-    assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0]["argv"][2], calls[1]["argv"][2]);
-    assert_eq!(
-        calls[1]["argv"][5],
-        format!("Cancel task {id}. Do not call echo.report.result for it.")
-    );
+    assert_cancelled_muse_task(&mut world, &task.unwrap()).await;
     assert_eq!(
         world.control(json!({"action":"playback"})).await.unwrap()["pcm_bytes"],
         0
@@ -137,6 +125,22 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
     );
     host_owner.assert_closed();
     assert_eq!(close(&mut world).await, Ok(()));
+}
+
+#[cfg(unix)]
+async fn assert_cancelled_muse_task(world: &mut World, id: &str) {
+    let response = world.muse.report(id).await.unwrap();
+    assert_eq!(response["exit"], 1);
+    assert_eq!(response["stdout"], "");
+    assert!(response["stderr"].as_str().unwrap().contains("cancelled task_id"));
+    world.muse.collect().unwrap();
+    let calls = &world.muse.calls;
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["argv"][2], calls[1]["argv"][2]);
+    assert_eq!(
+        calls[1]["argv"][5],
+        format!("Cancel task {id}. Do not call echo.report.result for it.")
+    );
 }
 
 #[tokio::test]

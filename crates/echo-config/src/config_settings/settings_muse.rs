@@ -1,4 +1,4 @@
-use crate::{ConfigError, MuseConfig, config_decode::Fields, config_muse::decode_fields};
+use crate::{ConfigError, MuseConfig};
 use std::{
     collections::BTreeMap,
     fs::symlink_metadata,
@@ -13,15 +13,28 @@ pub enum SettingsMuse {
 }
 
 impl SettingsMuse {
-    pub(super) fn decode(mut fields: Fields<'_>) -> Result<Self, ConfigError> {
-        if let Some(enabled) = fields.optional::<bool>("enabled")? {
-            if enabled {
-                return Err(ConfigError::new("muse.enabled", "expected false"));
-            }
-            fields.finish()?;
-            return Ok(Self::Cleared);
+    pub(super) fn from_fields(
+        enabled: Option<bool>,
+        url: Option<String>,
+        ca_file: Option<PathBuf>,
+        credential_file: Option<PathBuf>,
+    ) -> Result<Self, ConfigError> {
+        if enabled.is_some() {
+            return if enabled == Some(false) && url.is_none() && ca_file.is_none() && credential_file.is_none() {
+                Ok(Self::Cleared)
+            } else {
+                Err(ConfigError::new(
+                    "muse.enabled",
+                    "expected false without connection fields",
+                ))
+            };
         }
-        let muse = decode_fields(fields)?;
+        let muse = MuseConfig {
+            url: url.ok_or(ConfigError::new("muse.url", "missing required field"))?,
+            ca_file: ca_file.ok_or(ConfigError::new("muse.ca_file", "missing required field"))?,
+            credential_file: credential_file
+                .ok_or(ConfigError::new("muse.credential_file", "missing required field"))?,
+        };
         generation(&muse)?;
         Ok(Self::Configured(muse))
     }

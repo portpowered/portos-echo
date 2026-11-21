@@ -76,11 +76,22 @@ async fn t3_settings_muse_save_probe_rotate_and_reload_private_connection() {
 }
 
 async fn save_and_test(fixture: &Fixture, origin: &str, der: &[u8]) {
+    assert_unconfigured(fixture).await;
+    let accepted = save_connection(fixture, origin, der).await;
+    refuse_changed_origin(fixture, &accepted).await;
+    guard_probes(fixture).await;
+    rotate_credential(fixture, &accepted["muse"]).await;
+}
+
+async fn assert_unconfigured(fixture: &Fixture) {
     let old = snapshot(fixture, false).await;
     assert!(old.get("muse").is_none());
     let initial = snapshot(fixture, true).await;
     assert_eq!(initial["muse"], json!({"configured":false,"reachability":"unchecked"}));
     probe(fixture, json!({"version":2,"reachable":false,"reason":"unconfigured"})).await;
+}
+
+async fn save_connection(fixture: &Fixture, origin: &str, der: &[u8]) -> Value {
     let saved = patch(
         fixture,
         json!({"url":origin,"ca":STANDARD.encode(der),"credential":"x".repeat(32)}),
@@ -97,13 +108,15 @@ async fn save_and_test(fixture: &Fixture, origin: &str, der: &[u8]) {
         json!({"configured":true,"url":origin,"reachability":"unchecked"})
     );
     assert!(snapshot(fixture, false).await.get("muse").is_none());
-    refuse_changed_origin(fixture, &accepted).await;
-    guard_probes(fixture).await;
+    accepted
+}
+
+async fn rotate_credential(fixture: &Fixture, unchecked: &Value) {
     probe(fixture, json!({"version":2,"reachable":true})).await;
     assert_eq!(snapshot(fixture, true).await["muse"]["reachability"], "reachable");
     let rotated = patch(fixture, json!({"credential":"y".repeat(32)})).await;
     assert_eq!(rotated.status(), StatusCode::OK);
-    assert_eq!(snapshot(fixture, true).await["muse"], accepted["muse"]);
+    assert_eq!(&snapshot(fixture, true).await["muse"], unchecked);
     probe(fixture, json!({"version":2,"reachable":false,"reason":"unauthorized"})).await;
 }
 

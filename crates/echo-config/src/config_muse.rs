@@ -11,10 +11,7 @@ pub struct MuseConfig {
 }
 
 pub(super) fn decode(value: toml::de::DeValue<'_>) -> Result<MuseConfig, ConfigError> {
-    decode_fields(Fields::new(value, "muse")?)
-}
-
-pub(super) fn decode_fields(mut fields: Fields<'_>) -> Result<MuseConfig, ConfigError> {
+    let mut fields = Fields::new(value, "muse")?;
     let result = MuseConfig {
         url: fields.required("url")?,
         ca_file: fields.required("ca_file")?,

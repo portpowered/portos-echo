@@ -133,8 +133,19 @@ impl SettingsOverlay {
             result.options.agent_tools = home.optional("agent_tools")?;
             home.finish()?;
         }
-        result.options.decode_portos(fields.section("mcp")?)?;
-        result.muse = fields.section("muse")?.map(SettingsMuse::decode).transpose()?;
+        if let Some(mut mcp) = fields.section("mcp")? {
+            result.options.scopes = mcp.optional("scopes")?;
+            result.options.server = single_server(mcp.optional("server")?)?;
+            mcp.finish()?;
+        }
+        if let Some(mut muse) = fields.section("muse")? {
+            let enabled = muse.optional("enabled")?;
+            let url = muse.optional("url")?;
+            let ca_file = muse.optional("ca_file")?;
+            let credential_file = muse.optional("credential_file")?;
+            muse.finish()?;
+            result.muse = Some(SettingsMuse::from_fields(enabled, url, ca_file, credential_file)?);
+        }
         fields.finish()?;
         if let Some(value) = result.daily_cap {
             i64::try_from(value).map_err(|_| ConfigError::new("agent.daily_request_cap", "must fit a TOML integer"))?;
@@ -263,21 +274,6 @@ impl SettingsOverlay {
 }
 
 impl SettingsOptions {
-    fn decode_portos(&mut self, section: Option<Fields<'_>>) -> Result<(), ConfigError> {
-        if let Some(mut mcp) = section {
-            self.scopes = mcp.optional("scopes")?;
-            let servers: Option<Vec<SettingsServerTools>> = mcp.optional("server")?;
-            if let Some(mut servers) = servers {
-                if servers.len() != 1 {
-                    return Err(ConfigError::new("mcp.server", "expected one Port OS server override"));
-                }
-                self.server = servers.pop();
-            }
-            mcp.finish()?;
-        }
-        Ok(())
-    }
-
     fn apply_to(&self, config: &mut BridgeConfig) -> Result<(), ConfigError> {
         if let Some(mode) = self.web_search {
             config.codex.web_search = mode;
@@ -359,6 +355,14 @@ impl SettingsOptions {
         }
         Ok(())
     }
+}
+
+fn single_server(servers: Option<Vec<SettingsServerTools>>) -> Result<Option<SettingsServerTools>, ConfigError> {
+    let Some(mut servers) = servers else { return Ok(None) };
+    if servers.len() != 1 {
+        return Err(ConfigError::new("mcp.server", "expected one Port OS server override"));
+    }
+    Ok(servers.pop())
 }
 
 fn nonempty_override(value: &str) -> Option<String> {

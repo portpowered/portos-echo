@@ -1,8 +1,8 @@
 //! T2: real public types and `serde_json` with no transport.
 use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use serde::{Serialize, de::DeserializeOwned};
-use std::error::Error;
 use std::io::Write as _;
+use std::{error::Error, fmt::Debug};
 
 fn round_trip<T>(value: &T, wire: &str) -> Result<(), Box<dyn Error>>
 where
