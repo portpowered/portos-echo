@@ -377,7 +377,7 @@ pub(crate) async fn endpoint_fixture(
     connector: impl echo_link::LinkConnector,
     stream: tokio::io::DuplexStream,
     cancelled: impl Future<Output = ()>,
-    ready: &tokio::sync::Notify,
+    (ready, stale): (&tokio::sync::Notify, &tokio::sync::Notify),
 ) -> Result<(), Error> {
     use echo_link::LinkConnector as _;
     let (read, write) = tokio::io::split(stream);
@@ -393,8 +393,10 @@ pub(crate) async fn endpoint_fixture(
         async || Ok(MemoryPeer),
         cancelled,
         |notice| {
-            if matches!(notice, ServeNotice::Ready) {
-                ready.notify_one();
+            match notice {
+                ServeNotice::Ready => ready.notify_one(),
+                ServeNotice::Device(LinkEvent::StaleRemoteCapture | LinkEvent::Mute(false)) => stale.notify_one(),
+                _ => {}
             }
             Ok(())
         },

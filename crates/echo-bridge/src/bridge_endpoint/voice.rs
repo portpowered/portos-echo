@@ -47,6 +47,7 @@ struct Session {
     state: AssistantState,
     ending: bool,
     user_ended: bool,
+    admitted: bool,
 }
 
 #[derive(Clone)]
@@ -83,7 +84,7 @@ pub(super) struct View {
 
 impl View {
     pub(super) fn report(&self) -> ReportState<'_> {
-        let active = self.active.as_ref();
+        let active = self.active.as_ref().filter(|session| session.admitted);
         ReportState {
             state: if self.muted {
                 AssistantState::Muted
@@ -149,6 +150,7 @@ impl Voice {
                 state,
                 ending: false,
                 user_ended: false,
+                admitted: false,
             });
         });
         Ok(id)
@@ -156,6 +158,20 @@ impl Voice {
 
     pub(crate) fn remote_failed(&self) {
         self.finish(EndedReason::Error);
+    }
+
+    pub(crate) fn remote_admitted(&self, id: &str) {
+        self.state.send_if_modified(|view| {
+            if let Some(session) = view
+                .active
+                .as_mut()
+                .filter(|session| session.id == id && !session.admitted)
+            {
+                session.admitted = true;
+                return true;
+            }
+            false
+        });
     }
 
     pub(crate) fn close_requested(&self) -> bool {
@@ -202,6 +218,7 @@ impl Voice {
                             state: AssistantState::Listening,
                             ending: false,
                             user_ended: false,
+                            admitted: true,
                         });
                     });
                 }
@@ -272,6 +289,9 @@ impl Voice {
             let Some(session) = view.active.take() else {
                 return false;
             };
+            if !session.admitted {
+                return true;
+            }
             let reason = match reason {
                 EndedReason::Completed if session.ending => EndedReason::Remote,
                 EndedReason::Completed if session.user_ended => EndedReason::User,

@@ -12,7 +12,7 @@ use echo_contracts::endpoint::AssistantState;
 use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun};
 use std::{cell::Cell, future::Future, sync::Arc, time::Duration};
 use tokio::sync::watch;
-use tokio::time::{sleep_until, timeout_at};
+use tokio::time::{Instant, sleep_until, timeout_at};
 
 type DeviceRun<L> = <<L as EchoLink>::Events as LinkEvents>::Run;
 
@@ -105,10 +105,11 @@ pub(super) async fn prepare<L: EchoLink>(
     }
     if start.payload.initial_text.is_some() {
         let id = endpoint.begin_remote(AssistantState::Thinking)?;
+        let followup = start.payload.listen && options.remote_mic;
         return Ok(Some(Admission {
             microphone: (options.silent)(),
-            remote: Some(start.admit(&id)),
-            followup: false,
+            remote: Some(start.admit(&id, followup)),
+            followup,
         }));
     }
     if !options.remote_mic {
@@ -120,9 +121,10 @@ pub(super) async fn prepare<L: EchoLink>(
     match capture {
         Ok(Capture::Matched((microphone, frames))) if !start.cancelled() => {
             let followup = start.payload.listen;
+            endpoint.remote_admitted(&id);
             Ok(Some(Admission {
                 microphone: (options.buffered)(microphone, frames),
-                remote: Some(start.admit(&id)),
+                remote: Some(start.admit(&id, false)),
                 followup,
             }))
         }
@@ -244,4 +246,42 @@ fn capture_event<R>(
 
 fn no_capture() -> serde_json::Value {
     refusal("NOT_READY", "Device microphone start is unavailable.")
+}
+
+// Text admission and its first reply never wait on capture. Offer one
+// negotiated device run at the point where follow-up becomes eligible.
+pub(super) async fn followup<L: EchoLink>(
+    client: &L,
+    events: &mut L::Events,
+    cancelled: impl Future<Output = ()>,
+    deadline: Instant,
+    mut observe: impl FnMut(&LinkEvent<DeviceRun<L>>) -> Result<(), Error>,
+) -> Result<Option<DeviceRun<L>>, Error> {
+    let request: Arc<str> = echo_mcp_auth::new_request_id().map_err(|_| Error::Unavailable)?.into();
+    let work = async {
+        if client
+            .request_remote_capture(Arc::downgrade(&request), deadline.into_std())
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
+        loop {
+            let event = events.recv().await?.ok_or(Error::Wyoming)?;
+            match event {
+                LinkEvent::RemoteCapture { request_id, run } if request_id == request.as_ref() => return Ok(Some(run)),
+                LinkEvent::Mute(true) => {
+                    observe(&event)?;
+                    return Ok(None);
+                }
+                _ => observe(&event)?,
+            }
+        }
+    };
+    tokio::select! {
+        biased;
+        () = cancelled => Err(Error::Control),
+        () = crate::bridge_endpoint::voice::ending() => Ok(None),
+        result = timeout_at(deadline, work) => result.unwrap_or(Ok(None)),
+    }
 }

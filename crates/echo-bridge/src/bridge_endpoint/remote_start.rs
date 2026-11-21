@@ -2,7 +2,13 @@
 use crate::Error;
 use echo_contracts::endpoint::{AssistantState, StartSession, StartSessionOutcome};
 use serde_json::{Value, json};
-use std::{future::Future, sync::Mutex};
+use std::{
+    future::Future,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use tokio::{
     sync::{oneshot, watch},
     time::{Duration, Instant},
@@ -54,7 +60,7 @@ impl Start {
         let _ = self.reply.send(outcome);
     }
 
-    pub(crate) fn admit(mut self, id: &str) -> Run {
+    pub(crate) fn admit(mut self, id: &str, followup: bool) -> Run {
         let deadline = self.reply_deadline();
         let label = safe_reason(&self.payload.reason);
         let text = self.payload.initial_text.take();
@@ -72,6 +78,7 @@ impl Start {
             deadline,
             lease: self.lease,
             label,
+            followup: AtomicBool::new(followup),
         }
     }
 }
@@ -82,6 +89,7 @@ pub(crate) struct Run {
     deadline: Instant,
     pub(crate) lease: watch::Receiver<()>,
     label: &'static str,
+    followup: AtomicBool,
 }
 
 struct TextTurn {
@@ -105,7 +113,28 @@ pub(crate) fn reason() -> Option<&'static str> {
     INITIAL.try_with(|run| run.label).ok()
 }
 
-pub(crate) async fn append<R, W, P>(call: &mut crate::bridge_codex::MediaCall<'_, R, W, P>) -> Result<(), Error>
+pub(crate) fn take_followup() -> bool {
+    INITIAL
+        .try_with(|run| run.followup.swap(false, Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
+pub(crate) async fn open<R, W, P>(
+    call: &mut crate::bridge_codex::MediaCall<'_, R, W, P>,
+    options: &crate::bridge_codex::Options<'_>,
+    tools: Vec<echo_codex::DynamicTool>,
+    deadline: Instant,
+) -> Result<(), Error>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+    P: echo_media::MediaPeer,
+{
+    call.start(options, tools, deadline).await?;
+    append(call).await
+}
+
+async fn append<R, W, P>(call: &mut crate::bridge_codex::MediaCall<'_, R, W, P>) -> Result<(), Error>
 where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -127,7 +156,11 @@ where
     call.append_endpoint_text(&turn.text, deadline).await?;
     turn.reply
         .send(json!(StartSessionOutcome::admitted(&id, AssistantState::Thinking)))
-        .map_err(|_| Error::Control)
+        .map_err(|_| Error::Control)?;
+    if let Some(voice) = super::voice::Voice::current() {
+        voice.remote_admitted(&id);
+    }
+    Ok(())
 }
 
 fn safe_reason(reason: &str) -> &'static str {

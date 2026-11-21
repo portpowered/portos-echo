@@ -13,7 +13,7 @@ use tokio::{
 #[tokio::test(start_paused = true)]
 async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
     tokio::task::LocalSet::new()
-        .run_until(bridge_mcp::bridge_component::drive(async {
+        .run_until(Box::pin(bridge_mcp::bridge_component::drive(async {
             let home = tempfile::tempdir().unwrap();
             let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
             mock.enable_endpoint_audience().unwrap();
@@ -29,6 +29,8 @@ async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
             );
             let ready = Arc::new(Notify::new());
             let signal = ready.clone();
+            let stale = Arc::new(Notify::new());
+            let ordered = stale.clone();
             let shared_grant = grant.grant.clone();
             let settings = Settings::serve_with_owner(send_settings, |stop| {
                 tokio::task::spawn_local(async move {
@@ -39,14 +41,17 @@ async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
                             async {
                                 let _ = stop.await;
                             },
-                            &signal,
+                            (&signal, &ordered),
                         )
                         .await;
                         assert_eq!(result, Err(crate::Error::Control));
                     };
-                    service
-                        .scope_with_grant(work, || shared_grant.link_status(), || Some(shared_grant.clone()))
-                        .await;
+                    Box::pin(service.scope_with_grant(
+                        work,
+                        || shared_grant.link_status(),
+                        || Some(shared_grant.clone()),
+                    ))
+                    .await;
                 })
             })
             .await;
@@ -60,13 +65,15 @@ async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
             assert_installed(home.path(), &mock).await;
 
             missing_capture(&gateway, &mock, &mut device).await;
+            stale.notified().await;
+            mic_start(&gateway, &mock, &mut app, &mut device, &stale).await;
             text_start(&gateway, &mock, &mut app, &mut device).await;
             wake_and_end(&gateway, &mock, &mut app, &mut device).await;
-            assert_eq!(receipts(&mock).len(), 5);
+            assert_eq!(receipts(&mock).len(), 6);
             settings.close().await;
             gateway.assert_disconnect().await;
             grant.close().await;
-        }))
+        })))
         .await;
 }
 
@@ -77,11 +84,7 @@ async fn missing_capture(gateway: &Gateway, mock: &Mock, device: &mut Device) {
         &command("start-session", "no-capture", ROUTE, &json!({"reason":"fixture"})),
     )
     .await;
-    let request = device.receive("hassmic-start-run").await;
-    let id = request.header.data.or(request.data).unwrap()["requestId"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let id = device.remote_request().await;
     assert_ne!(id, "no-capture");
     advance(Duration::from_millis(1999)).await;
     assert!(receipts(mock).is_empty());
@@ -90,6 +93,48 @@ async fn missing_capture(gateway: &Gateway, mock: &Mock, device: &mut Device) {
     assert_eq!(reply["failure"]["code"], "NOT_READY");
     assert!((Duration::from_secs(2)..=Duration::from_millis(2500)).contains(&at.elapsed()));
     device.pipeline(Some(&id)).await;
+}
+
+async fn mic_start(
+    gateway: &Gateway,
+    mock: &Mock,
+    app: &mut BufReader<DuplexStream>,
+    device: &mut Device,
+    ordered: &Notify,
+) {
+    let at = Instant::now();
+    send(
+        gateway,
+        &command(
+            "start-session",
+            "mic",
+            ROUTE,
+            &json!({"reason":"fixture","listen":false}),
+        ),
+    )
+    .await;
+    let id = device.remote_request().await;
+    device.pipeline(Some(&id)).await;
+    device.send("hassmic-mute", json!({"muted":false})).await;
+    ordered.notified().await;
+    advance(Duration::from_millis(1999)).await;
+    assert_eq!(receipts(mock).len(), 1);
+    advance(Duration::from_millis(1)).await;
+    let reply = outcome(mock, "mic").await;
+    assert_eq!(
+        (reply["ok"].as_bool(), reply["state"].as_str()),
+        (Some(true), Some("listening"))
+    );
+    assert!((Duration::from_secs(2)..=Duration::from_millis(2500)).contains(&at.elapsed()));
+    finish_capture(app, device).await;
+    assert_end(mock, reply["sessionId"].as_str().unwrap(), "remote", "completed").await;
+}
+
+async fn finish_capture(app: &mut BufReader<DuplexStream>, device: &mut Device) {
+    app_start(app).await;
+    play_reply(app, device).await;
+    device.receive("hassmic-end").await;
+    app_stop(app).await;
 }
 
 async fn text_start(gateway: &Gateway, mock: &Mock, app: &mut BufReader<DuplexStream>, device: &mut Device) {
@@ -116,12 +161,16 @@ async fn text_start(gateway: &Gateway, mock: &Mock, app: &mut BufReader<DuplexSt
     assert_eq!(reply["ok"], true);
     assert!(at.elapsed() <= Duration::from_secs(1));
     let session = reply["sessionId"].as_str().unwrap();
+    play_reply(app, device).await;
+    app_stop(app).await;
+    assert_end(mock, session, "remote", "completed").await;
+}
+
+async fn play_reply(app: &mut BufReader<DuplexStream>, device: &mut Device) {
     device.receive("audio-start").await;
     write(app, &json!({"method":"thread/realtime/transcript/done","params":{"threadId":"test-thread","role":"assistant","text":"fixture reply"}})).await;
     device.receive("audio-stop").await;
     device.send("played", Value::Null).await;
-    app_stop(app).await;
-    assert_end(mock, session, "remote", "completed").await;
 }
 
 async fn wake_and_end(gateway: &Gateway, mock: &Mock, app: &mut BufReader<DuplexStream>, device: &mut Device) {
@@ -131,6 +180,33 @@ async fn wake_and_end(gateway: &Gateway, mock: &Mock, app: &mut BufReader<Duplex
     advance(Duration::from_millis(250)).await;
     let wake = message(mock, "report-state", "origin", &json!("wake")).await;
     let id = wake["sessionId"].as_str().unwrap();
+    assert_busy(gateway, mock, id).await;
+    end_wake(gateway, mock, device, id).await;
+    advance(Duration::from_secs(1)).await;
+    app_stop(app).await;
+}
+
+async fn end_wake(gateway: &Gateway, mock: &Mock, device: &mut Device, id: &str) {
+    let ended = Instant::now();
+    send(gateway, &command("end-session", "end", ROUTE, &json!({"sessionId":id}))).await;
+    device.receive("hassmic-flush").await;
+    device.send("played", Value::Null).await;
+    device.receive("hassmic-end").await;
+    assert_eq!(
+        outcome(mock, "end").await,
+        json!({"ok":true,"state":"idle","ending":false})
+    );
+    assert!(ended.elapsed() <= Duration::from_secs(1));
+    assert_end(mock, id, "wake", "remote").await;
+    send(
+        gateway,
+        &command("end-session", "repeat", ROUTE, &json!({"sessionId":id})),
+    )
+    .await;
+    assert_eq!(outcome(mock, "repeat").await["ok"], true);
+}
+
+async fn assert_busy(gateway: &Gateway, mock: &Mock, id: &str) {
     let started = Instant::now();
     send(
         gateway,
@@ -152,26 +228,6 @@ async fn wake_and_end(gateway: &Gateway, mock: &Mock, app: &mut BufReader<Duplex
         (Some("BUSY"), Some(id), Some("wake"))
     );
     assert!(started.elapsed() <= Duration::from_secs(1));
-
-    let ended = Instant::now();
-    send(gateway, &command("end-session", "end", ROUTE, &json!({"sessionId":id}))).await;
-    device.receive("hassmic-flush").await;
-    device.send("played", Value::Null).await;
-    device.receive("hassmic-end").await;
-    assert_eq!(
-        outcome(mock, "end").await,
-        json!({"ok":true,"state":"idle","ending":false})
-    );
-    assert!(ended.elapsed() <= Duration::from_secs(1));
-    assert_end(mock, id, "wake", "remote").await;
-    send(
-        gateway,
-        &command("end-session", "repeat", ROUTE, &json!({"sessionId":id})),
-    )
-    .await;
-    assert_eq!(outcome(mock, "repeat").await["ok"], true);
-    advance(Duration::from_secs(1)).await;
-    app_stop(app).await;
 }
 
 async fn assert_end(mock: &Mock, id: &str, origin: &str, reason: &str) {
@@ -298,6 +354,14 @@ impl Device {
             payload: vec![],
         };
         self.wire.write_all(&encode(&frame)).await.unwrap();
+    }
+
+    async fn remote_request(&mut self) -> String {
+        let request = self.receive("hassmic-start-run").await;
+        request.header.data.or(request.data).unwrap()["requestId"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     }
 
     async fn pipeline(&mut self, id: Option<&str>) {

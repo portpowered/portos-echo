@@ -134,8 +134,7 @@ where
                         if Instant::now() >= options.deadline { return Err(Error::Deadline); }
                         validate(&options.session)?;
                         if let Some(trace) = trace { call.trace_setup(trace)?; }
-                        call.start(&options.call, options.tools, options.deadline).await?;
-                        crate::bridge_endpoint::remote_start::append(&mut call).await
+                        crate::bridge_endpoint::remote_start::open(&mut call, &options.call, options.tools, options.deadline).await
                     } => result?,
                 }
                 Ok(())

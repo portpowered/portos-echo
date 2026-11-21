@@ -1,5 +1,5 @@
 //! Reuse the operator kill marker; never acquire or mutate credentials here.
-use super::ServeNotice;
+use super::{ServeNotice, remote_admission};
 use crate::{Error, bridge_runtime::bridge_kill::inspect};
 use std::{cell::Cell, path::Path, time::Duration};
 
@@ -124,6 +124,49 @@ impl<'a> Gate<'a> {
             () = shutdown => (),
         }
     }
+}
+
+use crate::{bridge_codex, bridge_endpoint::voice::Voice};
+use echo_codex::codex_io::RpcIo;
+use echo_link::EchoLink;
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    time::timeout,
+};
+
+pub(super) async fn settle_admission<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+    client: &impl EchoLink,
+    io: &mut RpcIo<R, W>,
+    result: Result<(), Error>,
+    (killed, stopped): (bool, bool),
+    endpoint: Option<&Voice>,
+    gate: &mut Gate<'_>,
+    publish: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    if result != Err(Error::Control) {
+        return super::voice_admission::report_run_end(client, result, publish).await;
+    }
+    if killed {
+        settle_kill(client, io).await?;
+        return gate.tripped(publish);
+    }
+    remote_admission::settle(client, endpoint, stopped).await
+}
+
+async fn settle_kill<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+    client: &impl EchoLink,
+    io: &mut RpcIo<R, W>,
+) -> Result<(), Error> {
+    // Cancelled negotiation can invalidate IO. Never resume that generation
+    // or present readiness after an unsuccessful stop.
+    timeout(Duration::from_secs(2), io.flush())
+        .await
+        .map_err(|_| Error::Deadline)?
+        .map_err(bridge_codex::rpc_error)?;
+    client
+        .fail_run(echo_link::RunFailure::KillSwitch)
+        .await
+        .map_err(Error::from)
 }
 
 #[cfg(test)]

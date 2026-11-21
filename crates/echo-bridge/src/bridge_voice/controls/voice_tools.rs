@@ -429,10 +429,7 @@ where
                     biased;
                     () = cancelled.as_mut() => return Err(Error::Control),
                     () = crate::bridge_endpoint::voice::ending() => return Err(Error::Control),
-                    result = async {
-                        call.start(&options.call, catalog.tools().to_vec(), options.deadline).await?;
-                        crate::bridge_endpoint::remote_start::append(&mut call).await
-                    } => result?,
+                    result = crate::bridge_endpoint::remote_start::open(&mut call, &options.call, catalog.tools().to_vec(), options.deadline) => result?,
                 }
                 Ok(catalog)
             }),

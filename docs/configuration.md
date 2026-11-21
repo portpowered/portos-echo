@@ -95,8 +95,14 @@ Set network destinations in the base file. The optional WSS template ends in
 `/devices/{authLinkId}`. The API base defaults to the configured Port OS grant's HTTPS resource
 origin. Omit inline credentials, queries, fragments and other substitutions from both. Settings shows
 an unavailable state until the endpoint issuer and an authoritative route resolver are available.
-To downgrade, remove this section from
-the base file and Settings overlay.
+
+Remote and wake sessions share one voice slot. A text start can speak a reply without opening
+device capture. Set `remote_mic = true` only for a Wyoming peer that acknowledges the correlated
+capture request. A mic-only start then waits up to two seconds for the peer. A text start that
+requests follow-up tries capture after its first reply has played. An explicit remote end cancels
+delegated work and closes playback and capture.
+
+To downgrade, remove this section from the base file and Settings overlay.
 
 ### Muse
 

@@ -91,18 +91,19 @@ pub(super) async fn replies<L: EchoLink>(
         source.answer_due = generation_options.response_deadline;
     }
     if source.session.ending() {
-        let flush = async {
-            if crate::bridge_endpoint::voice::close_requested() {
-                port.end_remote().await
-            } else {
-                port.flush_session_answer().await
-            }
-        };
-        tokio::time::timeout(options.played_timeout, flush)
+        tokio::time::timeout(options.played_timeout, flush_end(port))
             .await
             .map_err(|_| Error::Deadline)??;
     }
     Ok(())
+}
+
+async fn flush_end(port: &mut impl VoicePort) -> Result<(), Error> {
+    if crate::bridge_endpoint::voice::close_requested() {
+        port.end_remote().await
+    } else {
+        port.flush_session_answer().await
+    }
 }
 
 fn settle_cut(
@@ -137,7 +138,25 @@ async fn after_reply<L: EchoLink>(
     if source.session.ending() {
         return Ok(false);
     }
-    let followup = options.listen_timeout.is_some();
+    let mut followup = options.listen_timeout.is_some();
+    if followup && !source.delegation.waiting() && crate::bridge_endpoint::remote_start::take_followup() {
+        let deadline = (Instant::now() + Duration::from_secs(2)).min(source.run_ceiling.ok_or(Error::Deadline)?);
+        let next = super::remote_admission::followup(client, events, cancelled.as_mut(), deadline, |event| {
+            super::device(event, true, source, observe)
+        })
+        .await?;
+        if let Some(run) = next {
+            *microphone = run;
+            super::earcon::reset_capture();
+            source.controller.microphone_started();
+        } else {
+            followup = false;
+        }
+        if crate::bridge_endpoint::voice::close_requested() {
+            source.session.request_end();
+            return Ok(false);
+        }
+    }
     if !followup && !source.delegation.waiting() {
         return Ok(false);
     }

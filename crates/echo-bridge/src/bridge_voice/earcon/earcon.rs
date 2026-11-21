@@ -79,6 +79,12 @@ pub(super) fn active() -> bool {
     current().is_some_and(|context| context.state().phase == Phase::Active)
 }
 
+pub(super) fn reset_capture() {
+    if let Some(context) = current() {
+        context.state().capture = capture::Capture::default();
+    }
+}
+
 pub(super) fn start() -> Result<(), Error> {
     if let Some(context) = current() {
         let mut state = context.state();

@@ -88,8 +88,8 @@ where
 pub(super) async fn service<L, R, W, P>(
     client: &mut L,
     io: &mut RpcIo<R, W>,
-    mut options: ServeOptions<'_>,
-    mut peer: impl AsyncFnMut() -> Result<P, Error>,
+    options: ServeOptions<'_>,
+    peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     mut observe: impl FnMut(ServeNotice) -> Result<(), Error>,
     context: Context<'_, DeviceRun<L>>,
@@ -100,99 +100,104 @@ where
     W: AsyncWrite + Unpin,
     P: MediaPeer,
 {
-    let (mut tools, trace, wake_earcon, termination, remote) = context;
-    let endpoint = remote.as_ref().and_then(|_| Voice::current());
+    validate_service(&options)?;
+    let endpoint = context.4.as_ref().and_then(|_| Voice::current());
     if let Some(endpoint) = &endpoint {
         endpoint.seed_mute(options.session.muted);
     }
-    let mut publish = |notice| {
+    let publish = |notice| {
         if let Some(endpoint) = &endpoint {
             endpoint.observe(&notice)?;
         }
         observe(notice)
     };
-    validate_service(&options)?;
-    let mut events = client.events()?;
-    // Heap-own the service to keep scoped supervision within the Windows stack.
-    let work = Box::pin(async {
-        let cancelled = async {
-            tokio::select! {
-                () = cancelled => (),
-                () = super::earcon::failed() => (),
-            }
-        };
-        tokio::pin!(cancelled);
-        let mut gate = Gate::new(options.kill_path);
-        loop {
-            gate.sync(&mut publish)?;
-            publish(ServeNotice::Ready)?;
-            let Some(admission) = select_admission(
-                client,
-                &mut events,
-                io,
-                (&mut options.session.muted, &mut gate),
-                endpoint.as_ref().zip(remote.as_ref()),
-                cancelled.as_mut(),
-                &mut publish,
-            )
-            .await?
-            else {
-                return Ok(());
-            };
-            let stopped = std::cell::Cell::new(false);
-            let killed = std::cell::Cell::new(false);
-            let lease = admission.remote.as_ref().map(|remote| remote.lease.clone());
-            let result = Box::pin(serve_admitted(
-                (&*client, &mut events, admission),
-                io,
-                &mut options,
-                &mut peer,
-                gate.cancel(remote_admission::stop(cancelled.as_mut(), lease, &stopped), &killed),
-                &mut publish,
-                (tools.as_deref_mut(), trace.clone()),
-            ))
-            .await;
-            if killed.get()
-                && let Some(termination) = termination
-            {
-                termination.trip();
-            }
-            settle_admission(
-                client,
-                io,
-                result,
-                (killed.get(), stopped.get()),
-                endpoint.as_ref(),
-                &mut gate,
-                &mut publish,
-            )
-            .await?;
-        }
-    });
-    let result = super::earcon::scope(client, wake_earcon, work).await;
+    let events = client.events()?;
+    let earcon = context.2;
+    let work = Box::pin(service_loop(
+        client,
+        events,
+        io,
+        options,
+        (peer, cancelled),
+        publish,
+        (context, endpoint.as_ref()),
+    ));
+    let result = super::earcon::scope(client, earcon, work).await;
     if let Some(endpoint) = &endpoint {
         endpoint.unavailable();
     }
     result
 }
 
-async fn settle_admission<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
-    client: &impl EchoLink,
+async fn service_loop<L, R, W, P>(
+    client: &L,
+    mut events: L::Events,
     io: &mut RpcIo<R, W>,
-    result: Result<(), Error>,
-    (killed, stopped): (bool, bool),
-    endpoint: Option<&Voice>,
-    gate: &mut Gate<'_>,
-    publish: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
-) -> Result<(), Error> {
-    if result != Err(Error::Control) {
-        return report_run_end(client, result, publish).await;
+    mut options: ServeOptions<'_>,
+    (mut peer, cancelled): (impl AsyncFnMut() -> Result<P, Error>, impl Future<Output = ()>),
+    mut publish: impl FnMut(ServeNotice) -> Result<(), Error>,
+    (context, endpoint): (Context<'_, DeviceRun<L>>, Option<&Voice>),
+) -> Result<(), Error>
+where
+    L: EchoLink,
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    P: MediaPeer,
+{
+    let (mut tools, trace, _, termination, remote) = context;
+    let cancelled = async {
+        tokio::select! {
+            () = cancelled => (),
+            () = super::earcon::failed() => (),
+        }
+    };
+    tokio::pin!(cancelled);
+    let mut gate = Gate::new(options.kill_path);
+    loop {
+        gate.sync(&mut publish)?;
+        publish(ServeNotice::Ready)?;
+        let Some(admission) = select_admission(
+            client,
+            &mut events,
+            io,
+            (&mut options.session.muted, &mut gate),
+            endpoint.zip(remote.as_ref()),
+            cancelled.as_mut(),
+            &mut publish,
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+        let stopped = std::cell::Cell::new(false);
+        let killed = std::cell::Cell::new(false);
+        let lease = admission.remote.as_ref().map(|remote| remote.lease.clone());
+        let result = Box::pin(serve_admitted(
+            (client, &mut events, admission),
+            io,
+            &mut options,
+            &mut peer,
+            gate.cancel(remote_admission::stop(cancelled.as_mut(), lease, &stopped), &killed),
+            &mut publish,
+            (tools.as_deref_mut(), trace.clone()),
+        ))
+        .await;
+        if killed.get()
+            && let Some(termination) = termination
+        {
+            termination.trip();
+        }
+        super::voice_kill::settle_admission(
+            client,
+            io,
+            result,
+            (killed.get(), stopped.get()),
+            endpoint,
+            &mut gate,
+            &mut publish,
+        )
+        .await?;
     }
-    if killed {
-        settle_kill(client, io).await?;
-        return gate.tripped(publish);
-    }
-    remote_admission::settle(client, endpoint, stopped).await
 }
 
 async fn serve_admitted<L, R, W, P>(
@@ -237,22 +242,6 @@ where
     result
 }
 
-async fn settle_kill<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
-    client: &impl EchoLink,
-    io: &mut RpcIo<R, W>,
-) -> Result<(), Error> {
-    // Cancelled negotiation can invalidate IO. Never resume that generation
-    // or present readiness after an unsuccessful stop.
-    timeout(Duration::from_secs(2), io.flush())
-        .await
-        .map_err(|_| Error::Deadline)?
-        .map_err(bridge_codex::rpc_error)?;
-    client
-        .fail_run(echo_link::RunFailure::KillSwitch)
-        .await
-        .map_err(Error::from)
-}
-
 async fn select_admission<L: EchoLink, R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     client: &L,
     events: &mut L::Events,
@@ -294,7 +283,7 @@ async fn idle_control<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(io: &mut RpcI
     }
 }
 
-async fn report_run_end(
+pub(super) async fn report_run_end(
     client: &impl EchoLink,
     result: Result<(), Error>,
     observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
