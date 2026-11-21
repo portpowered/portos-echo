@@ -29,6 +29,14 @@ VARIANTS = ("mouth-half", "mouth-open", "blink", "listening", "connecting",
             "thinking", "error", "happy", "setup", "approval")
 # Poses shown next to a card stand left of centre, clear of the card.
 CARD_SHIFT = {"setup": -110, "approval": -110, "error": -110}
+# A generated edit comes back a few levels brighter than its master, by an
+# amount that differs with the colour. Each edit is therefore matched to the
+# master with one colour map for the whole frame, fitted on a MATCH_SIZE copy
+# over the pixels the edit left alone: those that differ by less than
+# MATCH_SAME. The map is a lattice of MATCH_NODES values per channel.
+MATCH_SIZE = (256, 384)
+MATCH_SAME = 24
+MATCH_NODES = 9
 # One colour grade for every frame, from -1 (cool) to 1 (warm): red gains and
 # blue loses a fifth of it. The build's --warmth option overrides it.
 WARMTH = -0.25
@@ -46,13 +54,18 @@ SPEECH = (("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 2), ("neutral", 2
           ("mouth-open", 5), ("mouth-half", 3), ("neutral", 3),
           ("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 4), ("neutral", 4))
 # The idle loop is three breaths long, so the blinks in it come at unequal
-# gaps: 3.7 s, 3.2 s and, across the loop's seam, 5.1 s. A blink is four
-# frames: closing, closed twice, opening.
+# gaps: 3.7 s, 3.2 s and, across the loop's seam, 5.1 s.
 BREATH = 120
 BLINKS = (42, 153, 249)
+# The idle loop is on screen most of the time, and every frame that differs
+# from the last costs the display a full decode and redraw. The slow bob is
+# therefore drawn IDLE_FPS times a second. A blink is two of those frames:
+# closed, then opening.
+IDLE_FPS = 10
+IDLE_STEP = FPS // IDLE_FPS
 # A state loop returns to the neutral frame only where it joins, so the held
 # poses use long loops.
-FRAMES = {"idle": 3 * BREATH + 1, "connecting": 150, "listening": 240, "thinking": 240,
+FRAMES = {"idle": 3 * BREATH // IDLE_STEP, "connecting": 150, "listening": 240, "thinking": 240,
           "speaking": 100, "muted": 30, "setup": 60, "setup-enter": 16, "approval": 300,
           "error": 300, "happy": 45}
 TRANSITION = 10
@@ -64,21 +77,89 @@ UNBLENDED = ("idle", "speaking", "muted", "setup")
 LOSSY = ("idle", "speaking")
 
 
+MATCHES = None
+SMALL = {}
+
+
 def run(args, data=None):
     return subprocess.run([*FFMPEG, *args], input=data, check=True,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
 
-def raw_input(path):
+def raw_input(path, rate=FPS):
     return ["-f", "rawvideo", "-pixel_format", "rgba", "-video_size", SIZE,
-            "-framerate", str(FPS), "-i", str(path)]
+            "-framerate", str(rate), "-i", str(path)]
+
+
+def small(sheet):
+    width, height = MATCH_SIZE
+    return run(["-i", str(ART / f"{sheet}.png"), "-vf",
+                f"format=rgba,scale={width}:{height}:flags=area", "-frames:v", "1",
+                "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
+
+
+def colour_match(sheet):
+    """The colour map that takes an edit's colours to the master's, as a
+    .cube file: every node holds the mean shift of the unchanged pixels near
+    it, shared out by their distance to the node."""
+    path = MATCHES / f"{sheet}.cube"
+    if path.exists():
+        return path
+    if "neutral" not in SMALL:
+        SMALL["neutral"] = small("neutral")
+    master, edit = SMALL["neutral"], small(sheet)
+    nodes = MATCH_NODES
+    step = 255 / (nodes - 1)
+    weight = [0.0] * nodes ** 3
+    shift = [[0.0] * nodes ** 3 for _ in range(3)]
+    count = 0
+    mean = [0.0, 0.0, 0.0]
+    for at in range(0, len(edit), 4):
+        if edit[at + 3] < 250 or master[at + 3] < 250:
+            continue
+        colour = edit[at:at + 3]
+        change = [master[at + c] - colour[c] for c in range(3)]
+        if max(map(abs, change)) >= MATCH_SAME:
+            continue
+        count += 1
+        cell, part = [], []
+        for c in range(3):
+            position = min(colour[c] / step, nodes - 1.000001)
+            cell.append(int(position))
+            part.append(position - int(position))
+            mean[c] += change[c]
+        for corner in range(8):
+            node, share = 0, 1.0
+            for c in range(3):
+                high = corner >> c & 1
+                node += (cell[c] + high) * nodes ** c
+                share *= part[c] if high else 1 - part[c]
+            weight[node] += share
+            for c in range(3):
+                shift[c][node] += share * change[c]
+    assert count > 10000, f"{sheet} does not register with the master"
+    mean = [total / count for total in mean]
+    lines = [f"LUT_3D_SIZE {nodes}"]
+    # Red changes fastest in a .cube file.
+    for node in range(nodes ** 3):
+        values = []
+        for c in range(3):
+            # A colour too rare to measure takes the frame's mean shift.
+            known = weight[node] >= 20
+            moved = shift[c][node] / weight[node] if known else mean[c]
+            level = node // nodes ** c % nodes * step + moved
+            values.append(f"{min(1.0, max(0.0, level / 255)):.6f}")
+        lines.append(" ".join(values))
+    path.write_text("\n".join(lines) + "\n", encoding="ascii", newline="\n")
+    return path
 
 
 def cutout(sheet, rect, filters):
     x, y, width, height = rect
     grade = f"colorchannelmixer=rr={1 + WARMTH / 5:.4f}:bb={1 - WARMTH / 5:.4f},"
+    match = "" if sheet == "neutral" else f"lut3d=file={colour_match(sheet)},"
     return run(["-i", str(ART / f"{sheet}.png"), "-vf",
-                f"format=rgba,crop={width}:{height}:{x}:{y},{grade if WARMTH else ''}"
+                f"format=rgba,crop={width}:{height}:{x}:{y},{match}{grade if WARMTH else ''}"
                 f"lutrgb=a='if(lt(val,16),0,val)',{filters}", "-frames:v", "1",
                 "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"])
 
@@ -136,14 +217,15 @@ def bob(index):
 
 
 def idle(frames):
-    for index in range(FRAMES["idle"]):
+    for index in range(0, 3 * BREATH, IDLE_STEP):
         drop = bob(index)
         frame = frames["bob"][drop]
-        step = min((index - start for start in BLINKS if 0 <= index - start < 4), default=None)
+        step = min(((index - start) // IDLE_STEP for start in BLINKS
+                    if 0 <= index - start < 2 * IDLE_STEP), default=None)
         if step is not None:
             # The closed eyes ride the same breath as the frame they replace.
             closed = raster("blink", MASTER, drop)
-            frame = closed if step in (1, 2) else mix(frame, closed)
+            frame = mix(frame, closed) if step else closed
         yield frame
 
 
@@ -200,12 +282,13 @@ def encode(pack, raw, role, count):
         transition = f"(1-cos(PI*(N-1)/{count - 1}))/2"
     else:
         transition = ease_in_out("N-1", count)
+    rate = IDLE_FPS if role == "idle" else FPS
     graph = (
         "[0:v]format=gbrap,premultiply=inplace=1[rest];"
         "[1:v]format=gbrap,premultiply=inplace=1[pose];"
         f"[rest][pose]blend=all_expr='A+(B-A)*({transition})':shortest=1,"
         "unpremultiply=inplace=1,format=yuva420p,split[webm][alpha];"
-        f"color=c={BACKGROUND}:s={SIZE}:r={FPS}[background];"
+        f"color=c={BACKGROUND}:s={SIZE}:r={rate}[background];"
         "[background][alpha]overlay=shortest=1,format=yuv420p[mp4]"
     )
     fixed = ["-an", "-threads", "1", "-fflags", "+bitexact",
@@ -215,8 +298,8 @@ def encode(pack, raw, role, count):
     h264_quality = ["-qp", "18"] if role == "muted" else ["-crf", "18"]
     vp9_quality = (["-crf", "10", "-b:v", "0", "-cpu-used", "2"] if role in LOSSY
                    else ["-lossless", "1", "-cpu-used", "4"])
-    run(["-loop", "1", "-framerate", str(FPS), "-i", str(pack / "rest.png"),
-         *raw_input(raw), "-filter_complex", graph,
+    run(["-loop", "1", "-framerate", str(rate), "-i", str(pack / "rest.png"),
+         *raw_input(raw, rate), "-filter_complex", graph,
          "-map", "[webm]", *fixed, *gop, "-c:v", "libvpx-vp9",
          "-auto-alt-ref", "0", *vp9_quality, str(pack / f"{role}.webm"),
          "-map", "[mp4]", *fixed, *gop, "-c:v", "libx264", *h264_quality, "-preset", "fast",
@@ -225,8 +308,10 @@ def encode(pack, raw, role, count):
 
 
 def render(pack, work, warmth=WARMTH):
-    global WARMTH
+    global WARMTH, MATCHES
     WARMTH = warmth
+    MATCHES = work
+    SMALL.clear()
     frames = keyframes()
     run([*raw_input("pipe:0"), "-frames:v", "1", "-threads", "1",
          str(pack / "rest.png")], frames["neutral"])
