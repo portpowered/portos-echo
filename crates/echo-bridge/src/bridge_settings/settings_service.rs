@@ -199,14 +199,7 @@ fn commit(
         &operation,
         SettingsOperation::SaveV2(patch) if super::settings_host::settings_v2::legacy_only(&patch.settings)
     );
-    let legacy_v1 = matches!(
-        &operation,
-        SettingsOperation::Save(patch)
-            if patch.settings.voice.is_none() && patch.settings.codex.is_none()
-                && patch.settings.agent.as_ref().is_some_and(|agent| {
-                    agent.daily_request_cap.is_none() && agent.max_tool_calls.is_some()
-                })
-    );
+    let legacy_v1 = legacy_v1_cap_only(&operation);
     let mut reply = host.transaction_with_grant(operation, link, view.scopes, owner);
     if legacy_v2 {
         return reply;
@@ -252,6 +245,17 @@ fn commit(
         };
     }
     reply
+}
+
+fn legacy_v1_cap_only(operation: &SettingsOperation) -> bool {
+    matches!(
+        operation,
+        SettingsOperation::Save(patch)
+            if patch.settings.voice.is_none() && patch.settings.codex.is_none()
+                && patch.settings.agent.as_ref().is_some_and(|agent| {
+                    agent.daily_request_cap.is_none() && agent.max_tool_calls.is_some()
+                })
+    )
 }
 
 #[cfg(test)]

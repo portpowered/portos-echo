@@ -286,14 +286,6 @@ impl crate::bridge_runtime::journey::bridge_live::LivePort for Live {
     }
 }
 
-fn config() -> echo_config::AgentConfig {
-    echo_config::AgentConfig {
-        max_tool_calls: 8,
-        task_deadline_seconds: 5,
-        daily_request_cap: 1,
-        model: None,
-    }
-}
 fn delegation(id: &str, target: &str) -> echo_contracts::live::LiveEvent {
     serde_json::from_value(
         json!({"type":"session.delegation.created","delegation":{"id":id,"target":target,"input":"private request"}}),
@@ -309,7 +301,7 @@ async fn bridge_muse_host_delivers_once_on_owner_and_deduplicates_busy_or_unsupp
         summary: "completed test job".into(),
     }]);
     let state = fake.state.clone();
-    let mut host = Muse::new(fake, config(), Arc::new(|| 7));
+    let mut host = Muse::new(fake, 1, Arc::new(|| 7));
     let mut witness = Witness::new();
     let event = delegation("delegation-raw-7", "client");
     assert!(host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap());
@@ -354,7 +346,7 @@ async fn bridge_muse_host_abandon_joins_cancel_and_suppresses_late_commentary() 
     use super::super::bridge_muse_host::Muse;
     let fake = fake(vec![]);
     let state = fake.state.clone();
-    let mut host = Muse::new(fake, config(), Arc::new(|| 7));
+    let mut host = Muse::new(fake, 1, Arc::new(|| 7));
     let mut witness = Witness::new();
     assert!(
         !host
@@ -401,7 +393,7 @@ async fn bridge_muse_host_budget_survives_new_calls_and_cancellation_then_rolls_
     let state = fake.state.clone();
     let day = Arc::new(AtomicU64::new(7));
     let clock = day.clone();
-    let mut host = Muse::new(fake, config(), Arc::new(move || clock.load(Ordering::Relaxed)));
+    let mut host = Muse::new(fake, 1, Arc::new(move || clock.load(Ordering::Relaxed)));
     let mut witness = Witness::new();
     let event = delegation("delegation-raw-7", "client");
     assert!(host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap());

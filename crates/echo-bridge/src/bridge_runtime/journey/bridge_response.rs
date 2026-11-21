@@ -1,7 +1,7 @@
 use super::{
     Arbiter, Cancellation, Duration, EchoLink, Error, Instant, LeadPacer, LinkEvents, LivePort, MicrophoneRun,
-    NonZeroUsize, Output, PlayOutcome, PlaybackContext, Source, Trace, Work, bridge_audio, bridge_timing, json,
-    stop_failed_producer,
+    NonZeroUsize, Output, PlayOutcome, PlaybackContext, Source, Trace, UserSpeech, Work, bridge_audio, bridge_timing,
+    json, stop_failed_producer,
 };
 
 use echo_live::call::CallError;
@@ -322,7 +322,9 @@ async fn produce_turns<L: EchoLink>(
         if source.received > received {
             context.wait.media_started(context.delegation.awaiting_result());
         }
-        let timing = context.service_delegation(source.user_speaking, call).await?;
+        let timing = context
+            .service_delegation(source.user_speech == UserSpeech::Active, call)
+            .await?;
         context.screen.presentation.expire_emotion()?;
         context.pressure(source, &mut pressure_reported)?;
         let echo_done = source.echo_done(lab);

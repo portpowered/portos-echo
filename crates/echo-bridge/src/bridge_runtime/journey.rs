@@ -15,6 +15,13 @@ use serde_json::json;
 use std::{future::Future, num::NonZeroUsize, pin::Pin, time::Duration};
 use tokio::time::Instant;
 type CutReceipt<'a> = Pin<Box<dyn Future<Output = Result<echo_link::CutStats, echo_link::Error>> + Send + 'a>>;
+
+#[derive(PartialEq, Eq)]
+enum UserSpeech {
+    Quiet,
+    Active,
+}
+
 struct Source {
     mic: Option<Microphone>,
     chunks: u64,
@@ -25,7 +32,7 @@ struct Source {
     acknowledged: u64,
     finished: bool,
     audio_done: bool,
-    user_speaking: bool,
+    user_speech: UserSpeech,
     cancelled: bool,
     reply: Reply,
     queue: FrameQueue<Vec<u8>>,
@@ -43,7 +50,7 @@ impl Source {
             acknowledged: 0,
             finished: false,
             audio_done: false,
-            user_speaking: false,
+            user_speech: UserSpeech::Quiet,
             cancelled: false,
             reply: Reply::new()?,
             queue: FrameQueue::new(NonZeroUsize::new(128).ok_or(Error::Audio)?),
@@ -179,11 +186,11 @@ impl Source {
         match event {
             LiveEvent::Error { .. } => Err(Error::Unavailable),
             LiveEvent::Other(value) if value["type"] == "input_audio_buffer.speech_started" => {
-                self.user_speaking = true;
+                self.user_speech = UserSpeech::Active;
                 Ok(())
             }
             LiveEvent::Other(value) if value["type"] == "input_audio_buffer.speech_stopped" => {
-                self.user_speaking = false;
+                self.user_speech = UserSpeech::Quiet;
                 Ok(())
             }
             LiveEvent::Other(value)

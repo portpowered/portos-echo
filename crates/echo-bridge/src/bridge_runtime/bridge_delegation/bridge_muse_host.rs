@@ -4,7 +4,6 @@ use super::{MAX_DELEGATIONS, bridge_muse_work};
 use crate::bridge_runtime::{bridge_budget::Budget, journey::bridge_live::LivePort};
 use crate::{Error, bridge_trace::Trace};
 use echo_agent_api::Task;
-use echo_config::AgentConfig;
 use echo_contracts::{
     ids::DelegationId,
     live::{DelegationTarget, LiveEvent},
@@ -28,10 +27,10 @@ pub(in crate::bridge_runtime) struct Muse<B = crate::bridge_muse::Backend> {
 }
 
 impl<B: echo_agent_api::AgentBackend + Send + Sync + 'static> Muse<B> {
-    pub fn new(backend: B, config: AgentConfig, utc_day: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
+    pub fn new(backend: B, daily_request_cap: u64, utc_day: Arc<dyn Fn() -> u64 + Send + Sync>) -> Self {
         Self {
             backend: Arc::new(backend),
-            budget: Budget::new(config.daily_request_cap),
+            budget: Budget::new(daily_request_cap),
             utc_day,
             seen: HashSet::new(),
             active: None,

@@ -61,7 +61,7 @@ async fn delegation_trace_muse_task_outcomes_keep_exact_speech_and_one_local_han
         let mut fake = fake(events(case));
         fake.reject = case == "rejected";
         let state = fake.state.clone();
-        let mut host = Muse::new(fake, config(), Arc::new(|| 7));
+        let mut host = Muse::new(fake, 1, Arc::new(|| 7));
         let mut witness = Witness::new();
         let event = delegation("delegation-raw-7", "client");
         assert!(host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap());
@@ -122,7 +122,7 @@ async fn delegation_trace_muse_append_failure_preserves_error_and_prior_task_fai
                 summary: "synthetic answer".into(),
             }
         };
-        let mut host = Muse::new(fake(vec![event]), config(), Arc::new(|| 7));
+        let mut host = Muse::new(fake(vec![event]), 1, Arc::new(|| 7));
         let mut witness = Witness::new();
         host.dispatch(
             &delegation("delegation-raw-7", "client"),
@@ -160,9 +160,7 @@ async fn delegation_trace_muse_abandon_drop_and_replacement_close_each_generatio
     for explicit in [false, true] {
         let fake = fake(vec![]);
         let state = fake.state.clone();
-        let mut agent = config();
-        agent.daily_request_cap = 3;
-        let mut host = Muse::new(fake, agent, Arc::new(|| 7));
+        let mut host = Muse::new(fake, 3, Arc::new(|| 7));
         let mut witness = Witness::new();
         let event = delegation("delegation-raw-7", "client");
         host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap();
@@ -201,7 +199,7 @@ async fn delegation_trace_muse_payload_switch_redacts_task_and_answer_without_ch
             task_id: id(),
             summary: answer.into(),
         }]);
-        let mut host = Muse::new(fake, config(), Arc::new(|| 7));
+        let mut host = Muse::new(fake, 1, Arc::new(|| 7));
         let mut witness = Witness::new();
         witness.trace = witness.trace.with_payloads(payloads);
         let mut input = serde_json::to_value(delegation("delegation-raw-7", "client")).unwrap();

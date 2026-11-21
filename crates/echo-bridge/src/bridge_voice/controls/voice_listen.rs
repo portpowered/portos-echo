@@ -8,7 +8,7 @@ pub(super) async fn until(deadline: Option<Instant>) {
     if let Some(deadline) = deadline {
         tokio::time::sleep_until(deadline).await;
     } else {
-        std::future::pending().await
+        std::future::pending::<()>().await;
     }
 }
 

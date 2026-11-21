@@ -145,20 +145,26 @@ where
                     .map_err(bridge_codex::rpc_error)?;
                 client.fail_run(echo_link::RunFailure::KillSwitch).await?;
                 gate.tripped(&mut observe)?;
-            } else if matches!(result, Err(Error::NoResponse | Error::SessionCeiling)) {
-                let reason = if result == Err(Error::SessionCeiling) {
-                    "session_ceiling"
-                } else {
-                    "no_response"
-                };
-                client.fail_run(echo_link::RunFailure::Unavailable).await?;
-                observe(ServeNotice::Unanswered { reason })?;
             } else {
-                result?;
+                report_run_end(client, result, &mut observe).await?;
             }
         }
     });
     super::earcon::scope(client, wake_earcon, work).await
+}
+
+async fn report_run_end(
+    client: &impl EchoLink,
+    result: Result<(), Error>,
+    observe: &mut impl FnMut(ServeNotice) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let reason = match result {
+        Err(Error::SessionCeiling) => "session_ceiling",
+        Err(Error::NoResponse) => "no_response",
+        other => return other,
+    };
+    client.fail_run(echo_link::RunFailure::Unavailable).await?;
+    observe(ServeNotice::Unanswered { reason })
 }
 
 fn validate_service(options: &ServeOptions<'_>) -> Result<(), Error> {

@@ -7,10 +7,10 @@ async fn t3_settings_legacy_patches_keep_v1_storage_and_skip_v2_writes() {
     let path = fixture.path("settings.toml");
     let url = fixture.url("/settings/v2");
     let legacy = json!({"version":2,"settings":{"agent":{"max_tool_calls":2,"task_deadline_seconds":5}}});
-    let patch = || fixture.client.patch(&url).json(&legacy).send();
+    let save_legacy = || fixture.client.patch(&url).json(&legacy).send();
     for persisted in [false, true] {
         let before = fs::read(&path).ok();
-        let reply = patch().await.unwrap();
+        let reply = save_legacy().await.unwrap();
         assert_eq!(reply.status(), StatusCode::OK);
         assert_eq!(
             reply.json::<Value>().await.unwrap(),

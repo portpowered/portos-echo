@@ -15,7 +15,11 @@ impl Host {
     pub fn new(settings: &Settings, utc_day: Arc<dyn Fn() -> u64 + Send + Sync>) -> Result<Self, Error> {
         if let Some((agent, config)) = &settings.muse {
             let backend = crate::bridge_muse::Backend::open(config, settings.model_url.is_some())?;
-            Ok(Self::Muse(Box::new(Muse::new(backend, agent.clone(), utc_day))))
+            Ok(Self::Muse(Box::new(Muse::new(
+                backend,
+                agent.daily_request_cap,
+                utc_day,
+            ))))
         } else {
             Ok(Self::Client(Box::new(Client::new(settings, utc_day))))
         }

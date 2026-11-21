@@ -479,7 +479,7 @@ async fn voice_stuck_delegation_cuts_once_the_filler_has_played_at_the_run_ceili
     let filler = frames(&observer);
     assert_eq!(filler.len(), 11);
     assert!(matches!(observer.commands().last(), Some(Command::Frame(_))));
-    tokio::time::advance(options.session_max - Duration::from_secs(10)).await;
+    tokio::time::advance(options.session_max.checked_sub(Duration::from_secs(10)).unwrap()).await;
     // PCM ready at the cutoff must stay on the retiring call.
     send(&tx, audible(1)).await;
     assert_eq!(work.await, Err(Error::SessionCeiling));
