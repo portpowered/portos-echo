@@ -172,7 +172,9 @@ fn wire_replies(
     for (index, (stream, frames)) in streams.iter().zip(&counts).enumerate() {
         let played = stream["played_us"].as_u64().ok_or("goodbye: missing device Played")?;
         if index == spoken {
-            if stream["ending"] != "stop" || stream["pcm_bytes"] != 0 || !frames.is_empty() || played < last_played {
+            // Empty either way: closed, or cut by the end that superseded it.
+            let closed = stream["ending"] == "stop" || stream["ending"] == "flush";
+            if !closed || stream["pcm_bytes"] != 0 || !frames.is_empty() || played < last_played {
                 return Err(format!("goodbye: audio followed the farewell: {stream}"));
             }
             last_played = played;
