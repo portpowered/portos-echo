@@ -176,7 +176,7 @@ async function geometry(page, state) {
             assert.ok(
                 box.top >= 480 &&
                     Math.abs((box.left + box.right) / 2 - 480) <= 42,
-                label,
+                `${state}: ${label} box=${JSON.stringify(box)}`,
             );
         }
     }
