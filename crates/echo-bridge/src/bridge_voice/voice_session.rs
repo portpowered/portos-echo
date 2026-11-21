@@ -360,6 +360,11 @@ async fn drive<L: EchoLink>(
             |notice| project_reply(notice, &mut options.muted, observe),
         )
         .await?;
+        if crate::bridge_endpoint::voice::close_requested() {
+            // A remote end retires the interrupted call before the next wake
+            // can borrow it or dispatch work from the old turn.
+            options.idle = Duration::ZERO;
+        }
         completed = completed.checked_add(1).ok_or(Error::Unavailable)?;
         observe(SessionNotice::MicrophoneCompleted(stats.clone()))?;
         if options.listen_timeout.is_none() {
