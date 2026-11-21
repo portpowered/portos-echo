@@ -1,5 +1,5 @@
 //! T3: real Settings dispatch and Codex wire across failed replacement recovery.
-use super::super::tools::{Media, ready};
+use super::super::tools::Media;
 use super::*;
 use echo_bridge::{bridge_settings::SettingsHost, bridge_voice::RuntimeCompletion};
 use echo_config::{EffectiveConfig, MuseConfig, SettingsOverlay};
@@ -86,6 +86,7 @@ fn configure(fixture: &Fixture, startup: &mut EffectiveConfig) -> MuseConfig {
         notes: false,
         prompts: false,
     };
+    startup.base.mcp.server.clear();
     startup.base.muse = Some(muse.clone());
     startup.config = startup.overlay.apply_to(&startup.base).unwrap();
     muse
@@ -122,7 +123,7 @@ async fn catalog_turn(
         retained,
     );
     let journey = async {
-        let (_control, _screen) = ready(fixture).await;
+        let (_control, _screen) = settings_ready(fixture, before_clear).await;
         observer.wake("catalog fixture", vec![]);
         while !observer.commands().contains(&Command::Stop) {
             tokio::task::yield_now().await;
@@ -150,6 +151,21 @@ async fn catalog_turn(
     super::super::host::released(fixture).await;
     std::fs::remove_file(fixture.home.join("peer-port")).unwrap();
     completion.unwrap()
+}
+
+async fn settings_ready(
+    fixture: &Fixture,
+    before_clear: bool,
+) -> (tokio::net::TcpStream, Lines<BufReader<tokio::net::TcpStream>>) {
+    let control = fixture.control().await;
+    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    let message = if before_clear {
+        "Echo Live ready"
+    } else {
+        "Could not restart bridge; saved settings remain pending"
+    };
+    while bridge_wire_screen::state(&mut screen).await["message"] != message {}
+    (control, screen)
 }
 
 async fn clear(fixture: &Fixture) {

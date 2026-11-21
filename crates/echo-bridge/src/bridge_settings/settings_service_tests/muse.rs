@@ -13,10 +13,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         assert self.headers.get('DPoP') is None
         accepted = self.headers.get('Authorization') == 'Bearer ' + 'x' * 32
         status, code = (405, 'method_not_allowed') if accepted else (401, 'unauthorized')
+        body = json.dumps({'error': code, 'fixture': 'private-remote-detail'}).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(json.dumps({'error': code, 'fixture': 'private-remote-detail'}).encode())
+        self.wfile.write(body)
         print(status, flush=True)
 server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
 tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
