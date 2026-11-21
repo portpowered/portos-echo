@@ -37,7 +37,9 @@ pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, Stri
         Journey::LongWait => long_wait(evidence, &summary)?,
         Journey::Limits => limits(evidence, &summary)?,
         Journey::LongQuestion => long_question(evidence, &summary)?,
-        Journey::Recovery | Journey::ActiveMedia => return Err("session: invalid recovery dispatch".into()),
+        Journey::End | Journey::Recovery | Journey::ActiveMedia => {
+            return Err("session: invalid journey dispatch".into());
+        }
     };
     Ok(json!({"timeline":summary,"journey":detail}))
 }
@@ -417,7 +419,9 @@ fn end(evidence: &Evidence) -> Result<Value, String> {
     let opened = elapsed(records, "run.started");
     let ended = elapsed(records, "wyoming.run_ended");
     if opened.len() != 1 || ended.len() != 1 || elapsed(records, "bridge.run_completed").len() > 1 {
-        return Err(format!("session: expected one run and one end, observed opened={opened:?} ended={ended:?}"));
+        return Err(format!(
+            "session: expected one run and one end, observed opened={opened:?} ended={ended:?}"
+        ));
     }
     if records.iter().any(|r| r["event"] == "bridge.error") {
         return Err("session: bridge.error recorded".into());

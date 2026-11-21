@@ -59,7 +59,7 @@ async fn voice_listen_hold_acknowledged_without_a_grant_ends_at_the_listen_windo
     assert_eq!(end.result, Ok(()));
     assert!(!end.alive_at_119);
     assert_eq!(end.ended - end.granted, Duration::from_secs(15));
-    assert!(end.receipts.is_empty());
+    assert_eq!(end.receipts, Vec::<String>::new());
 }
 
 /// An explicit end 60 s into the 120 s grant closes the run at once.
@@ -156,35 +156,9 @@ async fn hold(answered: bool, then: Then) -> Hold {
             Ok(())
         },
     ));
-    if answered {
-        // "What time is it?" answered; then the user speaks again.
-        reply(&tx, 5000).await;
-        super::settle(&mut work, &observer, &seen.played, 1).await;
-        tokio::time::advance(Duration::from_secs(2)).await;
-        tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
-        poll(work.as_mut()).await;
-    }
-    let acknowledged = 1 + usize::from(answered);
-    reply(&tx, -5000).await;
-    super::settle(&mut work, &observer, &seen.played, acknowledged).await;
+    acknowledge(&tx, &mut work, &observer, &seen.played, answered).await;
     let run = owner.borrow().clone().unwrap();
-    let (granted, deadline, result, alive_at_119) = match then {
-        Then::Acknowledge => {
-            let played = Instant::now();
-            let deadline = played + Duration::from_secs(15);
-            let (result, alive) = wait_out(work, &observer, deadline).await;
-            (played, deadline, result, alive)
-        }
-        Then::WaitOut => {
-            let (granted, deadline) = extend(&tx, &mut work, &run, opened).await;
-            let (result, alive) = wait_out(work, &observer, deadline).await;
-            (granted, deadline, result, alive)
-        }
-        Then::End(after) => {
-            let (granted, deadline) = extend(&tx, &mut work, &run, opened).await;
-            (granted, deadline, end_explicitly(&tx, work, &run, after).await, false)
-        }
-    };
+    let (granted, deadline, result, alive_at_119) = follow(then, &tx, work, &observer, (&run, opened)).await;
     assert!(observer.commands().contains(&Command::EndRun));
     Hold {
         result,
@@ -193,6 +167,50 @@ async fn hold(answered: bool, then: Then) -> Hold {
         deadline,
         ended: Instant::now(),
         receipts: seen.receipts.take(),
+    }
+}
+
+/// Optionally "What time is it?" answered and the user heard again, then the
+/// hold's acknowledgement played.
+async fn acknowledge<W: Future<Output = Result<Stats, Error>>>(
+    tx: &mpsc::Sender<MediaEvent>,
+    work: &mut Pin<Box<W>>,
+    observer: &Observer,
+    played: &Cell<usize>,
+    answered: bool,
+) {
+    if answered {
+        reply(tx, 5000).await;
+        super::settle(work, observer, played, 1).await;
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+        poll(work.as_mut()).await;
+    }
+    reply(tx, -5000).await;
+    super::settle(work, observer, played, 1 + usize::from(answered)).await;
+}
+
+/// What follows the acknowledgement: (granted, deadline, result, alive at 119 s).
+async fn follow<W: Future<Output = Result<Stats, Error>>>(
+    then: Then,
+    tx: &mpsc::Sender<MediaEvent>,
+    mut work: Pin<Box<W>>,
+    observer: &Observer,
+    (run, opened): (&Arc<()>, Instant),
+) -> (Instant, Instant, Result<(), Error>, bool) {
+    if matches!(then, Then::Acknowledge) {
+        let played = Instant::now();
+        let deadline = played + Duration::from_secs(15);
+        let (result, alive) = wait_out(work, observer, deadline).await;
+        return (played, deadline, result, alive);
+    }
+    let (granted, deadline) = extend(tx, &mut work, run, opened).await;
+    match then {
+        Then::End(after) => (granted, deadline, end_explicitly(tx, work, run, after).await, false),
+        Then::WaitOut | Then::Acknowledge => {
+            let (result, alive) = wait_out(work, observer, deadline).await;
+            (granted, deadline, result, alive)
+        }
     }
 }
 

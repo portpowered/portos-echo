@@ -392,7 +392,10 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) {
     assert!(!source.delegation.in_flight());
     assert!(source.controller.ready_to_close(true, true));
     let commands = device.commands();
-    assert_eq!(commands.iter().filter(|cmd| matches!(cmd, Command::Cut(_))).count(), cuts);
+    assert_eq!(
+        commands.iter().filter(|cmd| matches!(cmd, Command::Cut(_))).count(),
+        cuts
+    );
 }
 
 async fn goodbye_run<T>(

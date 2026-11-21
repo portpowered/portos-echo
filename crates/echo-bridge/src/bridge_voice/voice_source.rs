@@ -78,6 +78,8 @@ pub(super) struct Source {
     barge: Barge,
     /// A barge-in cut the reply: call audio is its until the model speaks again.
     stale: bool,
+    /// The open reply has taken audible audio: it is speaking, not just opened.
+    spoken: bool,
     /// Measures the microphone under the reply for `reply.quality`; decides nothing.
     ear: Ear,
     /// The session's transcript of the turn the reply answers.
@@ -109,6 +111,7 @@ impl Source {
 
     /// Replace the reply queue and its pacer, keeping what they counted.
     fn fresh_reply(&mut self) -> Result<(), Error> {
+        self.spoken = false;
         self.stats.reply_dropped += self.reply.dropped_frames();
         self.meter.paced(self.reply.take_playout());
         self.reply = ReplyAudio::new(self.lead_ms)?;
@@ -155,6 +158,7 @@ impl Source {
 
     /// Close the reply's quality window. `lost` is the call's cumulative RTP loss.
     pub fn settle(&mut self, lost: u64) -> ReplyQuality {
+        self.spoken = false;
         self.meter.paced(self.reply.take_playout());
         let mut quality = self.meter.settle(lost);
         quality.mic = self.ear.rest();
@@ -212,6 +216,7 @@ impl Source {
             uplink: VecDeque::new(),
             barge: Barge::default(),
             stale: false,
+            spoken: false,
             ear: Ear::default(),
             question: Question::default(),
         })
@@ -262,7 +267,7 @@ impl Source {
             return Ok(());
         }
         self.delegation = Delegation::default();
-        if self.controller.idle_deadline().is_some() || self.mouth.voiced() {
+        if self.controller.idle_deadline().is_some() || self.spoken {
             return Ok(());
         }
         self.stale = true;
@@ -390,6 +395,7 @@ impl Source {
             if held && !self.barge.pending() {
                 self.meter.released(now);
             }
+            self.spoken |= audible(frame);
             let wanted = self.meter.arrived(now);
             self.meter.targeted(self.reply.retarget(wanted));
             return self.reply.push(frame);
