@@ -148,7 +148,7 @@ pub(super) async fn complete_turn(answered: bool, port: &mut impl VoicePort, sou
 }
 
 /// Finish the reply after the audio that has already arrived.
-async fn close_reply(port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
+pub(super) async fn close_reply(port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
     if !source.reply.finished() {
         while let Some(frame) = port.ready_audio().await? {
             source.audio(&frame)?;
@@ -323,7 +323,9 @@ async fn listening_step<E: LinkEvents>(
             match event {
                 MediaEvent::Control(Event::Session(request)) => {
                     super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
-                    source.end_if_ended(port)?;
+                    if source.end_if_ended(port)? {
+                        close_reply(port, source).await?;
+                    }
                 }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
                 MediaEvent::Control(Event::TurnCompleted { .. }) => source.dispatch_completed(),

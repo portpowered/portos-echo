@@ -492,7 +492,10 @@ async fn media(
         }
         MediaEvent::Control(Event::Session(request)) => {
             session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
-            source.end_if_ended(port)
+            if source.end_if_ended(port)? {
+                voice_listen::close_reply(port, source).await?;
+            }
+            Ok(())
         }
         MediaEvent::Control(Event::Other | Event::ReplyHandoff(_)) => Ok(()),
         MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),

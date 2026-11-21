@@ -78,8 +78,6 @@ pub(super) struct Source {
     barge: Barge,
     /// A barge-in cut the reply: call audio is its until the model speaks again.
     stale: bool,
-    /// The open reply has taken audible audio: it is speaking, not just opened.
-    spoken: bool,
     /// Measures the microphone under the reply for `reply.quality`; decides nothing.
     ear: Ear,
     /// The session's transcript of the turn the reply answers.
@@ -111,7 +109,6 @@ impl Source {
 
     /// Replace the reply queue and its pacer, keeping what they counted.
     fn fresh_reply(&mut self) -> Result<(), Error> {
-        self.spoken = false;
         self.stats.reply_dropped += self.reply.dropped_frames();
         self.meter.paced(self.reply.take_playout());
         self.reply = ReplyAudio::new(self.lead_ms)?;
@@ -158,7 +155,7 @@ impl Source {
 
     /// Close the reply's quality window. `lost` is the call's cumulative RTP loss.
     pub fn settle(&mut self, lost: u64) -> ReplyQuality {
-        self.spoken = false;
+        self.reply.hush();
         self.meter.paced(self.reply.take_playout());
         let mut quality = self.meter.settle(lost);
         quality.mic = self.ear.rest();
@@ -216,7 +213,6 @@ impl Source {
             uplink: VecDeque::new(),
             barge: Barge::default(),
             stale: false,
-            spoken: false,
             ear: Ear::default(),
             question: Question::default(),
         })
@@ -260,15 +256,23 @@ impl Source {
     /// An applied `end_session` supersedes everything (owner, 2026-11-21):
     /// nothing delegated is owed any more, and a reply opened for it stops at
     /// once, as a barge-in cut does. A reply already audible is the Live
-    /// voice's farewell for the end's hand-off: it finishes, and the run ends
+    /// voice's farewell for the end's hand-off: it plays out, and the run ends
     /// at its playback boundary. Between replies there is nothing to stop.
-    pub fn end_if_ended(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
+    ///
+    /// True when that farewell is already done and was only held open for
+    /// the delegated answer: the caller finishes it after the audio that has
+    /// arrived. Otherwise its own done finishes it.
+    pub fn end_if_ended(&mut self, port: &mut impl VoicePort) -> Result<bool, Error> {
         if !self.session.ending() || self.controller.cutting() || self.controller.closing() {
-            return Ok(());
+            return Ok(false);
         }
+        let held = self.delegation.held();
         self.delegation = Delegation::default();
-        if self.controller.idle_deadline().is_some() || self.spoken {
-            return Ok(());
+        if self.controller.idle_deadline().is_some() {
+            return Ok(false);
+        }
+        if self.reply.spoken() {
+            return Ok(held);
         }
         self.stale = true;
         port.retire_audio();
@@ -276,7 +280,7 @@ impl Source {
         self.mouth = Mouth::default();
         crate::bridge_runtime::bridge_pacing::reply_lips::cut(Instant::now());
         self.controller.cut();
-        Ok(())
+        Ok(false)
     }
 
     /// The model has yielded to the user: the pending barge-in cuts the reply.
@@ -395,7 +399,9 @@ impl Source {
             if held && !self.barge.pending() {
                 self.meter.released(now);
             }
-            self.spoken |= audible(frame);
+            if audible(frame) {
+                self.reply.speak();
+            }
             let wanted = self.meter.arrived(now);
             self.meter.targeted(self.reply.retarget(wanted));
             return self.reply.push(frame);
