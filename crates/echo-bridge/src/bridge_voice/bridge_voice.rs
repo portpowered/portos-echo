@@ -335,12 +335,12 @@ async fn drive<L: EchoLink>(
             drop(sink.take());
             played = Some(Instant::now() + options.played_timeout);
         }
-        let (deadline, on_timeout) = voice_wait::deadline(source, options, played);
+        let (deadline, on_timeout) = voice_wait::deadline(source, played);
         tokio::select! {
             // Timeouts cannot be starved by a continuously ready peer.
             biased;
             duration = earcon::completed() => observe(Notice::EarconPlayed(duration))?,
-            () = voice_listen::until(deadline) => return Err(on_timeout),
+            () = voice_listen::until(deadline) => voice_wait::expired(source, on_timeout)?,
             () = voice_listen::until(barge) => source.interrupt(port)?,
             () = voice_listen::until(source.mouth.due()) => {
                 if let Some(notice) = voice_listen::playout_notice(&mut source.mouth, source.delegation.in_flight()) {
@@ -488,7 +488,7 @@ async fn media(
             Ok(())
         }
         MediaEvent::Control(Event::SpeechStopped) => {
-            source.user_speech = UserSpeech::Quiet;
+            source.user_quiet();
             Ok(())
         }
         MediaEvent::Control(Event::Session(request)) => {

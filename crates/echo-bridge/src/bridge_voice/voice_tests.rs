@@ -105,6 +105,8 @@ fn done() -> MediaEvent {
 mod barge_cases;
 #[path = "voice_cases.rs"]
 mod cases;
+#[path = "recovery/no_answer_cases.rs"]
+mod no_answer_cases;
 #[tokio::test(start_paused = true)]
 async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played() {
     let observer = Observer::default();

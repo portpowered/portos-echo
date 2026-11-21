@@ -34,6 +34,7 @@ pub(super) fn check(journey: Journey, evidence: &Evidence) -> Result<Value, Stri
         Journey::LongWait => long_wait(evidence, &summary)?,
         Journey::End => end(evidence, &summary)?,
         Journey::Limits => limits(evidence, &summary)?,
+        Journey::LongQuestion => long_question(evidence, &summary)?,
         Journey::Recovery | Journey::ActiveMedia => return Err("session: invalid recovery dispatch".into()),
     };
     Ok(json!({"timeline":summary,"journey":detail}))
@@ -149,6 +150,36 @@ fn limits(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
         return Err(format!("session: long answer played after only {elapsed} ms"));
     }
     Ok(json!({"successful_calls":count,"elapsed_to_played_ms":elapsed,"turn":dispatch(evidence, summary)?}))
+}
+
+/// A long question and a slow hand-off: the answer is Played past one
+/// no-answer window from the wake, the run is never ended as unanswered, and
+/// it then idles out as usual.
+fn long_question(evidence: &Evidence, summary: &Value) -> Result<Value, String> {
+    let opened = summary["run_opened_ms"].as_u64().ok_or("session: missing run open")?;
+    let since = |event: &str| match elapsed(evidence.records, event)[..] {
+        [at] => at.checked_sub(opened).ok_or(format!("session: {event} before the run")),
+        _ => Err(format!("session: expected one {event}")),
+    };
+    let (created, resolved) = (since("delegation.created")?, since("delegation.resolved")?);
+    let played = last_played(summary)?
+        .checked_sub(opened)
+        .ok_or("session: invalid elapsed time")?;
+    let window = 60_000;
+    if created < super::QUESTION_MS
+        || resolved < created + super::HANDOFF_MS
+        || resolved >= window
+        || played < (resolved + super::HANDBACK_MS).max(window)
+        || !elapsed(evidence.records, "run.ended").is_empty()
+    {
+        return Err(format!(
+            "session: long question timeline created={created} resolved={resolved} played={played} ms"
+        ));
+    }
+    Ok(
+        json!({"delegation_created_ms":created,"delegation_resolved_ms":resolved,
+        "reply_played_ms":played,"unanswered_ends":0,"idle":idle(summary)?}),
+    )
 }
 
 fn elapsed(records: &[Value], event: &str) -> Vec<u64> {

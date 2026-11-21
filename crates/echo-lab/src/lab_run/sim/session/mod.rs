@@ -27,9 +27,10 @@ pub(super) enum Journey {
     Limits,
     Recovery,
     ActiveMedia,
+    LongQuestion,
 }
 
-const JOURNEYS: [(&str, Journey); 9] = [
+const JOURNEYS: [(&str, Journey); 10] = [
     ("session-two-turns", Journey::Turns),
     ("session-idle-timeout", Journey::Idle),
     ("session-extend-capped", Journey::Extend),
@@ -39,12 +40,18 @@ const JOURNEYS: [(&str, Journey); 9] = [
     ("session-delegation-limits", Journey::Limits),
     ("session-delegation-recovery", Journey::Recovery),
     ("session-delegation-media-ceiling", Journey::ActiveMedia),
+    ("session-long-question-answered", Journey::LongQuestion),
 ];
 
 const LONG_ANSWER: &str = "The twelve checks are complete.";
 const LONG_CALLS: usize = 12;
 const LONG_WAIT_MS: u64 = 61_000;
 const RECOVERY_MAX_SECONDS: u64 = 90;
+/// The call seen on the Echo: a 44 s question, a hand-off resolved ten
+/// seconds later and an answer that starts past 60 s from the wake.
+const QUESTION_MS: u64 = 44_000;
+const HANDOFF_MS: u64 = 10_000;
+const HANDBACK_MS: u64 = 8_000;
 
 fn journey(id: &str) -> Option<Journey> {
     JOURNEYS
@@ -70,6 +77,7 @@ impl Journey {
         match self {
             Self::Turns => json!([[{"say":"It is noon."}], [{"say":"It is Tuesday."}]]),
             Self::Idle => json!([[{"say":"It is noon."}]]),
+            Self::LongQuestion => json!([[{"say":"It is noon.","wait_for_release":true}]]),
             // The user is heard again while the delegated model request is pending.
             Self::Dispatch => json!([[{"say":"It is noon.","heard":"What day is it?"}]]),
             Self::Extend | Self::LongWait => json!([[

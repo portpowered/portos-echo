@@ -201,7 +201,7 @@ impl World {
         .await
     }
 
-    fn provider(&self) -> Result<&super::Provider, String> {
+    pub(super) fn provider(&self) -> Result<&super::Provider, String> {
         self.provider.as_ref().ok_or_else(|| "session: missing provider".into())
     }
 

@@ -25,6 +25,13 @@ pub(super) enum UserSpeech {
     Active,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FollowUp {
+    First,
+    Replied,
+    Unanswered,
+}
+
 pub(super) struct Source {
     pub microphone: Option<CaptureAudio>,
     pub muted: bool,
@@ -42,6 +49,12 @@ pub(super) struct Source {
     /// The device was told a dispatch is running in silence.
     thinking: bool,
     pub user_speech: UserSpeech,
+    /// When a reply nobody has begun is unanswered: one response window
+    /// after the reply opened or the user was last heard to stop speaking.
+    pub answer_due: Instant,
+    /// Whether a reply has settled, and whether speech after it went
+    /// unanswered: then the run ends, unfailed.
+    pub follow_up: FollowUp,
     pub run_ceiling: Option<Instant>,
     /// User speech heard during the reply, until the model yields to it.
     barge: Barge,
@@ -105,6 +118,15 @@ impl Source {
         self.stale || self.controller.retired()
     }
 
+    /// The user stopped speaking: the Live session's end of speech, their
+    /// whole transcript or the end of capture. The no-answer window restarts.
+    pub fn user_quiet(&mut self) {
+        self.user_speech = UserSpeech::Quiet;
+        if let Ok(due) = self.controller.replacement_deadline() {
+            self.answer_due = due;
+        }
+    }
+
     /// Give the configured listen window from now.
     pub fn renew_idle(&mut self) {
         let listen = self.session.listen();
@@ -155,6 +177,8 @@ impl Source {
             mouth: Mouth::default(),
             thinking: false,
             user_speech: UserSpeech::Quiet,
+            answer_due: Instant::now(),
+            follow_up: FollowUp::First,
             run_ceiling: None,
             meter: meter(),
             stats: Stats::default(),
@@ -174,7 +198,11 @@ impl Source {
     /// neither cancels the delegated turn nor cuts the speaker until it
     /// completes. The Live session still hears that speech.
     pub fn heard_user(&mut self, trigger: BargeTrigger, said: &str, whole: bool) {
-        self.user_speech = if whole { UserSpeech::Quiet } else { UserSpeech::Active };
+        if whole {
+            self.user_quiet();
+        } else {
+            self.user_speech = UserSpeech::Active;
+        }
         let replying = !self.delegation.in_flight() && self.controller.speaking();
         // Nobody talks over a reply that has not sounded yet, and a reply
         // that has is not talked over by its own question.
@@ -230,7 +258,7 @@ impl Source {
     pub fn capture(&mut self, frame: Option<MicFrame>, port: &impl VoicePort) -> Result<bool, Error> {
         let Some(frame) = frame else {
             self.controller.microphone_ended();
-            self.user_speech = UserSpeech::Quiet;
+            self.user_quiet();
             if let Some(microphone) = &mut self.microphone {
                 let frames = microphone.finish()?;
                 self.stats.microphone_tail = microphone.tail_samples();
