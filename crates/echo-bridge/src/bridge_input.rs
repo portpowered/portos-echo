@@ -377,7 +377,7 @@ mod tests {
         assert!(!directory.path().join("unused-trace").exists());
     }
 
-    /// Owner, 2026-11-20: a saved `alloy` failed every wake at the pinned v3 start.
+    /// Owner, 2026-11-20: a saved `alloy` failed every wake at the v3 start.
     #[test]
     fn settings_overlay_stored_retired_voice_starts_as_default_with_one_warning() {
         let directory = tempfile::tempdir().unwrap();
@@ -397,7 +397,7 @@ mod tests {
         assert_eq!(config.voice.session_listen_seconds, 42);
         assert_eq!(
             loaded.settings_warning.as_deref(),
-            Some("settings.toml: ignored codex.voice: not supported by the pinned realtime version; using default")
+            Some("settings.toml: ignored codex.voice: not supported by the v3 realtime version; using default")
         );
         assert_eq!(std::fs::read_to_string(home.join("settings.toml")).unwrap(), stored);
     }

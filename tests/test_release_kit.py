@@ -377,8 +377,10 @@ def configure_native():
     """Explicit network provisioning, then configure only; never compiles Codex."""
     import tomllib
     import urllib.request
-    helper = (ROOT / "scripts/build-codex-armv7.sh").read_text()
-    pin, = re.findall(r"(?m)^  commit=([0-9a-f]{40})$", helper)
+    # The same selection the build makes: the newest stable release, or CODEX_RELEASE.
+    selected = subprocess.run([sys.executable, str(ROOT / "scripts/codex_release.py"), "resolve", str(ROOT)],
+                              check=True, capture_output=True, text=True, timeout=120).stdout
+    pin, = re.findall(r"(?m)^commit=([0-9a-f]{40})$", selected)
     lock_url = "https://raw.githubusercontent.com/openai/codex/" + pin + "/codex-rs/Cargo.lock"
     with urllib.request.urlopen(lock_url, timeout=60) as response:
         lock = tomllib.loads(response.read().decode())
@@ -386,7 +388,7 @@ def configure_native():
     name = "openssl-src-" + package["version"]
     with urllib.request.urlopen("https://static.crates.io/crates/openssl-src/" + name + ".crate", timeout=60) as response:
         data = response.read()
-    require(sha(data) == package["checksum"], "OpenSSL source checksum differs from pinned lock")
+    require(sha(data) == package["checksum"], "OpenSSL source checksum differs from the release lock")
     with tempfile.TemporaryDirectory(prefix="release-configure-", dir="/tmp") as temporary:
         work = Path(temporary)
         with tarfile.open(fileobj=io.BytesIO(data)) as archive:

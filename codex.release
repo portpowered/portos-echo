@@ -1,0 +1,8 @@
+# No Codex release is pinned (owner decision, 2026-11-21). Builds and tests take
+# the newest stable rust-v* release when they provision; CODEX_RELEASE names
+# another one to reproduce an old build. `minimum` is a floor, not a pin: it is
+# the first release whose app server lists the v3 voices.
+repo = "https://github.com/openai/codex"
+minimum = "0.164.0"
+license = "Apache-2.0"
+notice = "OpenAI Codex, Copyright 2025 OpenAI"

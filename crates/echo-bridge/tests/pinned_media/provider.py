@@ -184,6 +184,9 @@ try:
             identity = command.get('identity')
             assert delegation is None or (identity and identity not in manual_cases)
             history = [] if delegation is None else delegation.history + delegation.outputs
+            if 'native_extras' in command:
+                delegation = tools_provider.NativeExtras(command['tools'], command['native_extras'])
+                continue
             delegation = tools_provider.Delegation(
                 command['tools'], command['negative'], command.get('exhausted', False),
                 command.get('model', 'gpt-5.4'), command.get('web_search', 'live'), identity, history)

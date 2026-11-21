@@ -65,7 +65,7 @@ async fn codex_host_admits_once_with_exclusive_initialized_authenticated_io_and_
         async |io| {
             assert_eq!(
                 std::fs::read_to_string(fixture.home.join("last-method")).unwrap(),
-                "account/read"
+                "thread/realtime/listVoices"
             );
             assert!(matches!(
                 Supervisor::new(SupervisorConfig::new(fixture.binary.clone(), fixture.home.clone(),)),

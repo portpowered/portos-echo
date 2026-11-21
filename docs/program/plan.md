@@ -174,10 +174,12 @@ server instead of our own GPT-Live client, and build it for armv7 too. Reuse is 
 encode the undocumented parts (endpoints, headers, the V3 events, the sideband's reconnects). Expose only what we
 need, since the Echo's disk is small.
 
-- **Pin.** Release `rust-v0.171.0` (commit `ccf9be8cc458bd6b8336fe84d68d8893f2691a5e`), Apache-2.0 with a NOTICE that
-  any redistributed build or adapted file keeps. The Linux host uses the published `x86_64-unknown-linux-musl`
-  binary, checked against a pinned SHA-256 by `scripts/codex-app-server.sh`; the Echo uses our
-  own armv7 build of the same commit. Moving the pin is a coordinator PR, like `hassmic.pin`.
+- **Release.** No release is pinned (owner, 2026-11-21). A build takes the newest stable `rust-v*` release of
+  `openai/codex`, never older than the floor in `codex.release`; `CODEX_RELEASE` names another one. Codex is
+  Apache-2.0 with a NOTICE that any redistributed build or adapted file keeps. The Linux host uses the published
+  `x86_64-unknown-linux-musl` binary, checked against the SHA-256 digest GitHub publishes for it by
+  `scripts/codex-app-server.sh`; the Echo uses our own armv7 build of the same release's tag commit. Below, "the
+  pin" means the app server release in use.
 - **Process.** `codex app-server --listen stdio://`, a child of the bridge with its own `CODEX_HOME` outside the
   repository. Messages are newline-delimited JSON-RPC without a `"jsonrpc"` field. The bridge sends `initialize`
   with `capabilities.experimentalApi: true` (every realtime method is experimental and is refused without it),
@@ -208,8 +210,10 @@ need, since the Echo's disk is small.
   servers in Codex's config, `approvalPolicy: never` with a read-only sandbox. The result goes back as
   `delegation.context.append` without bridge code. The bridge stops waiting and interrupts a stalled turn when the run reaches
   its session ceiling (600 s by default). Ordinary unanswered Live runs use a separate 60 s response window.
-  Every model in the pin's catalog is code-mode-only, and the pin keeps its own `functions.exec`,
-  `functions.wait`, `functions.request_user_input_async` and `clock.sleep` declared. The bridge's tools are
+  Every model in the app server's catalog is code-mode-only, and the app server keeps tools of its own declared
+  (`functions.exec`, `functions.wait`, `clock.sleep`, and at `rust-v0.171.0` also `apply_patch` and three MCP
+  resource helpers). Owner amendment (2026-11-21): such extras are allowed when T3 proves them inert under the
+  bridge's thread settings; every bridge tool must still be present. The bridge's tools are
   direct declarations beside them, never `exec` callables: `exec` runs in `codex-code-mode-host`, which the
   Echo's armv7 install does not have, so a tool that is only an `exec` callable cannot be called on the Echo
   (decision 2026-11-20). Both configuration paths set

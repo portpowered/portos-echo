@@ -25,11 +25,19 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           target: test-unit-rust
+      - name: Select the newest stable Codex release
+        id: codex
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh scripts/codex-app-server.sh --resolve >> "$GITHUB_OUTPUT"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ~/.cache/portos-echo/codex
-          key: codex-${{ runner.os }}-${{ hashFiles('codex.pin') }}
-      - name: Provision verified pinned Codex
+          key: codex-${{ runner.os }}-${{ steps.codex.outputs.tag }}
+      - name: Provision verified Codex
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODEX_RELEASE: ${{ steps.codex.outputs.tag }}
         run: sh scripts/codex-app-server.sh
       - name: Enable isolated Codex network namespace
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

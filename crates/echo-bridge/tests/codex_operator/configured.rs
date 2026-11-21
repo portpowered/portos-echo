@@ -319,7 +319,7 @@ async fn codex_configured_service_authenticates_both_modes_before_ready_and_reap
             }
             assert_eq!(
                 std::fs::read_to_string(fixture.home.join("last-method")).unwrap(),
-                "account/read"
+                "thread/realtime/listVoices"
             );
             assert_eq!(
                 observer.commands(),

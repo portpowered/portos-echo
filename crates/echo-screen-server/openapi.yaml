@@ -489,7 +489,7 @@ components:
           additionalProperties: false
           required: [voice]
           properties:
-            voice: { type: string, description: default or a name from allowed_voices; echo-config is authoritative }
+            voice: { type: string, description: default or a name from allowed_voices }
         agent:
           type: object
           additionalProperties: false
@@ -535,7 +535,7 @@ components:
       properties:
         version: { type: integer, const: 1 }
         settings: { $ref: '#/components/schemas/SettingsValuesV1' }
-        allowed_voices: { type: array, items: { type: string }, description: default plus the existing echo-config pinned list; no independently maintained UI list }
+        allowed_voices: { type: array, items: { type: string }, description: default plus the voices the running app server lists; no independently maintained UI list }
         prompts:
           type: object
           additionalProperties: false

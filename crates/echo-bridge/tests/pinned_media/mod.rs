@@ -37,6 +37,7 @@ async fn t3_pinned_codex_himari_negotiates_v3_media() {
 
 #[tokio::test]
 async fn t3_pinned_codex_lists_v3_voices() {
+    use std::io::Write as _;
     let directory = tempfile::tempdir().unwrap();
     let mut supervisor = Supervisor::new(SupervisorConfig::new(binary(), directory.path().join("home"))).unwrap();
     supervisor.start().await.unwrap();
@@ -44,14 +45,23 @@ async fn t3_pinned_codex_lists_v3_voices() {
     let request = io.begin_request("thread/realtime/listVoices", &json!({})).unwrap();
     let result = io.wait_reply(&request).await.unwrap();
     supervisor.shutdown().await.unwrap();
-    assert_eq!(
-        result["voices"]["v3"],
-        json!([
-            "juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol", "cove", "marin", "aube", "bubbie",
-            "haetsal", "hanul", "himari", "leher", "miko", "neer", "porto", "rindo", "rio", "rivage", "selva", "sonna",
-            "tinta", "viola"
-        ])
-    );
+    // No release is pinned, so a newer one may list more voices. The witness is
+    // the list itself (rust-v0.171.0 lists 26); the claims are the names Echo
+    // documents and the v2-only name it refuses.
+    writeln!(std::io::stdout(), "{}", json!({"v3_voices": result["voices"]["v3"]})).unwrap();
+    let listed: Vec<&str> = result["voices"]["v3"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|voice| voice.as_str().unwrap())
+        .collect();
+    for voice in echo_config::realtime_voices()
+        .filter(|voice| *voice != "default")
+        .chain(["miko", "himari", "hanul", "leher"])
+    {
+        assert!(listed.contains(&voice), "{voice} is not listed: {listed:?}");
+    }
+    assert!(!listed.contains(&"alloy"), "{listed:?}");
 }
 
 #[tokio::test]
@@ -93,8 +103,10 @@ async fn refuse_alloy() {
                             );
                             break;
                         }
-                        "thread/realtime/started" | "thread/realtime/sdp" => panic!("alloy started: {params}"),
-                        _ => (),
+                        other => assert!(
+                            !matches!(other, "thread/realtime/started" | "thread/realtime/sdp"),
+                            "alloy started: {params}"
+                        ),
                     }
                 }
             }

@@ -162,6 +162,7 @@ impl SettingsService {
                                 let view = GrantView::read(grant.as_deref(), request.reads_portos()).await;
                                 request.commit(|operation| {
                                     if let Some(account) = &account {
+                                        host.listed_voices(account.voices());
                                         match operation {
                                             SettingsOperation::OpenAiSnapshot => return account.snapshot(),
                                             SettingsOperation::OpenAiOperation(request) => return account.start(request),

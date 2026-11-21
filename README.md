@@ -72,7 +72,7 @@ The required jobs are defined in [.github/workflows/ci.yml](.github/workflows/ci
 | `test-sim` | Simulated suites and host scenarios with local fake providers |
 | `build-host` | Locked workspace host build |
 | `build-echo` | Android ARMv7 bridge build with provisioned NDK |
-| `build-codex-armv7` | Pinned standalone Codex app-server and CA bundle |
+| `build-codex-armv7` | Standalone Codex app-server (newest stable release) and CA bundle |
 | `build-echo-screen` | Android screen APK with provisioned SDK |
 
 Device operations are operator-run only ([standing rules](docs/program/rules.md)).

@@ -16,7 +16,7 @@ SESSION_NAMES = [tool['name'] for tool in SESSION_TOOLS]
 
 def function_tools(tools):
     expected = [{'type': 'function', 'name': tool['name'], 'description': tool['description'],
-                 # rust-v0.160.0 closes each dynamic object schema on the wire.
+                 # Codex closes each dynamic object schema on the wire.
                  'parameters': {**deepcopy(tool['inputSchema']), 'additionalProperties': False},
                  'strict': False} for tool in tools + SESSION_TOOLS]
     # The same pin drops numeric minimum while lowering JSON schema to its

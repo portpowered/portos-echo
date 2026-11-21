@@ -145,9 +145,9 @@ async fn t3_settings_host_http_sparse_merge_validation_permissions_and_base_pres
     fixture.close().await;
 }
 
-/// The pin refuses a v2-only voice for the v3 start, so a save never stores one.
+/// The app server refuses a v2-only voice for the v3 start, so a save never stores one.
 #[tokio::test]
-async fn t3_settings_host_http_refuses_a_voice_the_pinned_v3_start_rejects() {
+async fn t3_settings_host_http_refuses_a_voice_the_v3_start_rejects() {
     let fixture = Fixture::open().await;
     assert_eq!(
         fixture.snapshot().await.allowed_voices,
@@ -155,14 +155,14 @@ async fn t3_settings_host_http_refuses_a_voice_the_pinned_v3_start_rejects() {
             "default", "arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"
         ]
     );
-    for voice in ["alloy", "marin", "cedar"] {
+    for voice in ["alloy", "cedar"] {
         assert_eq!(
             fixture.patch(serde_json::json!({"codex":{"voice":voice}})).await,
             (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 serde_json::json!({
                     "version":1,
-                    "message":"codex.voice: not supported by the pinned realtime version; choose default or a listed voice"
+                    "message":"codex.voice: not supported by the v3 realtime version; choose default or a listed voice"
                 })
             )
         );
@@ -219,7 +219,7 @@ async fn t3_settings_host_http_guards_do_not_write_and_invalid_values_do_not_lea
     for (fields, message) in [
         (
             serde_json::json!({"codex":{"voice":"SYNTHETIC_VALUE\n\u{8a9e}"}}),
-            "codex.voice: expected default or a pinned realtime voice",
+            "codex.voice: expected default or a realtime voice name",
         ),
         (
             serde_json::json!({"agent":{"daily_request_cap":"9223372036854775808"}}),

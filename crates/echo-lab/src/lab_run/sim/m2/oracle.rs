@@ -130,7 +130,7 @@ fn codex_pcm(records: &[Value]) -> Result<(), String> {
     Ok(())
 }
 
-// rust-v0.160.0 performs two startup refreshes; remeasure on any pin bump.
+// Codex performs two startup refreshes (first measured at rust-v0.160.0); a release that changes the count fails here.
 pub(super) const EXPIRED_REFRESHES: u64 = 2;
 
 fn rejection(measured: &Value, records: &[Value]) -> Result<(), String> {

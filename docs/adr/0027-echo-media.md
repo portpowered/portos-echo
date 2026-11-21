@@ -21,7 +21,8 @@ The media peer was adapted from OpenAI Codex release rust-v0.160.0, commit
 NOTICE preserves the complete upstream notice, including its Ratatui paragraph.
 Adapted files must retain attribution, carry SPDX Apache-2.0 identification and
 state "Modified by Port OS".
-The runtime app-server release is selected separately by [codex.pin](../../codex.pin).
+The runtime app-server release is selected separately, at build time; see
+[codex.release](../../codex.release).
 
 The source paths under `codex-rs/voice-host/src/` are `transport.rs`,
 `audio_track.rs`, `processing.rs`, `incoming.rs` and `playout.rs`.

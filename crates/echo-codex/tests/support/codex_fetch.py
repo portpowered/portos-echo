@@ -1,5 +1,6 @@
 """T3 shipped helper CLI with private, offline, already-provisioned cache copies."""
 import hashlib
+import json
 import os
 import pathlib
 import shutil
@@ -10,10 +11,16 @@ import tempfile
 
 ROOT = pathlib.Path(sys.argv[1]).resolve()
 COMMAND = ['sh', str(ROOT / 'scripts/codex-app-server.sh')]
+HELPER = ('codex.release', 'scripts/codex-app-server.sh', 'scripts/codex_release.py')
+POINTER = 'current.json'
 
 
-def run(cache=None, command=COMMAND, offline=True):
-    environment = dict(os.environ, ECHO_CODEX_OFFLINE='1' if offline else '0')
+def run(cache=None, command=COMMAND, release=None):
+    # Offline only: selecting a release needs the network, which T3 never uses.
+    environment = dict(os.environ, ECHO_CODEX_OFFLINE='1')
+    environment.pop('CODEX_RELEASE', None)
+    if release is not None:
+        environment['CODEX_RELEASE'] = release
     if cache is not None:
         environment['ECHO_CODEX_CACHE_DIR'] = str(cache)
     return subprocess.run(command, env=environment, capture_output=True, text=True, timeout=20)
@@ -88,12 +95,35 @@ def legacy_cache_requires_provisioning(published, cache):
     print('legacy_identity=refused paired_identity=verified')
 
 
+def provisioned_release(published, cache):
+    """The offline reader follows the recorded release and nothing else."""
+    pointer = cache / POINTER
+    original = pointer.read_text()
+    record = json.loads(original)
+    assert sorted(record) == ['assets', 'commit', 'tag'], 'unexpected release record'
+    assert published == cache / record['commit'] / published.parent.name / '-'.join(record['assets'].values())
+    assert successful(run(cache, release=record['tag'])).parent == published
+    refused(run(cache, release='rust-v0.0.1'), 'binary missing; provision before testing')
+    try:
+        for changed in ('', '{', json.dumps({**record, 'commit': 'main'}),
+                        json.dumps({**record, 'assets': {name: '0' * 64 for name in record['assets']}}),
+                        json.dumps({**record, 'assets': {}})):
+            pointer.write_text(changed)
+            refused(run(cache), 'binary missing; provision before testing')
+        pointer.unlink()
+        refused(run(cache), 'binary missing; provision before testing')
+    finally:
+        pointer.write_text(original)
+    assert successful(run(cache)).parent == published
+    print('release_record=followed other_release=refused invalid_record=refused missing_record=refused')
+
+
 def writer_lock(published, cache):
     sys.path.insert(0, str(ROOT / 'crates/echo-codex/tests'))
     from codex_readers import check_warm
 
     check_warm(published, cache, sys.modules[__name__])
-    # No publication exists here: online admission must refuse before download.
+    # No publication exists here: a foreign lease is neither read nor removed.
     cold_cache = cache.parent / 'cold leased cache'
     cold_published = cold_cache / pathlib.Path(*published.parts[-3:])
     cold_published.parent.mkdir(parents=True)
@@ -101,7 +131,8 @@ def writer_lock(published, cache):
     lock.mkdir()
     try:
         refused(run(cold_cache), 'binary missing; provision before testing')
-        refused(run(cold_cache, offline=False), 'codex-app-server:')
+        shutil.copy2(cache / POINTER, cold_cache / POINTER)
+        refused(run(cold_cache), 'binary missing; provision before testing')
         assert lock.exists(), 'helper deleted another writer lease'
         assert list(cold_published.parent.iterdir()) == [lock]
     finally:
@@ -112,7 +143,7 @@ def external_worktree(temporary, cache, binary):
     checkout = temporary / 'main checkout'
     checkout.mkdir()
     (checkout / 'scripts').mkdir()
-    for name in ('codex.pin', 'scripts/codex-app-server.sh'):
+    for name in HELPER:
         shutil.copy2(ROOT / name, checkout / name)
 
     def git(*arguments):
@@ -120,7 +151,7 @@ def external_worktree(temporary, cache, binary):
                                        stderr=subprocess.STDOUT, text=True, timeout=10).strip()
 
     git('init', '--quiet')
-    git('add', 'codex.pin', 'scripts/codex-app-server.sh')
+    git('add', *HELPER)
     git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
         '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'helper fixture')
     lane = temporary / 'external linked worktree'
@@ -154,6 +185,8 @@ def main():
         relative = pathlib.Path(*source.parent.parts[-3:])
         published = cache / relative
         shutil.copytree(source.parent, published)
+        refused(run(cache), 'binary missing; provision before testing')
+        shutil.copy2(source.parents[3] / POINTER, cache / POINTER)
         binary = successful(run(cache))
         assert binary == published / source.name
         assert successful(run(cache)) == binary
@@ -164,6 +197,7 @@ def main():
         corrupt_and_restore(binary, cache)
         host_cache_integrity(published, cache)
         legacy_cache_requires_provisioning(published, cache)
+        provisioned_release(published, cache)
         writer_lock(published, cache)
         assert successful(run(cache)) == binary
         external_worktree(pathlib.Path(temporary).resolve(), cache, binary)

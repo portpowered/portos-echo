@@ -82,8 +82,8 @@ fn screen_settings_voices_preserve_precedence_and_the_pinned_default() {
         assert_eq!(config.codex_voice(), (voice != "default").then_some(voice));
     }
     for (voice, expected) in [
-        ("'SYNTHETIC_VALUE'", "expected default or a pinned realtime voice"),
-        ("'alloy '", "expected default or a pinned realtime voice"),
+        ("'SYNTHETIC_VALUE'", "expected default or a realtime voice name"),
+        ("'alloy '", "expected default or a realtime voice name"),
         ("''", "must be nonblank"),
         ("'  '", "must be nonblank"),
     ] {
@@ -282,12 +282,14 @@ fn screen_settings_effective_load_overrides_only_the_allowlist_without_writes() 
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 2);
 }
 
-const RETIRED: [&str; 10] = [
-    "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse",
+const RETIRED: [&str; 9] = [
+    "alloy", "ash", "ballad", "cedar", "coral", "echo", "sage", "shimmer", "verse",
 ];
 
+/// The built-in names are what Settings offers until the running app server
+/// has listed its own. Any well-formed name saves: the app server decides.
 #[test]
-fn screen_settings_offer_only_the_voices_the_pinned_v3_start_accepts() {
+fn screen_settings_offer_the_builtin_voices_and_accept_any_listed_name() {
     let offered: Vec<_> = echo_config::realtime_voices().collect();
     assert_eq!(
         offered,
@@ -301,18 +303,22 @@ fn screen_settings_offer_only_the_voices_the_pinned_v3_start_accepts() {
         let expected = (voice != "default").then_some(voice);
         assert_eq!(saved.apply_to(&base).unwrap().codex_voice(), expected);
     }
+    for voice in ["miko", "himari", "hanul", "leher", "marin"] {
+        let saved = SettingsOverlay::from_leaves(None, None, Some(voice.into()), None, None);
+        assert_eq!(saved.apply_to(&base).unwrap().codex_voice(), Some(voice));
+    }
     for voice in RETIRED {
         let saved = SettingsOverlay::from_leaves(None, None, Some(voice.into()), None, None);
         assert_eq!(
             saved.apply_to(&base).unwrap_err().to_string(),
-            "codex.voice: not supported by the pinned realtime version; choose default or a listed voice"
+            "codex.voice: not supported by the v3 realtime version; choose default or a listed voice"
         );
     }
 }
 
 #[test]
 fn screen_settings_stored_retired_voice_loads_as_default_with_one_warning() {
-    const REASON: &str = "not supported by the pinned realtime version; using default";
+    const REASON: &str = "not supported by the v3 realtime version; using default";
     let directory = Directory::new().unwrap();
     let (path, input) = home_config(&directory);
     let overlay_path = directory.0.join("settings.toml");

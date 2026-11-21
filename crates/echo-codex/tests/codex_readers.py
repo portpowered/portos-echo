@@ -1,4 +1,4 @@
-"""T3 real offline helper readers; provision the pinned archive before testing."""
+"""T3 real offline helper readers; provision the release archives before testing."""
 import concurrent.futures
 import pathlib
 import shutil
@@ -59,6 +59,7 @@ def main():
         cache = pathlib.Path(temporary).resolve() / 'private cache with spaces'
         published = cache / pathlib.Path(*source.parent.parts[-3:])
         shutil.copytree(source.parent, published)
+        shutil.copy2(source.parents[3] / fixture.POINTER, cache / fixture.POINTER)
         check_warm(published, cache, fixture)
 
 

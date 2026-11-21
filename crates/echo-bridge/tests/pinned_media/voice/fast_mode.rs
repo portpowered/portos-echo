@@ -289,9 +289,6 @@ fn compared_start(rows: &[Value], sent: Value, accepted: &str) -> (Value, Value)
     let mut live_start = live["request"].clone();
     assert_eq!(runner_start["method"], "thread/start");
     assert_eq!(live_start["method"], "thread/realtime/start");
-    assert_eq!(live_start["params"]["version"], "v3");
-    assert_eq!(live_start["params"].get("voice"), None);
-    assert_eq!(live_start["params"].get("model"), None);
     assert_eq!(runner_start["params"]["model"], "gpt-6-sol");
     assert_eq!(runner_start["params"]["config"]["model_reasoning_effort"], "low");
     assert_eq!(runner["reply"]["result"]["serviceTier"], accepted);
@@ -323,6 +320,9 @@ fn assert_fixed_context(runner: &Value, live: &Value) {
     let context = "[Call-start context: 2027-01-15 Friday 08:00:00 UTC+00:00; local offset unavailable]"; // lint-rules: allow-literal UTC calendar expectation, never an endpoint
     let base = runner["params"]["baseInstructions"].as_str().unwrap();
     let prompt = live["params"]["prompt"].as_str().unwrap();
+    assert_eq!(live["params"]["version"], "v3");
+    assert_eq!(live["params"].get("voice"), None);
+    assert_eq!(live["params"].get("model"), None);
     assert_eq!(base.lines().last(), Some(context));
     assert_eq!(prompt.lines().last(), Some(context));
     assert_eq!(live["params"]["initialItems"][0]["text"], prompt);

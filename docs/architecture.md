@@ -351,9 +351,10 @@ starts a fresh child after a backoff (sequence (i)); it does not replay the fail
 
 #### Language — Codex app server
 
-Rust, pinned upstream `openai/codex`, release `rust-v0.171.0`, commit
-`ccf9be8cc458bd6b8336fe84d68d8893f2691a5e`, selected by [codex.pin](../codex.pin). The PC uses a verified vendor
-binary; the [ARM build](adr/0028-codex-armv7.md) carries authorized build patches for the W4 target.
+Rust, upstream `openai/codex`. No release is pinned: a build takes the newest stable `rust-v*` release, never
+older than the floor in [codex.release](../codex.release), and verifies it against GitHub's published digests. The
+PC uses that verified vendor binary; the [ARM build](adr/0028-codex-armv7.md) carries authorized build fixes for the
+W4 target. Where this document says "the pin", read "the app server release in use".
 
 #### Responsibilities — Codex app server
 

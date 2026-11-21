@@ -64,6 +64,7 @@ impl SettingsHost {
         let codex = fields.codex.unwrap_or_default();
         let agent = fields.agent.unwrap_or_default();
         let voice = fields.voice.unwrap_or_default();
+        self.check_voice(codex.voice.as_deref())?;
         let daily_cap = agent
             .daily_request_cap
             .map(|value| value.as_str().parse::<u64>())

@@ -319,7 +319,7 @@ async fn codex_configured_tools_exhausted_call_admission_never_opens_media_or_mo
     assert!(!fixture.home.join("tool-result").exists());
     assert_eq!(
         std::fs::read_to_string(fixture.home.join("last-method")).unwrap(),
-        "account/read"
+        "thread/realtime/listVoices"
     );
     super::host::released(&fixture).await;
     spoof.shutdown().await.unwrap();

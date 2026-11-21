@@ -252,7 +252,7 @@ impl LinkConnector for Connector<'_> {
         // Device dial is forbidden until initialization/account admission.
         assert_eq!(
             std::fs::read_to_string(self.fixture.home.join("last-method")).unwrap(),
-            "account/read"
+            "thread/realtime/listVoices"
         );
         assert!(matches!(
             echo_codex::codex_supervisor::Supervisor::new(echo_codex::codex_supervisor::SupervisorConfig::new(
