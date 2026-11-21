@@ -48,6 +48,17 @@ impl GrantView {
         }
         Self::default()
     }
+
+    fn for_owner(self, previous: Option<&Arc<Grant>>, current: Option<&Arc<Grant>>) -> Self {
+        if previous
+            .zip(current)
+            .is_some_and(|(before, now)| Arc::ptr_eq(before, now))
+        {
+            self
+        } else {
+            Self::default()
+        }
+    }
 }
 
 impl SettingsService {
@@ -194,9 +205,7 @@ impl SettingsService {
                                         }
                                     }
                                     let current = current_grant();
-                                    let same_owner = grant.as_ref().zip(current.as_ref())
-                                        .is_some_and(|(before, now)| Arc::ptr_eq(before, now));
-                                    let view = if same_owner { view } else { GrantView::default() };
+                                    let view = view.for_owner(grant.as_ref(), current.as_ref());
                                     commit_with_endpoint(&mut host, &restart, trace.as_mut(), operation,
                                         (link_status(), view, current.as_deref()), endpoint)
                                 }).await;

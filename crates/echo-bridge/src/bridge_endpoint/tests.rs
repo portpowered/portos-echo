@@ -288,13 +288,7 @@ async fn restart_and_rename(
     grant: &mut bridge_mcp::Runtime,
     started: Instant,
 ) -> Settings {
-    settings.save(false, "Hall Echo").await;
-    gateway.assert_disconnect().await;
-    advance(Duration::from_secs(61)).await;
-    assert!(gateway.received.try_recv().is_err());
-    assert_eq!(settings.snapshot().await["portos"]["endpoint_enabled"], false);
-    settings.save(true, "Hall Echo").await;
-    gateway.assert_upgrade(4).await;
+    disable_and_resume(&settings, gateway).await;
     settings.save(true, "Kitchen").await;
     gateway.assert_disconnect().await;
     gateway.assert_upgrade(4).await;
@@ -309,6 +303,16 @@ async fn restart_and_rename(
     assert_eq!(reopened.snapshot().await["portos"]["endpoint_name"], "Kitchen");
     assert_rename(home, mock);
     reopened
+}
+
+async fn disable_and_resume(settings: &Settings, gateway: &mut Gateway) {
+    settings.save(false, "Hall Echo").await;
+    gateway.assert_disconnect().await;
+    advance(Duration::from_secs(61)).await;
+    assert!(gateway.received.try_recv().is_err());
+    assert_eq!(settings.snapshot().await["portos"]["endpoint_enabled"], false);
+    settings.save(true, "Hall Echo").await;
+    gateway.assert_upgrade(4).await;
 }
 
 fn assert_rename(home: &Path, mock: &Mock) {
