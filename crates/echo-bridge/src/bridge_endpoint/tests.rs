@@ -15,7 +15,7 @@ use tokio::{
     net::TcpListener,
     sync::{mpsc, oneshot},
     task::JoinHandle,
-    time::advance,
+    time::{Instant, advance},
 };
 use tokio_tungstenite::{
     accept_hdr_async,
@@ -28,6 +28,7 @@ mod setup_tests;
 const SETTINGS_TOKEN: &str = "synthetic-paired-settings";
 const LINK: &str = "loopback link/%";
 const ROUTE: &str = "resolved-fake-route";
+const EPOCH: u64 = 1_800_000_000;
 
 struct Resolver;
 
@@ -115,7 +116,7 @@ async fn registered(mock: &Mock, home: &Path) -> bridge_mcp::Runtime {
         state.metadata = Some(metadata);
         state.fault = Some((register.into(), 201, json!({"client_id":"synthetic-dcr"})));
     }
-    let owner = grant_owner(mock, home).await;
+    let owner = grant_owner(mock, home, EPOCH).await;
     let mut operation = owner
         .operator
         .start(bridge_mcp::bridge_operations::Operation::Link)
@@ -128,7 +129,7 @@ async fn registered(mock: &Mock, home: &Path) -> bridge_mcp::Runtime {
     owner
 }
 
-async fn grant_owner(mock: &Mock, home: &Path) -> bridge_mcp::Runtime {
+async fn grant_owner(mock: &Mock, home: &Path, epoch: u64) -> bridge_mcp::Runtime {
     let pairing = home.join("pair");
     fs::write(&pairing, SETTINGS_TOKEN).unwrap();
     let settings = bridge_mcp::Settings {
@@ -147,7 +148,7 @@ async fn grant_owner(mock: &Mock, home: &Path) -> bridge_mcp::Runtime {
     };
     let presentation = bridge_mcp::bridge_presentation::Presentation::new(None);
     let trace = Trace::open(&home.join("trace"), "api_key").unwrap();
-    bridge_mcp::Runtime::open(settings, presentation, trace, None)
+    bridge_mcp::Runtime::open(settings, presentation, trace, Some(epoch))
         .await
         .unwrap()
 }
@@ -310,7 +311,8 @@ fn settings_owner(home: &Path, mock: &Mock, base_enabled: bool) -> (SettingsHost
 async fn t3_endpoint_pair_settings_to_gateway_and_report() {
     bridge_mcp::bridge_component::drive(async {
         let home = tempfile::tempdir().unwrap();
-        let mock = Mock::bind().await.unwrap();
+        let started = Instant::now();
+        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
         let mut grant = registered(&mock, home.path()).await;
         let mut gateway = Gateway::open().await;
@@ -323,7 +325,7 @@ async fn t3_endpoint_pair_settings_to_gateway_and_report() {
         gateway.assert_upgrade(4).await;
         assert_eq!(settings.snapshot().await["portos"]["challenge"], Value::Null);
         assert_installed(home.path(), &mock).await;
-        let settings = restart_and_rename(settings, home.path(), &mock, &mut gateway, &mut grant).await;
+        let settings = restart_and_rename(settings, home.path(), &mock, &mut gateway, &mut grant, started).await;
         setup_tests::assert_rest_audiences(&mock).await;
         let device_id = read_install(home.path())["deviceId"].clone();
         settings.unlink().await;
@@ -357,6 +359,7 @@ async fn restart_and_rename(
     mock: &Mock,
     gateway: &mut Gateway,
     grant: &mut bridge_mcp::Runtime,
+    started: Instant,
 ) -> Settings {
     settings.save(false, "Hall Echo").await;
     gateway.assert_disconnect().await;
@@ -371,7 +374,8 @@ async fn restart_and_rename(
     settings.close().await;
     gateway.assert_disconnect().await;
     grant.close().await;
-    *grant = grant_owner(mock, home).await;
+    // Reopen at the simulated wall time of the still-running issuer.
+    *grant = grant_owner(mock, home, EPOCH + started.elapsed().as_secs()).await;
 
     let reopened = Settings::open(home, mock, gateway, grant.grant.clone()).await;
     gateway.assert_upgrade(6).await;

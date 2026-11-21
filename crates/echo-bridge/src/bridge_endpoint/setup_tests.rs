@@ -18,7 +18,7 @@ impl RouteResolver for DelayedRoute {
 async fn t3_endpoint_pair_resumes_route_lookup_without_a_new_exchange() {
     bridge_mcp::bridge_component::drive(async {
         let home = tempfile::tempdir().unwrap();
-        let mock = Mock::bind().await.unwrap();
+        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
         let mut grant = registered(&mock, home.path()).await;
         let mut gateway = Gateway::open().await;
@@ -74,7 +74,7 @@ async fn wait_unavailable(settings: &Settings) {
 async fn t3_endpoint_pair_starts_from_enabled_base_configuration() {
     bridge_mcp::bridge_component::drive(async {
         let home = tempfile::tempdir().unwrap();
-        let mock = Mock::bind().await.unwrap();
+        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
         let mut grant = registered(&mock, home.path()).await;
         let mut gateway = Gateway::open().await;
@@ -101,7 +101,7 @@ async fn t3_endpoint_pair_starts_from_enabled_base_configuration() {
 async fn t3_endpoint_pair_retries_the_committed_exchange_after_losing_its_response() {
     bridge_mcp::bridge_component::drive(async {
         let home = tempfile::tempdir().unwrap();
-        let mock = Mock::bind().await.unwrap();
+        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
         let mut grant = registered(&mock, home.path()).await;
         let mut gateway = Gateway::open().await;
@@ -149,9 +149,9 @@ async fn t3_endpoint_pair_retries_the_committed_exchange_after_losing_its_respon
 async fn t3_endpoint_pair_requires_the_existing_port_os_link() {
     bridge_mcp::bridge_component::drive(async {
         let home = tempfile::tempdir().unwrap();
-        let mock = Mock::bind().await.unwrap();
+        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
-        let mut grant = grant_owner(&mock, home.path()).await;
+        let mut grant = grant_owner(&mock, home.path(), EPOCH).await;
         let mut gateway = Gateway::open().await;
         let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
         settings.save(true, "Hall Echo").await;
@@ -181,7 +181,7 @@ async fn t3_endpoint_pair_requires_the_existing_port_os_link() {
 async fn t3_endpoint_pair_without_a_production_resolver_keeps_settings_and_mcp_available() {
     bridge_mcp::bridge_component::drive(async {
         let home = tempfile::tempdir().unwrap();
-        let mock = Mock::bind().await.unwrap();
+        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
         let mut grant = registered(&mock, home.path()).await;
         let (owner, _) = settings_owner(home.path(), &mock, false);
