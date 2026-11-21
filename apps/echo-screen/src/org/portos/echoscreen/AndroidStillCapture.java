@@ -22,13 +22,20 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
-/** Camera2 resources and callbacks remain on a single owning thread. */
-final class AndroidStillCapture implements StillCapture {
+/** Adapts Camera2 and the process-wide callback looper to a single JPEG capture. */
+final class AndroidStillCapture implements StillCapture, StillCapture.Backend {
     private final Context context;
     private final CameraManager cameras;
     private final Handler handler = CallbackThread.HANDLER;
+    private final SingleShot capture = new SingleShot(this, new Scheduler() {
+        @Override public long now() { return SystemClock.elapsedRealtime(); }
+        @Override public void post(Runnable task) { handler.post(task); }
+        @Override public void postDelayed(Runnable task, long delay) { handler.postDelayed(task, delay); }
+        @Override public void remove(Runnable task) { handler.removeCallbacks(task); }
+    });
 
     AndroidStillCapture(Context context) {
         this.context = context.getApplicationContext();
@@ -36,13 +43,11 @@ final class AndroidStillCapture implements StillCapture {
     }
 
     @Override public Cancel start(String id, int timeout, Complete complete) {
-        Operation capture = new Operation(id, SystemClock.elapsedRealtime() + timeout, complete);
-        handler.post(capture::open);
-        return capture::cancel;
+        return capture.start(id, timeout, complete);
     }
 
-    // Android can deliver an open callback after Activity destruction.
-    // Keep one process-wide callback looper so the cancelled operation closes it.
+    // An open callback can arrive after Activity destruction. The callback
+    // looper stays available so the cancelled operation can close the device.
     private static final class CallbackThread {
         static final Handler HANDLER = start();
 
@@ -53,190 +58,157 @@ final class AndroidStillCapture implements StillCapture {
         }
     }
 
-    private final class Operation {
-        final String id;
-        final long expires;
-        final Complete complete;
-        final AtomicBoolean cancelled = new AtomicBoolean();
-        final Lifetime lifetime = new Lifetime();
-        final Runnable deadline = () -> fail(Failure.TIMEOUT);
-        CameraDevice device;
-        CameraCaptureSession session;
-        ImageReader reader;
+    @Override public boolean permitted() {
+        return context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+    }
 
-        Operation(String id, long expires, Complete complete) {
-            this.id = id;
-            this.expires = expires;
-            this.complete = complete;
+    @Override public Iterable<Mode> modes(String id) throws Fault {
+        if (cameras == null) return Collections.emptyList();
+        try {
+            CameraCharacteristics properties = cameras.getCameraCharacteristics(id);
+            StreamConfigurationMap streams = properties.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            Size[] sizes = streams == null ? null : streams.getOutputSizes(ImageFormat.JPEG);
+            if (sizes == null) return Collections.emptyList();
+            List<Mode> modes = new ArrayList<>();
+            for (Size size : sizes) modes.add(new Mode(size.getWidth(), size.getHeight()));
+            return modes;
+        } catch (CameraAccessException error) {
+            throw access(error.getReason());
         }
+    }
 
-        boolean live() {
-            return !lifetime.closed() && !cancelled.get() && SystemClock.elapsedRealtime() < expires;
+    @Override public Reader reader(Mode mode, Runnable ready) {
+        JpegReader reader = new JpegReader(ImageReader.newInstance(mode.width, mode.height, ImageFormat.JPEG, 1));
+        try {
+            reader.images.setOnImageAvailableListener(received -> ready.run(), handler);
+            return reader;
+        } catch (RuntimeException error) {
+            reader.close();
+            throw error;
         }
+    }
 
-        void open() {
-            if (!live()) {
-                fail(Failure.TIMEOUT);
-                return;
-            }
-            if (context.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                fail(Failure.PERMISSION);
-                return;
-            }
-            try {
-                if (cameras == null) {
-                    fail(Failure.CAMERA);
-                    return;
-                }
-                Mode mode = mode(cameras.getCameraCharacteristics(id));
-                if (mode == null) {
-                    fail(Failure.CAMERA);
-                    return;
-                }
-                if (!live()) {
-                    fail(Failure.TIMEOUT);
-                    return;
-                }
-                reader = ImageReader.newInstance(mode.width, mode.height, ImageFormat.JPEG, 1);
-                lifetime.keep(reader);
-                reader.setOnImageAvailableListener(this::image, handler);
-                handler.postDelayed(deadline, Math.max(0, expires - SystemClock.elapsedRealtime()));
-                cameras.openCamera(id, deviceCallbacks(), handler);
-            } catch (SecurityException denied) {
-                fail(Failure.PERMISSION);
-            } catch (CameraAccessException error) {
-                fail(access(error.getReason()));
-            } catch (RuntimeException error) {
-                fail(Failure.CAMERA);
-            }
-        }
+    @Override public void open(String id, Consumer<Device> opened, BiConsumer<Device, Failure> failed) throws Fault {
+        try {
+            cameras.openCamera(id, new CameraDevice.StateCallback() {
+                private DeviceHandle device;
 
-        CameraDevice.StateCallback deviceCallbacks() {
-            return new CameraDevice.StateCallback() {
-                @Override public void onOpened(CameraDevice opened) {
-                    if (!live()) {
-                        Lifetime.release(opened);
-                        fail(Failure.TIMEOUT);
-                        return;
-                    }
-                    device = opened;
-                    lifetime.keep(opened);
-                    configure();
+                private DeviceHandle handle(CameraDevice received) {
+                    if (device == null) device = new DeviceHandle(received);
+                    return device;
                 }
 
-                @Override public void onDisconnected(CameraDevice disconnected) {
-                    if (device != disconnected) Lifetime.release(disconnected);
-                    fail(Failure.CAMERA);
+                @Override public void onOpened(CameraDevice received) {
+                    opened.accept(handle(received));
                 }
 
-                @Override public void onError(CameraDevice failed, int error) {
-                    if (device != failed) Lifetime.release(failed);
-                    fail(error == ERROR_CAMERA_IN_USE || error == ERROR_MAX_CAMERAS_IN_USE
+                @Override public void onDisconnected(CameraDevice received) {
+                    failed.accept(handle(received), Failure.CAMERA);
+                }
+
+                @Override public void onError(CameraDevice received, int error) {
+                    failed.accept(handle(received), error == ERROR_CAMERA_IN_USE || error == ERROR_MAX_CAMERAS_IN_USE
                             ? Failure.BUSY : Failure.CAMERA);
                 }
-            };
+            }, handler);
+        } catch (CameraAccessException error) {
+            throw access(error.getReason());
+        }
+    }
+
+    private static final class JpegReader implements Reader {
+        private final ImageReader images;
+
+        JpegReader(ImageReader images) {
+            this.images = images;
         }
 
-        void configure() {
-            try {
-                device.createCaptureSession(Collections.singletonList(reader.getSurface()),
-                        new CameraCaptureSession.StateCallback() {
-                    @Override public void onConfigured(CameraCaptureSession configured) {
-                        if (!live()) {
-                            Lifetime.release(configured);
-                            fail(Failure.TIMEOUT);
-                            return;
-                        }
-                        session = configured;
-                        lifetime.keep(configured);
-                        exposeOnce();
-                    }
-
-                    @Override public void onConfigureFailed(CameraCaptureSession failed) {
-                        Lifetime.release(failed);
-                        fail(Failure.CAMERA);
-                    }
-                }, handler);
-            } catch (SecurityException denied) {
-                fail(Failure.PERMISSION);
-            } catch (CameraAccessException error) {
-                fail(access(error.getReason()));
-            } catch (RuntimeException error) {
-                fail(Failure.CAMERA);
+        @Override public Result read() {
+            try (Image image = images.acquireNextImage()) {
+                if (image == null) return null;
+                ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+                if (buffer.remaining() > CameraWire.MAX_JPEG) return Result.failure(Failure.CAMERA);
+                byte[] bytes = new byte[buffer.remaining()];
+                buffer.get(bytes);
+                return Result.jpeg(bytes, image.getWidth(), image.getHeight(), System.currentTimeMillis());
             }
         }
 
-        void exposeOnce() {
-            if (!lifetime.beginExposure()) return;
+        @Override public void close() {
+            images.close();
+        }
+    }
+
+    private final class DeviceHandle implements Device {
+        private final CameraDevice device;
+
+        DeviceHandle(CameraDevice device) {
+            this.device = device;
+        }
+
+        @Override public void configure(Reader reader, Consumer<Session> ready, Consumer<Session> failed) throws Fault {
+            JpegReader jpeg = (JpegReader) reader;
+            try {
+                device.createCaptureSession(Collections.singletonList(jpeg.images.getSurface()),
+                        new CameraCaptureSession.StateCallback() {
+                    private SessionHandle session;
+
+                    private SessionHandle handle(CameraCaptureSession received) {
+                        if (session == null) session = new SessionHandle(device, received, jpeg);
+                        return session;
+                    }
+
+                    @Override public void onConfigured(CameraCaptureSession received) {
+                        ready.accept(handle(received));
+                    }
+
+                    @Override public void onConfigureFailed(CameraCaptureSession received) {
+                        failed.accept(handle(received));
+                    }
+                }, handler);
+            } catch (CameraAccessException error) {
+                throw access(error.getReason());
+            }
+        }
+
+        @Override public void close() {
+            device.close();
+        }
+    }
+
+    private final class SessionHandle implements Session {
+        private final CameraDevice device;
+        private final CameraCaptureSession session;
+        private final JpegReader jpeg;
+
+        SessionHandle(CameraDevice device, CameraCaptureSession session, JpegReader jpeg) {
+            this.device = device;
+            this.session = session;
+            this.jpeg = jpeg;
+        }
+
+        @Override public void expose(Runnable failed) throws Fault {
             try {
                 CaptureRequest.Builder request = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-                request.addTarget(reader.getSurface());
+                request.addTarget(jpeg.images.getSurface());
                 session.capture(request.build(), new CameraCaptureSession.CaptureCallback() {
                     @Override public void onCaptureFailed(CameraCaptureSession owner,
                             CaptureRequest request, CaptureFailure failure) {
-                        fail(Failure.CAMERA);
+                        failed.run();
                     }
                 }, handler);
-            } catch (SecurityException denied) {
-                fail(Failure.PERMISSION);
             } catch (CameraAccessException error) {
-                fail(access(error.getReason()));
-            } catch (RuntimeException error) {
-                fail(Failure.CAMERA);
+                throw access(error.getReason());
             }
         }
 
-        void image(ImageReader received) {
-            if (!live()) {
-                fail(Failure.TIMEOUT);
-                return;
-            }
-            Result result;
-            try (Image image = received.acquireNextImage()) {
-                if (image == null) return;
-                ByteBuffer buffer = image.getPlanes()[0].getBuffer();
-                if (buffer.remaining() > CameraWire.MAX_JPEG) {
-                    result = Result.failure(Failure.CAMERA);
-                } else {
-                    byte[] bytes = new byte[buffer.remaining()];
-                    buffer.get(bytes);
-                    result = Result.jpeg(bytes, image.getWidth(), image.getHeight(), System.currentTimeMillis());
-                }
-            } catch (RuntimeException error) {
-                result = Result.failure(Failure.CAMERA);
-            }
-            finish(result);
-        }
-
-        void fail(Failure failure) {
-            finish(Result.failure(failure));
-        }
-
-        void cancel() {
-            cancelled.set(true);
-            handler.post(() -> finish(null));
-        }
-
-        void finish(Result result) {
-            if (!lifetime.close()) return;
-            handler.removeCallbacks(deadline);
-            if (!cancelled.get() && result != null) {
-                complete.result(SystemClock.elapsedRealtime() < expires ? result : Result.failure(Failure.TIMEOUT));
-            }
+        @Override public void close() {
+            session.close();
         }
     }
 
-    private static Mode mode(CameraCharacteristics properties) {
-        StreamConfigurationMap streams = properties.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-        Size[] sizes = streams == null ? null : streams.getOutputSizes(ImageFormat.JPEG);
-        if (sizes == null) return null;
-        List<Mode> modes = new ArrayList<>();
-        for (Size size : sizes) modes.add(new Mode(size.getWidth(), size.getHeight()));
-        return Mode.largest(modes);
-    }
-
-    private static Failure access(int reason) {
-        return reason == CameraAccessException.CAMERA_IN_USE || reason == CameraAccessException.MAX_CAMERAS_IN_USE
-                ? Failure.BUSY : Failure.CAMERA;
+    private static Fault access(int reason) {
+        return new Fault(reason == CameraAccessException.CAMERA_IN_USE || reason == CameraAccessException.MAX_CAMERAS_IN_USE
+                ? Failure.BUSY : Failure.CAMERA);
     }
 }

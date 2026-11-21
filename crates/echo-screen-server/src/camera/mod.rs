@@ -4,7 +4,7 @@ use std::{
     time::SystemTime,
 };
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{OwnedMutexGuard, mpsc, oneshot, watch},
     time::Instant,
 };
 
@@ -33,6 +33,15 @@ struct Pending {
     id: String,
     deadline: Instant,
     result: oneshot::Sender<CaptureResult>,
+    // Dropping the pending capture ends any body read for this ID.
+    retired: watch::Sender<()>,
+    upload: Arc<tokio::sync::Mutex<()>>,
+}
+
+struct Upload {
+    deadline: Instant,
+    retired: watch::Receiver<()>,
+    _slot: OwnedMutexGuard<()>,
 }
 
 struct Session {
@@ -55,7 +64,6 @@ pub(super) enum Event {
 #[derive(Clone, Default)]
 pub struct Camera {
     session: Arc<Mutex<Option<Session>>>,
-    upload: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Camera {
@@ -109,6 +117,8 @@ impl Camera {
             id: id.clone(),
             deadline,
             result,
+            retired: watch::channel(()).0,
+            upload: Arc::default(),
         });
         Ok((
             Capture {
@@ -146,6 +156,17 @@ impl Camera {
         self.session
             .lock()
             .is_ok_and(|lock| lock.as_ref().is_some_and(|session| session.owns(nonce, id)))
+    }
+
+    fn upload(&self, nonce: &str, id: &str) -> Option<Upload> {
+        let lock = self.session.lock().ok()?;
+        let session = lock.as_ref().filter(|session| session.owns(nonce, id))?;
+        let pending = session.pending.as_ref()?;
+        Some(Upload {
+            deadline: pending.deadline,
+            retired: pending.retired.subscribe(),
+            _slot: pending.upload.clone().try_lock_owned().ok()?,
+        })
     }
 
     fn accept(&self, nonce: &str, id: &str, result: Result<Sample, CaptureError>) -> bool {

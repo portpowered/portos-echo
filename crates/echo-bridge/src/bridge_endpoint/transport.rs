@@ -1,3 +1,5 @@
+mod uplink;
+
 use super::{Status, commands::Receipts, snapshot::Camera, voice::Voice};
 use echo_contracts::endpoint::{Report, Uplink};
 use echo_mcp_auth::{EndpointTokenSource, new_request_id};
@@ -10,7 +12,7 @@ use std::{
 use tokio::{
     net::TcpStream,
     sync::mpsc,
-    time::{Instant, MissedTickBehavior, interval_at, sleep_until, timeout, timeout_at},
+    time::{Instant, MissedTickBehavior, interval_at, timeout},
 };
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async_with_config,
@@ -25,7 +27,6 @@ use tokio_tungstenite::{
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const REPLY_WINDOW: Duration = Duration::from_secs(10);
 const MAX_COMMAND: usize = 64 * 1024;
-pub(super) const MAX_MESSAGE: usize = 8 * 1024 * 1024;
 const QUEUED_COMMANDS: usize = 32;
 const IN_FLIGHT_REPLIES: usize = 16;
 const PATH_MARKER: &str = "{authLinkId}";
@@ -264,42 +265,11 @@ impl Transport {
                             let Some(body) = command.reply(lease, &self.camera, self.trace.as_ref(), prepare).await else {
                                 return;
                             };
-                            self.send(tokens, body, deadline).await;
+                            self.send_reply(tokens, body, deadline).await;
                         }));
                     }
                 }
             }
-        }
-    }
-
-    async fn send(&self, tokens: &dyn EndpointTokenSource, body: Option<Vec<u8>>, deadline: Instant) {
-        let Some(body) = body.filter(|bytes| bytes.len() <= MAX_MESSAGE) else {
-            return;
-        };
-        let Ok(key) = new_request_id() else { return };
-        while Instant::now() < deadline {
-            let attempt = async {
-                let Ok(token) = tokens.access_token().await else {
-                    return false;
-                };
-                self.http
-                    .post(self.messages.clone())
-                    .bearer_auth(token.expose())
-                    .header("Idempotency-Key", &key)
-                    .header("Content-Type", "application/json")
-                    .body(body.clone())
-                    .send()
-                    .await
-                    .map_or(true, |reply| reply.status().is_server_error())
-            };
-            if !timeout_at(deadline, attempt).await.unwrap_or(false) {
-                return;
-            }
-            let retry = Instant::now() + Duration::from_millis(250);
-            if retry >= deadline {
-                return;
-            }
-            sleep_until(retry).await;
         }
     }
 }

@@ -22,7 +22,7 @@ mod native;
 #[cfg(target_os = "android")]
 pub(super) use native::NativeCamera;
 
-const CAPTURE_WINDOW: Duration = Duration::from_secs(3);
+pub(super) const CAPTURE_WINDOW: Duration = Duration::from_secs(3);
 /// Port OS refuses a `sampledAtMs` more than 300 s from its own clock.
 const SAMPLE_SKEW: Duration = Duration::from_secs(300);
 

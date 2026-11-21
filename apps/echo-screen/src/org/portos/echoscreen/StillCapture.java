@@ -2,6 +2,9 @@ package org.portos.echoscreen;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 interface StillCapture {
     interface Cancel {
@@ -13,6 +16,178 @@ interface StillCapture {
     }
 
     Cancel start(String id, int timeout, Complete complete);
+
+    interface Scheduler {
+        long now();
+        void post(Runnable task);
+        void postDelayed(Runnable task, long delay);
+        void remove(Runnable task);
+    }
+
+    interface Backend {
+        boolean permitted();
+        Iterable<Mode> modes(String id) throws Fault;
+        Reader reader(Mode mode, Runnable ready);
+        void open(String id, Consumer<Device> opened, BiConsumer<Device, Failure> failed) throws Fault;
+    }
+
+    interface Resource extends AutoCloseable {
+        @Override void close();
+    }
+
+    interface Reader extends Resource {
+        Result read();
+    }
+
+    interface Device extends Resource {
+        void configure(Reader reader, Consumer<Session> ready, Consumer<Session> failed) throws Fault;
+    }
+
+    interface Session extends Resource {
+        void expose(Runnable failed) throws Fault;
+    }
+
+    final class Fault extends Exception {
+        private static final long serialVersionUID = 1L;
+        final Failure failure;
+
+        Fault(Failure failure) {
+            this.failure = failure;
+        }
+    }
+
+    /** Runs the single capture and owns its resources on the callback thread. */
+    final class SingleShot implements StillCapture {
+        private final Backend backend;
+        private final Scheduler scheduler;
+
+        SingleShot(Backend backend, Scheduler scheduler) {
+            this.backend = backend;
+            this.scheduler = scheduler;
+        }
+
+        @Override public Cancel start(String id, int timeout, Complete complete) {
+            Operation operation = new Operation(scheduler.now() + timeout, complete);
+            scheduler.post(() -> operation.open(id));
+            return operation::cancel;
+        }
+
+        private final class Operation {
+            private final long expires;
+            private final Complete complete;
+            private final Lifetime lifetime = new Lifetime();
+            private final AtomicBoolean cancelled = new AtomicBoolean();
+            private final Runnable deadline = () -> fail(Failure.TIMEOUT);
+            private Reader reader;
+            private Device device;
+            private Session session;
+
+            Operation(long expires, Complete complete) {
+                this.expires = expires;
+                this.complete = complete;
+            }
+
+            private boolean live() {
+                if (!lifetime.closed() && !cancelled.get() && scheduler.now() < expires) return true;
+                fail(Failure.TIMEOUT);
+                return false;
+            }
+
+            void open(String id) {
+                step(() -> {
+                    if (!backend.permitted()) {
+                        fail(Failure.PERMISSION);
+                        return;
+                    }
+                    Mode mode = Mode.largest(backend.modes(id));
+                    if (mode == null) {
+                        fail(Failure.CAMERA);
+                        return;
+                    }
+                    if (!live()) return;
+                    reader = backend.reader(mode, this::image);
+                    lifetime.keep(reader);
+                    if (!live()) return;
+                    scheduler.postDelayed(deadline, Math.max(0, expires - scheduler.now()));
+                    backend.open(id, this::opened, this::deviceFailed);
+                });
+            }
+
+            private void opened(Device acquired) {
+                if (device == acquired) return;
+                if (!live() || device != null) {
+                    Lifetime.release(acquired);
+                    return;
+                }
+                device = acquired;
+                lifetime.keep(acquired);
+                step(() -> acquired.configure(reader, this::configured, this::sessionFailed));
+            }
+
+            private void configured(Session acquired) {
+                if (session == acquired) return;
+                if (!live() || session != null) {
+                    Lifetime.release(acquired);
+                    return;
+                }
+                session = acquired;
+                lifetime.keep(acquired);
+                step(() -> acquired.expose(() -> fail(Failure.CAMERA)));
+            }
+
+            private void deviceFailed(Device failed, Failure failure) {
+                if (device != failed) Lifetime.release(failed);
+                fail(failure);
+            }
+
+            private void sessionFailed(Session failed) {
+                if (session != failed) Lifetime.release(failed);
+                fail(Failure.CAMERA);
+            }
+
+            private void image() {
+                step(() -> {
+                    if (session == null) return;
+                    Result result = reader.read();
+                    if (result != null) finish(result);
+                });
+            }
+
+            private void step(Action action) {
+                if (!live()) return;
+                try {
+                    action.run();
+                } catch (Fault fault) {
+                    fail(fault.failure);
+                } catch (SecurityException denied) {
+                    fail(Failure.PERMISSION);
+                } catch (RuntimeException error) {
+                    fail(Failure.CAMERA);
+                }
+            }
+
+            private void fail(Failure failure) {
+                finish(Result.failure(failure));
+            }
+
+            void cancel() {
+                cancelled.set(true);
+                scheduler.post(() -> finish(null));
+            }
+
+            private void finish(Result result) {
+                if (!lifetime.close()) return;
+                scheduler.remove(deadline);
+                if (!cancelled.get() && result != null) {
+                    complete.result(scheduler.now() < expires ? result : Result.failure(Failure.TIMEOUT));
+                }
+            }
+        }
+
+        private interface Action {
+            void run() throws Fault;
+        }
+    }
 
     enum Failure {
         BUSY("busy"), PERMISSION("permission_denied"), CAMERA("camera_error"), TIMEOUT("timeout");
@@ -26,22 +201,10 @@ interface StillCapture {
     /** Owned by the camera callback thread. Late acquisitions are closed on arrival. */
     final class Lifetime {
         private final Deque<AutoCloseable> resources = new ArrayDeque<>();
-        private boolean exposing;
         private boolean closed;
 
-        boolean keep(AutoCloseable resource) {
-            if (closed) {
-                release(resource);
-                return false;
-            }
+        void keep(Resource resource) {
             resources.push(resource);
-            return true;
-        }
-
-        boolean beginExposure() {
-            if (closed || exposing || resources.size() != 3) return false;
-            exposing = true;
-            return true;
         }
 
         boolean closed() {

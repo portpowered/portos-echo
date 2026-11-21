@@ -94,24 +94,20 @@ pub(crate) async fn result(
     core.camera_key().ok_or(StatusCode::UNAUTHORIZED)?;
     let revoke = core.revocation();
     drop(core);
-    let _upload = camera.upload.try_lock().map_err(|_| StatusCode::CONFLICT)?;
-    // Verify the body-bound proof before returning the capture slot's state.
+    let mut upload = camera.upload(&nonce, &id).ok_or(StatusCode::CONFLICT)?;
     let bytes = tokio::select! {
         biased;
         () = cancelled(revoke) => return Err(StatusCode::UNAUTHORIZED),
         () = cancelled(state.stop.clone()) => return Err(StatusCode::CONFLICT),
         () = draining(state.drain.clone()) => return Err(StatusCode::CONFLICT),
-        bytes = tokio::time::timeout(Duration::from_secs(3), to_bytes(body, MAX_JPEG_BYTES)) => {
-            bytes.map_err(|_| StatusCode::CONFLICT)?.map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?
-        }
+        _ = upload.retired.changed() => return Err(StatusCode::CONFLICT),
+        () = tokio::time::sleep_until(upload.deadline) => return Err(StatusCode::CONFLICT),
+        bytes = to_bytes(body, MAX_JPEG_BYTES) => bytes.map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?,
     };
     let core = state.core.lock().await;
     let key = core.camera_key().ok_or(StatusCode::UNAUTHORIZED)?;
     if !metadata.verify(key, &nonce, &proof, &id, &bytes) {
         return Err(StatusCode::UNAUTHORIZED);
-    }
-    if !camera.pending(&nonce, &id) {
-        return Err(StatusCode::CONFLICT);
     }
     let result = metadata.result(bytes).ok_or(StatusCode::BAD_REQUEST)?;
     if !camera.accept(&nonce, &id, result) {

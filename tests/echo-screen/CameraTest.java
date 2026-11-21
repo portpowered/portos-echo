@@ -5,9 +5,13 @@ import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 public final class CameraTest {
     private static void check(boolean condition) {
@@ -47,8 +51,10 @@ public final class CameraTest {
         replay(wire, sse(vectors.get(1)), sse(vectors.get(2)));
         pairing();
         modes();
-        lifecycle();
-        System.out.println("camera JVM: signed vectors, tamper and stale proof, numeric pairing, largest JPEG mode, release");
+        captureAdmission();
+        captureFailures();
+        captureCancellation();
+        System.out.println("camera JVM: signed vectors, pairing, zero opens on refusal, one exposure, typed failures, deadline, cleanup and recovery");
     }
 
     private static String sse(String vector) {
@@ -99,24 +105,213 @@ public final class CameraTest {
         check(StillCapture.Result.jpeg(jpeg, 1921, 1080, 125).failure == StillCapture.Failure.CAMERA);
     }
 
-    private static void lifecycle() {
-        for (int acquired = 0; acquired <= 3; acquired++) {
-            StillCapture.Lifetime operation = new StillCapture.Lifetime();
-            List<Integer> closed = new ArrayList<>();
-            for (int index = 1; index <= acquired; index++) {
-                final int resource = index;
-                check(operation.keep(() -> {
-                    closed.add(resource);
-                    if (resource == 2) throw new IOException();
-                }));
+    private static void captureAdmission() {
+        CameraFake fake = new CameraFake();
+        fake.start("invalid", 3000);
+        fake.assertFailure(StillCapture.Failure.CAMERA);
+        fake.permitted = false;
+        fake.start("0", 3000);
+        fake.assertFailure(StillCapture.Failure.PERMISSION);
+        fake.permitted = true;
+        fake.start("0", 0);
+        fake.assertFailure(StillCapture.Failure.TIMEOUT);
+        check(fake.opens == 0 && fake.exposures == 0 && fake.closed.isEmpty());
+        fake.start("0", 3000);
+        fake.expose();
+        fake.sessionReady.accept(fake.session);
+        fake.imageReady.run();
+        fake.imageReady.run();
+        fake.assertJpeg();
+        check(fake.opens == 1 && fake.exposures == 1 && fake.reads == 1);
+        check(fake.closed.equals(Arrays.asList("session", "device", "reader")));
+        check(fake.clock.deadline == null);
+    }
+
+    private static void captureFailures() {
+        CameraFake fake = new CameraFake();
+        fake.start("0", 3000);
+        fake.deviceFailed.accept(fake.device, StillCapture.Failure.BUSY);
+        fake.assertFailure(StillCapture.Failure.BUSY);
+        check(fake.exposures == 0 && fake.closed.equals(Arrays.asList("device", "reader")));
+
+        fake.closed.clear();
+        fake.failDeviceClose = true;
+        fake.start("0", 3000);
+        fake.deviceReady.accept(fake.device);
+        fake.sessionFailed.accept(fake.session);
+        fake.assertFailure(StillCapture.Failure.CAMERA);
+        check(fake.exposures == 0 && fake.closed.equals(Arrays.asList("session", "device", "reader")));
+        fake.failDeviceClose = false;
+
+        fake.closed.clear();
+        fake.start("0", 3000);
+        fake.expose();
+        fake.exposureFailed.run();
+        fake.assertFailure(StillCapture.Failure.CAMERA);
+        check(fake.exposures == 1 && fake.closed.equals(Arrays.asList("session", "device", "reader")));
+
+        fake.closed.clear();
+        fake.start("0", 3000);
+        fake.expose();
+        fake.clock.advance(2999);
+        check(fake.results.isEmpty() && fake.closed.isEmpty());
+        fake.clock.advance(1);
+        fake.imageReady.run();
+        fake.assertFailure(StillCapture.Failure.TIMEOUT);
+        check(fake.opens == 4 && fake.exposures == 2 && fake.reads == 0);
+        check(fake.closed.equals(Arrays.asList("session", "device", "reader")));
+    }
+
+    private static void captureCancellation() {
+        CameraFake fake = new CameraFake();
+        fake.start("0", 3000).close();
+        fake.clock.run();
+        check(fake.closed.equals(Arrays.asList("reader")));
+        fake.deviceReady.accept(fake.device);
+        check(fake.closed.equals(Arrays.asList("reader", "device")) && fake.sessionReady == null);
+
+        fake.closed.clear();
+        StillCapture.Cancel configuring = fake.start("0", 3000);
+        fake.deviceReady.accept(fake.device);
+        configuring.close();
+        fake.clock.run();
+        fake.sessionReady.accept(fake.session);
+        check(fake.closed.equals(Arrays.asList("device", "reader", "session")) && fake.exposures == 0);
+
+        fake.closed.clear();
+        StillCapture.Cancel exposing = fake.start("0", 3000);
+        fake.expose();
+        Runnable staleImage = fake.imageReady;
+        exposing.close();
+        fake.clock.run();
+        check(fake.closed.equals(Arrays.asList("session", "device", "reader")) && fake.results.isEmpty());
+
+        fake.closed.clear();
+        fake.start("0", 3000);
+        fake.expose();
+        staleImage.run();
+        check(fake.closed.isEmpty() && fake.results.isEmpty() && fake.reads == 0);
+        fake.imageReady.run();
+        fake.assertJpeg();
+        check(fake.opens == 4 && fake.exposures == 2 && fake.reads == 1);
+        check(fake.closed.equals(Arrays.asList("session", "device", "reader")));
+    }
+
+    private static final class Clock implements StillCapture.Scheduler {
+        final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
+        long now;
+        long expires;
+        Runnable deadline;
+
+        @Override public long now() { return now; }
+        @Override public void post(Runnable task) { tasks.add(task); }
+        @Override public void postDelayed(Runnable task, long delay) {
+            check(deadline == null);
+            deadline = task;
+            expires = now + delay;
+        }
+        @Override public void remove(Runnable task) {
+            if (deadline == task) deadline = null;
+        }
+
+        void run() {
+            while (!tasks.isEmpty()) tasks.remove().run();
+        }
+
+        void advance(long elapsed) {
+            now += elapsed;
+            if (deadline != null && now >= expires) deadline.run();
+            run();
+        }
+    }
+
+    private static final class CameraFake implements StillCapture.Backend {
+        final byte[] jpeg = {(byte) 255, (byte) 216, (byte) 255, (byte) 217};
+        final Clock clock = new Clock();
+        final StillCapture camera = new StillCapture.SingleShot(this, clock);
+        final List<String> closed = new ArrayList<>();
+        final List<StillCapture.Result> results = new ArrayList<>();
+        boolean permitted = true;
+        boolean failDeviceClose;
+        int opens;
+        int exposures;
+        int reads;
+        Consumer<StillCapture.Device> deviceReady;
+        BiConsumer<StillCapture.Device, StillCapture.Failure> deviceFailed;
+        Consumer<StillCapture.Session> sessionReady;
+        Consumer<StillCapture.Session> sessionFailed;
+        Runnable exposureFailed;
+        Runnable imageReady;
+
+        final StillCapture.Device device = new StillCapture.Device() {
+            @Override public void configure(StillCapture.Reader reader, Consumer<StillCapture.Session> ready,
+                    Consumer<StillCapture.Session> failed) {
+                sessionReady = ready;
+                sessionFailed = failed;
             }
-            check(operation.beginExposure() == (acquired == 3));
-            check(!operation.beginExposure());
-            check(operation.close() && operation.closed() && !operation.close());
-            for (int index = 0; index < acquired; index++) check(closed.get(index) == acquired - index);
-            check(!operation.keep(() -> closed.add(4)));
-            check(closed.size() == acquired + 1 && closed.get(acquired) == 4);
-            check(!operation.beginExposure());
+            @Override public void close() {
+                closed.add("device");
+                if (failDeviceClose) throw new IllegalStateException();
+            }
+        };
+        final StillCapture.Session session = new StillCapture.Session() {
+            @Override public void expose(Runnable failed) {
+                exposures++;
+                exposureFailed = failed;
+            }
+            @Override public void close() { closed.add("session"); }
+        };
+
+        @Override public boolean permitted() { return permitted; }
+
+        @Override public Iterable<StillCapture.Mode> modes(String id) {
+            if (!"0".equals(id)) return Collections.emptyList();
+            return Arrays.asList(new StillCapture.Mode(4000, 3000),
+                    new StillCapture.Mode(640, 480), new StillCapture.Mode(1920, 1080));
+        }
+
+        @Override public StillCapture.Reader reader(StillCapture.Mode mode, Runnable ready) {
+            check(mode.width == 1920 && mode.height == 1080);
+            imageReady = ready;
+            return new StillCapture.Reader() {
+                @Override public StillCapture.Result read() {
+                    reads++;
+                    return StillCapture.Result.jpeg(jpeg, mode.width, mode.height, 125);
+                }
+                @Override public void close() { closed.add("reader"); }
+            };
+        }
+
+        @Override public void open(String id, Consumer<StillCapture.Device> opened,
+                BiConsumer<StillCapture.Device, StillCapture.Failure> failed) {
+            check("0".equals(id));
+            opens++;
+            deviceReady = opened;
+            deviceFailed = failed;
+        }
+
+        StillCapture.Cancel start(String id, int timeout) {
+            StillCapture.Cancel cancel = camera.start(id, timeout, results::add);
+            clock.run();
+            return cancel;
+        }
+
+        void expose() {
+            deviceReady.accept(device);
+            sessionReady.accept(session);
+        }
+
+        void assertFailure(StillCapture.Failure expected) {
+            check(results.size() == 1);
+            StillCapture.Result result = results.remove(0);
+            check(result.failure == expected && result.jpeg == null);
+        }
+
+        void assertJpeg() {
+            check(results.size() == 1);
+            StillCapture.Result result = results.remove(0);
+            check(result.failure == null && result.jpeg == jpeg && result.width == 1920
+                    && result.height == 1080 && result.sampledAt == 125);
         }
     }
 }

@@ -2,8 +2,12 @@
 use super::*;
 use echo_contracts::endpoint::{MAX_SNAPSHOT_BYTES, REPORT_NAMESPACE};
 use hmac::{Hmac, KeyInit as _, Mac as _};
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use sha2::{Digest as _, Sha256};
+use tokio::{
+    io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader},
+    net::TcpStream,
+};
 
 const NONCE: &str = "0123456789abcdef0123456789abcdef";
 
@@ -63,10 +67,10 @@ impl Peer {
         }
     }
 
-    async fn result(&self, id: &str, bytes: Vec<u8>, sampled_at: i64, authenticated: bool) -> StatusCode {
+    fn upload(&self, id: &str, bytes: &[u8], sampled_at: i64, authenticated: bool) -> RequestBuilder {
         let content = "image/jpeg";
         let time = sampled_at.to_string();
-        let digest = hex::encode(Sha256::digest(&bytes));
+        let digest = hex::encode(Sha256::digest(bytes));
         let proof = sign("app", &["result", id, content, "2", "1", &time, &digest]);
         let request = self
             .http
@@ -76,14 +80,44 @@ impl Peer {
             .header("X-Echo-Camera-Width", "2")
             .header("X-Echo-Camera-Height", "1")
             .header("X-Echo-Camera-Sampled-At-Ms", time);
-        let request = if authenticated {
+        if authenticated {
             request.header("X-Echo-Camera-Proof", proof)
         } else {
             request.header("X-Echo-Camera-Proof", "0".repeat(64))
-        };
-        let response = request.body(bytes).send().await.unwrap();
+        }
+    }
+
+    async fn result(&self, id: &str, bytes: Vec<u8>, sampled_at: i64, authenticated: bool) -> StatusCode {
+        let response = self
+            .upload(id, &bytes, sampled_at, authenticated)
+            .body(bytes)
+            .send()
+            .await
+            .unwrap();
         assert!(response.content_length().is_none_or(|bytes| bytes == 0));
         response.status()
+    }
+
+    async fn stall_upload(&self, id: &str, bytes: &[u8], sampled_at: i64) -> TcpStream {
+        use std::fmt::Write as _;
+        let request = self.upload(id, bytes, sampled_at, true).build().unwrap();
+        let authority = self.origin.strip_prefix("http://").unwrap();
+        let mut socket = TcpStream::connect(authority).await.unwrap();
+        let mut headers = format!(
+            "POST {} HTTP/1.1\r\nHost: {authority}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            request.url().path(),
+            bytes.len()
+        );
+        for (name, value) in request.headers() {
+            write!(headers, "{name}: {}\r\n", value.to_str().unwrap()).unwrap();
+        }
+        socket.write_all(headers.as_bytes()).await.unwrap();
+        socket.write_all(b"\r\n").await.unwrap();
+        socket.write_all(&bytes[..1]).await.unwrap();
+        // A wrong-proof probe cannot complete the capture. A conflict means the
+        // stalled request already holds the live result slot.
+        while self.result(id, bytes.to_vec(), sampled_at, false).await != StatusCode::CONFLICT {}
+        socket
     }
 }
 
@@ -121,13 +155,16 @@ async fn t3_endpoint_snapshot_native_peer_proof_cancellation_and_recovery() {
             let mut app = Peer::attach(&listener).await;
             let mut camera = CameraPeer::open();
             Arc::get_mut(&mut camera).unwrap().exchange = listener.camera();
-            let fixture = fixture_with_camera(home.path(), &mock, &gateway, grant.grant.clone(), Some(camera)).await;
+            let fixture =
+                fixture_with_camera(home.path(), &mock, &gateway, grant.grant.clone(), Some(camera.clone())).await;
             fixture.settings.save(true, "Hall Echo").await;
             gateway.assert_upgrade(CLAIMED).await;
             let stale = observe_timeout(&gateway, &mock, &mut app).await;
             observe_fresh_capture(&gateway, &mock, &mut app, "native-retry", Some("BASE64"), &stale).await;
             observe_fresh_capture(&gateway, &mock, &mut app, "native-url", Some("URL"), &stale).await;
             observe_fresh_capture(&gateway, &mock, &mut app, "native-default", None, &stale).await;
+            observe_cancelled_upload(&gateway, &mock, &mut app, &camera).await;
+            observe_uplink_deadline(&gateway, &mock, &mut app).await;
             assert_private(home.path());
             fixture.settings.close().await;
             gateway.assert_disconnect().await;
@@ -135,6 +172,81 @@ async fn t3_endpoint_snapshot_native_peer_proof_cancellation_and_recovery() {
             listener.shutdown().await.unwrap();
         })))
         .await;
+}
+
+async fn observe_cancelled_upload(gateway: &Gateway, mock: &Mock, app: &mut Peer, camera: &CameraPeer) {
+    send(gateway, &snapshot_request("native-aborted", "BASE64")).await;
+    let capture = app.event("capture").await;
+    let id = capture["captureId"].as_str().unwrap();
+    let jpeg = STANDARD.decode(JPEG).unwrap();
+    let start = Instant::now();
+    let stalled = app.stall_upload(id, &jpeg, sampled_at_ms()).await;
+    camera.shutter.send_replace(Shutter::Closed);
+    assert_eq!(app.event("cancel").await, json!({"captureId":id}));
+    assert_reply(mock, "native-aborted", "SHUTTERED").await;
+    camera.shutter.send_replace(Shutter::Open);
+    observe_fresh_capture(gateway, mock, app, "native-after-abort", None, id).await;
+    let mut response = String::new();
+    BufReader::new(stalled).read_line(&mut response).await.unwrap();
+    assert!(response.starts_with("HTTP/1.1 409 "));
+    assert!(start.elapsed() < Duration::from_secs(3));
+}
+
+async fn observe_uplink_deadline(gateway: &Gateway, mock: &Mock, app: &mut Peer) {
+    let request_id = "native-uplink-deadline";
+    // Fail before the mock accepts the report or consumes the command ID.
+    mock.state.lock().unwrap().fault = Some(("/messages".into(), 503, json!({})));
+    send(gateway, &snapshot_request(request_id, "BASE64")).await;
+    let capture = app.event("capture").await;
+    let start = Instant::now();
+    assert_eq!(capture["remainingMs"], 3000);
+    advance(Duration::from_millis(2800)).await;
+    assert_eq!(
+        app.result(
+            capture["captureId"].as_str().unwrap(),
+            STANDARD.decode(JPEG).unwrap(),
+            sampled_at_ms(),
+            true
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    let first = outcome(mock, request_id).await;
+    assert_eq!(first["snapshot"]["data"], JPEG);
+    mock.state.lock().unwrap().fault = None;
+    advance(Duration::from_millis(199)).await;
+    assert_eq!(start.elapsed(), Duration::from_millis(2999));
+    assert_eq!(receipt_attempts(mock, request_id).len(), 1);
+    assert_uplink_timeout(mock, request_id, start).await;
+}
+
+async fn assert_uplink_timeout(mock: &Mock, request_id: &str, start: Instant) {
+    let observe_until = start + Duration::from_millis(3300);
+    while receipt_attempts(mock, request_id).len() == 1 {
+        assert!(
+            Instant::now() < observe_until,
+            "missing uplink result at the snapshot deadline"
+        );
+        advance(Duration::from_millis(1)).await;
+    }
+    advance(Duration::from_secs(10)).await;
+    let attempts = receipt_attempts(mock, request_id);
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0].status, Some(503));
+    assert!(attempts[0].received < start + Duration::from_secs(3));
+    assert_eq!(attempts[1].status, Some(202));
+    assert!(attempts[1].received >= start + Duration::from_secs(3));
+    assert_eq!(
+        attempts[1].json.as_ref().unwrap()["payload"],
+        json!({"requestId":request_id,"error":{"code":"TIMEOUT"}})
+    );
+}
+
+fn receipt_attempts(mock: &Mock, request_id: &str) -> Vec<echo_mcp_auth::mock::Request> {
+    command_tests::receipts(mock)
+        .into_iter()
+        .filter(|request| request.json.as_ref().unwrap()["payload"]["requestId"] == request_id)
+        .collect()
 }
 
 async fn observe_timeout(gateway: &Gateway, mock: &Mock, app: &mut Peer) -> String {

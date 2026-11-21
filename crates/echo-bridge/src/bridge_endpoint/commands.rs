@@ -20,6 +20,11 @@ pub(super) struct Command {
     received: Instant,
 }
 
+pub(super) enum Prepared<T> {
+    Reply(T),
+    Snapshot { body: T, timeout: T, received: Instant },
+}
+
 impl Receipts {
     /// Accept one frame addressed to this device, once per command id.
     pub(super) fn accept(
@@ -55,7 +60,7 @@ impl Command {
         camera: &Camera,
         trace: Option<&Trace>,
         prepare: impl Fn(Report) -> T,
-    ) -> Option<T> {
+    ) -> Option<Prepared<T>> {
         let Self { header, body, received } = self;
         let name = audit_name(&header);
         match (header.interface(), header.name.as_str()) {
@@ -72,18 +77,22 @@ impl Command {
                         prepare(report)
                     })
                     .await;
-                audit(
-                    trace,
-                    name,
-                    prepared.as_ref().map_or_else(Reply::code, |_| "OK"),
-                    received,
-                );
-                Some(prepared.unwrap_or_else(|reply| prepare(Report::reply(&header.id, reply))))
+                Some(match prepared {
+                    Ok(body) => Prepared::Snapshot {
+                        body,
+                        timeout: prepare(Report::reply(&header.id, refusal("TIMEOUT"))),
+                        received,
+                    },
+                    Err(reply) => {
+                        audit(trace, name, reply.code(), received);
+                        Prepared::Reply(prepare(Report::reply(&header.id, reply)))
+                    }
+                })
             }
             _ => {
                 let reply = correlate(&header, body, received, lease).await;
                 audit(trace, name, reply.code(), received);
-                Some(prepare(Report::reply(&header.id, reply)))
+                Some(Prepared::Reply(prepare(Report::reply(&header.id, reply))))
             }
         }
     }
@@ -98,7 +107,7 @@ fn audit_name(header: &FrameHeader) -> &str {
     }
 }
 
-fn audit(trace: Option<&Trace>, name: &str, code: &str, received: Instant) {
+pub(super) fn audit(trace: Option<&Trace>, name: &str, code: &str, received: Instant) {
     if let Some(trace) = trace {
         let duration_ms = u64::try_from(received.elapsed().as_millis()).unwrap_or(u64::MAX);
         let _ = trace.clone().record(
