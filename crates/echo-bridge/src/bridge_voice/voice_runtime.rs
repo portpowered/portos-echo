@@ -93,6 +93,16 @@ impl<'a> SettingsLink<'a> {
         }
     }
 
+    fn tools(&self, options: &RuntimeOptions<'_>) -> Option<super::voice_tools::Tools> {
+        options.delegation.map(|config| {
+            super::voice_tools::Tools::new(config, options.utc_day.clone())
+                .with_muse(config, options.host.routes.is_some())
+                .with_muse_access(self.muse_access.clone())
+                .with_portos_permissions(self.permissions.clone())
+                .with_runner_skills(options.runner_skills)
+        })
+    }
+
     async fn retain_portos(
         &self,
         view: &mut View<'_>,
@@ -393,15 +403,7 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
             options.capture_failsafe_seconds(),
             cancelled,
             async |io, client, stopping| {
-                let mut tools = options
-                    .delegation
-                    .map(|config| {
-                        super::voice_tools::Tools::new(config, options.utc_day.clone())
-                            .with_muse(config, options.host.routes.is_some())
-                            .with_muse_access(grant.muse_access.clone())
-                            .with_portos_permissions(grant.permissions.clone())
-                            .with_runner_skills(options.runner_skills)
-                    });
+                let mut tools = grant.tools(options);
                 let setup = grant.open_tools(view, options, &mut tools);
                 let prepared = tokio::select! {
                     biased;

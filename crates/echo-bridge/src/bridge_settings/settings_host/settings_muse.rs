@@ -196,7 +196,7 @@ fn private_directory(metadata: &fs::Metadata) -> std::io::Result<bool> {
     {
         use std::os::unix::fs::MetadataExt;
         let owner = fs::metadata("/proc/self")?.uid();
-        Ok(metadata.is_dir() && metadata.uid() == owner && metadata.mode() & 0o077 == 0)
+        Ok(metadata.is_dir() && metadata.uid() == owner && metadata.mode().trailing_zeros() >= 6)
     }
     #[cfg(not(unix))]
     Ok(metadata.is_dir())

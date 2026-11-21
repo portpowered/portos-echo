@@ -64,6 +64,10 @@ use voice_source::{Source, UserSpeech};
 pub trait VoicePort {
     /// Bind the run identity, preserving queued tools' original binding.
     fn bind_session(&mut self, _run: Option<std::sync::Arc<()>>) {}
+    /// Bind Muse admission to the owning Wyoming run and its deadline.
+    ///
+    /// # Errors
+    /// Returns an error if the current run cannot be read from its trace.
     fn start_muse_run(&mut self, _deadline: Instant) -> Result<(), Error> {
         Ok(())
     }

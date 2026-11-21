@@ -3,6 +3,7 @@ use echo_agent_api::{AgentError, ToolError, ToolHost, ToolSpec};
 use echo_contracts::{ids::TaskId, task::TaskEvent};
 use echo_delegation::codex_dispatch::{Catalog, Dispatcher};
 use serde_json::json;
+use std::future::{Future, ready};
 use std::sync::Mutex;
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -15,9 +16,9 @@ struct BackendFake {
     pending: bool,
 }
 impl AgentBackend for BackendFake {
-    async fn submit(&self, task: Task) -> Result<TaskId, AgentError> {
+    fn submit(&self, task: Task) -> impl Future<Output = Result<TaskId, AgentError>> + Send + '_ {
         self.tasks.lock().unwrap().push(task);
-        Ok(TaskId::new("task-7").unwrap())
+        ready(Ok(TaskId::new("task-7").unwrap()))
     }
 
     async fn next_event(&self, id: &TaskId) -> Option<TaskEvent> {
@@ -32,22 +33,27 @@ impl AgentBackend for BackendFake {
         }
     }
 
-    async fn cancel(&self, id: &TaskId) -> Result<(), AgentError> {
+    fn cancel<'a>(&'a self, id: &'a TaskId) -> impl Future<Output = Result<(), AgentError>> + Send + 'a {
         self.cancels.lock().unwrap().push(id.clone());
-        Ok(())
+        ready(Ok(()))
     }
 }
 
 struct UnreachableMcp(Arc<std::sync::atomic::AtomicUsize>);
 impl ToolHost for UnreachableMcp {
-    async fn list_tools(&self) -> Result<Vec<ToolSpec>, ToolError> {
+    fn list_tools(&self) -> impl Future<Output = Result<Vec<ToolSpec>, ToolError>> + Send + '_ {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Err(ToolError::Denied)
+        ready(Err(ToolError::Denied))
     }
 
-    async fn call_tool(&self, _: &str, _: Value, _: &str) -> Result<echo_agent_api::ToolResult, ToolError> {
+    fn call_tool<'a>(
+        &'a self,
+        _: &'a str,
+        _: Value,
+        _: &'a str,
+    ) -> impl Future<Output = Result<echo_agent_api::ToolResult, ToolError>> + Send + 'a {
         self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Err(ToolError::Denied)
+        ready(Err(ToolError::Denied))
     }
 }
 

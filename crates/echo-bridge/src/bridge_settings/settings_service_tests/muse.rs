@@ -3,7 +3,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use std::{io::Write, os::unix::fs::PermissionsExt, process::Stdio};
 use tokio::{io::AsyncBufReadExt, process::Command};
 
-const PEER: &str = r#"
+const PEER: &str = r"
 import http.server, json, ssl, sys
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args): pass
@@ -25,7 +25,7 @@ server.socket = tls.wrap_socket(server.socket, server_side=True)
 print(server.server_address[1], flush=True)
 for _ in range(2):
     server.handle_request()
-"#;
+";
 
 #[tokio::test]
 async fn t3_settings_muse_save_probe_rotate_and_reload_private_connection() {
@@ -81,15 +81,11 @@ async fn save_and_test(fixture: &Fixture, origin: &str, der: &[u8]) {
     let initial = snapshot(fixture, true).await;
     assert_eq!(initial["muse"], json!({"configured":false,"reachability":"unchecked"}));
     probe(fixture, json!({"version":2,"reachable":false,"reason":"unconfigured"})).await;
-    let patch = |muse| {
-        fixture.client.patch(fixture.url("/settings/v2")).json(&json!({
-            "version":2,"settings":{"muse":muse}
-        }))
-    };
-    let saved = patch(json!({"url":origin,"ca":STANDARD.encode(der),"credential":"x".repeat(32)}))
-        .send()
-        .await
-        .unwrap();
+    let saved = patch(
+        fixture,
+        json!({"url":origin,"ca":STANDARD.encode(der),"credential":"x".repeat(32)}),
+    )
+    .await;
     assert_eq!(saved.status(), StatusCode::OK);
     assert_eq!(
         saved.json::<Value>().await.unwrap(),
@@ -101,29 +97,40 @@ async fn save_and_test(fixture: &Fixture, origin: &str, der: &[u8]) {
         json!({"configured":true,"url":origin,"reachability":"unchecked"})
     );
     assert!(snapshot(fixture, false).await.get("muse").is_none());
-    let bad = patch(json!({"url":"https://127.0.0.1:1","credential":"private-refused"}))
-        .send()
-        .await
-        .unwrap();
+    refuse_changed_origin(fixture, &accepted).await;
+    guard_probes(fixture).await;
+    probe(fixture, json!({"version":2,"reachable":true})).await;
+    assert_eq!(snapshot(fixture, true).await["muse"]["reachability"], "reachable");
+    let rotated = patch(fixture, json!({"credential":"y".repeat(32)})).await;
+    assert_eq!(rotated.status(), StatusCode::OK);
+    assert_eq!(snapshot(fixture, true).await["muse"], accepted["muse"]);
+    probe(fixture, json!({"version":2,"reachable":false,"reason":"unauthorized"})).await;
+}
+
+async fn refuse_changed_origin(fixture: &Fixture, accepted: &Value) {
+    let bad = patch(
+        fixture,
+        json!({"url":"https://127.0.0.1:1","credential":"private-refused"}),
+    )
+    .await;
     assert_eq!(bad.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
         bad.json::<Value>().await.unwrap(),
         json!({"version":2,"message":"muse.ca: expected a valid DER certificate"})
     );
-    assert_eq!(snapshot(fixture, true).await, accepted);
-    guard_probes(fixture).await;
-    probe(fixture, json!({"version":2,"reachable":true})).await;
-    assert_eq!(snapshot(fixture, true).await["muse"]["reachability"], "reachable");
-    assert_eq!(
-        patch(json!({"credential":"y".repeat(32)}))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        StatusCode::OK
-    );
-    assert_eq!(snapshot(fixture, true).await["muse"], accepted["muse"]);
-    probe(fixture, json!({"version":2,"reachable":false,"reason":"unauthorized"})).await;
+    assert_eq!(&snapshot(fixture, true).await, accepted);
+}
+
+async fn patch(fixture: &Fixture, muse: Value) -> reqwest::Response {
+    fixture
+        .client
+        .patch(fixture.url("/settings/v2"))
+        .json(&json!({
+            "version":2,"settings":{"muse":muse}
+        }))
+        .send()
+        .await
+        .unwrap()
 }
 
 async fn guard_probes(fixture: &Fixture) {
