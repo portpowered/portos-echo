@@ -4,106 +4,86 @@ on:
 permissions:
   contents: read
 jobs:
-  config:
+  candidates:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 34
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Observe supported configuration against the verified 0.171.0 asset
+      - uses: ./.github/actions/setup
+        with:
+          target: test-sim
+          sim: 'true'
+      - name: Build the unchanged candidate witnesses
         run: |
-          pin=$(sh scripts/codex-app-server.sh)
-          export WITNESS_PIN="$pin"
-          export PYTHONPATH="crates/echo-lab/src/lab_run/sim/session/catalog_measurement:crates/echo-bridge/tests/pinned_media"
-          curl --fail --silent --show-error --location https://raw.githubusercontent.com/openai/codex/ccf9be8cc458bd6b8336fe84d68d8893f2691a5e/codex-rs/models-manager/models.json -o "$RUNNER_TEMP/models.json"
-          python3 - <<'PY'
-          from copy import deepcopy
-          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+          cargo build --locked -p echo-lab -p echo-bridge -p echo-muse-bridge --bins
+          cargo nextest run --locked -p echo-bridge --test bridge_codex_media --config-file .github/nextest.toml --profile ci --no-run
+      - name: Verify both archives and run existing observations newest first
+        shell: bash
+        run: |
+          cp codex.pin "$RUNNER_TEMP/codex.pin"
+          cp scripts/codex-app-server.sh "$RUNNER_TEMP/codex-app-server.sh"
+          export ECHO_CODEX_CACHE_DIR="$RUNNER_TEMP/candidate-codex"
+          export CANDIDATE_REPORTS="$RUNNER_TEMP/candidate-reports"
+          mkdir -p "$CANDIDATE_REPORTS"
+          for tag in 0.170.0 0.169.1 0.169.0 0.168.0 0.167.2 0.167.1 0.167.0 0.166.0 0.165.0 0.164.0 0.162.0 0.161.0; do
+            printf '%s\n' "CANDIDATE_BEGIN $tag"
+            export WITNESS_TAG="rust-v$tag"
+            git ls-remote https://github.com/openai/codex "refs/tags/$WITNESS_TAG" "refs/tags/$WITNESS_TAG^{}" > "$RUNNER_TEMP/ref"
+            curl -fsSL --retry 2 "https://api.github.com/repos/openai/codex/releases/tags/$WITNESS_TAG" > "$RUNNER_TEMP/release.json"
+            python3 - <<'PY'
           import json
           import os
           from pathlib import Path
-          from queue import Queue
-          import tempfile
-          from threading import Thread
+          import re
+          import tomllib
 
-          from replay import app_settings, pin, thread_settings
-          from tools_provider import Delegation
-
-          bodies = Queue()
-
-          class Observer(BaseHTTPRequestHandler):
-              def do_POST(self):
-                  body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-                  if self.path == '/v1/responses':
-                      bodies.put(body)
-                      self.send_error(400)
-                  else:
-                      self.send_error(403)
-
-              def log_message(self, *args):
-                  pass
-
-          tools = [{'name': 'end_session', 'description': 'End the fixture session.',
-                    'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}}]
-          expected = [{'type': 'function', 'name': t['name'], 'description': t['description'],
-                       'parameters': t['inputSchema'], 'strict': False} for t in tools]
-          model = 'gpt-6.1-sol'
-          with ThreadingHTTPServer(('127.0.0.1', 0), Observer) as peer:
-              task = Thread(target=peer.serve_forever, daemon=True)
-              task.start()
-              origin = f'http://127.0.0.1:{peer.server_port}'
-
-              def observe(name, cli=(), file='', override=None, metadata=None, write=False):
-                  with tempfile.TemporaryDirectory() as temp:
-                      home = Path(temp)
-                      (home / 'config.toml').write_text(file)
-                      args = app_settings(origin) + list(cli)
-                      if metadata is not None:
-                          catalog = json.loads((Path(os.environ['RUNNER_TEMP']) / 'models.json').read_text())
-                          for entry in catalog['models']:
-                              if entry['slug'] == model:
-                                  entry.update(metadata)
-                          (home / 'models.json').write_text(json.dumps(catalog))
-                          args.append(f'model_catalog_json="{home}/models.json"')
-                      with pin(Path(os.environ['WITNESS_PIN']), args, home, origin) as rpc:
-                          rpc.request('initialize', {'clientInfo': {'name': 'echo-lab', 'version': '0.1.0'},
-                                                     'capabilities': {'experimentalApi': True}})
-                          rpc.send({'method': 'initialized'})
-                          if write:
-                              rpc.request('config/value/write', {'keyPath': 'tools.experimental_request_user_input.enabled',
-                                                                 'value': True, 'mergeStrategy': 'replace'})
-                          params = thread_settings(tools, 'flat', model, home)
-                          params['config']['features.view_image'] = False
-                          for key, val in (override or {}).items():
-                              if val is None:
-                                  params['config'].pop(key)
-                              else:
-                                  params['config'][key] = val
-                          thread = rpc.request('thread/start', params)['thread']['id']
-                          rpc.request('turn/start', {'threadId': thread, 'input': [{'type':'text', 'text':'Fixture only'}]})
-                          body = bodies.get(timeout=8)
-                          print(f'VARIANT {name}', flush=True)
-                          try:
-                              Delegation(tools, False, model=model, web_search='disabled').check_tools(body, expected)
-                          except AssertionError as error:
-                              print(f'CATALOG_REFUSED {name} {error}', flush=True)
-                          else:
-                              print(f'CATALOG_MATCH {name}', flush=True)
-
-              input_key = 'tools.experimental_request_user_input.enabled'
-              observe('bridge-current')
-              observe('home-async', file='[tools.experimental_request_user_input]\nenabled = true\n', override={input_key: None})
-              observe('cli-async', cli=[f'{input_key}=true'], override={input_key: None})
-              observe('config-write-async', write=True, override={input_key: None})
-              observe('thread-async', override={input_key: True, 'features.default_mode_request_user_input': False})
-              observe('deprecated-patch-feature', override={'features.apply_patch_freeform': False})
-              observe('namespace-exclude', override={'features.code_mode.excluded_tool_namespaces': ['functions']})
-              observe('namespace-reroute', override={'features.code_mode.direct_only_tool_namespaces': ['web']})
-              observe('feature-code-mode-off', override={'features.code_mode': False, 'features.code_mode_only': False})
-              observe('catalog-no-patch', override={input_key: True}, metadata={'apply_patch_tool_type': None})
-              observe('catalog-code-mode', override={input_key: True}, metadata={'apply_patch_tool_type': None, 'tool_mode': 'code_mode'})
-              observe('catalog-code-mode-fail-closed', override={input_key: True, 'code_mode_host.disable_in_process_fallback': True},
-                      metadata={'apply_patch_tool_type': None, 'tool_mode': 'code_mode'})
-              peer.shutdown()
+          temp = Path(os.environ['RUNNER_TEMP'])
+          refs = (temp / 'ref').read_text().splitlines()
+          peeled = [line for line in refs if line.endswith('^{}')]
+          commit = (peeled[0] if peeled else refs[0]).split()[0]
+          assert re.fullmatch('[0-9a-f]{40}', commit), commit
+          release = json.loads((temp / 'release.json').read_text())
+          assert release['tag_name'] == os.environ['WITNESS_TAG'] and not release['prerelease']
+          pin = tomllib.loads((temp / 'codex.pin').read_text())
+          replacements = {pin['tag']: release['tag_name'], pin['commit']: commit}
+          for item in pin['assets'].values():
+              archive, = (asset for asset in release['assets'] if asset['name'] == item['name'])
+              digest = archive['digest']
+              assert re.fullmatch('sha256:[0-9a-f]{64}', digest), digest
+              replacements[item['sha256']] = digest.split(':')[1]
+          for name in ['codex.pin', 'scripts/codex-app-server.sh']:
+              source = (temp / Path(name).name).read_text()
+              for old, current in replacements.items():
+                  source = source.replace(old, current)
+              Path(name).write_text(source)
+          print('CANDIDATE_PROVENANCE', release['tag_name'], commit, *list(replacements.values())[2:])
           PY
+            sh scripts/codex-app-server.sh > /dev/null
+            native_exit=0
+            pinned_exit=0
+            sim_exit=0
+            filter='test(t3_pinned_tools_native_direct_call_needs_no_code_mode_host)'
+            cargo nextest run --locked -p echo-bridge --test bridge_codex_media --config-file .github/nextest.toml --profile ci \
+              --success-output immediate --failure-output immediate --no-fail-fast -E "$filter" || native_exit=$?
+            if [[ "$tag" != 0.162.0 && "$tag" != 0.161.0 ]]; then
+              filter='test(/^pinned_media::t3_pinned_codex_(lists_v3|himari|refuses_alloy)/)'
+              cargo nextest run --locked -p echo-bridge --test bridge_codex_media --config-file .github/nextest.toml --profile ci \
+                --success-output immediate --failure-output immediate --no-fail-fast -E "$filter" || pinned_exit=$?
+              target/debug/echo-lab run tests/scenarios/session-live-goodbye-native.yaml --driver sim \
+                --out "$CANDIDATE_REPORTS/$tag" || sim_exit=$?
+            fi
+            printf '%s\n' "CANDIDATE_RESULT $tag native=$native_exit voices=$pinned_exit goodbye=$sim_exit"
+            cache="$ECHO_CODEX_CACHE_DIR"
+            if [[ "$cache" == "$RUNNER_TEMP/candidate-codex" && -d "$cache" ]]; then
+              rm -rf -- "$cache"
+            fi
+          done
+      - name: Upload scenario reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: targeted-reports-candidate-pins
+          path: ${{ runner.temp }}/candidate-reports/
+          if-no-files-found: ignore
