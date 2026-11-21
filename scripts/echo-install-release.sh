@@ -230,7 +230,8 @@ historical_prompt_seed() {
       runner:a18d535d17f290d80c2abb96cc36f4eb55912f7618370cf453224474d7db1bd4 | \
       runner:2656728cf9edbc981852fa484c49f4b27b90befb4f4421cba11cb61f2967297a | \
       voice:88821b161b9570cdd9a93663c3dff8fd75c85f633c8c36733eed5cbff5414212 | \
-      voice:cb6f6bb7d6756a758e94beba11f91f5f9baa06f4fd7b27dd1619b73b15d92c34 | \n      voice:2c7d33e9ec50149061e3fbb3b8d8198102917493a6975efebf9579177e0149dc) return 0 ;;
+      voice:cb6f6bb7d6756a758e94beba11f91f5f9baa06f4fd7b27dd1619b73b15d92c34 | \
+      voice:2c7d33e9ec50149061e3fbb3b8d8198102917493a6975efebf9579177e0149dc) return 0 ;;
     *) return 1 ;;
   esac
 }
