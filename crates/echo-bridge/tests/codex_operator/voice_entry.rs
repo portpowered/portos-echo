@@ -57,10 +57,8 @@ async fn codex_voice_entry_binary_authenticates_before_ready_and_reaps_after_eof
             std::fs::read_to_string(fixture.home.join("last-method")).unwrap(),
             "thread/realtime/listVoices"
         );
-        let registration = bridge_short::read(&mut satellite).await.0;
-        assert_eq!(registration["type"], "run-satellite");
         assert_eq!(
-            registration["data"],
+            fixture::registration(&mut satellite).await,
             json!({"hassmic_failsafe_seconds": if mode == "api_key" { 65 } else { 605 }})
         );
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");

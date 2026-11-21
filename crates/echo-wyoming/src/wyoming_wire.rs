@@ -54,15 +54,23 @@ pub(crate) async fn write<W: AsyncWrite + Unpin>(
         return Err(Error::Capacity);
     }
     let value = serde_json::to_value(event).map_err(|_| Error::Protocol)?;
-    let kind = value["type"].as_str().ok_or(Error::Protocol)?.into();
+    let kind: String = value["type"].as_str().ok_or(Error::Protocol)?.into();
+    let data = value["data"].clone();
+    // hassmic reads run-satellite's fields only from a separate data segment:
+    // inline, its capture watchdog silently stayed at the 30 s default.
+    let (inline, segment) = if kind == "run-satellite" && data.is_object() {
+        (None, Some(data))
+    } else {
+        (Some(data), None)
+    };
     let event = Event {
         header: Header {
             r#type: kind,
-            data: Some(value["data"].clone()),
+            data: inline,
             data_length: 0,
             payload_length: 0,
         },
-        data: None,
+        data: segment,
         payload,
     };
     let bytes = encode(&event);
