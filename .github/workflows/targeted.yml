@@ -19,7 +19,7 @@ jobs:
       - name: Build the shipped screen and install Chromium
         working-directory: web/screen
         run: |
-          npm ci
+          npm ci --offline=false
           npx --offline playwright install --with-deps chromium
           npm run build
       - name: Verify paired Settings on the prebuilt bridge
