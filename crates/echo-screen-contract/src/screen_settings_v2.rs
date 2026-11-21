@@ -2,6 +2,11 @@
 use super::settings_v1::{DailyCapV1, PromptTextsV1, VoicePatchV1, VoiceValuesV1, present};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
+#[path = "screen_settings_muse.rs"]
+mod muse;
+pub use muse::{
+    MusePatchV2, MuseProbeReasonV2, MuseProbeRequestV2, MuseProbeResultV2, MuseReachabilityV2, MuseStatusV2,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
@@ -220,7 +225,7 @@ pub struct PortosPermissionsPatchV2 {
     pub allow_tools: Option<Vec<PortosToolV2>>,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("minProperties" = 1))]
 pub struct SettingsFieldsV2 {
@@ -239,6 +244,9 @@ pub struct SettingsFieldsV2 {
     #[schemars(with = "PortosPermissionsPatchV2")]
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub portos: Option<PortosPermissionsPatchV2>,
+    #[schemars(with = "MusePatchV2")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub muse: Option<MusePatchV2>,
 }
 
 impl SettingsFieldsV2 {
@@ -260,6 +268,7 @@ impl SettingsFieldsV2 {
                 .is_none_or(|agent| agent != &AgentPatchV2::default())
             && self.home.as_ref().is_none_or(|home| distinct(&home.agent_tools))
             && self.portos.as_ref().is_none_or(PortosPermissionsPatchV2::valid_shape)
+            && self.muse.as_ref().is_none_or(MusePatchV2::valid_shape)
     }
 }
 
@@ -278,7 +287,7 @@ fn distinct<T: PartialEq>(items: &[T]) -> bool {
     items.iter().enumerate().all(|(i, item)| !items[..i].contains(item))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsPatchV2 {
     pub version: SettingsVersionV2,
@@ -377,6 +386,9 @@ pub struct SettingsSnapshotV2 {
     pub allowed_voices: Vec<String>,
     pub prompts: PromptTextsV1,
     pub portos: PortosStatusV2,
+    #[schemars(with = "MuseStatusV2")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub muse: Option<MuseStatusV2>,
     pub bridge_version: String,
     pub restart_pending: bool,
     pub warnings: Vec<String>,
