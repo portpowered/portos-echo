@@ -1,5 +1,5 @@
-import { assertShape, readResponse, record, send, settingsUrl } from "./api";
-import type { MuseProbeReasonV2, MuseProbeResultV2 } from "./model";
+import { assertShape, readResponse, record, send, settingsUrl } from "../api";
+import type { MuseProbeReasonV2, MuseProbeResultV2 } from "../model";
 
 export const museReasons: Record<MuseProbeReasonV2, string> = {
     unconfigured: "Muse is not configured.",

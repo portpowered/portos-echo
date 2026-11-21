@@ -15,7 +15,7 @@ import { openAIOptions, portosForm } from "./forms-v2";
 import { mountPortos } from "./accounts/portos";
 import { mountOpenAI } from "./accounts/openai";
 import { accountRow } from "./accounts/account-buttons";
-import { museForm } from "./muse-form";
+import { museForm } from "./muse/form";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
 const LINK_FROM_PC =

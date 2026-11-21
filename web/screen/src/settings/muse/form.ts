@@ -1,8 +1,8 @@
-import { decodeSaved, type PatchV2 } from "./api";
-import { saveSettingsV2 } from "./api-v2";
-import { element } from "./forms";
-import { museReasons, probeMuse } from "./muse-api";
-import type { MuseStatusV2 } from "./model";
+import { decodeSaved, type PatchV2 } from "../api";
+import { saveSettingsV2 } from "../api-v2";
+import { element } from "../forms";
+import { museReasons, probeMuse } from "./api";
+import type { MuseStatusV2 } from "../model";
 
 type Perform = (
     work: (signal: AbortSignal) => Promise<string>,

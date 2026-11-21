@@ -14,7 +14,7 @@ import {
     type SnapshotV2,
 } from "./api";
 import type { OpenAiAccountV2, PortosOperationV2 } from "./model";
-import { validateMuseStatus } from "./muse-api";
+import { validateMuseStatus } from "./muse/api";
 
 export async function loadSettings(
     actions: string,
