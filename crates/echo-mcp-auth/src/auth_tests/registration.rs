@@ -5,13 +5,6 @@ pub(super) const REGISTER: &str = "/custom/register";
 pub(super) const EPOCH: u64 = 1_800_000_000;
 const LEGACY_CLI: &str = "port1/systems/zero/oauth-clients/command-line-interface";
 
-pub(super) async fn linked_dcr(mock: &Mock, directory: &std::path::Path) -> Arc<AuthClient> {
-    offer_registration(mock);
-    let mcp = automatic(mock, directory, EPOCH).await;
-    approve(mock, mcp.clone(), &directory.join("grant.json")).await;
-    mcp
-}
-
 pub(super) async fn automatic(mock: &Mock, directory: &std::path::Path, epoch: u64) -> Arc<AuthClient> {
     let explicit = options(mock, directory);
     let options = AuthOptions {
@@ -58,7 +51,7 @@ async fn t3_default_registration_commits_identity_and_reuses_it_after_reopen() {
     assert_requests(&mock);
 }
 
-async fn approve(mock: &Mock, client: Arc<AuthClient>, path: &std::path::Path) -> Value {
+pub(super) async fn approve(mock: &Mock, client: Arc<AuthClient>, path: &std::path::Path) -> Value {
     let before = std::fs::read(path).ok();
     let link = drive(client.begin_link()).await.unwrap();
     assert_eq!(link.user_code, "TEST-CODE");
@@ -98,20 +91,24 @@ fn assert_requests(mock: &Mock) {
         .iter()
         .filter(|r| r.path == "/custom/link" || r.path == "/custom/token")
     {
+        // One sign-in names both RFC 8707 audiences; the exchange picks `/mcp`.
         let expected = if request.path == "/custom/link" {
-            [
+            vec![
                 ("client_id", "dcr_synthetic".into()),
                 ("scope", "endpoint:read group:read".into()),
+                ("resource", mock.base.clone()),
                 ("resource", format!("{}/mcp", mock.base)),
             ]
         } else {
-            [
-                ("client_id", "dcr_synthetic".into()),
+            vec![
                 ("grant_type", wire::DEVICE_GRANT.into()),
                 ("device_code", "synthetic-device".into()),
+                ("client_id", "dcr_synthetic".into()),
+                ("resource", format!("{}/mcp", mock.base)),
             ]
         };
-        assert_eq!(request.form, expected.into_iter().map(|(k, v)| (k.into(), v)).collect());
+        let expected: Vec<(String, String)> = expected.into_iter().map(|(k, v)| (k.into(), v)).collect();
+        assert_eq!(request.form_all, expected);
     }
     assert_eq!(state.jtis.len(), 4); // The mock pins each grant to the key of its device authorization.
 }
@@ -196,7 +193,7 @@ async fn t3_automatic_mode_revokes_with_the_committed_legacy_client() {
     assert!(!revoke.headers.contains_key("dpop"));
 }
 
-fn offer_registration(mock: &Mock) {
+pub(super) fn offer_registration(mock: &Mock) {
     advertise(mock, json!(format!("{}{REGISTER}", mock.base)));
     mock.fault(REGISTER, 201, json!({"client_id":"dcr_synthetic"}));
 }

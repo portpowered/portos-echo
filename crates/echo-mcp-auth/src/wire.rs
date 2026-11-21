@@ -57,7 +57,8 @@ pub(crate) struct Pair {
 }
 
 impl Pair {
-    pub fn grant(self, now: u64) -> Result<Secret<Grant>, AuthError> {
+    /// Keep the RFC 8707 resources of the sign-in this pair came from.
+    pub fn grant(self, now: u64, resources: &[String]) -> Result<Secret<Grant>, AuthError> {
         if !self.token_type.eq_ignore_ascii_case("Bearer")
             || self.access_token.expose().is_empty()
             || self.refresh_token.expose().is_empty()
@@ -70,6 +71,7 @@ impl Pair {
             refresh_token: self.refresh_token.expose().clone(),
             expires_at_unix: now.checked_add(self.expires_in).ok_or(AuthError::Protocol)?,
             scope: self.scope,
+            resources: resources.to_vec(),
         }))
     }
 }

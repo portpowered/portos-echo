@@ -89,3 +89,27 @@ fn endpoint_remote_capture_capability_is_operator_only() {
         "portos_endpoint: unknown field"
     );
 }
+
+#[test]
+fn endpoint_gateway_defaults_only_for_the_port_os_api() {
+    let base = BridgeConfig::from_toml_str(MINIMAL).unwrap().portos_endpoint;
+    assert_eq!(base.gateway_url, None);
+    assert_eq!(base.api_base, None);
+    let gateway = "wss://devices.portoperatingsystem.com/devices/{authLinkId}"; // lint-rules: allow-literal published default gateway, never dialed
+    assert_eq!(echo_config::PORTOS_GATEWAY_URL, gateway);
+    assert_eq!(base.gateway_for(echo_config::PORTOS_API_BASE).as_deref(), Some(gateway));
+    assert_eq!(
+        base.gateway_for("https://api.portoperatingsystem.com/").as_deref(), // lint-rules: allow-literal published API origin, never dialed
+        Some(gateway)
+    );
+    assert_eq!(base.gateway_for("https://127.0.0.1"), None);
+    let configured = BridgeConfig::from_toml_str(&format!(
+        "{MINIMAL}\n[portos_endpoint]\ngateway_url='wss://127.0.0.1/devices/{{authLinkId}}'"
+    ))
+    .unwrap()
+    .portos_endpoint;
+    assert_eq!(
+        configured.gateway_for(echo_config::PORTOS_API_BASE).as_deref(),
+        Some("wss://127.0.0.1/devices/{authLinkId}")
+    );
+}

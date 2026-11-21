@@ -2,6 +2,17 @@ use super::{Request, invalid};
 use std::collections::BTreeMap;
 use tokio::{io::AsyncReadExt, net::TcpStream, time::Instant};
 
+/// The request path and its decoded query parameters.
+fn split_target(target: &str) -> (String, BTreeMap<String, String>) {
+    match target.split_once('?') {
+        Some((path, query)) => (
+            path.to_owned(),
+            url::form_urlencoded::parse(query.as_bytes()).into_owned().collect(),
+        ),
+        None => (target.to_owned(), BTreeMap::new()),
+    }
+}
+
 pub(super) async fn read(stream: &mut TcpStream, start: Instant) -> std::io::Result<Request> {
     let mut bytes = Vec::new();
     let end = loop {
@@ -19,7 +30,7 @@ pub(super) async fn read(stream: &mut TcpStream, start: Instant) -> std::io::Res
     let mut lines = text.split("\r\n");
     let mut line = lines.next().ok_or_else(invalid)?.split_whitespace();
     let method = line.next().ok_or_else(invalid)?.into();
-    let path = line.next().ok_or_else(invalid)?.into();
+    let (path, query) = split_target(line.next().ok_or_else(invalid)?);
     let headers: BTreeMap<String, String> = lines
         .filter_map(|line| line.split_once(':'))
         .map(|(k, v)| (k.to_lowercase(), v.trim().into()))
@@ -27,7 +38,7 @@ pub(super) async fn read(stream: &mut TcpStream, start: Instant) -> std::io::Res
     let length = headers
         .get("content-length")
         .map_or(Ok(0), |v| v.parse::<usize>().map_err(|_| invalid()))?;
-    if length > 65536 {
+    if length > 8 * 1024 * 1024 {
         return Err(invalid());
     }
     let mut body = vec![0; length];
@@ -37,17 +48,19 @@ pub(super) async fn read(stream: &mut TcpStream, start: Instant) -> std::io::Res
     }
     let received = Instant::now();
     let json = serde_json::from_slice(&body).ok();
-    let form = if json.is_none() {
+    let form_all: Vec<(String, String)> = if json.is_none() {
         url::form_urlencoded::parse(&body).into_owned().collect()
     } else {
-        BTreeMap::new()
+        Vec::new()
     };
     Ok(Request {
         method,
         message_body: (path == "/messages").then(|| body.into()),
         path,
         headers,
-        form,
+        form: form_all.iter().cloned().collect(),
+        form_all,
+        query,
         json,
         time: (received - start).as_secs(),
         received,

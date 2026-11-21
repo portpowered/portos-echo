@@ -1,20 +1,21 @@
 //! T2 exact synthetic task/Live messages; uncaptured Wyoming arms are synthetic.
 use echo_contracts::endpoint::{
-    AdjustVolume, AssistantState, CommandReply, Downlink, ECHO_PLUGIN, EndSession, EndSessionOutcome, EndedReason,
-    SessionEnded, SessionOrigin, SetOutputMute, SetVolume, StartSession, StartSessionOutcome, Uplink, VERSION,
+    AdjustVolume, AssistantReport, AssistantState, ECHO_PLUGIN_ID, EndSession, EndSessionReply, EndedReason, Frame,
+    InstallRequest, REPORT_NAMESPACE, Reply, Report, SessionEnded, SessionOrigin, SetOutputMute, SetVolume,
+    SpeakerReport, StartSession, StartSessionReply, Uplink, VERSION,
 };
 use echo_contracts::{ids::DelegationId, live::*, wyoming::*};
 use serde_json::to_value;
 use serde_json::{Value, json};
 
 #[test]
-fn endpoint_speaker_payloads_keep_integer_volume_and_boolean_output_mute() {
-    let set: SetVolume = serde_json::from_value(json!({"volume":40})).unwrap();
-    let adjust: AdjustVolume = serde_json::from_value(json!({"delta":-20})).unwrap();
+fn endpoint_speaker_payloads_take_numbers_and_boolean_output_mute() {
+    let set: SetVolume = serde_json::from_value(json!({"volume":40.5})).unwrap();
+    let adjust: AdjustVolume = serde_json::from_value(json!({"volumeDelta":-20})).unwrap();
     let mute: SetOutputMute = serde_json::from_value(json!({"mute":true})).unwrap();
-    assert_eq!((set.volume, adjust.delta, mute.mute), (40, -20, true));
-    assert!(serde_json::from_value::<SetVolume>(json!({"volume":40.5})).is_err());
-    assert!(serde_json::from_value::<AdjustVolume>(json!({"delta":"20"})).is_err());
+    assert_eq!((set.volume, adjust.volume_delta, mute.mute), (40.5, -20.0, true));
+    assert!(serde_json::from_value::<AdjustVolume>(json!({"delta":-20})).is_err());
+    assert!(serde_json::from_value::<AdjustVolume>(json!({"volumeDelta":"20"})).is_err());
     assert!(serde_json::from_value::<SetOutputMute>(json!({"muted":true})).is_err());
 }
 
@@ -139,20 +140,21 @@ fn external_data_replaces_non_object_and_missing_inline() {
 }
 
 #[test]
-fn endpoint_start_command_preserves_route_and_text() {
+fn endpoint_start_command_frame_names_interface_device_and_id() {
     let text = "é".repeat(2_000);
-    let command: Downlink = serde_json::from_value(json!({
-        "header": {"namespace":"assistant-session","name":"start-session","version":VERSION,"messageId":"request-1"},
-        "target": {"type":"ROUTE","value":"resolved-route"},
-        "payload": {"initialText":text,"reason":"synthetic reason"}
+    let frame: Frame = serde_json::from_value(json!({
+        "header": {"namespace":"port1/systems/zero/capability-interfaces/assistant-session",
+            "name":"start-session","version":VERSION,"id":"request-1"},
+        "body": {"initialText":text,"reason":"synthetic reason"},
+        "context": {"deviceId":"synthetic-device","sentAt":"2026-11-21T12:00:00Z"}
     }))
     .unwrap();
-    assert_eq!(command.header.namespace, "assistant-session");
-    assert_eq!(command.header.name, "start-session");
-    assert_eq!(command.header.version, "1.0");
-    assert_eq!(command.header.message_id, "request-1");
-    assert_eq!(command.target.value, "resolved-route");
-    let payload: StartSession = serde_json::from_value(Value::Object(command.payload)).unwrap();
+    assert_eq!(frame.header.interface(), Some("assistant-session"));
+    assert_eq!(frame.header.name, "start-session");
+    assert_eq!(frame.header.version, "1.0");
+    assert_eq!(frame.header.id, "request-1");
+    assert_eq!(frame.context.device_id, "synthetic-device");
+    let payload: StartSession = serde_json::from_value(frame.body).unwrap();
     assert_eq!(payload.initial_text.as_deref(), Some(text.as_str()));
     assert!(payload.listen);
     assert_eq!(payload.reason, "synthetic reason");
@@ -171,92 +173,136 @@ fn endpoint_command_rejects_bad_wire_types() {
     let mic: StartSession = serde_json::from_value(json!({"reason":"mic","listen":false})).unwrap();
     assert_eq!(mic.initial_text, None);
     assert!(!mic.listen);
-    for (kind, payload) in [("DEVICE", json!({})), ("ROUTE", json!([]))] {
-        let command = json!({
-            "header":{"namespace":"assistant-session","name":"end-session","version":VERSION,"messageId":"request-2"},
-            "target":{"type":kind,"value":"resolved-route"},"payload":payload
-        });
-        assert!(serde_json::from_value::<Downlink>(command).is_err());
-    }
+    let missing_context = json!({
+        "header":{"namespace":"assistant-session","name":"end-session","version":VERSION,"id":"request-2"},
+        "body":{}
+    });
+    assert!(serde_json::from_value::<Frame>(missing_context).is_err());
+    let legacy: Frame = serde_json::from_value(json!({
+        "header":{"namespace":"assistant-session","name":"end-session","version":VERSION,"id":"request-2"},
+        "context":{"deviceId":"synthetic-device"}
+    }))
+    .unwrap();
+    assert_eq!(legacy.header.interface(), None);
 }
 
 #[test]
-fn endpoint_session_replies_keep_request_ids_and_resolved_route() {
-    let receipt = CommandReply {
-        request_id: "request-1",
-        outcome: StartSessionOutcome::admitted("session-1", AssistantState::Thinking),
-    };
+fn endpoint_session_replies_are_nested_reports_with_one_request_id() {
+    let start = Report::reply(
+        "request-1",
+        Reply::StartSession(StartSessionReply::admitted("session-1", AssistantState::Thinking)),
+    );
     assert_eq!(
-        to_value(Uplink::new("start-session", "resolved-route", receipt)).unwrap(),
+        to_value(Uplink::report("synthetic-device", start)).unwrap(),
         json!({
-            "header":{"namespace":ECHO_PLUGIN,"name":"start-session","version":"1.0"},
-            "target":{"type":"ROUTE","value":"resolved-route"},
-            "payload":{"requestId":"request-1","outcome":{"ok":true,"sessionId":"session-1","state":"thinking"}}
+            "header":{"namespace":REPORT_NAMESPACE,"name":"report-state","version":"1.0"},
+            "target":{"type":"ROUTE","value":"synthetic-device"},
+            "payload":{"requestId":"request-1","startSession":{"sessionId":"session-1","state":"THINKING"}}
         })
     );
     let end: EndSession = serde_json::from_value(json!({"sessionId":"session-1"})).unwrap();
     assert_eq!(end.session_id, "session-1");
-    let receipt = CommandReply {
-        request_id: "request-2",
-        outcome: EndSessionOutcome::closed(),
-    };
+    for (muted, state) in [(false, "IDLE"), (true, "MUTED")] {
+        let reply = Report::reply("request-2", Reply::EndSession(EndSessionReply::closed(muted)));
+        assert_eq!(
+            to_value(reply).unwrap(),
+            json!({"requestId":"request-2","endSession":{"state":state}})
+        );
+    }
     assert_eq!(
-        to_value(Uplink::new("end-session", "resolved-route", receipt)).unwrap(),
-        json!({
-            "header":{"namespace":ECHO_PLUGIN,"name":"end-session","version":"1.0"},
-            "target":{"type":"ROUTE","value":"resolved-route"},
-            "payload":{"requestId":"request-2","outcome":{"ok":true,"state":"idle","ending":false}}
-        })
+        to_value(Report::reply("request-3", Reply::refused("NOT_FOUND"))).unwrap(),
+        json!({"requestId":"request-3","error":{"code":"NOT_FOUND"}})
+    );
+    assert_eq!(
+        to_value(Report::reply(
+            "request-4",
+            Reply::busy("session-1", SessionOrigin::Wake)
+        ))
+        .unwrap(),
+        json!({"requestId":"request-4","error":{"code":"BUSY","sessionId":"session-1","origin":"WAKE"}})
     );
 }
 
 #[test]
-fn endpoint_snapshot_accepts_base64_and_keeps_the_sample_metadata() {
-    use echo_contracts::endpoint::{GetSnapshot, Snapshot, SnapshotFormat, SnapshotImage};
-
-    let request: GetSnapshot = serde_json::from_value(json!({"responseFormat":"BASE64"})).unwrap();
-    assert!(matches!(request.response_format, SnapshotFormat::Base64));
-    for payload in [
-        json!({}),
-        json!({"responseFormat":"base64"}),
-        json!({"responseFormat":null}),
-    ] {
-        assert!(serde_json::from_value::<GetSnapshot>(payload).is_err());
-    }
-    let reply = CommandReply {
-        request_id: "snapshot-1",
-        outcome: Snapshot::captured(
-            SnapshotImage::jpeg("AA==".into(), 2, 1),
-            "2027-01-15T08:00:00.125Z".into(),
-        ),
+fn endpoint_state_report_carries_session_only_while_active() {
+    let report = Report {
+        sampled_at_ms: Some(1_800_000_000_125),
+        speaker: Some(SpeakerReport {
+            volume: 40,
+            muted: false,
+        }),
+        assistant: Some(AssistantReport::new(
+            AssistantState::Listening,
+            Some(("session-1", SessionOrigin::Remote)),
+        )),
+        ..Report::default()
     };
     assert_eq!(
-        to_value(Uplink::new("get-snapshot", "resolved-route", reply)).unwrap(),
+        to_value(report).unwrap(),
         json!({
-            "header":{"namespace":ECHO_PLUGIN,"name":"get-snapshot","version":"1.0"},
-            "target":{"type":"ROUTE","value":"resolved-route"},
-            "payload":{"requestId":"snapshot-1","outcome":{
-                "ok":true,"image":{"mimeType":"image/jpeg","data":"AA==","width":2,"height":1},
-                "timeOfSample":"2027-01-15T08:00:00.125Z"
-            }}
+            "sampledAtMs":1_800_000_000_125_i64,
+            "speaker":{"volume":40,"muted":false},
+            "assistant":{"state":"LISTENING","sessionId":"session-1","origin":"REMOTE"}
+        })
+    );
+    let idle = AssistantReport::new(AssistantState::Idle, Some(("session-1", SessionOrigin::Wake)));
+    assert_eq!(to_value(idle).unwrap(), json!({"state":"IDLE"}));
+}
+
+#[test]
+fn endpoint_snapshot_format_is_optional_and_the_reply_is_inline() {
+    use echo_contracts::endpoint::{GetSnapshot, SnapshotFormat, SnapshotReply};
+
+    let request: GetSnapshot = serde_json::from_value(json!({"responseFormat":"BASE64"})).unwrap();
+    assert!(matches!(request.response_format, Some(SnapshotFormat::Base64)));
+    let request: GetSnapshot = serde_json::from_value(json!({"responseFormat":"URL"})).unwrap();
+    assert!(matches!(request.response_format, Some(SnapshotFormat::Url)));
+    let request: GetSnapshot = serde_json::from_value(json!({})).unwrap();
+    assert!(request.response_format.is_none());
+    assert!(serde_json::from_value::<GetSnapshot>(json!({"responseFormat":"base64"})).is_err());
+    let mut reply = Report::reply(
+        "snapshot-1",
+        Reply::Snapshot(SnapshotReply {
+            width: 2,
+            height: 1,
+            data: "AA==".into(),
+        }),
+    );
+    reply.sampled_at_ms = Some(1_800_000_000_125);
+    assert_eq!(
+        to_value(reply).unwrap(),
+        json!({
+            "sampledAtMs":1_800_000_000_125_i64,"requestId":"snapshot-1",
+            "snapshot":{"width":2,"height":1,"data":"AA=="}
         })
     );
 }
 
 #[test]
 fn endpoint_session_ended_is_unsolicited_and_preserves_identity() {
-    let ended = SessionEnded {
-        session_id: "session-1",
-        origin: SessionOrigin::Wake,
-        reason: EndedReason::Remote,
-        ended_at: "2026-11-21T12:00:00Z",
+    let ended = Report {
+        session_ended: Some(SessionEnded {
+            session_id: "session-1".into(),
+            origin: SessionOrigin::Wake,
+            reason: EndedReason::Remote,
+            ended_at: "2026-11-21T12:00:00Z".into(),
+        }),
+        ..Report::default()
     };
     assert_eq!(
-        to_value(Uplink::new("session-ended", "resolved-route", ended)).unwrap(),
+        to_value(Uplink::report("synthetic-device", ended)).unwrap(),
         json!({
-            "header":{"namespace":ECHO_PLUGIN,"name":"session-ended","version":"1.0"},
-            "target":{"type":"ROUTE","value":"resolved-route"},
-            "payload":{"sessionId":"session-1","origin":"wake","reason":"remote","endedAt":"2026-11-21T12:00:00Z"}
+            "header":{"namespace":REPORT_NAMESPACE,"name":"report-state","version":"1.0"},
+            "target":{"type":"ROUTE","value":"synthetic-device"},
+            "payload":{"sessionEnded":{"sessionId":"session-1","origin":"WAKE","reason":"REMOTE","endedAt":"2026-11-21T12:00:00Z"}}
         })
     );
+}
+
+#[test]
+fn endpoint_pairing_uses_the_published_plugin_id() {
+    let install = to_value(InstallRequest::new("synthetic-device", "Hall Echo", None)).unwrap();
+    assert_eq!(install["pluginId"], ECHO_PLUGIN_ID);
+    assert_ne!(ECHO_PLUGIN_ID, REPORT_NAMESPACE);
+    assert_eq!(install["principalId"], "~self");
 }

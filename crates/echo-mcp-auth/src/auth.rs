@@ -45,6 +45,7 @@ pub struct LinkInstructions {
     created: Instant,
     identity: LinkIdentity,
     key: Arc<Secret<PrivateJwk>>,
+    resources: Vec<String>,
 }
 
 struct LinkIdentity {
@@ -223,11 +224,9 @@ impl AuthClient {
         let key = Arc::new(proof::generate());
         let scope = self.options.scopes.join(" ");
         let identity = self.link_identity(&state.record, &scope).await?;
-        let form = [
-            ("client_id", identity.client_id.as_str()),
-            ("scope", &scope),
-            ("resource", self.options.resource_url.as_str()),
-        ];
+        let resources = self.audiences();
+        let mut form = vec![("client_id", identity.client_id.as_str()), ("scope", &scope)];
+        form.extend(resources.iter().map(|resource| ("resource", resource.as_str())));
         let Reply::Value(link) = wire::post::<DeviceChallenge>(
             &self.http,
             &self.metadata.device_authorization_endpoint,
@@ -257,7 +256,19 @@ impl AuthClient {
             created: Instant::now(),
             identity,
             key,
+            resources: if resources.len() > 1 { resources } else { Vec::new() },
         })
+    }
+
+    /// A DCR device client signs in once for the Port OS REST base and its
+    /// `/mcp` resource (RFC 8707); any other client, for the resource alone.
+    fn audiences(&self) -> Vec<String> {
+        let resource = self.options.resource_url.clone();
+        let automatic = matches!(self.options.client_id, LinkClient::Automatic { .. });
+        match portos_base(&resource).filter(|_| automatic) {
+            Some(base) => vec![base, resource],
+            None => vec![resource],
+        }
     }
 
     async fn link_identity(&self, record: &Record, scope: &str) -> Result<LinkIdentity, AuthError> {
@@ -305,11 +316,15 @@ impl AuthClient {
             }
             tokio::time::sleep_until(next).await;
             let mut state = self.state.lock().await;
-            let form = [
+            let mut form = vec![
                 ("grant_type", wire::DEVICE_GRANT),
                 ("device_code", link.device_code.expose().as_str()),
                 ("client_id", link.identity.client_id.as_str()),
             ];
+            if !link.resources.is_empty() {
+                // Without it the token would be for the first resource listed.
+                form.push(("resource", self.options.resource_url.as_str()));
+            }
             let reply = tokio::time::timeout_at(
                 expires,
                 wire::post::<Pair>(
@@ -329,8 +344,9 @@ impl AuthClient {
                     interval = interval.checked_add(5).ok_or(AuthError::Protocol)?;
                 }
                 Reply::Value(pair) => {
+                    let grant = pair.grant(self.now(), &link.resources)?;
                     let linked = Some((link.identity, link.key));
-                    self.publish(&mut state, Some(pair.grant(self.now())?), linked)?;
+                    self.publish(&mut state, Some(grant), linked)?;
                     return Ok(());
                 }
             }
@@ -417,6 +433,13 @@ impl AuthClient {
         }
         self.publish(&mut state, None, None)
     }
+}
+
+/// The REST base of a Port OS `/mcp` resource: its origin.
+fn portos_base(resource: &str) -> Option<String> {
+    let url = url::Url::parse(resource).ok()?;
+    (url.path() == "/mcp" && url.query().is_none() && url.fragment().is_none())
+        .then(|| url.origin().ascii_serialization())
 }
 
 fn token(state: &State) -> Result<Secret<String>, AuthError> {

@@ -4,6 +4,10 @@ use std::collections::BTreeMap;
 const SECTION: &str = "portos_endpoint";
 const NAME: &str = "portos_endpoint.device_name";
 const GATEWAY_SUFFIX: &str = "/devices/{authLinkId}";
+/// The Port OS API base whose device gateway is known without configuration.
+pub const PORTOS_API_BASE: &str = "https://api.portoperatingsystem.com";
+/// The device gateway of [`PORTOS_API_BASE`].
+pub const PORTOS_GATEWAY_URL: &str = "wss://devices.portoperatingsystem.com/devices/{authLinkId}";
 
 /// Operator configuration for the opt-in Port OS endpoint transport.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +32,15 @@ impl Default for PortosEndpoint {
 }
 
 impl PortosEndpoint {
+    /// The gateway template for `api_base`: the configured one, else the Port OS
+    /// gateway when `api_base` is the Port OS API. Any other API needs it configured.
+    #[must_use]
+    pub fn gateway_for(&self, api_base: &str) -> Option<String> {
+        self.gateway_url
+            .clone()
+            .or_else(|| (api_base.trim_end_matches('/') == PORTOS_API_BASE).then(|| PORTOS_GATEWAY_URL.into()))
+    }
+
     pub(crate) fn validate(&self) -> Result<(), ConfigError> {
         validate_name(&self.device_name)?;
         if self.gateway_url.as_deref().is_some_and(|url| !gateway_template(url)) {

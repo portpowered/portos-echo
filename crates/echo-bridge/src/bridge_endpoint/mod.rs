@@ -16,18 +16,14 @@ use echo_mcp_auth::{AuthError, EndpointExchange, EndpointRegistration, EndpointT
 use std::{
     future::{Future, pending},
     path::PathBuf,
-    pin::Pin,
     sync::Arc,
     time::Duration,
 };
 use tokio::{sync::watch, time::sleep};
 use transport::{REQUEST_TIMEOUT, Transport};
 
-type Resolve<'a> = Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>>;
-
-pub(crate) trait RouteResolver: Send + Sync {
-    fn resolve<'a>(&'a self, auth_link_id: &'a str, tokens: &'a dyn EndpointTokenSource) -> Resolve<'a>;
-}
+/// Route read-back retries: Port OS discovers the paired route asynchronously.
+const DISCOVERY_DELAYS: [u64; 6] = [0, 5, 30, 120, 600, 1800];
 
 pub(crate) const UNAVAILABLE: &str = "Port OS endpoint connection is unavailable.";
 
@@ -89,7 +85,6 @@ impl Control {
 pub(crate) struct Runtime {
     home: PathBuf,
     api_base: String,
-    resolver: Arc<dyn RouteResolver>,
     exchange: EndpointExchange,
     transport: Transport,
     desired: watch::Receiver<Desired>,
@@ -97,32 +92,18 @@ pub(crate) struct Runtime {
 }
 
 impl Runtime {
-    pub(crate) fn configured(
-        config: &BridgeConfig,
-        resolver: Option<Arc<dyn RouteResolver>>,
-    ) -> Option<(Self, Control)> {
-        // The Port OS route lookup is pending. Production supplies no resolver
-        // and makes no endpoint authorization, install or gateway requests.
-        let resolver = resolver?;
+    pub(crate) fn configured(config: &BridgeConfig) -> Option<(Self, Control)> {
         let api = endpoint_api(config)?;
-        let gateway = config.portos_endpoint.gateway_url.as_deref()?;
+        let gateway = config.portos_endpoint.gateway_for(&api)?;
         let exchange = EndpointExchange::open(&api, REQUEST_TIMEOUT).ok()?;
-        let transport = Transport::new(gateway, &api, false)?;
+        let transport = Transport::new(&gateway, &api, false)?;
         let home = config.mcp.state_dir.clone()?;
-        Some(Self::new(
-            home,
-            api,
-            resolver,
-            exchange,
-            transport,
-            &config.portos_endpoint,
-        ))
+        Some(Self::new(home, api, exchange, transport, &config.portos_endpoint))
     }
 
     fn new(
         home: PathBuf,
         api_base: String,
-        resolver: Arc<dyn RouteResolver>,
         exchange: EndpointExchange,
         transport: Transport,
         initial: &echo_config::PortosEndpoint,
@@ -142,7 +123,6 @@ impl Runtime {
             Self {
                 home,
                 api_base,
-                resolver,
                 exchange,
                 transport,
                 desired,
@@ -246,7 +226,7 @@ impl Runtime {
         store: &Arc<EndpointRegistration>,
         current_grant: &impl Fn() -> Option<Arc<Grant>>,
     ) -> Result<Status, AuthError> {
-        let owner = linked_owner(current_grant, &self.status).await;
+        let owner = linked_owner(current_grant, &self.api_base, &self.status).await;
         let tokens = owner.endpoint_grant(&self.api_base)?;
         // A pending request may refer to the previous name. An accepted rename
         // follows that checkpoint rather than altering the old key's body.
@@ -260,22 +240,52 @@ impl Runtime {
             }
         }
         let install = store.installation().await.ok_or(AuthError::Storage)?;
-        let route = if let Some(route) = install.route_id {
-            route
-        } else {
-            let Ok(Some(route)) =
-                tokio::time::timeout(REQUEST_TIMEOUT, self.resolver.resolve(&install.auth_link_id, &tokens)).await
-            else {
-                return Ok(Status::Unavailable);
-            };
-            store.resolve(&install.auth_link_id, route.clone()).await?;
-            route
-        };
+        // Only a refresh after pairing mints tokens with the auth-link claim.
         tokens.refresh_installation().await?;
-        Ok(self
+        let device_id = store.device_id().await;
+        let serve = self
             .transport
-            .serve(&install.auth_link_id, &route, &tokens, &self.status)
-            .await)
+            .serve(&install.auth_link_id, &device_id, &tokens, &self.status);
+        tokio::pin!(serve);
+        if install.endpoint_id.is_none() {
+            tokio::select! {
+                status = &mut serve => return Ok(status),
+                () = self.discover(store, &install.auth_link_id, &device_id, &tokens) => {}
+            }
+        }
+        Ok(serve.await)
+    }
+
+    /// Read the paired route back for display and logs. Commands and reports
+    /// address the `deviceId`, so the bridge serves while discovery lags.
+    async fn discover(
+        &self,
+        store: &EndpointRegistration,
+        auth_link_id: &str,
+        device_id: &str,
+        tokens: &dyn EndpointTokenSource,
+    ) {
+        for delay in DISCOVERY_DELAYS {
+            sleep(Duration::from_secs(delay)).await;
+            match self.exchange.endpoint_id(tokens, device_id).await {
+                Ok(Some(endpoint_id)) => {
+                    let stored = store.remember_endpoint(auth_link_id, endpoint_id).await.is_ok();
+                    self.discovered(if stored { "found" } else { "unsaved" });
+                    return;
+                }
+                Ok(None) | Err(ExchangeError::Transport) => {}
+                Err(_) => break,
+            }
+        }
+        self.discovered("unknown");
+    }
+
+    fn discovered(&self, result: &'static str) {
+        if let Some(trace) = &self.transport.trace {
+            let _ = trace
+                .clone()
+                .record("endpoint.route", None, serde_json::json!({ "result": result }));
+        }
     }
 }
 
@@ -293,10 +303,17 @@ fn endpoint_api(config: &BridgeConfig) -> Option<String> {
     (resource.scheme() == "https").then(|| resource.origin().ascii_serialization())
 }
 
-async fn linked_owner(current_grant: &impl Fn() -> Option<Arc<Grant>>, status: &watch::Sender<Status>) -> Arc<Grant> {
+/// Wait for a linked grant whose sign-in covers the endpoint: both audiences
+/// and the endpoint scopes. An older grant shows Relink until it is relinked.
+async fn linked_owner(
+    current_grant: &impl Fn() -> Option<Arc<Grant>>,
+    api_base: &str,
+    status: &watch::Sender<Status>,
+) -> Arc<Grant> {
     loop {
         if let Some(owner) = current_grant()
             && owner.link_status() == echo_screen_contract::settings_v1::LinkStatusV1::Linked
+            && owner.endpoint_ready(api_base).await
         {
             status.send_replace(Status::Connecting);
             return owner;

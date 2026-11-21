@@ -1,21 +1,39 @@
-//! Port OS Echo endpoint install and message vocabulary.
+//! Port OS Echo endpoint install and message vocabulary (live contract 2026-11-21).
+//!
+//! Commands arrive from the device gateway as [`Frame`]s. Everything the bridge
+//! says goes to `POST /messages` as one `report-state` [`Uplink`] whose payload
+//! is a strict [`Report`]: Port OS refuses unknown fields with 400.
 
 use serde::{Deserialize, Serialize};
 
 mod session;
-pub use session::{EndSession, EndSessionOutcome, EndedReason, SessionEnded, StartSession, StartSessionOutcome};
+pub use session::{EndSession, EndSessionReply, EndedReason, SessionEnded, StartSession, StartSessionReply};
 
-pub const ECHO_PLUGIN: &str = "port1/systems/zero/plugins/echo-show";
+/// The `pluginId` of the published echo-show plugin, used by the pairing exchange.
+pub const ECHO_PLUGIN_ID: &str = "port1/systems/zero/plugins/15badf8f-fe9b-4bf0-be33-2d7eb287f89f";
+/// The header namespace of every bridge report. It is not the plugin id.
+pub const REPORT_NAMESPACE: &str = "port1/systems/zero/plugins/echo-show";
+/// The only report name the plugin accepts.
+pub const REPORT_STATE: &str = "report-state";
+/// Capability interface namespaces carry this prefix in command frames.
+pub const CAPABILITY_PREFIX: &str = "port1/systems/zero/capability-interfaces/";
 pub const VERSION: &str = "1.0";
+/// Snapshot replies carry at most 4 MiB of JPEG.
+pub const MAX_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
+/// Session ids are at most 128 characters on the wire.
+pub const MAX_SESSION_ID: usize = 128;
+/// The REST scopes the endpoint needs: pairing, route read-back and reports.
+pub const ENDPOINT_SCOPES: [&str; 3] = ["message:send", "endpoint:write", "endpoint:read"];
 
 #[derive(Deserialize)]
 pub struct SetVolume {
-    pub volume: u8,
+    pub volume: f64,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AdjustVolume {
-    pub delta: i64,
+    pub volume_delta: f64,
 }
 
 #[derive(Deserialize)]
@@ -26,102 +44,64 @@ pub struct SetOutputMute {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetSnapshot {
-    pub response_format: SnapshotFormat,
+    /// The host republishes or inlines the bytes as the caller asked; the
+    /// bridge always replies with inline base64.
+    #[serde(default)]
+    pub response_format: Option<SnapshotFormat>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum SnapshotFormat {
+    Url,
     Base64,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Snapshot {
-    ok: bool,
-    image: SnapshotImage,
-    time_of_sample: String,
-}
-
-impl Snapshot {
-    #[must_use]
-    pub fn captured(image: SnapshotImage, time_of_sample: String) -> Self {
-        Self {
-            ok: true,
-            image,
-            time_of_sample,
-        }
-    }
-}
-
-#[derive(Serialize)]
-pub struct SnapshotImage {
-    #[serde(rename = "mimeType")]
-    mime_type: &'static str,
-    data: String,
-    width: u32,
-    height: u32,
-}
-
-impl SnapshotImage {
-    #[must_use]
-    pub fn jpeg(data: String, width: u32, height: u32) -> Self {
-        Self {
-            mime_type: "image/jpeg",
-            data,
-            width,
-            height,
-        }
-    }
+/// One gateway command: one WebSocket text message.
+#[derive(Deserialize)]
+pub struct Frame {
+    pub header: FrameHeader,
+    #[serde(default)]
+    pub body: serde_json::Value,
+    pub context: FrameContext,
 }
 
 #[derive(Deserialize)]
-pub struct Downlink {
-    pub header: CommandHeader,
-    pub target: CommandTarget,
-    pub payload: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CommandHeader {
+pub struct FrameHeader {
     pub namespace: String,
     pub name: String,
     pub version: String,
-    pub message_id: String,
+    /// The command id. Replies carry it as `requestId`.
+    pub id: String,
+}
+
+impl FrameHeader {
+    /// The capability interface name, such as `snapshot`, when the namespace is canonical.
+    #[must_use]
+    pub fn interface(&self) -> Option<&str> {
+        self.namespace.strip_prefix(CAPABILITY_PREFIX)
+    }
 }
 
 #[derive(Deserialize)]
-pub struct CommandTarget {
-    #[serde(rename = "type")]
-    _kind: RouteType,
-    pub value: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum RouteType {
-    Route,
-}
-
-#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CommandReply<'a, T> {
-    pub request_id: &'a str,
-    pub outcome: T,
+pub struct FrameContext {
+    pub device_id: String,
+    #[serde(default)]
+    pub sent_at: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct Uplink<'a, T> {
-    header: UplinkHeader<'a>,
+    header: UplinkHeader,
     target: Route<'a>,
     payload: T,
 }
 
 #[derive(Serialize)]
-struct UplinkHeader<'a> {
+struct UplinkHeader {
     namespace: &'static str,
-    name: &'a str,
+    name: &'static str,
     version: &'static str,
 }
 
@@ -133,35 +113,143 @@ struct Route<'a> {
 }
 
 impl<'a, T> Uplink<'a, T> {
+    /// A `report-state` message for the paired route, whose value is the bridge's `deviceId`.
     #[must_use]
-    pub fn new(name: &'a str, route_id: &'a str, payload: T) -> Self {
+    pub fn report(device_id: &'a str, payload: T) -> Self {
         Self {
             header: UplinkHeader {
-                namespace: ECHO_PLUGIN,
-                name,
+                namespace: REPORT_NAMESPACE,
+                name: REPORT_STATE,
                 version: VERSION,
             },
             target: Route {
                 kind: "ROUTE",
-                value: route_id,
+                value: device_id,
             },
             payload,
         }
     }
 }
 
-#[derive(Serialize)]
+/// The strict `report-state` payload. Every part is optional; at least one is present.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ReportState<'a> {
-    pub state: AssistantState,
-    pub session_id: Option<&'a str>,
-    pub origin: Option<SessionOrigin>,
-    pub volume: Option<u8>,
-    pub muted: Option<bool>,
+pub struct Report {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampled_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<SpeakerReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<AssistantReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<Reply>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ended: Option<SessionEnded>,
+}
+
+impl Report {
+    /// One reply to the command whose header id is `request_id`.
+    #[must_use]
+    pub fn reply(request_id: &str, reply: Reply) -> Self {
+        Self {
+            request_id: Some(request_id.into()),
+            reply: Some(reply),
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+pub struct SpeakerReport {
+    pub volume: u8,
+    pub muted: bool,
+}
+
+/// Session id and origin appear only with an active state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantReport {
+    pub state: AssistantState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<SessionOrigin>,
+}
+
+impl AssistantReport {
+    #[must_use]
+    pub fn new(state: AssistantState, session: Option<(&str, SessionOrigin)>) -> Self {
+        let session = session.filter(|_| state.active());
+        Self {
+            state,
+            session_id: session.map(|(id, _)| id.into()),
+            origin: session.map(|(_, origin)| origin),
+        }
+    }
+}
+
+/// At most one reply per report.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Reply {
+    Snapshot(SnapshotReply),
+    StartSession(StartSessionReply),
+    EndSession(EndSessionReply),
+    Error(ErrorReply),
+}
+
+impl Reply {
+    /// A reason-code refusal without free text; the plugin writes the message.
+    #[must_use]
+    pub fn refused(code: &'static str) -> Self {
+        Self::Error(ErrorReply {
+            code,
+            session_id: None,
+            origin: None,
+        })
+    }
+
+    /// The endpoint is busy with the named session.
+    #[must_use]
+    pub fn busy(session_id: &str, origin: SessionOrigin) -> Self {
+        Self::Error(ErrorReply {
+            code: "BUSY",
+            session_id: Some(session_id.into()),
+            origin: Some(origin),
+        })
+    }
+
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Error(error) => error.code,
+            _ => "OK",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SnapshotReply {
+    pub width: u32,
+    pub height: u32,
+    /// Base64 of a JPEG of at most [`MAX_SNAPSHOT_BYTES`].
+    pub data: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorReply {
+    pub code: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<SessionOrigin>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum AssistantState {
     Idle,
     Listening,
@@ -170,8 +258,16 @@ pub enum AssistantState {
     Muted,
 }
 
+impl AssistantState {
+    /// Listening, thinking and speaking describe an active session.
+    #[must_use]
+    pub fn active(self) -> bool {
+        matches!(self, Self::Listening | Self::Thinking | Self::Speaking)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "UPPERCASE")]
 pub enum SessionOrigin {
     Wake,
     Remote,
@@ -196,12 +292,12 @@ struct DeviceIdentity<'a> {
 }
 
 impl<'a> InstallRequest<'a> {
-    /// Build an install or a rename of the supplied installation.
+    /// Build an install or a rename (renewal) of the supplied installation.
     #[must_use]
     pub fn new(device_id: &'a str, device_name: &'a str, auth_link_id: Option<&'a str>) -> Self {
         Self {
             principal_id: "~self",
-            plugin_id: ECHO_PLUGIN,
+            plugin_id: ECHO_PLUGIN_ID,
             plugin_authentication_data: DeviceIdentity {
                 device_id,
                 device_name,
@@ -217,8 +313,9 @@ impl<'a> InstallRequest<'a> {
     }
 }
 
+/// Unknown response fields are ignored: Port OS may add to its replies.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct InstallResult {
     pub auth_link_id: String,
     pub id: String,
@@ -231,4 +328,32 @@ pub struct InstallResult {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum InstallStatus {
     Succeeded,
+}
+
+/// One `GET /routes?owner=~caller` page. Only the fields the bridge reads.
+#[derive(Deserialize)]
+pub struct RoutePage {
+    #[serde(default)]
+    pub results: Vec<RouteRecord>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteRecord {
+    #[serde(default)]
+    pub associated_plugin_route_id: Option<String>,
+    #[serde(default)]
+    pub associated_endpoint_id: Option<String>,
+}
+
+impl RoutePage {
+    /// The endpoint id of the route whose plugin route id is this device. Never derived.
+    #[must_use]
+    pub fn endpoint_for(&self, device_id: &str) -> Option<&str> {
+        self.results
+            .iter()
+            .find(|route| route.associated_plugin_route_id.as_deref() == Some(device_id))
+            .and_then(|route| route.associated_endpoint_id.as_deref())
+            .filter(|id| !id.trim().is_empty())
+    }
 }

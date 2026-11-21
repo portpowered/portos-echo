@@ -78,6 +78,7 @@ fn t2_private_store_schema_roundtrip_and_invalid_versions_or_keys() {
         refresh_token: "synthetic-refresh".into(),
         expires_at_unix: 42,
         scope: "endpoint:read".into(),
+        resources: Vec::new(),
     }));
     store.save(&record).unwrap();
     let linked = load();

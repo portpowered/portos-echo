@@ -14,15 +14,17 @@ fn invalid_token_pairs_are_never_published() {
         let mut pair = valid.clone();
         pair[key] = value;
         error(
-            serde_json::from_value::<Pair>(pair).unwrap().grant(0),
+            serde_json::from_value::<Pair>(pair).unwrap().grant(0, &[]),
             AuthError::Protocol,
         );
     }
     error(
-        serde_json::from_value::<Pair>(valid.clone()).unwrap().grant(u64::MAX),
+        serde_json::from_value::<Pair>(valid.clone())
+            .unwrap()
+            .grant(u64::MAX, &[]),
         AuthError::Protocol,
     );
-    let pair = serde_json::from_value::<Pair>(valid).unwrap().grant(7).unwrap();
+    let pair = serde_json::from_value::<Pair>(valid).unwrap().grant(7, &[]).unwrap();
     assert_eq!(pair.expose().expires_at_unix, 307);
 }
 

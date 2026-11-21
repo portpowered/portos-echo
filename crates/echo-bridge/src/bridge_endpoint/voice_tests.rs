@@ -18,7 +18,7 @@ async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
             let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
             mock.enable_endpoint_audience().unwrap();
             let mut grant = registered(&mock, home.path()).await;
-            let mut gateway = Gateway::open().await;
+            let mut gateway = Gateway::open(&mock).await;
             let Fixture {
                 settings,
                 mut device,
@@ -26,7 +26,7 @@ async fn t3_endpoint_session_shares_voice_admission_and_ends_the_device_run() {
                 stale,
             } = fixture(home.path(), &mock, &gateway, grant.grant.clone()).await;
             settings.save(true, "Hall Echo").await;
-            gateway.assert_upgrade(4).await;
+            gateway.assert_upgrade(CLAIMED).await;
             assert_installed(home.path(), &mock).await;
 
             missing_capture(&gateway, &mock, &mut device).await;
@@ -87,7 +87,7 @@ pub(super) async fn fixture_with_link(
     connector: impl echo_link::LinkConnector + 'static,
     camera: Option<Arc<dyn snapshot::CameraSource>>,
 ) -> (Settings, BufReader<DuplexStream>, Arc<Notify>, Arc<Notify>) {
-    let (service, send_settings) = Settings::with_camera(home, mock, gateway, Arc::new(Resolver), false, camera);
+    let (service, send_settings) = Settings::with_camera(home, mock, gateway, false, camera);
     let (app, server) = tokio::io::duplex(16384);
     let ready = Arc::new(Notify::new());
     let signal = ready.clone();
@@ -121,7 +121,7 @@ pub(super) async fn missing_capture(gateway: &Gateway, mock: &Mock, device: &mut
     let at = Instant::now();
     send(
         gateway,
-        &command("start-session", "no-capture", ROUTE, &json!({"reason":"fixture"})),
+        &command("start-session", "no-capture", DEVICE, &json!({"reason":"fixture"})),
     )
     .await;
     let id = device.remote_request().await;
@@ -130,7 +130,7 @@ pub(super) async fn missing_capture(gateway: &Gateway, mock: &Mock, device: &mut
     assert!(receipts(mock).is_empty());
     advance(Duration::from_millis(1)).await;
     let reply = outcome(mock, "no-capture").await;
-    assert_eq!(reply["failure"]["code"], "NOT_READY");
+    assert_eq!(reply, json!({"error":{"code":"NOT_READY"}}));
     assert!((Duration::from_secs(2)..=Duration::from_millis(2500)).contains(&at.elapsed()));
     device.pipeline(Some(&id)).await;
 }
@@ -148,7 +148,7 @@ async fn mic_start(
         &command(
             "start-session",
             "mic",
-            ROUTE,
+            DEVICE,
             &json!({"reason":"fixture","listen":false}),
         ),
     )
@@ -160,14 +160,11 @@ async fn mic_start(
     advance(Duration::from_millis(1999)).await;
     assert_eq!(receipts(mock).len(), 1);
     advance(Duration::from_millis(1)).await;
-    let reply = outcome(mock, "mic").await;
-    assert_eq!(
-        (reply["ok"].as_bool(), reply["state"].as_str()),
-        (Some(true), Some("listening"))
-    );
+    let reply = outcome(mock, "mic").await["startSession"].clone();
+    assert_eq!(reply["state"], "LISTENING");
     assert!((Duration::from_secs(2)..=Duration::from_millis(2500)).contains(&at.elapsed()));
     finish_capture(app, device).await;
-    assert_end(mock, reply["sessionId"].as_str().unwrap(), "remote", "completed").await;
+    assert_end(mock, reply["sessionId"].as_str().unwrap(), "REMOTE", "COMPLETED").await;
 }
 
 async fn finish_capture(app: &mut BufReader<DuplexStream>, device: &mut Device) {
@@ -182,7 +179,7 @@ async fn text_start(gateway: &Gateway, mock: &Mock, app: &mut BufReader<DuplexSt
     let session = reply["sessionId"].as_str().unwrap();
     play_reply(app, device, "fixture reply").await;
     app_stop(app).await;
-    assert_end(mock, session, "remote", "completed").await;
+    assert_end(mock, session, "REMOTE", "COMPLETED").await;
 }
 
 async fn text_followup(
@@ -201,7 +198,7 @@ async fn text_followup(
     advance(Duration::from_secs(8)).await;
     device.receive("hassmic-end").await;
     app_stop(app).await;
-    assert_end(mock, reply["sessionId"].as_str().unwrap(), "remote", "completed").await;
+    assert_end(mock, reply["sessionId"].as_str().unwrap(), "REMOTE", "COMPLETED").await;
 }
 
 pub(super) async fn begin_text(
@@ -218,7 +215,7 @@ pub(super) async fn begin_text(
         &command(
             "start-session",
             request,
-            ROUTE,
+            DEVICE,
             &json!({"reason":"fixture","initialText":text,"listen":listen}),
         ),
     )
@@ -230,9 +227,8 @@ pub(super) async fn begin_text(
         json!({"threadId":"test-thread","role":"user","text":text})
     );
     answer(app, &append, json!({})).await;
-    let reply = outcome(mock, request).await;
-    assert_eq!(reply["state"], "thinking");
-    assert_eq!(reply["ok"], true);
+    let reply = outcome(mock, request).await["startSession"].clone();
+    assert_eq!(reply["state"], "THINKING");
     assert!(at.elapsed() <= Duration::from_secs(1));
     reply
 }
@@ -255,12 +251,12 @@ async fn assert_start_refused(gateway: &Gateway, mock: &Mock, id: &str, code: &s
         &command(
             "start-session",
             id,
-            ROUTE,
+            DEVICE,
             &json!({"reason":"fixture","initialText":"hello"}),
         ),
     )
     .await;
-    assert_eq!(outcome(mock, id).await["failure"]["code"], code);
+    assert_eq!(outcome(mock, id).await, json!({"error":{"code":code}}));
     assert!(at.elapsed() <= Duration::from_secs(1));
 }
 
@@ -277,8 +273,8 @@ async fn wake_and_end(gateway: &Gateway, mock: &Mock, app: &mut BufReader<Duplex
     device.receive("audio-start").await;
     start_delegation(app, device).await;
     advance(Duration::from_millis(250)).await;
-    let wake = message(mock, "report-state", "origin", &json!("wake")).await;
-    let id = wake["sessionId"].as_str().unwrap();
+    let wake = message(mock, "/assistant/origin", &json!("WAKE")).await;
+    let id = wake["assistant"]["sessionId"].as_str().unwrap();
     assert_busy(gateway, mock, id).await;
     end_wake(gateway, mock, app, device, id).await;
     advance(Duration::from_secs(1)).await;
@@ -297,7 +293,11 @@ async fn start_delegation(app: &mut BufReader<DuplexStream>, device: &mut Device
 
 async fn end_wake(gateway: &Gateway, mock: &Mock, app: &mut BufReader<DuplexStream>, device: &mut Device, id: &str) {
     let ended = Instant::now();
-    send(gateway, &command("end-session", "end", ROUTE, &json!({"sessionId":id}))).await;
+    send(
+        gateway,
+        &command("end-session", "end", DEVICE, &json!({"sessionId":id})),
+    )
+    .await;
     device.receive("hassmic-flush").await;
     device.send("played", Value::Null).await;
     device.receive("hassmic-end").await;
@@ -307,18 +307,15 @@ async fn end_wake(gateway: &Gateway, mock: &Mock, app: &mut BufReader<DuplexStre
         json!({"threadId":"test-thread","turnId":"delegated-turn"})
     );
     answer(app, &interrupt, json!({})).await;
-    assert_eq!(
-        outcome(mock, "end").await,
-        json!({"ok":true,"state":"idle","ending":false})
-    );
+    assert_eq!(outcome(mock, "end").await, json!({"endSession":{"state":"IDLE"}}));
     assert!(ended.elapsed() <= Duration::from_secs(1));
-    assert_end(mock, id, "wake", "remote").await;
+    assert_end(mock, id, "WAKE", "REMOTE").await;
     send(
         gateway,
-        &command("end-session", "repeat", ROUTE, &json!({"sessionId":id})),
+        &command("end-session", "repeat", DEVICE, &json!({"sessionId":id})),
     )
     .await;
-    assert_eq!(outcome(mock, "repeat").await["ok"], true);
+    assert_eq!(outcome(mock, "repeat").await, json!({"endSession":{"state":"IDLE"}}));
 }
 
 async fn assert_busy(gateway: &Gateway, mock: &Mock, id: &str) {
@@ -328,25 +325,20 @@ async fn assert_busy(gateway: &Gateway, mock: &Mock, id: &str) {
         &command(
             "start-session",
             "busy",
-            ROUTE,
+            DEVICE,
             &json!({"reason":"fixture","initialText":"busy"}),
         ),
     )
     .await;
-    let busy = outcome(mock, "busy").await;
     assert_eq!(
-        (
-            busy["failure"]["code"].as_str(),
-            busy["sessionId"].as_str(),
-            busy["origin"].as_str()
-        ),
-        (Some("BUSY"), Some(id), Some("wake"))
+        outcome(mock, "busy").await,
+        json!({"error":{"code":"BUSY","sessionId":id,"origin":"WAKE"}})
     );
     assert!(started.elapsed() <= Duration::from_secs(1));
 }
 
 pub(super) async fn assert_end(mock: &Mock, id: &str, origin: &str, reason: &str) {
-    let payload = message(mock, "session-ended", "sessionId", &json!(id)).await;
+    let payload = message(mock, "/sessionEnded/sessionId", &json!(id)).await["sessionEnded"].clone();
     assert_eq!(
         (payload["origin"].as_str(), payload["reason"].as_str()),
         (Some(origin), Some(reason))
@@ -354,6 +346,7 @@ pub(super) async fn assert_end(mock: &Mock, id: &str, origin: &str, reason: &str
     assert!(payload["endedAt"].as_str().unwrap().ends_with('Z'));
 }
 
+/// The reply part of the one report answering `id`, without its `requestId`.
 pub(super) async fn outcome(mock: &Mock, id: &str) -> Value {
     loop {
         if let Some(reply) = receipts(mock)
@@ -361,14 +354,20 @@ pub(super) async fn outcome(mock: &Mock, id: &str) -> Value {
             .filter_map(|receipt| receipt.json)
             .find(|body| body["payload"]["requestId"] == id)
         {
-            assert_eq!(reply["target"]["value"], ROUTE);
-            return reply["payload"]["outcome"].clone();
+            assert_eq!(reply["target"]["value"], DEVICE);
+            assert_no_refusals(mock);
+            let mut payload = reply["payload"].clone();
+            let fields = payload.as_object_mut().unwrap();
+            fields.remove("requestId");
+            fields.remove("sampledAtMs");
+            return payload;
         }
         tokio::task::yield_now().await;
     }
 }
 
-pub(super) async fn message(mock: &Mock, name: &str, field: &str, expected: &Value) -> Value {
+/// The first report payload whose value at `pointer` is `expected`.
+pub(super) async fn message(mock: &Mock, pointer: &str, expected: &Value) -> Value {
     loop {
         if let Some(body) = mock
             .state
@@ -376,10 +375,12 @@ pub(super) async fn message(mock: &Mock, name: &str, field: &str, expected: &Val
             .unwrap()
             .requests
             .iter()
+            .filter(|request| request.path == "/messages")
             .filter_map(|request| request.json.as_ref())
-            .find(|body| body["header"]["name"] == name && body["payload"][field] == *expected)
+            .find(|body| body["payload"].pointer(pointer) == Some(expected))
         {
-            assert_eq!(body["target"]["value"], ROUTE);
+            assert_eq!(body["header"]["name"], "report-state");
+            assert_eq!(body["target"]["value"], DEVICE);
             return body["payload"].clone();
         }
         tokio::task::yield_now().await;

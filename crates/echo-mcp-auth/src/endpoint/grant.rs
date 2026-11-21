@@ -6,7 +6,7 @@ use crate::{
     valid_text,
     wire::{self, Pair, Reply},
 };
-use echo_contracts::secret::Secret;
+use echo_contracts::{endpoint::ENDPOINT_SCOPES, secret::Secret};
 use std::sync::atomic::Ordering;
 
 pub(super) struct Access {
@@ -41,6 +41,17 @@ impl AuthClient {
         Ok(EndpointGrant { owner: self, resource })
     }
 
+    /// Whether the committed grant can serve the endpoint at `api_base`: one
+    /// DCR sign-in approved that REST audience with the endpoint scopes. A grant
+    /// from before the two-audience sign-in is never refreshed for it; it needs a relink.
+    pub async fn endpoint_ready(&self, api_base: &str) -> bool {
+        let Ok(endpoint) = self.endpoint_grant(api_base) else {
+            return false;
+        };
+        let state = self.state.lock().await;
+        self.has_grant() && endpoint.require_registered(&state).is_ok()
+    }
+
     pub(super) async fn redeem_refresh(&self, state: &mut State, resource: &str) -> Result<Secret<Grant>, AuthError> {
         if state.uncertain || state.record.grant.is_none() {
             return Err(AuthError::RelinkRequired);
@@ -56,6 +67,7 @@ impl AuthClient {
             saved?;
         }
         let grant = state.record.grant.as_ref().ok_or(AuthError::RelinkRequired)?;
+        let resources = grant.expose().resources.clone();
         let form = [
             ("grant_type", "refresh_token"),
             ("refresh_token", grant.expose().refresh_token.as_str()),
@@ -75,7 +87,7 @@ impl AuthClient {
         .await
         .map_err(AuthError::from);
         match result {
-            Ok(Reply::Value(pair)) => pair.grant(self.now()),
+            Ok(Reply::Value(pair)) => pair.grant(self.now(), &resources),
             Err(AuthError::RelinkRequired) => {
                 self.publish(state, None, None)?;
                 Err(AuthError::RelinkRequired)
@@ -93,7 +105,7 @@ impl EndpointGrant<'_> {
     /// Reports relinking, protocol, transport or storage failure.
     pub async fn refresh_installation(&self) -> Result<(), AuthError> {
         let mut state = self.owner.state.lock().await;
-        Self::require_registered(&state)?;
+        self.require_registered(&state)?;
         if self.cached(&state).is_some_and(|access| access.claimed) {
             return Ok(());
         }
@@ -101,8 +113,13 @@ impl EndpointGrant<'_> {
         self.rotate(&mut state, true).await
     }
 
-    fn require_registered(state: &State) -> Result<(), AuthError> {
-        if state.uncertain || state.record.registration.is_none() || state.record.grant.is_none() {
+    fn require_registered(&self, state: &State) -> Result<(), AuthError> {
+        if state.uncertain || state.record.registration.is_none() {
+            return Err(AuthError::RelinkRequired);
+        }
+        let grant = state.record.grant.as_ref().ok_or(AuthError::RelinkRequired)?.expose();
+        let scopes: Vec<_> = grant.scope.split_ascii_whitespace().collect();
+        if !grant.resources.contains(&self.resource) || ENDPOINT_SCOPES.iter().any(|scope| !scopes.contains(scope)) {
             return Err(AuthError::RelinkRequired);
         }
         Ok(())
@@ -130,6 +147,7 @@ impl EndpointGrant<'_> {
             expires_at_unix: mcp.expires_at_unix,
             scope: mcp.scope.clone(),
             refresh_token: minted.refresh_token.clone(),
+            resources: mcp.resources.clone(),
         }));
         self.owner.store.save(&state.record)?;
         state.endpoint = Some(Access {
@@ -148,12 +166,23 @@ impl EndpointTokenSource for EndpointGrant<'_> {
     fn access_token(&self) -> TokenFuture<'_> {
         Box::pin(async move {
             let mut state = self.owner.state.lock().await;
-            Self::require_registered(&state)?;
+            self.require_registered(&state)?;
             let cached = self.cached(&state);
             if cached.is_none_or(|access| access.expires <= self.owner.now().saturating_add(300)) {
                 let claimed = cached.is_some_and(|access| access.claimed);
                 self.rotate(&mut state, claimed).await?;
             }
+            let access = self.cached(&state).ok_or(AuthError::RelinkRequired)?;
+            Ok(Secret::new(access.token.expose().clone()))
+        })
+    }
+
+    fn fresh_token(&self) -> TokenFuture<'_> {
+        Box::pin(async move {
+            let mut state = self.owner.state.lock().await;
+            self.require_registered(&state)?;
+            let claimed = self.cached(&state).is_some_and(|access| access.claimed);
+            self.rotate(&mut state, claimed).await?;
             let access = self.cached(&state).ok_or(AuthError::RelinkRequired)?;
             Ok(Secret::new(access.token.expose().clone()))
         })

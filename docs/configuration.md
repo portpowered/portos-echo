@@ -80,7 +80,11 @@ The endpoint preference defaults to off with the name **Echo Show**. From paired
 contain 1 to 64 Unicode characters, including at least one non-whitespace character and no control
 characters. The bridge saves these preferences without restarting a conversation.
 Use the existing **Port OS** link to approve the Echo once. Both MCP and the endpoint use
-that sign-in. The bridge requests a separate access token for each audience.
+that sign-in: it names both audiences (the API base and its `/mcp` resource), and the bridge
+refreshes a separate access token for each. The bridge's own client registers and requests the
+configured `mcp.scopes` plus `message:send`, `endpoint:write` and `endpoint:read`. A grant from
+before this sign-in, or a client registered without those scopes, shows **Link** until it is
+linked again; the bridge then registers a new client.
 
 ```toml
 [portos_endpoint]
@@ -91,10 +95,13 @@ gateway_url = "wss://gateway.example.invalid/devices/{authLinkId}"
 api_base = "https://api.example.invalid"
 ```
 
-Set network destinations in the base file. The optional WSS template ends in
-`/devices/{authLinkId}`. The API base defaults to the configured Port OS grant's HTTPS resource
-origin. Omit inline credentials, queries, fragments and other substitutions from both. Settings shows
-an unavailable state until the endpoint issuer and an authoritative route resolver are available.
+Set network destinations in the base file only to override the defaults. The API base defaults
+to the configured Port OS grant's HTTPS resource origin, `https://api.portoperatingsystem.com`.
+For that API the WSS template defaults to
+`wss://devices.portoperatingsystem.com/devices/{authLinkId}`; any other API base needs
+`gateway_url`, which ends in `/devices/{authLinkId}`. Omit inline credentials, queries, fragments
+and other substitutions from both. Commands and reports address the Echo by its `deviceId`; the
+bridge reads its route back (`GET /routes?owner=~caller`) for display and logs only.
 
 Remote and wake sessions share one voice slot. A text start can speak a reply without opening
 device capture. Set `remote_mic = true` only for a Wyoming peer that acknowledges the correlated
@@ -291,7 +298,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `portos_endpoint.enabled` | Boolean, default false. Opts in once the endpoint service prerequisites are available. | save / yes |
 | `portos_endpoint.remote_mic` | Boolean, default false. Enable only when the Wyoming peer supports the correlated remote capture handshake. | restart / no |
 | `portos_endpoint.device_name` | Defaults to `Echo Show`. A nonblank name of 1 to 64 Unicode characters without controls. | save / yes |
-| `portos_endpoint.gateway_url` | Optional WSS template ending in `/devices/{authLinkId}`. | restart / no |
+| `portos_endpoint.gateway_url` | Optional WSS template ending in `/devices/{authLinkId}`. Defaults to the Port OS device gateway when the API base is the Port OS API. | restart / no |
 | `portos_endpoint.api_base` | Optional HTTPS API base. Defaults to the configured Port OS grant's HTTPS resource origin. | restart / no |
 | `screen` | Required screen transport table. | restart / no |
 | `screen.listen` | Socket address; decoder defaults to all IPv4 interfaces on port 16900. Runtime device config must use 127.0.0.1:16900. | restart / no |

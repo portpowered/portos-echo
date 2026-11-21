@@ -1,13 +1,9 @@
 //! A snapshot request owns one cancellable capture and its shutter observation.
-use super::{
-    commands::{invalid, refusal},
-    transport::MAX_MESSAGE,
-};
+use super::commands::{invalid, refusal};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use echo_contracts::endpoint::{CommandReply, GetSnapshot, Snapshot, SnapshotImage, Uplink};
+use echo_contracts::endpoint::{GetSnapshot, MAX_SNAPSHOT_BYTES, Reply, SnapshotReply};
 use serde_json::Value;
 use std::{
-    fmt::Write as _,
     future::Future,
     pin::Pin,
     sync::Arc,
@@ -42,20 +38,13 @@ pub(super) struct Camera {
 }
 
 impl Camera {
-    pub(super) async fn reply(
-        &self,
-        route: &str,
-        request_id: &str,
-        payload: Value,
-        received: Instant,
-    ) -> Result<Vec<u8>, Value> {
-        if !payload.is_object() || serde_json::from_value::<GetSnapshot>(payload).is_err() {
+    /// Capture one JPEG for a `get-snapshot` command. Refused only while the
+    /// shutter is closed, or when the camera cannot provide one.
+    pub(super) async fn reply(&self, body: Value, received: Instant) -> Result<(SnapshotReply, i64), Reply> {
+        if !body.is_object() || serde_json::from_value::<GetSnapshot>(body).is_err() {
             return Err(invalid());
         }
-        let source = self
-            .source
-            .as_ref()
-            .ok_or_else(|| refusal("NOT_SUPPORTED", "The camera is unavailable."))?;
+        let source = self.source.as_ref().ok_or_else(|| refusal("NOT_SUPPORTED"))?;
         let mut shutter = source.shutter();
         if *shutter.borrow_and_update() || shutter.has_changed().is_err() {
             return Err(shuttered());
@@ -63,10 +52,7 @@ impl Camera {
         if Instant::now() >= received + CAPTURE_WINDOW {
             return Err(timed_out());
         }
-        let _capture = self
-            .capture
-            .try_lock()
-            .map_err(|_| refusal("CAMERA_BUSY", "The camera is busy."))?;
+        let _capture = self.capture.try_lock().map_err(|_| refusal("CAMERA_BUSY"))?;
         let sample = tokio::select! {
             biased;
             _ = shutter.changed() => return Err(shuttered()),
@@ -74,52 +60,42 @@ impl Camera {
                 result.map_err(|_| timed_out())?.ok_or_else(camera_error)?
             }
         };
-        let outcome = sample.encode()?;
-        let reply = CommandReply { request_id, outcome };
-        let body = serde_json::to_vec(&Uplink::new("get-snapshot", route, reply)).map_err(|_| camera_error())?;
+        let reply = sample.encode()?;
         if !matches!(shutter.has_changed(), Ok(false)) {
             return Err(shuttered());
         }
-        if body.len() > MAX_MESSAGE {
-            return Err(camera_error());
-        }
-        Ok(body)
+        Ok(reply)
     }
 }
 
 impl Sample {
-    fn encode(self) -> Result<Snapshot, Value> {
-        if self.width == 0 || self.height == 0 || self.jpeg.is_empty() || self.jpeg.len() > MAX_MESSAGE / 4 * 3 {
+    fn encode(self) -> Result<(SnapshotReply, i64), Reply> {
+        if self.width == 0 || self.height == 0 || self.jpeg.is_empty() || self.jpeg.len() > MAX_SNAPSHOT_BYTES {
             return Err(camera_error());
         }
-        Ok(Snapshot::captured(
-            SnapshotImage::jpeg(STANDARD.encode(self.jpeg), self.width, self.height),
-            sample_time(self.sampled_at)?,
-        ))
+        let sampled_at_ms = self
+            .sampled_at
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()
+            .and_then(|since| i64::try_from(since.as_millis()).ok())
+            .ok_or_else(camera_error)?;
+        let reply = SnapshotReply {
+            width: self.width,
+            height: self.height,
+            data: STANDARD.encode(self.jpeg),
+        };
+        Ok((reply, sampled_at_ms))
     }
 }
 
-fn sample_time(at: SystemTime) -> Result<String, Value> {
-    let mut timestamp = crate::bridge_voice::endpoint_timestamp(at).map_err(|_| camera_error())?;
-    let nanos = match at.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(offset) => offset.subsec_nanos(),
-        Err(offset) => (1_000_000_000 - offset.duration().subsec_nanos()) % 1_000_000_000,
-    };
-    if nanos != 0 {
-        timestamp.pop();
-        write!(timestamp, ".{nanos:09}Z").map_err(|_| camera_error())?;
-    }
-    Ok(timestamp)
+fn shuttered() -> Reply {
+    refusal("SHUTTERED")
 }
 
-fn shuttered() -> Value {
-    refusal("SHUTTERED", "The camera shutter is closed.")
+fn timed_out() -> Reply {
+    refusal("TIMEOUT")
 }
 
-fn timed_out() -> Value {
-    refusal("TIMEOUT", "The camera capture timed out.")
-}
-
-fn camera_error() -> Value {
-    refusal("CAMERA_ERROR", "The camera could not provide a snapshot.")
+fn camera_error() -> Reply {
+    refusal("CAMERA_ERROR")
 }

@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 #[test]
 fn endpoint_api_uses_the_configured_grant_origin_when_omitted() {
@@ -19,68 +18,61 @@ fn endpoint_api_uses_the_configured_grant_origin_when_omitted() {
     assert_eq!(endpoint_api(&config), None);
 }
 
-#[derive(Default)]
-struct DelayedRoute(AtomicBool);
-
-impl RouteResolver for DelayedRoute {
-    fn resolve<'a>(&'a self, auth_link_id: &'a str, tokens: &'a dyn EndpointTokenSource) -> Resolve<'a> {
-        if self.0.load(Ordering::Acquire) {
-            Resolver.resolve(auth_link_id, tokens)
-        } else {
-            Box::pin(async { None })
-        }
-    }
+#[test]
+fn production_runtime_defaults_the_port_os_gateway() {
+    let mut config = BridgeConfig::from_toml_str(include_str!("../../../../examples/bridge.echo.toml")).unwrap();
+    assert_eq!(endpoint_api(&config).as_deref(), Some(echo_config::PORTOS_API_BASE));
+    assert!(Runtime::configured(&config).is_some());
+    config.portos_endpoint.api_base = Some("https://endpoint.example.invalid".into()); // lint-rules: allow-literal offline origin override fixture
+    assert!(Runtime::configured(&config).is_none());
+    config.portos_endpoint.gateway_url = Some("wss://gateway.example.invalid/devices/{authLinkId}".into()); // lint-rules: allow-literal offline gateway override fixture
+    assert!(Runtime::configured(&config).is_some());
 }
 
 #[tokio::test(start_paused = true)]
-async fn t3_endpoint_pair_resumes_route_lookup_without_a_new_exchange() {
+async fn t3_endpoint_serves_while_route_discovery_lags() {
     bridge_mcp::bridge_component::drive(async {
         let home = tempfile::tempdir().unwrap();
         let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
+        mock.state.lock().unwrap().endpoint.route_delay = 2;
         let mut grant = registered(&mock, home.path()).await;
-        let mut gateway = Gateway::open().await;
-        let resolver = Arc::new(DelayedRoute::default());
-        let settings = Settings::with_resolver(
-            home.path(),
-            &mock,
-            &gateway,
-            grant.grant.clone(),
-            resolver.clone(),
-            false,
-        )
-        .await;
+        let mut gateway = Gateway::open(&mock).await;
+        let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
         settings.save(true, "Hall Echo").await;
-        wait_unavailable(&settings).await;
-        let retained = read_install(home.path());
+        gateway.assert_upgrade(CLAIMED).await;
+        let pending = read_install(home.path());
         assert_eq!(
-            retained["installation"],
+            pending["installation"],
             json!({"authLinkId":LINK, "deviceName":"Hall Echo"})
         );
-        assert!(gateway.received.try_recv().is_err());
-
-        settings.save(false, "Hall Echo").await;
-        resolver.0.store(true, Ordering::Release);
-        settings.save(true, "Hall Echo").await;
-        gateway.assert_upgrade(4).await;
+        // Discovery retries after 5 s and 30 s; drive the clock until the third read.
+        let routes = || route_reads(&mock);
+        let deadline = Instant::now() + Duration::from_secs(40);
+        while routes() < 3 {
+            assert!(Instant::now() < deadline, "route discovery retries");
+            advance(Duration::from_millis(10)).await;
+        }
         assert_installed(home.path(), &mock).await;
-        let install_requests = mock
-            .state
-            .lock()
-            .unwrap()
-            .requests
-            .iter()
-            .filter(|request| request.path == "/plugin-auth-code-exchanges")
-            .count();
-        assert_eq!(install_requests, 1);
+        let (exchanges, reads) = {
+            let state = mock.state.lock().unwrap();
+            let count = |path: &str| state.requests.iter().filter(|request| request.path == path).count();
+            (count("/plugin-auth-code-exchanges"), count("/routes"))
+        };
+        assert_eq!((exchanges, reads), (1, 3));
         settings.close().await;
         grant.close().await;
     })
     .await;
 }
 
-async fn wait_unavailable(settings: &Settings) {
-    wait_warning(settings, UNAVAILABLE).await;
+fn route_reads(mock: &Mock) -> usize {
+    let state = mock.state.lock().unwrap();
+    state
+        .requests
+        .iter()
+        .filter(|request| request.path == "/routes")
+        .count()
 }
 
 pub(super) async fn wait_warning(settings: &Settings, warning: &str) -> Value {
@@ -103,17 +95,9 @@ async fn t3_endpoint_pair_starts_from_enabled_base_configuration() {
         let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
         let mut grant = registered(&mock, home.path()).await;
-        let mut gateway = Gateway::open().await;
-        let settings = Settings::with_resolver(
-            home.path(),
-            &mock,
-            &gateway,
-            grant.grant.clone(),
-            Arc::new(Resolver),
-            true,
-        )
-        .await;
-        gateway.assert_upgrade(4).await;
+        let mut gateway = Gateway::open(&mock).await;
+        let settings = Settings::with_base(home.path(), &mock, &gateway, grant.grant.clone(), true).await;
+        gateway.assert_upgrade(CLAIMED).await;
         assert_eq!(settings.snapshot().await["portos"]["endpoint_enabled"], true);
         assert_installed(home.path(), &mock).await;
         assert!(!home.path().join("settings/settings.toml").exists());
@@ -130,7 +114,7 @@ async fn t3_endpoint_pair_retries_the_committed_exchange_after_losing_its_respon
         let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
         let mut grant = registered(&mock, home.path()).await;
-        let mut gateway = Gateway::open().await;
+        let mut gateway = Gateway::open(&mock).await;
         let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
         mock.state.lock().unwrap().hold = Some("/plugin-auth-code-exchanges".into());
         settings.save(true, "Hall Echo").await;
@@ -146,7 +130,7 @@ async fn t3_endpoint_pair_retries_the_committed_exchange_after_losing_its_respon
         mock.state.lock().unwrap().hold = None;
         mock.release.notify_one();
         let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
-        gateway.assert_upgrade(4).await;
+        gateway.assert_upgrade(CLAIMED).await;
         assert_installed(home.path(), &mock).await;
         assert_eq!(read_install(home.path())["pendingExchange"], Value::Null);
         {
@@ -178,7 +162,7 @@ async fn t3_endpoint_pair_requires_the_existing_port_os_link() {
         let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
         mock.enable_endpoint_audience().unwrap();
         let mut grant = grant_owner(&mock, home.path(), EPOCH).await;
-        let mut gateway = Gateway::open().await;
+        let mut gateway = Gateway::open(&mock).await;
         let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
         settings.save(true, "Hall Echo").await;
         let state = wait_warning(
@@ -195,46 +179,6 @@ async fn t3_endpoint_pair_requires_the_existing_port_os_link() {
                 "/custom/link" | "/custom/token" | "/plugin-auth-code-exchanges"
             )
         }));
-        settings.close().await;
-        grant.close().await;
-    })
-    .await;
-}
-
-#[tokio::test(start_paused = true)]
-async fn t3_endpoint_pair_without_a_production_resolver_keeps_settings_and_mcp_available() {
-    bridge_mcp::bridge_component::drive(async {
-        let home = tempfile::tempdir().unwrap();
-        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
-        mock.enable_endpoint_audience().unwrap();
-        let mut grant = registered(&mock, home.path()).await;
-        let (owner, _) = settings_owner(home.path(), &mock, false);
-        let (service, send) = SettingsService::resume(Box::new(owner));
-        let settings = Settings::serve(service, send, grant.grant.clone()).await;
-        settings.save(true, "Kitchen").await;
-        let view = settings.snapshot().await;
-        assert_eq!(view["portos"]["endpoint_name"], "Kitchen");
-        assert_eq!(view["portos"]["endpoint_enabled"], true);
-        assert_eq!(view["portos"]["link_status"], "linked");
-        assert_eq!(view["warnings"], json!([UNAVAILABLE]));
-        advance(Duration::from_secs(61)).await;
-        assert_eq!(settings.snapshot().await["portos"]["challenge"], Value::Null);
-        assert_eq!(
-            mock.state
-                .lock()
-                .unwrap()
-                .requests
-                .iter()
-                .filter(|request| {
-                    request.path == "/custom/link"
-                        || request.path == "/plugin-auth-code-exchanges"
-                        || request.path == "/messages"
-                })
-                .map(|request| request.path.as_str())
-                .collect::<Vec<_>>(),
-            ["/custom/link"]
-        );
-        assert!(!home.path().join("portos-endpoint").exists());
         settings.close().await;
         grant.close().await;
     })
@@ -282,14 +226,29 @@ pub(super) async fn assert_rest_audiences(mock: &Mock) {
     assert_eq!(duplicate.status(), 409);
 }
 
-pub(super) async fn assert_wrong_gateway_audience(gateway: &Gateway) {
+/// A token without the auth-link claim is admitted to the upgrade and then
+/// closed with 4403, as the live gateway does.
+pub(super) async fn assert_unclaimed_gateway_token(gateway: &mut Gateway) {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
     let address = gateway.template.replace("{authLinkId}", "loopback%20link%2F%25");
     let mut handshake = address.into_client_request().unwrap();
     handshake
         .headers_mut()
-        .insert("Authorization", "Bearer access-5".parse().unwrap());
-    let error = tokio_tungstenite::connect_async(handshake).await.unwrap_err();
-    assert!(matches!(error, tokio_tungstenite::tungstenite::Error::Http(reply) if reply.status() == 401));
+        .insert("Authorization", "Bearer endpoint-access-2".parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async(handshake).await.unwrap();
+    let close = loop {
+        match futures_util::StreamExt::next(&mut socket).await {
+            Some(Ok(tokio_tungstenite::tungstenite::Message::Close(frame))) => break frame,
+            Some(Ok(_)) => {}
+            _ => break None,
+        }
+    };
+    assert_eq!(close.map(|frame| u16::from(frame.code)), Some(4403));
+    assert_eq!(
+        gateway.received.recv().await,
+        Some(gateway_test_peer::GatewayEvent::Forbidden(
+            "Bearer endpoint-access-2".into()
+        ))
+    );
 }

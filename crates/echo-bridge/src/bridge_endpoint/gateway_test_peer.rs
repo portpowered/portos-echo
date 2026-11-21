@@ -1,7 +1,10 @@
-//! The endpoint T3 gateway accepts only synthetic endpoint tokens.
+//! The endpoint T3 device gateway, as the live gateway README describes it:
+//! any upgrade with a Bearer is accepted, and a token without the auth-link
+//! claim (or no longer current) is closed at once with 4403.
+use echo_mcp_auth::mock::{Mock, State};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle, time::Instant};
@@ -11,8 +14,11 @@ use tokio_tungstenite::{
         Message,
         handshake::server::{Callback, ErrorResponse, Request, Response},
         http::{Response as HttpResponse, StatusCode},
+        protocol::{CloseFrame, frame::coding::CloseCode},
     },
 };
+
+pub(super) const PATH: &str = "/devices/loopback%20link%2F%25";
 
 pub(super) struct Gateway {
     pub(super) template: String,
@@ -25,12 +31,16 @@ pub(super) struct Gateway {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum GatewayEvent {
     Upgrade(String, String, bool),
+    /// Closed with 4403: the Bearer had no auth-link claim or was not current.
+    Forbidden(String),
     Disconnected,
     Rejected(Instant),
 }
 
+type Seen = Arc<Mutex<Option<(String, String, bool)>>>;
+
 impl Gateway {
-    pub(super) async fn open() -> Self {
+    pub(super) async fn open(mock: &Mock) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let template = format!(
             "ws://127.0.0.1:{}/devices/{{authLinkId}}", // lint-rules: allow-literal port interpolated from the loopback listener
@@ -39,7 +49,12 @@ impl Gateway {
         let (events, received) = mpsc::channel(8);
         let (frames, outgoing) = mpsc::channel(8);
         let failures = Arc::new(AtomicUsize::new(0));
-        let task = tokio::spawn(gateway(listener, events, outgoing, failures.clone()));
+        let peer = Peer {
+            events,
+            failures: failures.clone(),
+            issuer: mock.state.clone(),
+        };
+        let task = tokio::spawn(peer.serve(listener, outgoing));
         Self {
             template,
             received,
@@ -49,12 +64,9 @@ impl Gateway {
         }
     }
 
-    pub(super) async fn assert_upgrade(&mut self, generation: usize) {
-        let wanted = GatewayEvent::Upgrade(
-            "/devices/loopback%20link%2F%25".into(),
-            format!("Bearer endpoint-access-{generation}"),
-            false,
-        );
+    /// The next upgrade was admitted with this access token.
+    pub(super) async fn assert_upgrade(&mut self, token: &str) {
+        let wanted = GatewayEvent::Upgrade(PATH.into(), format!("Bearer {token}"), false);
         assert_eq!(self.received.recv().await, Some(wanted));
     }
 
@@ -65,6 +77,15 @@ impl Gateway {
     pub(super) fn reject_next(&self, count: usize) {
         self.failures.store(count, Ordering::SeqCst);
     }
+
+    /// End the connection's hour: close 4000 (CYCLE).
+    pub(super) async fn cycle(&self) {
+        let close = CloseFrame {
+            code: CloseCode::from(4000),
+            reason: "cycle".into(),
+        };
+        self.frames.send(Message::Close(Some(close))).await.unwrap();
+    }
 }
 
 impl Drop for Gateway {
@@ -73,40 +94,65 @@ impl Drop for Gateway {
     }
 }
 
-async fn gateway(
-    listener: TcpListener,
+struct Peer {
     events: mpsc::Sender<GatewayEvent>,
-    mut frames: mpsc::Receiver<Message>,
     failures: Arc<AtomicUsize>,
-) {
-    while let Ok((stream, _)) = listener.accept().await {
-        let Ok(mut socket) = accept_hdr_async(stream, Upgrade(&events, &failures)).await else {
-            continue;
-        };
-        loop {
-            tokio::select! {
-                message = socket.next() => if message.is_none_or(|frame| frame.is_err()) { break; },
-                Some(frame) = frames.recv() => if socket.send(frame).await.is_err() { break; },
+    issuer: Arc<Mutex<State>>,
+}
+
+impl Peer {
+    async fn serve(self, listener: TcpListener, mut frames: mpsc::Receiver<Message>) {
+        while let Ok((stream, _)) = listener.accept().await {
+            let seen = Seen::default();
+            let upgrade = Upgrade(&self.events, &self.failures, seen.clone());
+            let Ok(mut socket) = accept_hdr_async(stream, upgrade).await else {
+                continue;
+            };
+            let Some((path, bearer, proof)) = seen.lock().unwrap().take() else {
+                continue;
+            };
+            let token = bearer.strip_prefix("Bearer ").unwrap_or_default();
+            if !self.issuer.lock().unwrap().admits_gateway(token) {
+                let close = CloseFrame {
+                    code: CloseCode::from(4403),
+                    reason: "forbidden".into(),
+                };
+                let _ = socket.send(Message::Close(Some(close))).await;
+                self.events.send(GatewayEvent::Forbidden(bearer)).await.unwrap();
+                continue;
             }
+            self.events
+                .send(GatewayEvent::Upgrade(path, bearer, proof))
+                .await
+                .unwrap();
+            connected(&mut socket, &mut frames).await;
+            self.events.send(GatewayEvent::Disconnected).await.unwrap();
         }
-        events.send(GatewayEvent::Disconnected).await.unwrap();
     }
 }
 
-struct Upgrade<'a>(&'a mpsc::Sender<GatewayEvent>, &'a AtomicUsize);
+async fn connected<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>, frames: &mut mpsc::Receiver<Message>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    loop {
+        tokio::select! {
+            message = socket.next() => match message {
+                Some(Ok(Message::Text(text))) if text.as_str() == "ping" => {
+                    if socket.send(Message::text("pong")).await.is_err() { break; }
+                }
+                Some(Ok(_)) => {}
+                _ => break,
+            },
+            Some(frame) = frames.recv() => if socket.send(frame).await.is_err() { break; },
+        }
+    }
+}
+
+struct Upgrade<'a>(&'a mpsc::Sender<GatewayEvent>, &'a AtomicUsize, Seen);
 
 impl Callback for Upgrade<'_> {
     fn on_request(self, request: &Request, response: Response) -> Result<Response, ErrorResponse> {
-        let bearer = request
-            .headers()
-            .get("Authorization")
-            .and_then(|header| header.to_str().ok())
-            .unwrap_or_default();
-        if !bearer.starts_with("Bearer endpoint-access-") {
-            let mut refused = HttpResponse::new(None);
-            *refused.status_mut() = StatusCode::UNAUTHORIZED;
-            return Err(refused);
-        }
         if self
             .1
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
@@ -117,13 +163,16 @@ impl Callback for Upgrade<'_> {
             *refused.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
             return Err(refused);
         }
-        self.0
-            .try_send(GatewayEvent::Upgrade(
-                request.uri().path().into(),
-                bearer.into(),
-                request.headers().contains_key("DPoP"),
-            ))
-            .unwrap();
+        let bearer = request
+            .headers()
+            .get("Authorization")
+            .and_then(|header| header.to_str().ok())
+            .unwrap_or_default();
+        *self.2.lock().unwrap() = Some((
+            request.uri().path().into(),
+            bearer.into(),
+            request.headers().contains_key("DPoP"),
+        ));
         Ok(response)
     }
 }

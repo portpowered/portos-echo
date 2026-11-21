@@ -17,7 +17,7 @@ pub use config_codex::{
     CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, LIVE_SESSION_GUIDANCE, RUNNER_INSTRUCTIONS, RUNNER_SESSION_GUIDANCE,
     WebSearch, realtime_voices,
 };
-pub use config_endpoint::{PortosEndpoint, SettingsEndpoint};
+pub use config_endpoint::{PORTOS_API_BASE, PORTOS_GATEWAY_URL, PortosEndpoint, SettingsEndpoint};
 pub use config_muse::MuseConfig;
 pub use config_screen::ScreenPackDownload;
 pub use config_settings::{EffectiveConfig, SettingsMuse, SettingsOptions, SettingsOverlay, SettingsServerTools};
