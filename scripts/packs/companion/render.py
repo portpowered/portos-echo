@@ -69,9 +69,10 @@ FRAMES = {"idle": 3 * BREATH // IDLE_STEP, "connecting": 150, "listening": 240, 
           "speaking": 100, "muted": 30, "setup": 60, "setup-enter": 16, "approval": 300,
           "error": 300, "happy": 45}
 TRANSITION = 10
-# These clips are the neutral frame with a bob or a mouth, or a held card
-# pose: there is nothing to blend.
-UNBLENDED = ("idle", "speaking", "muted", "setup")
+# These clips are the neutral frame with a bob or a mouth, or a pose held
+# left of centre beside a card. A cross-fade between the centred neutral frame
+# and a shifted pose would show two of her, so the page glides between them.
+UNBLENDED = ("idle", "speaking", "muted", *CARD_SHIFT)
 # Whole generated frames differ a little everywhere, which lossless coding
 # cannot keep small. These clips are coded at a visually lossless quality.
 LOSSY = ("idle", "speaking")
