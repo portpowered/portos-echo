@@ -326,7 +326,10 @@ export function mountSettings(
             settingsSection("Port OS permissions", permissions),
         );
         if (data.muse) {
-            muse = museForm(data.muse, actions, perform);
+            muse = museForm(data.muse, actions, (work, message, keep) => {
+                keyboard.close();
+                return perform(work, message, keep);
+            });
             track(muse);
             fields.append(settingsSection("Muse", muse.form));
         }

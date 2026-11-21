@@ -72,6 +72,14 @@ export async function verifyMuseSettings(page, calls) {
         await page.evaluate(() => document.documentElement.scrollWidth),
         960,
     );
+    assert.equal(
+        await page
+            .getByRole("group", { name: "On-screen keyboard" })
+            .isHidden(),
+        true,
+    );
+    const form = page.getByRole("form", { name: "Muse connection" });
+    await form.evaluate((node) => node.scrollIntoView({ block: "center" }));
     await mkdir("test-results/screenshots", { recursive: true });
     await page.screenshot({
         path: "test-results/screenshots/settings-muse-960x480.png",
