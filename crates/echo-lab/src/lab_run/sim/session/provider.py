@@ -286,7 +286,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                        if item.get('type') == 'message' and item.get('role') == 'developer'
                                        for part in item['content'] if part.get('type') == 'input_text'), '')
         if script and any('request' in turn[0] for turn in script.turns):
-            if 'hand off once with their words so the background agent ends the session' not in script.instructions:
+            if "first delegate it to the background agent with the user's exact words" not in script.instructions:
                 emit({'event': 'provider.failure', 'failure': 'missing goodbye Live prompt'})
         observed['calls'] += 1
         emit({'event': 'provider.offer', 'offer': body['sdp']})
