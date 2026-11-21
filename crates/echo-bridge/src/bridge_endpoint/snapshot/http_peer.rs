@@ -265,6 +265,12 @@ async fn observe_timeout(gateway: &Gateway, mock: &Mock, app: &mut Peer) -> Stri
     advance(Duration::from_millis(1)).await;
     assert_eq!(app.event("cancel").await, json!({"captureId":stale}));
     assert_reply(mock, "native-timeout", "TIMEOUT").await;
+    assert_expired_upload_rejected(app, stale).await;
+    assert_eq!(receipt_attempts(mock, "native-timeout").len(), 1);
+    stale.into()
+}
+
+async fn assert_expired_upload_rejected(app: &Peer, stale: &str) {
     let jpeg = STANDARD.decode(JPEG).unwrap();
     let sampled_at = sampled_at_ms();
     assert_eq!(
@@ -272,8 +278,6 @@ async fn observe_timeout(gateway: &Gateway, mock: &Mock, app: &mut Peer) -> Stri
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(app.result(stale, jpeg, sampled_at, true).await, StatusCode::CONFLICT);
-    assert_eq!(receipt_attempts(mock, "native-timeout").len(), 1);
-    stale.into()
 }
 
 async fn observe_fresh_capture(
