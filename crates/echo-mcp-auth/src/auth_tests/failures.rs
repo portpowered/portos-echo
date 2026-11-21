@@ -27,7 +27,7 @@ async fn t3_wrong_resource_missing_resource_and_wrong_proof_endpoint() {
         &h.client.http,
         url,
         &[("client_id", "synthetic-cli")],
-        Some(&state.record),
+        Some(key),
         h.client.now(),
     ))
     .await
@@ -41,7 +41,7 @@ async fn t3_wrong_resource_missing_resource_and_wrong_proof_endpoint() {
         &h.client.http,
         &h.client.metadata.token_endpoint,
         &form,
-        Some(&state.record),
+        Some(key),
         h.client.now(),
     ))
     .await
@@ -62,7 +62,7 @@ async fn assert_wrong_resource(h: &Harness, state: &State) {
             &h.client.http,
             url,
             &[("resource", "wrong")],
-            Some(&state.record),
+            Some(key),
             h.client.now(),
         ))
         .await,

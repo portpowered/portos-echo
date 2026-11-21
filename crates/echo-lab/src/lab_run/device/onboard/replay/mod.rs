@@ -79,10 +79,14 @@ fn rotated(initial: &Secret<Vec<u8>>, current: &Secret<Vec<u8>>, config: &str) -
     let [server] = config.mcp.server.as_slice() else {
         return Err(ERROR.into());
     };
+    let client_id = old["client_id"]
+        .as_str()
+        .filter(|id| !id.trim().is_empty())
+        .ok_or(ERROR)?;
     if old["version"] != 1
         || new["version"] != 1
         || old["resource"] != server.url
-        || old["client_id"] != config.mcp.client_id
+        || config.mcp.client_id.as_deref().is_some_and(|id| id != client_id)
         || ["issuer", "resource", "client_id", "private_key_jwk"]
             .iter()
             .any(|key| old[key] != new[key])

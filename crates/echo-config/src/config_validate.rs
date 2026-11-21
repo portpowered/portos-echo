@@ -92,7 +92,14 @@ fn schema_field(path: &str, key: &str) -> bool {
             "model",
         ],
         "muse" => &["url", "ca_file", "credential_file"],
-        "mcp" => &["server", "state_dir", "client_id", "scopes", "operator_listen"],
+        "mcp" => &[
+            "server",
+            "state_dir",
+            "client_id",
+            "client_name",
+            "scopes",
+            "operator_listen",
+        ],
         "screen" => &["listen", "pairing_token_file", "packs"],
         "audit" => &["log_dir"],
         p if p.starts_with("mcp.server[") && p.ends_with(']') => &["name", "url", "auth", "bearer_file", "allow_tools"],
@@ -165,8 +172,13 @@ fn validate_mcp(config: &crate::McpConfig) -> Result<(), ConfigError> {
             "expected literal IPv4 loopback",
         ));
     }
-    if config.client_id.trim().is_empty() || config.client_id.chars().any(char::is_control) {
-        return Err(ConfigError::new("mcp.client_id", "expected nonblank text"));
+    for (key, value) in [
+        ("mcp.client_id", config.client_id.as_deref()),
+        ("mcp.client_name", Some(config.client_name.as_str())),
+    ] {
+        if value.is_some_and(|text| text.trim().is_empty() || text.chars().any(char::is_control)) {
+            return Err(ConfigError::new(key, "expected nonblank text"));
+        }
     }
     if config.scopes.is_empty()
         || config

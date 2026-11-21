@@ -27,6 +27,20 @@
       "type": "string",
       "minLength": 1
     },
+    "registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "scope"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "string"
+        }
+      }
+    },
     "private_key_jwk": {
       "type": "object",
       "additionalProperties": false,

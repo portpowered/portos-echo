@@ -1,11 +1,11 @@
 //! Offline grant configuration checks precede discovery and store creation.
 use crate::{Error, bridge_input::loopback};
 use echo_config::{BridgeConfig, McpAuth};
-use echo_mcp_auth::AuthOptions;
+use echo_mcp_auth::{AuthOptions, LinkClient};
 use std::{net::SocketAddr, path::Path, time::Duration};
 
 pub struct Settings {
-    pub options: AuthOptions,
+    pub options: AuthOptions<LinkClient>,
     pub ca_pem: Option<Vec<u8>>,
     pub listen: SocketAddr,
     pub pairing_file: std::path::PathBuf,
@@ -24,14 +24,19 @@ impl Settings {
         let mcp = &config.mcp;
         let directory = mcp.state_dir.as_ref().ok_or(Error::Input)?;
         outside_repository(directory)?;
-        if mcp.client_id.trim().is_empty() || mcp.scopes.is_empty() || mcp.scopes.iter().any(|s| s.trim().is_empty()) {
+        if mcp.scopes.is_empty() || mcp.scopes.iter().any(|s| s.trim().is_empty()) {
             return Err(Error::Input);
         }
         Ok(Some(Self {
             ca_pem: Self::ca_pem(config)?,
             options: AuthOptions {
                 resource_url: server.url.clone(),
-                client_id: mcp.client_id.clone(),
+                client_id: mcp.client_id.clone().map_or_else(
+                    || LinkClient::Automatic {
+                        name: mcp.client_name.clone(),
+                    },
+                    LinkClient::Explicit,
+                ),
                 scopes: mcp.scopes.clone(),
                 storage_dir: directory.clone(),
                 request_timeout: Duration::from_secs(5),

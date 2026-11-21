@@ -183,6 +183,9 @@ pub(crate) fn pairing(path: &Path) -> Result<Secret<String>, Error> {
 fn error(category: &str) -> Result<AuthError, Error> {
     match category {
         "discovery" => Ok(AuthError::Discovery),
+        "registration_unavailable" => Ok(AuthError::RegistrationUnavailable),
+        "registration_refused" => Ok(AuthError::RegistrationRefused),
+        "registration_failed" => Ok(AuthError::RegistrationFailed),
         "transport" => Ok(AuthError::Transport),
         "protocol" => Ok(AuthError::Protocol),
         "access_denied" => Ok(AuthError::AccessDenied),
@@ -196,6 +199,7 @@ fn error(category: &str) -> Result<AuthError, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod registration;
 
     struct Probe(tokio::sync::mpsc::UnboundedSender<Vec<u8>>, Vec<u8>);
 
@@ -231,7 +235,7 @@ mod tests {
             ca_pem: None,
             options: echo_mcp_auth::AuthOptions {
                 resource_url: format!("{}/mcp", mock.base),
-                client_id: "synthetic-cli".into(),
+                client_id: echo_mcp_auth::LinkClient::Explicit("synthetic-cli".into()),
                 scopes: vec!["endpoint:read".into()],
                 storage_dir: root.join("grant"),
                 request_timeout: Duration::from_secs(5),
@@ -239,66 +243,6 @@ mod tests {
             listen,
             pairing_file: root.join("pair"),
         }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn t3_portos_link_registers_default_client() {
-        super::super::bridge_component::drive(async {
-            let mock = echo_mcp_auth::mock::Mock::bind().await.unwrap();
-            let mut metadata = echo_mcp_auth::mock::metadata(&mock.base);
-            metadata["registration_endpoint"] = format!("{}/custom/register", mock.base).into();
-            {
-                let mut state = mock.state.lock().unwrap();
-                state.metadata = Some(metadata);
-                state.fault = Some((
-                    "/custom/register".into(),
-                    201,
-                    serde_json::json!({"client_id":"dcr_synthetic"}),
-                ));
-            }
-            let directory = tempfile::tempdir().unwrap();
-            let root = directory.path();
-            let mut config =
-                BridgeConfig::load(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/bridge.echo.toml")).unwrap();
-            config.mcp.client_id = echo_config::McpConfig::default().client_id;
-            config.mcp.state_dir = Some(root.join("grant"));
-            config.mcp.operator_listen = ([127, 0, 0, 1], 0).into();
-            config.mcp.server[0].url = format!("{}/mcp", mock.base);
-            config.screen.pairing_token_file = root.join("pair");
-            std::fs::write(&config.screen.pairing_token_file, "synthetic-owner").unwrap();
-            let trace = crate::bridge_trace::Trace::open(&root.join("trace"), "api_key").unwrap();
-            let mut owner = super::super::Runtime::open(
-                Settings::configured(&config).unwrap().unwrap(),
-                super::super::Presentation::new(None),
-                trace,
-                None,
-            )
-            .await
-            .unwrap();
-            config.mcp.operator_listen = owner.address;
-            let prepared = Prepared {
-                settings: Settings::configured(&config).unwrap().unwrap(),
-                operation: Operation::Link,
-            };
-            let (send, mut flushed) = tokio::sync::mpsc::unbounded_channel();
-            let mut output = Probe(send, Vec::new());
-            let mut operation = Box::pin(prepared.execute(&mut output));
-            let prefix = format!("Verification URL: {}/approve\nUser code: TEST-CODE\n", mock.base);
-            assert_guidance(operation.as_mut(), &mut flushed, &prefix).await;
-            let registrations = mock
-                .state
-                .lock()
-                .unwrap()
-                .requests
-                .iter()
-                .filter(|r| r.path == "/custom/register")
-                .count();
-            assert_eq!(registrations, 1, "first default link must POST one registration");
-            tokio::time::advance(Duration::from_secs(5)).await;
-            assert_eq!(operation.await, Ok(()));
-            owner.close().await;
-        })
-        .await;
     }
 
     #[tokio::test(start_paused = true)]

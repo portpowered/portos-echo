@@ -165,7 +165,11 @@ Use stop/mute for operator control and preserve the hardware mute latch's author
 
 Start with narrow read scopes, a small explicit `allow_tools`, local home groups disabled unless needed,
 the default caps, loopback listeners and private credentials. The example includes `control`; remove it for
-a read-only installation. Use a dedicated Echo OAuth client before broader use as the decision log requires.
+a read-only installation.
+
+If an older installation set `mcp.client_id` to the built-in CLI client, remove that line and restart the bridge
+before relinking to give the Echo its own client. The existing grant retains its original client until you approve
+the new link.
 
 ## Configuration reference
 
@@ -211,7 +215,8 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `muse.credential_file` | Required nonblank literal credential path. | restart / no |
 | `mcp` | Required server/grant table. | restart / no |
 | `mcp.state_dir` | Optional nonempty path; runtime Port OS requires private state outside a repository, no parent traversal. | restart / no |
-| `mcp.client_id` | Default `port1/systems/zero/oauth-clients/command-line-interface` (public development client); nonblank text without controls. Use your registered client for broader deployment. | restart / no |
+| `mcp.client_id` | Optional override for an already registered public client. Omit it to register this Echo when you link Port OS. Accepts nonblank text without control characters. | restart / no |
+| `mcp.client_name` | Display name for automatic registration. Defaults to `Port OS Echo`. Accepts nonblank text without control characters. | restart / no |
 | `mcp.scopes` | Defaults to all seven supported Port OS scopes; nonempty array of nonempty names without whitespace/control characters. Grant consent can further constrain access. | withdraw immediately, other changes at boundary / yes |
 | `mcp.operator_listen` | Socket address on literal IPv4 loopback, default 127.0.0.1:16902; local grant-owner commands. | restart / no |
 | `mcp.server` | Optional array of tables, default empty. | restart / no |

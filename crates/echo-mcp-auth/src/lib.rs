@@ -28,21 +28,47 @@ pub trait TokenProvider: Send + Sync {
 }
 
 /// The storage directory must be outside the repository and owned by this user.
-pub struct AuthOptions {
+pub struct AuthOptions<I = String> {
     pub resource_url: String,
-    pub client_id: String,
+    pub client_id: I,
     pub scopes: Vec<String>,
     pub storage_dir: PathBuf,
     pub request_timeout: Duration,
 }
 
+/// Select a pre-registered public client or register one on explicit link.
+pub enum LinkClient {
+    Explicit(String),
+    Automatic { name: String },
+}
+
 impl AuthOptions {
+    fn explicit(self) -> AuthOptions<LinkClient> {
+        AuthOptions {
+            resource_url: self.resource_url,
+            client_id: LinkClient::Explicit(self.client_id),
+            scopes: self.scopes,
+            storage_dir: self.storage_dir,
+            request_timeout: self.request_timeout,
+        }
+    }
+}
+
+impl AuthOptions<LinkClient> {
     pub(crate) fn validate(&self) -> Result<(), AuthError> {
-        if self.client_id.is_empty() || self.request_timeout.is_zero() {
+        let text = match &self.client_id {
+            LinkClient::Explicit(id) => id,
+            LinkClient::Automatic { name } => name,
+        };
+        if !valid_text(text) || self.request_timeout.is_zero() {
             return Err(AuthError::Discovery);
         }
         Ok(())
     }
+}
+
+pub(crate) fn valid_text(text: &str) -> bool {
+    !text.trim().is_empty() && !text.chars().any(char::is_control)
 }
 
 /// Fixed diagnostic categories deliberately omit response bodies and URLs.
@@ -50,6 +76,12 @@ impl AuthOptions {
 pub enum AuthError {
     #[error("OAuth discovery failed")]
     Discovery,
+    #[error("Port OS registration is unavailable. Set mcp.client_id to use a registered client.")]
+    RegistrationUnavailable,
+    #[error("Port OS refused client registration (invalid_client_metadata).")]
+    RegistrationRefused,
+    #[error("Port OS client registration failed. Try linking again or set mcp.client_id.")]
+    RegistrationFailed,
     #[error("OAuth transport failed; operation may be incomplete")]
     Transport,
     #[error("OAuth protocol failed")]

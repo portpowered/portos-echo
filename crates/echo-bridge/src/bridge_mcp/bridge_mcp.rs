@@ -150,7 +150,7 @@ impl Runtime {
         let (send, receive) = mpsc::channel(1);
         let operator = bridge_operations::Operator::new(send);
         let grant = Arc::new(Grant {
-            client: AuthClient::open_with_ca(settings.options, epoch, settings.ca_pem.as_deref())
+            client: AuthClient::open_configured(settings.options, epoch, settings.ca_pem.as_deref())
                 .await
                 .map_err(Error::Mcp)?,
             rejected: AtomicBool::new(false),
@@ -206,6 +206,9 @@ impl Drop for Runtime {
 pub(crate) fn category(error: &AuthError) -> &'static str {
     match error {
         AuthError::Discovery => "discovery",
+        AuthError::RegistrationUnavailable => "registration_unavailable",
+        AuthError::RegistrationRefused => "registration_refused",
+        AuthError::RegistrationFailed => "registration_failed",
         AuthError::Transport => "transport",
         AuthError::Protocol => "protocol",
         AuthError::AccessDenied => "access_denied",

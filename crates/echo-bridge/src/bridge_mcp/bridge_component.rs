@@ -1,7 +1,7 @@
 //! T3 component boundary: actual auth and MCP HTTP clients against local controlled peers.
 use super::*;
 use echo_config::{McpAuth, McpServer};
-use echo_mcp_auth::{AuthOptions, mock::Mock};
+use echo_mcp_auth::{AuthOptions, LinkClient, mock::Mock};
 use echo_mcp_client::{McpClient, McpError, TokenProvider};
 use echo_screen_contract::UiState;
 use std::{future::Future, task::Poll, time::Duration};
@@ -100,7 +100,7 @@ async fn linked(mock: &Mock, directory: &std::path::Path) -> (Runtime, tokio::sy
         ca_pem: None,
         options: AuthOptions {
             resource_url: format!("{}/mcp", mock.base),
-            client_id: "synthetic-cli".into(),
+            client_id: LinkClient::Explicit("synthetic-cli".into()),
             scopes: vec!["endpoint:read".into()],
             storage_dir: directory.join("grant"),
             request_timeout: Duration::from_secs(5),

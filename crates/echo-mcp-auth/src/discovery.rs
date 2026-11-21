@@ -1,4 +1,4 @@
-use crate::{AuthError, AuthOptions};
+use crate::AuthError;
 use reqwest::Client;
 use serde::Deserialize;
 use url::Url;
@@ -10,6 +10,22 @@ pub(crate) struct Metadata {
     pub token_endpoint: String,
     pub revocation_endpoint: String,
     pub dpop_signing_alg_values_supported: Vec<String>,
+    pub registration_endpoint: Option<serde_json::Value>,
+}
+
+impl Metadata {
+    pub fn registration_url(&self) -> Result<Url, AuthError> {
+        let endpoint = self
+            .registration_endpoint
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .ok_or(AuthError::RegistrationUnavailable)?;
+        let url = safe_url(endpoint).map_err(|_| AuthError::RegistrationUnavailable)?;
+        if url.origin() != safe_url(&self.issuer)?.origin() {
+            return Err(AuthError::RegistrationUnavailable);
+        }
+        Ok(url)
+    }
 }
 
 #[derive(Deserialize)]
@@ -33,12 +49,12 @@ pub(crate) fn safe_url(value: &str) -> Result<Url, AuthError> {
     Ok(url)
 }
 
-pub(crate) async fn discover(client: &Client, options: &AuthOptions) -> Result<Metadata, AuthError> {
-    let mut resource_url = safe_url(&options.resource_url)?;
-    resource_url.set_path("/.well-known/oauth-protected-resource");
-    resource_url.set_query(None);
-    let resource: Resource = get(client, resource_url.as_str()).await?;
-    if resource.resource != options.resource_url || resource.authorization_servers.len() != 1 {
+pub(crate) async fn discover(client: &Client, resource_url: &str) -> Result<Metadata, AuthError> {
+    let mut discovery_url = safe_url(resource_url)?;
+    discovery_url.set_path("/.well-known/oauth-protected-resource");
+    discovery_url.set_query(None);
+    let resource: Resource = get(client, discovery_url.as_str()).await?;
+    if resource.resource != resource_url || resource.authorization_servers.len() != 1 {
         return Err(AuthError::Discovery);
     }
     let issuer = safe_url(&resource.authorization_servers[0])?;

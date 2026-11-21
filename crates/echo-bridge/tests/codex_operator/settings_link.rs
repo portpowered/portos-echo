@@ -86,7 +86,7 @@ fn portos_startup(fixture: &Fixture, base_url: &str, client_id: &str) -> echo_co
         bearer_file: None,
         allow_tools: vec![],
     }];
-    base.mcp.client_id = client_id.into();
+    base.mcp.client_id = Some(client_id.into());
     base.mcp.state_dir = Some(fixture.directory.path().join("grant"));
     base.mcp.operator_listen = ([127, 0, 0, 1], 0).into();
     echo_config::EffectiveConfig {

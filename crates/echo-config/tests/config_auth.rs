@@ -51,7 +51,8 @@ fn mcp_link_defaults_and_explicit_overrides_remain_offline() {
     let old = BridgeConfig::from_toml_str(MINIMAL).unwrap().mcp;
     assert_eq!(old, echo_config::McpConfig::default());
     assert_eq!(old.state_dir, None);
-    assert_eq!(old.client_id, "port1/systems/zero/oauth-clients/command-line-interface");
+    assert_eq!(old.client_id, None);
+    assert_eq!(old.client_name, "Port OS Echo");
     assert_eq!(
         old.scopes,
         [
@@ -65,10 +66,11 @@ fn mcp_link_defaults_and_explicit_overrides_remain_offline() {
         ]
     );
     assert_eq!(old.operator_listen.to_string(), "127.0.0.1:16902");
-    let input = MINIMAL.replace("[mcp]", "[mcp]\nstate_dir='absent/mcp-state'\nclient_id='public-test-client'\nscopes=['endpoint:read','other:read']\noperator_listen='127.0.0.1:0'");
+    let input = MINIMAL.replace("[mcp]", "[mcp]\nstate_dir='absent/mcp-state'\nclient_id='public-test-client'\nclient_name='Living room Echo'\nscopes=['endpoint:read','other:read']\noperator_listen='127.0.0.1:0'");
     let config = BridgeConfig::from_toml_str(&input).unwrap().mcp;
     assert_eq!(config.state_dir, Some("absent/mcp-state".into()));
-    assert_eq!(config.client_id, "public-test-client");
+    assert_eq!(config.client_id.as_deref(), Some("public-test-client"));
+    assert_eq!(config.client_name, "Living room Echo");
     assert_eq!(config.scopes, ["endpoint:read", "other:read"]);
     assert_eq!(config.operator_listen.to_string(), "127.0.0.1:0");
     // A legacy device-code config still decodes without creating a grant store.
@@ -85,6 +87,9 @@ fn mcp_link_rejects_invalid_fields_without_echoing_values() {
         ("client_id", "''", "expected nonblank text"),
         ("client_id", "'  '", "expected nonblank text"),
         ("client_id", "\"private\\nvalue\"", "expected nonblank text"),
+        ("client_name", "''", "expected nonblank text"),
+        ("client_name", "'  '", "expected nonblank text"),
+        ("client_name", "\"private\\nvalue\"", "expected nonblank text"),
         ("scopes", "[]", "expected nonempty scope names"),
         ("scopes", "['']", "expected nonempty scope names"),
         (
@@ -106,7 +111,7 @@ fn mcp_link_rejects_invalid_fields_without_echoing_values() {
             format!("mcp.{field}: {message}")
         );
     }
-    for field in ["state_dir", "client_id", "scopes", "operator_listen"] {
+    for field in ["state_dir", "client_id", "client_name", "scopes", "operator_listen"] {
         let input = MINIMAL.replace("[mcp]", &format!("[mcp]\n{field}={{secret='private'}}"));
         assert_eq!(
             BridgeConfig::from_toml_str(&input).unwrap_err().to_string(),

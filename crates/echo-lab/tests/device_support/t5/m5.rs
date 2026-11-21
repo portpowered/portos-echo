@@ -170,7 +170,7 @@ fn grant() -> Value {
     let point = key.verifying_key().to_sec1_point(false);
     let config = echo_config::BridgeConfig::from_toml_str(CONFIG).unwrap();
     json!({"version":1,"issuer":"https://127.0.0.1:1","resource":config.mcp.server[0].url,
-        "client_id":config.mcp.client_id,"private_key_jwk":{"kty":"EC","crv":"P-256",
+        "client_id":"dcr_synthetic_replay","private_key_jwk":{"kty":"EC","crv":"P-256",
         "x":B64.encode(&point.as_bytes()[1..33]),"y":B64.encode(&point.as_bytes()[33..65]),
         "d":B64.encode([7;32])},"grant":{"refresh_token":"synthetic-consumed"}})
 }
