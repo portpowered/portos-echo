@@ -118,7 +118,11 @@ async fn catalog_turn(
         },
         vec![],
         async {
-            let _ = stopping.await;
+            // The first journey releases playback and lets the Settings owner
+            // end the generation. Dropping its sender is not a shutdown.
+            if stopping.await.is_err() {
+                std::future::pending().await;
+            }
         },
         retained,
     );
