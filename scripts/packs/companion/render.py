@@ -277,13 +277,17 @@ def ease_in_out(frame, count):
 def encode(pack, raw, role, count, keep=None):
     # Blend premultiplied colors so the short transitions have clean edges
     # on the alpha path. Both outputs derive from the exact same frames.
+    # The blend is worked out for every pixel, which is most of the build's
+    # time. It therefore runs only on the frames of a transition; every other
+    # frame is the pose itself.
     if role in UNBLENDED:
-        transition = "1"
+        transition, blended = "1", "0"
     elif role == "setup-enter":
         # Ends on the card pose, which the setup loop then holds.
-        transition = f"(1-cos(PI*(N-1)/{count - 1}))/2"
+        transition, blended = f"(1-cos(PI*(N-1)/{count - 1}))/2", "1"
     else:
         transition = ease_in_out("N-1", count)
+        blended = f"lte(n,{TRANSITION})+gte(n,{count - TRANSITION})"
     rate = IDLE_FPS if role == "idle" else FPS
     # Only the frames in keep are coded, each at its own time.
     held = "" if keep is None else "select='" + "+".join(f"eq(n,{n})" for n in keep) + "',"
@@ -292,7 +296,8 @@ def encode(pack, raw, role, count, keep=None):
     graph = (
         "[0:v]format=gbrap,premultiply=inplace=1[rest];"
         "[1:v]format=gbrap,premultiply=inplace=1[pose];"
-        f"[rest][pose]blend=all_expr='A+(B-A)*({transition})':shortest=1,"
+        f"[pose][rest]blend=all_expr='B+(A-B)*({transition})':shortest=1"
+        f":enable='{blended}',"
         f"unpremultiply=inplace=1,format=yuva420p,{held}split[webm][alpha];"
         f"color=c={BACKGROUND}:s={SIZE}:r={rate}[background];"
         "[background][alpha]overlay=shortest=1,format=yuv420p[mp4]"
