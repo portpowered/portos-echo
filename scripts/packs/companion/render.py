@@ -53,19 +53,20 @@ SPEECH = (("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 2), ("neutral", 2
           ("mouth-half", 3), ("mouth-open", 3), ("mouth-half", 2),
           ("mouth-open", 5), ("mouth-half", 3), ("neutral", 3),
           ("mouth-half", 2), ("mouth-open", 4), ("mouth-half", 4), ("neutral", 4))
-# The idle loop is three breaths long, so the blinks in it come at unequal
-# gaps: 3.7 s, 3.2 s and, across the loop's seam, 5.1 s.
+# The idle loop is on screen most of the time, and every frame the display is
+# given costs it a decode and a full redraw. The loop is therefore one slow
+# breath, drawn IDLE_FPS times a second, and then a hold: she is still but for
+# her blinks, and the clip carries no frame while nothing changes. The blinks
+# come at unequal gaps: 6.9 s, 4.6 s and, across the loop's seam, 4.5 s. A
+# blink is two frames: closed, then opening.
 BREATH = 120
-BLINKS = (42, 153, 249)
-# The idle loop is on screen most of the time, and every frame that differs
-# from the last costs the display a full decode and redraw. The slow bob is
-# therefore drawn IDLE_FPS times a second. A blink is two of those frames:
-# closed, then opening.
+IDLE_LENGTH = 480
+BLINKS = (42, 249, 387)
 IDLE_FPS = 10
 IDLE_STEP = FPS // IDLE_FPS
 # A state loop returns to the neutral frame only where it joins, so the held
 # poses use long loops.
-FRAMES = {"idle": 3 * BREATH // IDLE_STEP, "connecting": 150, "listening": 240, "thinking": 240,
+FRAMES = {"idle": IDLE_LENGTH // IDLE_STEP, "connecting": 150, "listening": 240, "thinking": 240,
           "speaking": 100, "muted": 30, "setup": 60, "setup-enter": 16, "approval": 300,
           "error": 300, "happy": 45}
 TRANSITION = 10
@@ -218,8 +219,8 @@ def bob(index):
 
 
 def idle(frames):
-    for index in range(0, 3 * BREATH, IDLE_STEP):
-        drop = bob(index)
+    for index in range(0, IDLE_LENGTH, IDLE_STEP):
+        drop = bob(index) if index < BREATH else 0
         frame = frames["bob"][drop]
         step = min(((index - start) // IDLE_STEP for start in BLINKS
                     if 0 <= index - start < 2 * IDLE_STEP), default=None)
@@ -273,7 +274,7 @@ def ease_in_out(frame, count):
     return f"(1-cos(PI*({amount})))/2"
 
 
-def encode(pack, raw, role, count):
+def encode(pack, raw, role, count, keep=None):
     # Blend premultiplied colors so the short transitions have clean edges
     # on the alpha path. Both outputs derive from the exact same frames.
     if role in UNBLENDED:
@@ -284,11 +285,15 @@ def encode(pack, raw, role, count):
     else:
         transition = ease_in_out("N-1", count)
     rate = IDLE_FPS if role == "idle" else FPS
+    # Only the frames in keep are coded, each at its own time.
+    held = "" if keep is None else "select='" + "+".join(f"eq(n,{n})" for n in keep) + "',"
+    timing = [] if keep is None else ["-fps_mode", "vfr"]
+    count = count if keep is None else len(keep)
     graph = (
         "[0:v]format=gbrap,premultiply=inplace=1[rest];"
         "[1:v]format=gbrap,premultiply=inplace=1[pose];"
         f"[rest][pose]blend=all_expr='A+(B-A)*({transition})':shortest=1,"
-        "unpremultiply=inplace=1,format=yuva420p,split[webm][alpha];"
+        f"unpremultiply=inplace=1,format=yuva420p,{held}split[webm][alpha];"
         f"color=c={BACKGROUND}:s={SIZE}:r={rate}[background];"
         "[background][alpha]overlay=shortest=1,format=yuv420p[mp4]"
     )
@@ -301,9 +306,9 @@ def encode(pack, raw, role, count):
                    else ["-lossless", "1", "-cpu-used", "4"])
     run(["-loop", "1", "-framerate", str(rate), "-i", str(pack / "rest.png"),
          *raw_input(raw, rate), "-filter_complex", graph,
-         "-map", "[webm]", *fixed, *gop, "-c:v", "libvpx-vp9",
+         "-map", "[webm]", *fixed, *timing, *gop, "-c:v", "libvpx-vp9",
          "-auto-alt-ref", "0", *vp9_quality, str(pack / f"{role}.webm"),
-         "-map", "[mp4]", *fixed, *gop, "-c:v", "libx264", *h264_quality, "-preset", "fast",
+         "-map", "[mp4]", *fixed, *timing, *gop, "-c:v", "libx264", *h264_quality, "-preset", "fast",
          "-x264-params", "aq-mode=0:mbtree=0", "-movflags", "+faststart",
          str(pack / f"{role}.mp4")])
 
@@ -318,6 +323,12 @@ def render(pack, work, warmth=WARMTH):
          str(pack / "rest.png")], frames["neutral"])
     raw = work / "frames.rgba"
     for role, count in FRAMES.items():
+        keep, last = [], None
         with raw.open("wb") as stream:
-            stream.writelines(timeline(role, frames))
-        encode(pack, raw, role, count)
+            for index, frame in enumerate(timeline(role, frames)):
+                # The last frame is kept so the clip keeps its length.
+                if frame != last or index == count - 1:
+                    keep.append(index)
+                last = frame
+                stream.write(frame)
+        encode(pack, raw, role, count, keep if role == "idle" else None)

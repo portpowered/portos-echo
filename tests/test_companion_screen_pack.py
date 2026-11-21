@@ -31,7 +31,7 @@ BACKGROUND = (16, 24, 39)
 HOME_CENTER, CARD_CENTER = 384, 274
 # The poses that stand beside a card for as long as it shows.
 CARD = ("setup", "approval", "error")
-# The idle loop is drawn at 10 fps; its first blink is frame 14.
+# The idle loop is timed at 10 fps; its first blink is frame 14.
 RATES = {"idle": 10}
 BLINK = 14
 # Two states are told apart when their middle frames differ by this much.
@@ -269,7 +269,10 @@ class CompanionPack(unittest.TestCase):
             else:
                 self.assertLess(delta(first, rest), 4, (ext, role, "start"))
                 self.assertLess(delta(last, rest), 4, (ext, role, "end"))
-            representatives[role] = visual(frames[len(frames) // 2], with_alpha)
+            # The idle loop is told apart by its breath, which is deepest
+            # two seconds in; the rest of the loop is a hold.
+            middle = 2 * RATES["idle"] - 2 if role == "idle" else len(frames) // 2
+            representatives[role] = visual(frames[middle], with_alpha)
             if role == "setup":
                 self.check_setup(ext, rest, frames, first)
             if role == "idle":
