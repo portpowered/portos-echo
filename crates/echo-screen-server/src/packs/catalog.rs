@@ -151,3 +151,64 @@ pub(super) fn fingerprint(root: &Path, id: &str, files: &BTreeMap<String, Vec<u8
     }
     Ok(digest.finalize().into())
 }
+
+/// Entries one stamp may visit; a larger tree is scanned in full instead.
+const STAMP_LIMIT: usize = 4096;
+
+/// Identify everything under the pack root by name, kind, size and file
+/// identity, without opening a file. Any edit `fingerprint` reports changes
+/// this value too, so an unchanged stamp means a new scan would say the same.
+pub(super) fn stamp(root: &Path) -> Result<[u8; 32], Error> {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    let mut pending = vec![root.to_owned()];
+    let mut seen = 0_usize;
+    while let Some(dir) = pending.pop() {
+        let mut paths = Vec::new();
+        match fs::read_dir(&dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    paths.push(entry.map_err(|_| Error::Storage)?.path());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && dir == root => {}
+            Err(_) => return Err(Error::Storage),
+        }
+        paths.sort();
+        seen = seen.checked_add(paths.len()).ok_or(Error::Count)?;
+        if seen > STAMP_LIMIT {
+            return Err(Error::Count);
+        }
+        for path in paths {
+            let meta = fs::symlink_metadata(&path).map_err(|_| Error::Storage)?;
+            let name = path.as_os_str().as_encoded_bytes();
+            digest.update((name.len() as u64).to_le_bytes());
+            digest.update(name);
+            identity(&mut digest, &meta);
+            if meta.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    Ok(digest.finalize().into())
+}
+
+fn identity(digest: &mut sha2::Sha256, meta: &fs::Metadata) {
+    use sha2::Digest;
+    digest.update([u8::from(meta.is_dir()), u8::from(meta.is_file())]);
+    digest.update(meta.len().to_le_bytes());
+    if let Ok(time) = meta.modified().and_then(|time| {
+        time.duration_since(std::time::UNIX_EPOCH)
+            .map_err(std::io::Error::other)
+    }) {
+        digest.update(time.as_nanos().to_le_bytes());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        digest.update(meta.dev().to_le_bytes());
+        digest.update(meta.ino().to_le_bytes());
+        digest.update(meta.ctime().to_le_bytes());
+        digest.update(meta.ctime_nsec().to_le_bytes());
+    }
+}

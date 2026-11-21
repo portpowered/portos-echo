@@ -13,7 +13,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::{cmp::Ordering, path::Path};
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Installed {
     id: String,
     name: String,
@@ -25,7 +25,7 @@ struct Installed {
 }
 
 /// Safe, versioned catalog. Entries can only be created by validating local data.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct PackCatalog {
     version: u8,
     revision: u64,
