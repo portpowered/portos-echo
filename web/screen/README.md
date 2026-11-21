@@ -105,7 +105,8 @@ text. Link instructions never navigate automatically.
 Actions use fetch with POST, Content-Type application/json and exact UiAction
 JSON. Only HTTP 204 reports acceptance; the server-owned presentation stays in
 place until a newer frame. Controls are disabled during a request. Rejection,
-non-204 responses and the 10-second timeout show “Action could not be sent”.
+non-204 responses and the 10-second timeout show “Action could not be sent”
+for 4 seconds; a pending or accepted action shows no status text.
 There is no automatic action retry. Ready sends tap target primary; approval
 buttons send their exact id; errors offer Dismiss and optionally Relink.
 Emotion also offers Dismiss; sending it does not stop playback until the bridge

@@ -243,9 +243,11 @@ export async function checkTemplateLayout(
     assert.deepEqual(await fixture.next(), {
         action: { action: "tap", target: "primary" },
     });
-    const feedback = page.getByRole("status").filter({
-        hasText: "Action sent; waiting for screen update",
-    });
+    // An accepted action draws no status box over the face.
+    await page.locator("button.home-tap:enabled").waitFor();
+    const feedback = page.locator('.screen-presentation + [role="status"]');
+    assert.equal(await feedback.textContent(), "");
+    assert.equal(await feedback.isVisible(), false);
     await observe(
         "Ready after activation",
         [
@@ -253,7 +255,6 @@ export async function checkTemplateLayout(
             ["settings", settings],
             ["clock", page.locator(".pack-clock")],
             ["date", page.locator(".pack-date")],
-            ["action feedback", feedback],
         ],
         violations,
     );

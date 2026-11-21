@@ -103,10 +103,9 @@ test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and
     assert.deepEqual(await next(), {
         action: { action: "approve", id: "approval-1" },
     });
-    await page
-        .getByRole("status")
-        .filter({ hasText: "Action sent; waiting for screen update" })
-        .waitFor();
+    // An accepted action re-enables the controls and writes no status text.
+    await page.locator("button:focus:enabled").waitFor();
+    assert.equal(await page.getByRole("status").textContent(), "");
     assert.equal(await page.locator(":focus").textContent(), "Allow");
     await page.keyboard.press("Tab");
     await page.keyboard.press("Space");
@@ -214,6 +213,19 @@ test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and
         true,
     );
     assert.deepEqual(posts, [{ action: "approve", id: "approval-1" }]);
+    // The failure report goes away without a newer frame. The revoked
+    // stream may report its own interruption in the same line meanwhile.
+    await page.waitForFunction(
+        () =>
+            document.querySelector('[role="status"]').textContent !==
+            "Action could not be sent",
+        undefined,
+        { timeout: 8000 },
+    );
+    assert.equal(
+        await page.locator("section p").textContent(),
+        approval.prompt,
+    );
     assert.deepEqual(output, []);
     console.log(
         "native page: exact Ready/Error/Approval; pointer Tap; Enter Approve; Space Deny; focus/1280x800 controls; revoked POST refused once with no action",

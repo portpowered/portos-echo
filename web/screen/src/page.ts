@@ -37,6 +37,15 @@ export function startPage(root: HTMLElement, href: string): () => void {
     let settings: ReturnType<typeof mountSettings> | undefined;
     let packs: ReturnType<typeof mountPacks> | undefined;
     let unwatchBuild: (() => void) | undefined;
+    let failureTimer: ReturnType<typeof setTimeout> | undefined;
+    const FAILURE = "Action could not be sent";
+    // Only a failed action reports, and the report clears itself: the ready
+    // state emits no newer frame that would clear it.
+    function clearFailure(): void {
+        clearTimeout(failureTimer);
+        failureTimer = undefined;
+        if (diagnostic.textContent === FAILURE) diagnostic.textContent = "";
+    }
     async function send(action: UiAction, frame: ScreenFrame): Promise<void> {
         if (disposed || pending || presentation.current !== frame) return;
         const controller = new AbortController();
@@ -44,7 +53,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         pending = controller;
         for (const button of content.querySelectorAll("button"))
             button.disabled = true;
-        diagnostic.textContent = "Sending action…";
+        clearFailure();
         let timer: ReturnType<typeof setTimeout>;
         const failure = new Promise<never>((_, reject) => {
             cancelPending = () => {
@@ -58,12 +67,11 @@ export function startPage(root: HTMLElement, href: string): () => void {
                 postAction(urls.actions, action, controller.signal),
                 failure,
             ]);
-            if (!disposed && presentation.current === frame)
-                diagnostic.textContent =
-                    "Action sent; waiting for screen update";
         } catch {
-            if (!disposed && presentation.current === frame)
-                diagnostic.textContent = "Action could not be sent";
+            if (!disposed && presentation.current === frame) {
+                diagnostic.textContent = FAILURE;
+                failureTimer = setTimeout(clearFailure, 4000);
+            }
         } finally {
             clearTimeout(timer!);
             pending = undefined;
@@ -152,6 +160,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         controls.className = "controls";
         content.append(details, controls);
         content.dataset.seq = frame.seq.toString();
+        clearFailure();
         diagnostic.textContent = "";
         if (idle && !content.classList.contains("screen-pack")) {
             content.append(clock);
@@ -282,6 +291,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         stopAnimation?.();
         clearTimeout(clockTimer);
         clearTimeout(expiryTimer);
+        clearTimeout(failureTimer);
         settings?.dispose();
         packs?.dispose();
         unwatchBuild?.();
