@@ -12,8 +12,16 @@ struct Watch {
     accepted: Option<[u8; 32]>,
     /// The stamp taken just before the scan that matched the accepted catalog.
     quiet: Option<[u8; 32]>,
+    /// A settled scan the settings owner has not accepted yet.
+    held: Option<Held>,
     #[cfg(test)]
     scans: usize,
+}
+
+struct Held {
+    stamp: [u8; 32],
+    revision: u64,
+    catalog: crate::PackCatalog,
 }
 
 impl Worker {
@@ -35,7 +43,7 @@ impl Worker {
     async fn watch_step(&self, watch: &mut Watch) {
         // A scan reads and hashes every installed pack, which is seconds of
         // CPU on the Echo. Run it only when a name, size or file identity
-        // under the root has changed since the accepted catalog.
+        // under the root has changed since the last settled scan.
         let root = self.root.clone();
         let stamp = tokio::task::spawn_blocking(move || catalog::stamp(&root)).await;
         let stamp = stamp.ok().and_then(Result::ok);
@@ -43,6 +51,22 @@ impl Worker {
             return;
         }
         let revision = self.core.lock().await.pack_revision;
+        // The owner may be absent or busy. Offer it the same settled scan
+        // again while the tree and the install revision stand still.
+        let held = watch.held.take();
+        if let Some(held) = held.filter(|held| Some(held.stamp) == stamp && held.revision == revision) {
+            if self.observe(held.catalog.clone(), revision).await {
+                watch.accepted = Some(held.catalog.signature());
+                watch.quiet = stamp;
+            } else {
+                watch.held = Some(held);
+            }
+            return;
+        }
+        self.watch_scan(watch, stamp, revision).await;
+    }
+
+    async fn watch_scan(&self, watch: &mut Watch, stamp: Option<[u8; 32]>, revision: u64) {
         let root = self.root.clone();
         // This single serial loop owns one bounded scan. Background work
         // must not take the HTTP capacity permit or starve settings reads.
@@ -61,9 +85,15 @@ impl Worker {
             watch.quiet = stamp;
         } else if watch.settled != Some(signature) {
             watch.settled = Some(signature);
-        } else if self.observe(catalog, revision).await {
+        } else if self.observe(catalog.clone(), revision).await {
             watch.accepted = Some(signature);
             watch.quiet = stamp;
+        } else if let Some(stamp) = stamp {
+            watch.held = Some(Held {
+                stamp,
+                revision,
+                catalog,
+            });
         }
     }
 
@@ -163,28 +193,27 @@ mod tests {
         std::fs::write(pack.join("rest.png"), rest).unwrap();
     }
 
-    // T2: the watcher reads pack files only while the tree is changing.
-    #[tokio::test]
-    async fn pack_watch_scans_only_when_the_pack_tree_changes() {
-        let home = tempfile::tempdir().unwrap();
-        let root = home.path().join("screens");
-        write_pack(&root, "generated-rest");
+    type Senders = (watch::Sender<bool>, watch::Sender<Option<tokio::time::Instant>>);
+
+    async fn watcher(root: &std::path::Path) -> (Worker, Senders) {
         let core = Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-pair".into()))));
         core.lock().await.pack_identity = PackObservation::Current(None);
-        let files = Arc::new(crate::packs::Files::default());
-        let (host, mut inbox) = mpsc::channel::<crate::SettingsRequest>(1);
-        assert!(files.settings.set(host.downgrade()).is_ok());
-        let (_stop, stop) = watch::channel(false);
-        let (_drain, drain) = watch::channel(None);
+        let (stop_tx, stop) = watch::channel(false);
+        let (drain_tx, drain) = watch::channel(None);
         let worker = Worker {
-            root: root.clone(),
+            root: root.to_owned(),
             client: Err(crate::packs::Error::Ca),
             core,
             stop,
             drain,
-            files,
+            files: Arc::new(crate::packs::Files::default()),
         };
-        let owner = tokio::spawn(async move {
+        (worker, (stop_tx, drain_tx))
+    }
+
+    /// Accept every watched catalog and count them.
+    fn owner(mut inbox: mpsc::Receiver<crate::SettingsRequest>) -> tokio::task::JoinHandle<usize> {
+        tokio::spawn(async move {
             let mut watched = 0;
             while let Some(request) = inbox.recv().await {
                 watched += 1;
@@ -196,7 +225,46 @@ mod tests {
                     .await;
             }
             watched
-        });
+        })
+    }
+
+    // T2: a watcher whose settings owner is not there yet still reads the
+    // packs only once per change, and hands over the settled scan later.
+    #[tokio::test]
+    async fn pack_watch_without_an_owner_holds_one_settled_scan() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("screens");
+        write_pack(&root, "generated-rest");
+        let (worker, _senders) = watcher(&root).await;
+        let mut state = Watch::default();
+        for _ in 0..8 {
+            worker.watch_step(&mut state).await;
+        }
+        assert_eq!(state.scans, 2);
+        assert_eq!(state.quiet, None);
+
+        let (host, inbox) = mpsc::channel::<crate::SettingsRequest>(1);
+        assert!(worker.files.settings.set(host.downgrade()).is_ok());
+        let owner = owner(inbox);
+        for _ in 0..4 {
+            worker.watch_step(&mut state).await;
+        }
+        assert_eq!(state.scans, 2);
+        assert_eq!(state.quiet, Some(catalog::stamp(&root).unwrap()));
+        drop(host);
+        assert_eq!(owner.await.unwrap(), 1);
+    }
+
+    // T2: the watcher reads pack files only while the tree is changing.
+    #[tokio::test]
+    async fn pack_watch_scans_only_when_the_pack_tree_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("screens");
+        write_pack(&root, "generated-rest");
+        let (worker, _senders) = watcher(&root).await;
+        let (host, inbox) = mpsc::channel::<crate::SettingsRequest>(1);
+        assert!(worker.files.settings.set(host.downgrade()).is_ok());
+        let owner = owner(inbox);
         let mut state = Watch::default();
         let before = catalog::stamp(&root).unwrap();
         for _ in 0..6 {
