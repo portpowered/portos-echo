@@ -12,7 +12,7 @@ import { mountKeyboard } from "./keyboard";
 import type { UiState } from "../model";
 import { packControls } from "./packs";
 import {
-    endpointUnavailable,
+    endpointMessages,
     loadSettings,
     restartWarning,
     saveSettingsV2,
@@ -236,7 +236,7 @@ export function mountSettings(
         if (data.version === 1) renderV1(data);
         else renderV2(data);
         for (const warning of data.warnings) {
-            if (data.version === 1 || warning !== endpointUnavailable)
+            if (data.version === 1 || !endpointMessages.has(warning))
                 fields.append(element("p", warning));
         }
     }

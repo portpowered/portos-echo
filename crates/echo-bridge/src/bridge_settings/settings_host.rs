@@ -29,6 +29,10 @@ pub struct SettingsHost {
 }
 
 impl SettingsHost {
+    pub(super) fn effective(&self) -> &BridgeConfig {
+        self.store.effective()
+    }
+
     pub(crate) fn prompts(&self) -> PromptTextsV1 {
         self.prompts.clone()
     }

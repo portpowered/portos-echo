@@ -17,18 +17,35 @@ use std::{
 };
 use tokio::{sync::Mutex, time::Instant};
 
+#[path = "endpoint/dcr.rs"]
+mod endpoint;
+
 #[cfg(test)]
 #[path = "auth_tests/mod.rs"]
 mod tests;
 
 #[derive(Deserialize)]
-struct DeviceChallenge {
-    device_code: Secret<String>,
-    user_code: String,
-    verification_uri: String,
-    expires_in: u64,
+pub(crate) struct DeviceChallenge {
+    pub(crate) device_code: Secret<String>,
+    pub(crate) user_code: String,
+    pub(crate) verification_uri: String,
+    pub(crate) expires_in: u64,
     #[serde(default = "default_interval")]
-    interval: u64,
+    pub(crate) interval: u64,
+}
+
+impl DeviceChallenge {
+    pub(crate) fn validate(&self) -> Result<(), AuthError> {
+        discovery::safe_url(&self.verification_uri).map_err(|_| AuthError::Protocol)?;
+        if self.device_code.expose().is_empty()
+            || self.user_code.is_empty()
+            || self.expires_in == 0
+            || self.interval == 0
+        {
+            return Err(AuthError::Protocol);
+        }
+        Ok(())
+    }
 }
 
 /// Display only the public user code, verification URI and expiry to the user.
@@ -234,14 +251,7 @@ impl AuthClient {
         else {
             return Err(AuthError::Protocol);
         };
-        discovery::safe_url(&link.verification_uri).map_err(|_| AuthError::Protocol)?;
-        if link.device_code.expose().is_empty()
-            || link.user_code.is_empty()
-            || link.expires_in == 0
-            || link.interval == 0
-        {
-            return Err(AuthError::Protocol);
-        }
+        link.validate()?;
         Ok(LinkInstructions {
             device_code: link.device_code,
             user_code: link.user_code,

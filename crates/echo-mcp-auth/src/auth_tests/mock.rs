@@ -48,6 +48,9 @@ pub struct State {
     pub metadata: Option<Value>,
     pub hold: Option<String>,
     pub held: bool,
+    endpoint: Option<Box<State>>,
+    endpoint_only: bool,
+    endpoint_installed: bool,
 }
 
 pub struct Mock {
@@ -89,6 +92,20 @@ impl Mock {
             release,
             task,
         })
+    }
+
+    /// Enable an independent synthetic grant lineage and keep MCP resource-bound.
+    /// # Errors
+    /// Reports an unavailable mock state.
+    pub fn enable_endpoint_audience(&self) -> std::io::Result<()> {
+        let mut state = self.state.lock().map_err(|_| invalid())?;
+        state.endpoint = Some(Box::new(State {
+            epoch: state.epoch,
+            lifetime: state.lifetime,
+            endpoint_only: true,
+            ..State::default()
+        }));
+        Ok(())
     }
 
     #[cfg(test)]
@@ -251,14 +268,20 @@ fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
         ),
         "/.well-known/oauth-authorization-server" => (200, state.metadata.clone().unwrap_or_else(|| metadata(base))),
         "/custom/link" | "/custom/token" => {
-            if !verify(request, base, state) {
-                return fail("invalid_dpop_proof");
+            let endpoint = request
+                .form
+                .get("device_code")
+                .is_some_and(|code| code == "synthetic-endpoint-device")
+                || (request.path == "/custom/link"
+                    || request
+                        .form
+                        .get("grant_type")
+                        .is_some_and(|grant| grant == "refresh_token"))
+                    && !request.form.contains_key("resource");
+            if endpoint && let Some(owner) = &mut state.endpoint {
+                return oauth(request, base, owner);
             }
-            if request.path == "/custom/link" {
-                device(request, base, state)
-            } else {
-                token(request, state)
-            }
+            oauth(request, base, state)
         }
         "/custom/end" => {
             if request.form.get("token") == Some(&format!("refresh-{}", state.generation)) {
@@ -272,7 +295,48 @@ fn route(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
                 && request.headers.get("authorization") == Some(&format!("Bearer access-{}", state.generation));
             (if allowed { 200 } else { 401 }, json!({}))
         }
+        "/plugin-auth-code-exchanges" | "/messages" if state.endpoint.is_some() => endpoint_api(request, state),
         _ => (404, json!({})),
+    }
+}
+
+fn endpoint_api(request: &Request, state: &mut State) -> (u16, Value) {
+    let Some(endpoint) = &state.endpoint else {
+        return (404, json!({}));
+    };
+    if request.headers.get("authorization") != Some(&format!("Bearer endpoint-access-{}", endpoint.generation))
+        || request.headers.contains_key("dpop")
+    {
+        return (401, json!({}));
+    }
+    if request.path == "/messages" {
+        return (202, json!({"receiptId":"synthetic-receipt"}));
+    }
+    let auth_link_id = "loopback link/%";
+    let is_rename = request
+        .json
+        .as_ref()
+        .and_then(|value| value.get("authLinkId"))
+        .and_then(Value::as_str)
+        == Some(auth_link_id);
+    if state.endpoint_installed && !is_rename {
+        return (409, json!({}));
+    }
+    state.endpoint_installed = true;
+    (
+        201,
+        json!({"authLinkId": auth_link_id,"id":"synthetic-install","etag":"synthetic-etag","status":"SUCCEEDED"}),
+    )
+}
+
+fn oauth(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
+    if !verify(request, base, state) {
+        return fail("invalid_dpop_proof");
+    }
+    if request.path == "/custom/link" {
+        device(request, base, state)
+    } else {
+        token(request, state)
     }
 }
 
@@ -301,9 +365,14 @@ fn device(request: &Request, base: &str, state: &mut State) -> (u16, Value) {
     state.pending = Some(jwk);
     state.bound = resource.is_some();
     state.revoked = false;
+    let code = if state.endpoint_only {
+        "synthetic-endpoint-device"
+    } else {
+        "synthetic-device"
+    };
     (
         200,
-        json!({"device_code":"synthetic-device","user_code":"TEST-CODE","verification_uri":format!("{base}/approve"),"expires_in":1800,"interval":5}),
+        json!({"device_code":code,"user_code":"TEST-CODE","verification_uri":format!("{base}/approve"),"expires_in":1800,"interval":5}),
     )
 }
 
@@ -311,8 +380,9 @@ fn token(request: &Request, state: &mut State) -> (u16, Value) {
     if state.revoked {
         return fail("invalid_grant");
     }
+    let audience = if state.endpoint_only { "endpoint-" } else { "" };
     if request.form.get("grant_type").is_some_and(|g| g == "refresh_token") {
-        if request.form.get("refresh_token") != Some(&format!("refresh-{}", state.generation)) {
+        if request.form.get("refresh_token") != Some(&format!("{audience}refresh-{}", state.generation)) {
             state.revoked = true;
             return fail("invalid_grant");
         }
@@ -322,7 +392,7 @@ fn token(request: &Request, state: &mut State) -> (u16, Value) {
     state.generation += 1;
     (
         200,
-        json!({"access_token":format!("access-{}",state.generation),"refresh_token":format!("refresh-{}",state.generation),
+        json!({"access_token":format!("{audience}access-{}",state.generation),"refresh_token":format!("{audience}refresh-{}",state.generation),
         "token_type":"Bearer","expires_in":state.lifetime,"scope":"endpoint:read"}),
     )
 }

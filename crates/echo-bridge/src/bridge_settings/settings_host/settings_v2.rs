@@ -18,8 +18,6 @@ use echo_screen_contract::{
 };
 use echo_screen_server::SettingsReply;
 
-const ENDPOINT_UNAVAILABLE: &str = "Port OS endpoint connection is unavailable.";
-
 impl SettingsHost {
     pub(super) fn portos_operation(&self, request: PortosOperationV2, grant: Option<&Grant>) -> SettingsReply {
         let config = self.store.effective();
@@ -134,7 +132,7 @@ impl SettingsHost {
         let config = self.store.effective();
         let mut warnings = accepted.warnings;
         if config.portos_endpoint.enabled {
-            warnings.push(ENDPOINT_UNAVAILABLE.into());
+            warnings.push(crate::bridge_endpoint::UNAVAILABLE.into());
         }
         let home = config.home.as_ref().map(|home| HomeSettingsV2 {
             agent_tools: [

@@ -6,6 +6,12 @@ use reqwest::{Client, StatusCode, redirect::Policy};
 use std::time::Duration;
 use url::Url;
 
+mod grant;
+mod registration;
+
+pub use grant::{EndpointApproval, EndpointGrant};
+pub use registration::{EndpointInstall, EndpointInstallExchange, EndpointRegistration, new_request_id};
+
 const EXCHANGE_PATH: &str = "/plugin-auth-code-exchanges";
 const MAX_EXCHANGE_RESPONSE: usize = 16_384;
 
@@ -56,6 +62,19 @@ impl EndpointExchange {
             return Err(ExchangeError::Unavailable);
         }
         Self::new(api, timeout)
+    }
+
+    /// Construct the exchange adapter against a synthetic loopback issuer.
+    ///
+    /// # Errors
+    /// Refuses any address other than literal IPv4 loopback.
+    #[cfg(feature = "mock")]
+    pub fn loopback(api_base: &str, timeout: Duration) -> Result<Self, ExchangeError> {
+        let url = discovery::safe_url(api_base).map_err(|_| ExchangeError::Unavailable)?;
+        if url.scheme() != "http" || url.host_str() != Some("127.0.0.1") {
+            return Err(ExchangeError::Unavailable);
+        }
+        Self::new(url, timeout)
     }
 
     fn new(mut url: Url, timeout: Duration) -> Result<Self, ExchangeError> {

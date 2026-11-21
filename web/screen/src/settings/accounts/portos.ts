@@ -1,5 +1,7 @@
 import {
-    endpointUnavailable,
+    endpointApproval,
+    endpointConnecting,
+    endpointMessages,
     operateAccount,
     readSettingsProgress,
     restartWarning,
@@ -53,7 +55,9 @@ export function mountPortos(
     let status = initial.portos;
     let waiting = initial.restart_pending;
     let restartFailed = initial.warnings.includes(restartWarning);
-    let unavailable = initial.warnings.includes(endpointUnavailable);
+    let endpointMessage = initial.warnings.find((warning) =>
+        endpointMessages.has(warning),
+    );
     let endpointRefresh = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let read: AbortController | undefined;
@@ -101,8 +105,8 @@ export function mountPortos(
                     : "Linking is available after the bridge restarts."
                 : "");
         operationStatus.hidden = operationStatus.textContent === "";
-        endpointStatus.textContent = unavailable ? endpointUnavailable : "";
-        endpointStatus.hidden = !unavailable;
+        endpointStatus.textContent = endpointMessage ?? "";
+        endpointStatus.hidden = !endpointMessage;
         challenge.render(status.challenge);
         buttons.render(
             !!status.server &&
@@ -125,7 +129,10 @@ export function mountPortos(
 
     function monitor() {
         if (timer || read) return;
-        if (endpointRefresh || active() || (waiting && !restartFailed))
+        const pairing =
+            endpointMessage === endpointConnecting ||
+            endpointMessage === endpointApproval;
+        if (endpointRefresh || pairing || active() || (waiting && !restartFailed))
             timer = setTimeout(() => void poll(), 500);
     }
 
@@ -144,7 +151,9 @@ export function mountPortos(
             if (!result || controller.signal.aborted || read !== controller)
                 return;
             status = result.portos;
-            unavailable = result.warnings.includes(endpointUnavailable);
+            endpointMessage = result.warnings.find((warning) =>
+                endpointMessages.has(warning),
+            );
             restartFailed = result.warnings.includes(restartWarning);
             if (waiting && restartFailed) updateRestart(restartWarning);
             if (waiting && !result.restart_pending) {

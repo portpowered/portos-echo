@@ -3,6 +3,73 @@
 use serde::{Deserialize, Serialize};
 
 pub const ECHO_PLUGIN: &str = "port1/systems/zero/plugins/echo-show";
+pub const VERSION: &str = "1.0";
+
+#[derive(Serialize)]
+pub struct Uplink<'a, T> {
+    header: UplinkHeader<'a>,
+    target: Route<'a>,
+    payload: T,
+}
+
+#[derive(Serialize)]
+struct UplinkHeader<'a> {
+    namespace: &'static str,
+    name: &'a str,
+    version: &'static str,
+}
+
+#[derive(Serialize)]
+struct Route<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    value: &'a str,
+}
+
+impl<'a, T> Uplink<'a, T> {
+    #[must_use]
+    pub fn new(name: &'a str, route_id: &'a str, payload: T) -> Self {
+        Self {
+            header: UplinkHeader {
+                namespace: ECHO_PLUGIN,
+                name,
+                version: VERSION,
+            },
+            target: Route {
+                kind: "ROUTE",
+                value: route_id,
+            },
+            payload,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportState<'a> {
+    pub state: AssistantState,
+    pub session_id: Option<&'a str>,
+    pub origin: Option<SessionOrigin>,
+    pub volume: Option<u8>,
+    pub muted: Option<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantState {
+    Idle,
+    Listening,
+    Thinking,
+    Speaking,
+    Muted,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionOrigin {
+    Wake,
+    Remote,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

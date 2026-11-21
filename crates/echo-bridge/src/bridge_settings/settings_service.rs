@@ -1,12 +1,12 @@
 //! Runtime-owned dispatch: no detached transactions survive the voice owner.
 use super::openai_account::Account;
 use super::{SettingsError, SettingsHost, portos_permissions::PortosPermissions, settings_restart::Restart};
-use crate::bridge_mcp::Grant;
+use crate::{bridge_endpoint, bridge_mcp::Grant};
 use echo_config::EffectiveConfig;
 use echo_mcp_auth::GrantStatus;
 use echo_screen_contract::{
     settings_v1::{LinkStatusV1, PromptTextsV1, SettingsErrorV1, SettingsVersionV1},
-    settings_v2::{PortosChallengeV2, PortosOperationStateV2, SettingsErrorV2, SettingsVersionV2},
+    settings_v2::{PortosChallengeV2, PortosOperationStateV2, PortosOperationV2, SettingsErrorV2, SettingsVersionV2},
 };
 use echo_screen_server::{SettingsOperation, SettingsReply, SettingsRequest, settings_channel};
 use std::{future::Future, sync::Arc};
@@ -21,6 +21,7 @@ pub struct SettingsService {
     restart: Restart,
     trace: Option<crate::bridge_trace::Trace>,
     account: Option<Account>,
+    endpoint: Option<(bridge_endpoint::Runtime, bridge_endpoint::Control)>,
 }
 
 /// Accepted state survives resource cleanup without reopening the home. A
@@ -76,6 +77,7 @@ impl SettingsService {
     #[must_use]
     pub fn resume(host: Box<SettingsHost>) -> (Self, mpsc::Sender<SettingsRequest>) {
         let (send, inbox) = settings_channel();
+        let endpoint = bridge_endpoint::Runtime::configured(host.effective(), None);
         (
             Self {
                 host,
@@ -83,6 +85,7 @@ impl SettingsService {
                 restart: Restart::default(),
                 trace: None,
                 account: None,
+                endpoint,
             },
             send,
         )
@@ -118,6 +121,12 @@ impl SettingsService {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_endpoint(mut self, runtime: (bridge_endpoint::Runtime, bridge_endpoint::Control)) -> Self {
+        self.endpoint = Some(runtime);
+        self
+    }
+
     /// Drive the bounded inbox only while this service generation is alive.
     /// The work future includes voice and all owned resource cleanup. Completion
     /// wins over queued requests, so no transaction can begin after it returns.
@@ -131,10 +140,24 @@ impl SettingsService {
     }
 
     pub(crate) async fn scope_with_grant<T>(
-        self,
+        mut self,
         work: impl Future<Output = T>,
         link_status: impl Fn() -> LinkStatusV1,
         current_grant: impl Fn() -> Option<Arc<Grant>>,
+    ) -> (T, SettingsCompletion) {
+        if let Some((runtime, control)) = self.endpoint.take() {
+            let settings = self.serve_inbox(work, link_status, &current_grant, Some(&control));
+            return runtime.scope(settings, &current_grant).await;
+        }
+        self.serve_inbox(work, link_status, &current_grant, None).await
+    }
+
+    async fn serve_inbox<T>(
+        self,
+        work: impl Future<Output = T>,
+        link_status: impl Fn() -> LinkStatusV1,
+        current_grant: &impl Fn() -> Option<Arc<Grant>>,
+        endpoint: Option<&bridge_endpoint::Control>,
     ) -> (T, SettingsCompletion) {
         let Self {
             mut host,
@@ -142,6 +165,7 @@ impl SettingsService {
             restart,
             mut trace,
             account,
+            ..
         } = self;
         let result = restart
             .scope(async {
@@ -173,7 +197,13 @@ impl SettingsService {
                                     let same_owner = grant.as_ref().zip(current.as_ref())
                                         .is_some_and(|(before, now)| Arc::ptr_eq(before, now));
                                     let view = if same_owner { view } else { GrantView::default() };
-                                    commit(&mut host, &restart, trace.as_mut(), operation, (link_status(), view, current.as_deref()))
+                                    let before = endpoint.map(|_| host.effective().portos_endpoint.clone());
+                                    let unlink = matches!(&operation, SettingsOperation::PortosV2(PortosOperationV2::Unlink { .. }));
+                                    let mut reply = commit(&mut host, &restart, trace.as_mut(), operation, (link_status(), view, current.as_deref()));
+                                    if let Some((control, before)) = endpoint.zip(before) {
+                                        endpoint_commit(control, &before, &host.effective().portos_endpoint, unlink, &mut reply);
+                                    }
+                                    reply
                                 }).await;
                             };
                             // Work may itself hold the grant lock during refresh.
@@ -196,6 +226,23 @@ impl SettingsService {
                 host,
             },
         )
+    }
+}
+
+fn endpoint_commit(
+    control: &bridge_endpoint::Control,
+    before: &echo_config::PortosEndpoint,
+    accepted: &echo_config::PortosEndpoint,
+    unlink: bool,
+    reply: &mut SettingsReply,
+) {
+    if unlink && matches!(reply, SettingsReply::AccountStarted(_)) {
+        control.unlink();
+    } else if before != accepted {
+        control.accept(accepted);
+    }
+    if let SettingsReply::SnapshotV2(snapshot) = reply {
+        control.present(snapshot);
     }
 }
 

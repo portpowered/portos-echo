@@ -2,6 +2,7 @@
 pub mod bridge_audio;
 #[path = "bridge_codex/bridge_codex.rs"]
 pub mod bridge_codex;
+mod bridge_endpoint;
 pub mod bridge_health;
 pub mod bridge_input;
 #[path = "bridge_mcp/bridge_mcp.rs"]

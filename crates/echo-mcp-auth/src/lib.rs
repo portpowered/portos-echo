@@ -20,7 +20,10 @@ pub mod mock;
 
 pub use auth::{AuthClient, GrantStatus, LinkInstructions};
 use echo_contracts::secret::Secret;
-pub use endpoint::{EndpointExchange, EndpointTokenSource, ExchangeError};
+pub use endpoint::{
+    EndpointApproval, EndpointExchange, EndpointGrant, EndpointInstall, EndpointInstallExchange, EndpointRegistration,
+    EndpointTokenSource, ExchangeError, new_request_id,
+};
 pub use refusal::LinkFailure;
 use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};
 
