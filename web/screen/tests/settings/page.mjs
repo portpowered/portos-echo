@@ -320,6 +320,7 @@ test("settings: pairing, unavailable, malformed and persistence errors retain ed
         );
     }
     await page.getByRole("button", { name: "Back", exact: true }).click();
+    await page.getByRole("button", { name: "Don't save" }).click();
     await response(page, { ...snapshot, allowed_voices: [] });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     assert.equal(
@@ -342,7 +343,9 @@ test("settings: cancellation and unload never render a late response or resubmit
             .isDisabled(),
         true,
     );
+    // The save is not confirmed yet, so leaving asks; discarding cancels it.
     await page.getByRole("button", { name: "Back", exact: true }).click();
+    await page.getByRole("button", { name: "Don't save" }).click();
     await page.evaluate(() =>
         window.resolvePost({
             status: 200,
@@ -392,6 +395,7 @@ test("settings: timed-out save stays uncertain without retry, and reopening relo
     await page.clock.runFor(20000);
     assert.equal((await calls(page)).length, 3);
     await page.getByRole("button", { name: "Back", exact: true }).click();
+    await page.getByRole("button", { name: "Don't save" }).click();
     await response(page, { ...snapshot, restart_pending: true });
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     assert.equal(

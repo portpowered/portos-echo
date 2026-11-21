@@ -1,0 +1,17 @@
+id: session-long-question-answered
+milestone: M3
+tiers: [T3]
+setup: {}
+steps:
+  - say: "Computer, what time is it?"
+  - expect_trace:
+      - run.started
+      - "reply.played {outcome: played}"
+      - wyoming.run_ended
+# The user speaks for 44 s before anything is handed off. The hand-off resolves
+# ten seconds later and the voice starts its answer eight seconds after that,
+# past 60 s from the wake. The answer is Played, the run is never ended as
+# unanswered, and it then stays open for exactly the listen window.
+budgets:
+  session_listen_seconds: 3
+negative: []

@@ -1,6 +1,6 @@
 import { decodeSaved, type PatchV2 } from "../api";
 import { saveSettingsV2 } from "../api-v2";
-import { element } from "../forms";
+import { actions as formActions, element } from "../forms";
 import { museReasons, probeMuse } from "./api";
 import type { MuseStatusV2 } from "../model";
 
@@ -8,7 +8,7 @@ type Perform = (
     work: (signal: AbortSignal) => Promise<string>,
     message?: string,
     keep?: boolean,
-) => Promise<void>;
+) => Promise<boolean>;
 
 function labelled<T extends HTMLInputElement | HTMLTextAreaElement>(
     text: string,
@@ -52,9 +52,7 @@ export function museForm(
         labelled("Muse bridge URL", url),
         labelled("Muse CA (base64 DER)", ca),
         labelled("Muse credential", credential),
-        save,
-        test,
-        clear,
+        formActions(test, clear, save),
     );
 
     function sync() {
@@ -66,7 +64,7 @@ export function museForm(
         ca.value = credential.value = "";
     }
     function submit(patch: NonNullable<PatchV2["muse"]>) {
-        void perform(
+        return perform(
             async (signal) => {
                 const restart = decodeSaved(
                     await saveSettingsV2(actions, signal, { muse: patch }),
@@ -92,13 +90,18 @@ export function museForm(
             true,
         );
     }
-    form.addEventListener("submit", (event) => {
-        event.preventDefault();
+    function inputs(): NonNullable<PatchV2["muse"]> {
         const patch: NonNullable<PatchV2["muse"]> = {};
         if (url.value !== (accepted.url ?? "")) patch.url = url.value;
         if (ca.value) patch.ca = ca.value;
         if (credential.value) patch.credential = credential.value;
-        if (Object.keys(patch).length) submit(patch);
+        return patch;
+    }
+    const dirty = () => Object.keys(inputs()).length !== 0;
+    const saveInputs = () => submit(inputs());
+    form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (dirty()) void saveInputs();
     });
     url.addEventListener("input", sync);
     test.addEventListener("click", () => {
@@ -121,9 +124,9 @@ export function museForm(
             true,
         );
     });
-    clear.addEventListener("click", () => submit({ clear: true }));
+    clear.addEventListener("click", () => void submit({ clear: true }));
     sync();
-    return { form, sync, forget };
+    return { form, sync, forget, dirty, save: saveInputs };
 }
 
 function connectionStatus(status: MuseStatusV2): string {

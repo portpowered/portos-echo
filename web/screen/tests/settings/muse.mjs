@@ -98,5 +98,6 @@ export async function verifyMuseSettings(page, calls) {
     assert.equal(await url.inputValue(), "");
     await credential.fill("discard-this-private-entry");
     await page.getByRole("button", { name: "Back" }).click();
+    await page.getByRole("button", { name: "Don't save" }).click();
     assert.equal(await credential.inputValue(), "");
 }

@@ -16,7 +16,7 @@ type Portos = SnapshotV2["portos"];
 type Perform = (
     work: (signal: AbortSignal) => Promise<string>,
     message?: string,
-) => Promise<void>;
+) => Promise<unknown>;
 
 const linkLabels: Record<Portos["link_status"], string> = {
     unconfigured: "Unconfigured",

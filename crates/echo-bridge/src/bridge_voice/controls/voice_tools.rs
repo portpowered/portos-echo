@@ -18,6 +18,7 @@ use echo_screen_contract::settings_v1::LinkStatusV1;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot};
+#[path = "voice_tools/muse.rs"]
 mod muse;
 #[path = "voice_tools/runner_skills.rs"]
 mod runner_skills;

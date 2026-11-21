@@ -1,8 +1,16 @@
 //! Delegated response timing belongs to the admitted Wyoming run.
-use super::{Error, Options, Source, UserSpeech};
-use tokio::time::Instant;
+use super::{Error, Source, UserSpeech, voice_source::FollowUp};
+use tokio::time::{Duration, Instant};
 
-pub(super) fn deadline(source: &Source, options: &Options, played: Option<Instant>) -> (Option<Instant>, Error) {
+/// How long a resolved hand-off's answer may take to start. The voice model
+/// begins a handed-back answer within a few seconds; calls on the Echo showed
+/// more than six. Twenty covers that three times over, and a hand-back that
+/// never arrives still ends well inside one no-answer window.
+pub(super) const HANDBACK_GRACE: Duration = Duration::from_secs(20);
+
+/// The reply's deadline and what its expiry means. The no-answer window runs
+/// from the user's last end of speech, never while they are still speaking.
+pub(super) fn deadline(source: &Source, played: Option<Instant>) -> (Option<Instant>, Error) {
     if played.is_some() {
         return (played, Error::Deadline);
     }
@@ -11,13 +19,50 @@ pub(super) fn deadline(source: &Source, options: &Options, played: Option<Instan
         // playback operation until the Played timer takes over.
         return (None, Error::Deadline);
     }
+    let speaking = source.user_speech == UserSpeech::Active;
     if source.delegation.waiting() {
-        let active = source.user_speech == UserSpeech::Active
-            || source.mouth.voiced()
-            || (source.controller.speaking() && !source.delegation.held());
-        return (source.run_ceiling.filter(|_| !active), Error::SessionCeiling);
+        let active = speaking || source.mouth.voiced() || (source.controller.speaking() && !source.delegation.held());
+        return match source.delegation.resolved().filter(|_| !active) {
+            Some(resolved) => (Some(owed(source, resolved)), Error::NoResponse),
+            None => (source.run_ceiling.filter(|_| !active), Error::SessionCeiling),
+        };
     }
-    (Some(options.response_deadline), Error::NoResponse)
+    ((!speaking).then_some(source.answer_due), Error::NoResponse)
+}
+
+/// A resolved hand-off holds the run for its answer: to the end of the
+/// no-answer window, and at least the grace from its resolution.
+fn owed(source: &Source, resolved: Instant) -> Instant {
+    resolved
+        .checked_add(HANDBACK_GRACE)
+        .map_or(source.answer_due, |grace| grace.max(source.answer_due))
+}
+
+/// The wait between replies and what its expiry returns: a running turn has
+/// the run ceiling, a resolved one its answer's grace, the rest the listen window.
+pub(super) fn listening(source: &Source, idle: Instant) -> (Option<Instant>, Result<bool, Error>) {
+    if !source.delegation.waiting() {
+        return (Some(idle), Ok(false));
+    }
+    let quiet = source.user_speech == UserSpeech::Quiet;
+    match source.delegation.resolved() {
+        Some(resolved) => (quiet.then(|| owed(source, resolved)), Err(Error::NoResponse)),
+        None => (source.run_ceiling.filter(|_| quiet), Err(Error::SessionCeiling)),
+    }
+}
+
+/// The reply's deadline passed. Speech nobody answered after an earlier reply
+/// is not a failed run: the reply closes empty and the run ends the usual way.
+pub(super) fn expired(source: &mut Source, error: Error) -> Result<(), Error> {
+    if error != Error::NoResponse
+        || source.follow_up != FollowUp::Replied
+        || source.controller.speaking()
+        || source.delegation.waiting()
+    {
+        return Err(error);
+    }
+    source.follow_up = FollowUp::Unanswered;
+    source.reply.finish()
 }
 
 /// Delegated Codex turns and the assistant utterance they bracket. Each
@@ -53,12 +98,15 @@ pub struct Delegation {
     utterance: Utterance,
     held: bool,
     answer: Answer,
+    /// When the last running turn completed.
+    resolved: Option<Instant>,
 }
 
 impl Delegation {
     pub fn started(&mut self) {
         self.turns += 1;
         self.answer = Answer::Pending;
+        self.resolved = None;
         if self.utterance == Utterance::Answer {
             self.utterance = Utterance::Filler;
         } else {
@@ -70,6 +118,7 @@ impl Delegation {
         self.turns = self.turns.saturating_sub(1);
         if self.turns == 0 {
             self.armed = false;
+            self.resolved = Some(Instant::now());
             if self.utterance == Utterance::Filler {
                 self.utterance = Utterance::Settled;
             }
@@ -86,12 +135,19 @@ impl Delegation {
         self.in_flight() || self.held || self.answer == Answer::Pending
     }
 
+    /// When every turn had resolved, while their answer is still owed.
+    #[must_use]
+    pub fn resolved(&self) -> Option<Instant> {
+        self.resolved.filter(|_| !self.in_flight() && self.waiting())
+    }
+
     /// The next reply starts clean but still owes each running turn its
     /// completion; an utterance after the reset is an answer, not a filler.
     pub(super) fn carried(&self) -> Self {
         Self {
             turns: self.turns,
             answer: self.answer,
+            resolved: self.resolved,
             ..Self::default()
         }
     }
@@ -134,7 +190,7 @@ impl Delegation {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{super::Options, *};
     use std::time::Duration;
 
     #[test]
@@ -163,44 +219,36 @@ mod tests {
         let mut source = Source::new(200, false).unwrap();
         let ceiling = opened + options.session_max;
         source.run_ceiling = Some(ceiling);
+        source.answer_due = options.response_deadline;
         assert_eq!(
-            deadline(&source, &options, None),
+            deadline(&source, None),
             (Some(options.response_deadline), Error::NoResponse)
         );
         source.delegation.started();
         tokio::time::advance(Duration::from_secs(61)).await;
-        assert_eq!(
-            deadline(&source, &options, None),
-            (Some(ceiling), Error::SessionCeiling)
-        );
+        assert_eq!(deadline(&source, None), (Some(ceiling), Error::SessionCeiling));
         source.delegation.completed();
         source.delegation.started();
         source.user_speech = UserSpeech::Active;
         tokio::time::advance(Duration::from_secs(30)).await;
-        assert_eq!(deadline(&source, &options, None).0, None);
+        assert_eq!(deadline(&source, None).0, None);
         source.user_speech = UserSpeech::Quiet;
         source.spoke();
-        assert_eq!(deadline(&source, &options, None).0, None);
+        assert_eq!(deadline(&source, None).0, None);
         assert!(!source.delegation.answered());
         let audible = [2000_i16.to_le_bytes(); 480].concat();
         source.mouth.wrote(&audible, Instant::now());
-        assert_eq!(deadline(&source, &options, None).0, None);
+        assert_eq!(deadline(&source, None).0, None);
         tokio::time::advance(Duration::from_secs(1)).await;
         assert_eq!(source.mouth.poll(Instant::now()), Some(true));
         assert_eq!(source.mouth.poll(Instant::now()), Some(false));
-        assert_eq!(
-            deadline(&source, &options, None),
-            (Some(ceiling), Error::SessionCeiling)
-        );
+        assert_eq!(deadline(&source, None), (Some(ceiling), Error::SessionCeiling));
         source.delegation.completed();
         source.spoke();
         assert!(source.delegation.answered());
         source.reply.finish().unwrap();
-        assert_eq!(deadline(&source, &options, None), (None, Error::Deadline));
+        assert_eq!(deadline(&source, None), (None, Error::Deadline));
         let played = Instant::now() + options.played_timeout;
-        assert_eq!(
-            deadline(&source, &options, Some(played)),
-            (Some(played), Error::Deadline)
-        );
+        assert_eq!(deadline(&source, Some(played)), (Some(played), Error::Deadline));
     }
 }

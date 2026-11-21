@@ -4,6 +4,8 @@ use super::{
     duplex::Satellite,
     provider::{Control, Provider},
 };
+#[path = "recovery/long_wait.rs"]
+mod long_wait;
 #[path = "recovery/recovery.rs"]
 mod recovery;
 use crate::lab_run::sim::{
@@ -45,6 +47,7 @@ pub(super) struct World {
     pub models: Vec<Value>,
     pub endpoints: Vec<std::net::SocketAddr>,
     wait_for_long_answer: bool,
+    question: Option<long_wait::Question>,
     recovery: bool,
     media_boundary: Option<MediaBoundary>,
 }
@@ -70,6 +73,7 @@ impl World {
         let mut command = tokio::process::Command::new(bridge);
         crate::lab_run::sim::m3::configure(&mut command, root, address.port(), &provider.origin)?;
         self.wait_for_long_answer = journey == super::Journey::Limits;
+        self.question = (journey == super::Journey::LongQuestion).then_some(long_wait::Question::Speaking);
         if let Some(max) = journey.max() {
             configure_run(root, max, self.wait_for_long_answer)?;
         }
@@ -191,20 +195,17 @@ impl World {
             let timing = self.timing()?;
             self.cross_playback(&timing).await?;
             let playback_pending = self.playback_pending();
+            let admitted = index > 0 || (connected(&self.clock) && timing.endpoint_seen());
+            if self.long_wait(admitted && gates.phase == Phase::Admitting).await? {
+                started = self.epoch();
+            }
             let provider = self.provider.as_mut().ok_or("session: missing provider")?;
             // RTP and transcript gates follow the media cadence; once the reply
             // is received only the bridge's own clock remains.
             if !gates.idle {
                 provider.tick().await?;
             }
-            let admitted = index > 0 || (connected(&self.clock) && timing.endpoint_seen());
             let milliseconds = gates.advance(provider, &timing, admitted, playback_pending).await?;
-            if self.wait_for_long_answer {
-                self.release_long_answer().await?;
-                if !self.wait_for_long_answer {
-                    started = self.epoch();
-                }
-            }
             self.step(milliseconds).await?;
             if gates.idle && self.played()? > replies {
                 return Ok(());
@@ -213,52 +214,6 @@ impl World {
                 return Err(self.stalled(&format!("reply {index}")));
             }
         }
-    }
-
-    async fn release_long_answer(&mut self) -> Result<(), String> {
-        let provider = self.provider.as_ref().ok_or("session: missing provider")?;
-        if provider.count("waiting") == 0 {
-            self.read_trace()?;
-            if self.trace.records.iter().any(|row| row["event"] == "turn/interrupt") {
-                let applied = self
-                    .trace
-                    .records
-                    .iter()
-                    .filter(|row| row["event"] == "session.tool_receipt")
-                    .count();
-                return Err(format!(
-                    "session: admitted long turn interrupted after {applied} of {} tool effects",
-                    super::LONG_CALLS
-                ));
-            }
-            return Ok(());
-        }
-        // The pin has acknowledged all twelve calls and is waiting on its
-        // last model response. Advance only the bridge's injected clock.
-        self.advance_live(super::LONG_WAIT_MS).await?;
-        self.provider
-            .as_ref()
-            .ok_or("session: missing provider")?
-            .control(Control::ReleaseGoodbye)
-            .await?;
-        self.wait_for_long_answer = false;
-        Ok(())
-    }
-
-    /// Advance the injected run clock in increments while the real local
-    /// media peer services ICE. A single jump would manufacture consent loss.
-    async fn advance_live(&mut self, mut remaining: u64) -> Result<(), String> {
-        while remaining > 0 {
-            let step = remaining.min(500);
-            self.provider
-                .as_mut()
-                .ok_or("session: missing provider")?
-                .tick()
-                .await?;
-            self.step(step).await?;
-            remaining -= step;
-        }
-        Ok(())
     }
 
     async fn step(&mut self, milliseconds: u64) -> Result<(), String> {
