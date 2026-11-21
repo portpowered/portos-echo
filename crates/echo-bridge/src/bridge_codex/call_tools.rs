@@ -313,7 +313,11 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         self.cancel = Some(cancel);
         self.muse_pending = call.tool == crate::bridge_muse::TOOL;
         let local = self.muse_pending;
-        let invocation = self.muse.as_ref().and_then(|muse| muse.invocation(&call.turn_id));
+        let invocation = self
+            .muse
+            .as_ref()
+            .filter(|_| local)
+            .and_then(|muse| muse.invocation(&call.turn_id));
         self.work = Some(Box::pin(async move {
             let outcome = if local {
                 Some(

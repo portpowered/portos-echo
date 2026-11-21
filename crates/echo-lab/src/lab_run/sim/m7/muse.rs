@@ -99,12 +99,16 @@ impl Muse {
                 return Err("m7: deadline clock acknowledgement mismatch".into());
             }
         } else {
-            let helper = self.helper.as_mut().ok_or("m7: missing helper")?;
-            helper.send(&json!({"task_id":id})).await?;
-            let report = helper.expect("m7.report").await?;
+            let report = self.report(id).await?;
             self.reports.push(report);
         }
         Ok(())
+    }
+
+    pub async fn report(&mut self, id: &str) -> Result<Value, String> {
+        let helper = self.helper.as_mut().ok_or("m7: missing helper")?;
+        helper.send(&json!({"task_id":id})).await?;
+        helper.expect("m7.report").await
     }
 
     pub fn collect(&mut self) -> Result<(), String> {

@@ -38,14 +38,16 @@ impl AgentBackend for BackendFake {
     }
 }
 
-struct UnreachableMcp;
+struct UnreachableMcp(Arc<std::sync::atomic::AtomicUsize>);
 impl ToolHost for UnreachableMcp {
     async fn list_tools(&self) -> Result<Vec<ToolSpec>, ToolError> {
-        panic!("Muse does not discover MCP tools")
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Err(ToolError::Denied)
     }
 
     async fn call_tool(&self, _: &str, _: Value, _: &str) -> Result<echo_agent_api::ToolResult, ToolError> {
-        panic!("Muse must not execute through MCP")
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Err(ToolError::Denied)
     }
 }
 
@@ -59,16 +61,27 @@ fn invocation(root: &std::path::Path, backend: Arc<BackendFake>, remaining: Dura
     }
 }
 
+fn assert_reply(actual: ToolResult, text: &str, success: bool) {
+    assert_eq!(
+        serde_json::to_value(actual).unwrap(),
+        json!({
+            "success": success,
+            "contentItems":[{"type":"inputText","text":text}]
+        })
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn muse_tool_correlates_and_rounds_remaining_run_time_and_refuses_replay() {
     let root = tempfile::tempdir().unwrap();
     let backend = Arc::new(BackendFake::default());
     let tool = crate::bridge_muse::tool_spec();
-    let catalog = Catalog::new(vec![tool.clone()], &[tool.name.clone()]).unwrap();
-    let mut dispatcher = Dispatcher::new(UnreachableMcp, catalog, "thread-7".into()).unwrap();
+    let effects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let catalog = Catalog::new(vec![tool], &[crate::bridge_muse::TOOL.into()]).unwrap();
+    let mut dispatcher = Dispatcher::new(UnreachableMcp(effects.clone()), catalog, "thread-7".into()).unwrap();
     dispatcher.start_turn("thread-7", "turn-7").unwrap();
     let call = serde_json::from_value(json!({"threadId":"thread-7","turnId":"turn-7",
-        "callId":"call-7","tool":tool.name,"arguments":{"request":" Read the test light state. "}}))
+        "callId":"call-7","tool":crate::bridge_muse::TOOL,"arguments":{"request":" Read the test light state. "}}))
     .unwrap();
     let invoke = async |args: &Value| {
         let (_cancel, stop) = oneshot::channel();
@@ -80,9 +93,10 @@ async fn muse_tool_correlates_and_rounds_remaining_run_time_and_refuses_replay()
         .await
     };
     let output = dispatcher.dispatch_local(&call, crate::bridge_muse::TOOL, invoke).await;
-    assert_eq!(output, reply("Muse test job completed", true));
+    assert_reply(output, "Muse test job completed", true);
     let replay = dispatcher.dispatch_local(&call, crate::bridge_muse::TOOL, invoke).await;
-    assert_eq!(replay, reply("stale or duplicate tool request", false));
+    assert_reply(replay, "stale or duplicate tool request", false);
+    assert_eq!(effects.load(std::sync::atomic::Ordering::Relaxed), 0);
     assert_eq!(
         *backend.tasks.lock().unwrap(),
         vec![Task {
@@ -108,23 +122,18 @@ async fn muse_tool_rejects_invalid_expired_or_unowned_requests_before_submit() {
     ] {
         let (_cancel, stop) = oneshot::channel();
         let ctx = invocation(root.path(), backend.clone(), Duration::from_secs(2));
-        assert_eq!(
-            invoke(Some(ctx), &arg, stop).await,
-            reply("tool request refused", false)
-        );
+        assert_reply(invoke(Some(ctx), &arg, stop).await, "tool request refused", false);
     }
     let args = json!({"request":"test"});
     let (_cancel, stop) = oneshot::channel();
-    assert_eq!(
+    assert_reply(
         invoke(None::<Invocation<BackendFake>>, &args, stop).await,
-        reply("tool request refused", false)
+        "tool request refused",
+        false,
     );
     let (_cancel, stop) = oneshot::channel();
     let ctx = invocation(root.path(), backend.clone(), Duration::ZERO);
-    assert_eq!(
-        invoke(Some(ctx), &args, stop).await,
-        reply("tool request cancelled", false)
-    );
+    assert_reply(invoke(Some(ctx), &args, stop).await, "tool request cancelled", false);
     assert_eq!(*backend.tasks.lock().unwrap(), vec![]);
 }
 
@@ -142,7 +151,7 @@ async fn muse_tool_cancelled_run_joins_the_task_and_does_not_return_success() {
         backend.poll.notified().await;
         cancel.send(()).unwrap();
     });
-    assert_eq!(result, reply("tool request cancelled", false));
+    assert_reply(result, "tool request cancelled", false);
     assert_eq!(*backend.cancels.lock().unwrap(), vec![TaskId::new("task-7").unwrap()]);
     let trace = std::fs::read_to_string(root.path().join("trace")).unwrap();
     let entries: Vec<Value> = trace.lines().map(|line| serde_json::from_str(line).unwrap()).collect();

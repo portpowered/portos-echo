@@ -86,8 +86,9 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
     let bridge = world.bridge.as_mut().unwrap().observe_collection();
     let host = world.host.as_mut().unwrap().observe_collection();
     // Cancel after a genuine submitted task has emitted Progress, before report.
+    let mut task = None;
     let journey = world.speak_with(async |root, _muse| {
-        progress(root).await?;
+        task = Some(progress(root).await?);
         std::fs::write(&cancel, "cancel").unwrap();
         std::future::pending::<Result<(), String>>().await
     });
@@ -99,6 +100,26 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
         )
         .await,
         Err("sim: cancelled".into())
+    );
+    let mut failures = Vec::new();
+    world.close_bridge(&mut failures).await;
+    assert_eq!(failures, Vec::<String>::new());
+    let id = task.unwrap();
+    let response = world.muse.report(&id).await.unwrap();
+    assert_eq!(response["exit"], 1);
+    assert_eq!(response["stdout"], "");
+    assert!(response["stderr"].as_str().unwrap().contains("cancelled task_id"));
+    world.muse.collect().unwrap();
+    let calls = &world.muse.calls;
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["argv"][2], calls[1]["argv"][2]);
+    assert_eq!(
+        calls[1]["argv"][5],
+        format!("Cancel task {id}. Do not call echo.report.result for it.")
+    );
+    assert_eq!(
+        world.control(json!({"action":"playback"})).await.unwrap()["pcm_bytes"],
+        0
     );
     assert_eq!(close(&mut world).await, Ok(()));
     for collected in [daemon, bridge, host] {
