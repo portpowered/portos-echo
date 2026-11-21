@@ -114,6 +114,14 @@ async function installedBytes(home) {
 }
 
 async function geometry(page, state) {
+    // The layout is checked once the glide from the previous clip has ended
+    // and the new clip has left the neutral frame it opens on.
+    await page.waitForFunction(
+        (selector) =>
+            document.querySelector(selector)?.currentTime >= 0.4 &&
+            !document.querySelector(".pack-stage video[data-leaving]"),
+        activeVideo,
+    );
     const art = await visibleCharacterBoxes(page);
     assert.ok(art.length, `${state}: decoded character is visible`);
     const characters = art.map((box) => ({ label: "character", ...box }));
