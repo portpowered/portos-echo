@@ -333,7 +333,7 @@ async fn listening_step<E: LinkEvents>(
 fn activity(event: &MediaEvent) -> bool {
     matches!(
         event,
-        MediaEvent::Control(Event::SpeechStarted | Event::ReplyHandoff | Event::TurnStarted { .. })
+        MediaEvent::Control(Event::SpeechStarted | Event::ReplyHandoff(_) | Event::TurnStarted { .. })
     ) || matches!(event, MediaEvent::Control(Event::Transcript { role, done, .. })
             if role == "user" || (role == "assistant" && !done))
 }
@@ -352,7 +352,7 @@ fn window(source: &Source, options: &Options) -> Result<std::time::Duration, Err
 fn answer(event: &MediaEvent) -> bool {
     matches!(
         event,
-        MediaEvent::Control(Event::ReplyHandoff | Event::TurnStarted { .. })
+        MediaEvent::Control(Event::ReplyHandoff(_) | Event::TurnStarted { .. })
     ) || matches!(event, MediaEvent::Control(Event::Transcript { role, .. }) if role == "assistant")
 }
 

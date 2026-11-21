@@ -2,6 +2,7 @@
 mod bridge_budget;
 mod bridge_delegation;
 pub(crate) mod bridge_kill;
+pub(crate) use bridge_delegation::bridge_muse_work;
 mod bridge_lifecycle;
 pub(crate) mod bridge_pacing;
 mod bridge_refusal;
@@ -61,7 +62,6 @@ pub async fn execute_with_control<C: LinkConnector>(
 #[must_use]
 pub fn configured(settings: &Settings) -> bool {
     settings.config.is_some()
-        && settings.muse.is_none()
         && (settings.model_url.is_none()
             || settings
                 .config
@@ -103,7 +103,7 @@ pub async fn execute_controlled<C: LinkConnector>(
     connector: C,
 ) -> Result<(), Error> {
     validate_sim(&settings)?;
-    let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day)?;
+    let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day);
     let mut trace = Trace::open(
         &settings.trace,
         match settings.mode {

@@ -136,7 +136,7 @@ impl BridgeConfig {
         if self.codex.skills.is_empty() {
             return Ok(());
         }
-        if self.agent_backend != crate::AgentBackend::Client || self.codex.home.is_none() || self.home.is_none() {
+        if self.codex.home.is_none() || self.home.is_none() {
             return Err(ConfigError::new(
                 "codex.skills",
                 "requires the Codex client runner and home.dir",

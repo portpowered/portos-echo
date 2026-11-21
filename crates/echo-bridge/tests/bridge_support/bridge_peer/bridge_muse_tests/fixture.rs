@@ -205,14 +205,7 @@ fn binary(name: &str) -> PathBuf {
     path
 }
 
-pub(super) fn configure(directory: &Path, port: u16, muse: &Muse, fault: &str) {
-    bridge_wire_screen::setup(directory, port);
-    let path = directory.join("bridge.toml");
-    let config = std::fs::read_to_string(&path).unwrap();
-    // Omit MCP entirely: Muse owns the sole executor, no Port OS grant is mounted.
-    let (head, tail) = config.split_once("[[mcp.server]]").unwrap();
-    let (_, tail) = tail.split_once("[screen]").unwrap();
-    let config = format!("{head}[mcp]\nserver = []\n[screen]{tail}").replace("[agent]", "[agent]\nbackend = 'muse'");
+pub(super) fn config(directory: &Path, muse: &Muse, fault: &str) -> echo_config::MuseConfig {
     let ca = if fault == "untrusted" {
         certificate(directory, "other", "subjectAltName=IP:127.0.0.1");
         directory.join("other.der")
@@ -230,13 +223,9 @@ pub(super) fn configure(directory: &Path, port: u16, muse: &Muse, fault: &str) {
     } else {
         &muse.url
     };
-    std::fs::write(
-        path,
-        format!(
-            "{config}\n[muse]\nurl = '{url}'\nca_file = '{}'\ncredential_file = '{}'\n",
-            ca.display(),
-            credential.display()
-        ),
-    )
-    .unwrap();
+    echo_config::MuseConfig {
+        url: url.into(),
+        ca_file: ca,
+        credential_file: credential,
+    }
 }

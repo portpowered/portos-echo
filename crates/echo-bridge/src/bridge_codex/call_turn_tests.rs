@@ -239,7 +239,7 @@ async fn voice_listen_projects_each_current_thread_handoff_once_whatever_the_use
             .unwrap();
         for answered in [false, true, false] {
             assert!(matches!(call.next().await.unwrap(), Event::Other));
-            assert!(matches!(call.next().await.unwrap(), Event::ReplyHandoff));
+            assert!(matches!(call.next().await.unwrap(), Event::ReplyHandoff(_)));
             assert!(matches!(call.next().await.unwrap(), Event::Other));
             assert!(matches!(call.next().await.unwrap(), Event::TurnStarted { .. }));
             for _ in 0..3 {

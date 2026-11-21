@@ -1,4 +1,7 @@
 //! Caller-driven tool work shares the media owner's single process reader.
+mod muse;
+pub(crate) use muse::MuseTool;
+
 use super::{Event, MediaCall, MediaEvent, RetainedCall};
 use crate::{Error, bridge_voice::VoicePort};
 use echo_agent_api::ToolHost;
@@ -100,6 +103,8 @@ pub struct ToolSession<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: M
     run: Option<tokio::sync::watch::Sender<Option<Arc<()>>>>,
     current_run: Option<Arc<()>>,
     session_answer_pending: bool,
+    muse: Option<MuseTool>,
+    muse_pending: bool,
 }
 
 impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolHost + 'static>
@@ -130,6 +135,8 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             run: None,
             current_run: None,
             session_answer_pending: false,
+            muse: None,
+            muse_pending: false,
         })
     }
 
@@ -148,6 +155,11 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
     ) -> Self {
         self.session = Some(requests);
         self.run = Some(run);
+        self
+    }
+
+    pub(crate) fn with_muse(mut self, muse: Option<MuseTool>) -> Self {
+        self.muse = muse;
         self
     }
 
@@ -183,6 +195,12 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             event = Box::pin(self.port.next()) => match event? {
                 MediaEvent::Control(event @ (Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => {
                     self.observed_control(event)
+                },
+                MediaEvent::Control(Event::ReplyHandoff(id)) => {
+                    if let Some(muse) = &mut self.muse {
+                        muse.handoff(id.clone());
+                    }
+                    Ok(MediaEvent::Control(Event::ReplyHandoff(id)))
                 },
                 event => Ok(event),
             },
@@ -264,6 +282,9 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 let dispatcher = self.dispatcher.as_mut().ok_or(Error::Unavailable)?;
                 if dispatcher.finish_turn(&thread, &turn).is_ok() {
                     self.active = None;
+                    if let Some(muse) = &mut self.muse {
+                        muse.finish_turn();
+                    }
                 }
             }
             Event::Tool { id, mut call } => {
@@ -278,21 +299,39 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                     self.admit_turn(&call.thread_id, &call.turn_id)?;
                 }
                 crate::bridge_voice::normalize_skill_arguments(&mut call, self.skills_enabled);
-                let mut dispatcher = self.dispatcher.take().ok_or(Error::Unavailable)?;
-                let (cancel, cancelled) = oneshot::channel();
-                self.request = Some(id);
-                self.cancel = Some(cancel);
-                self.work = Some(Box::pin(async move {
-                    let outcome = tokio::select! {
-                        biased;
-                        _ = cancelled => None,
-                        outcome = Box::pin(dispatcher.dispatch(&call)) => Some(outcome),
-                    };
-                    (dispatcher, outcome)
-                }));
+                self.dispatch(id, call)?;
             }
             _ => return Err(Error::Input),
         }
+        Ok(())
+    }
+
+    fn dispatch(&mut self, id: RequestId, call: echo_codex::codex_protocol::ToolCall) -> Result<(), Error> {
+        let mut dispatcher = self.dispatcher.take().ok_or(Error::Unavailable)?;
+        let (cancel, cancelled) = oneshot::channel();
+        self.request = Some(id);
+        self.cancel = Some(cancel);
+        self.muse_pending = call.tool == crate::bridge_muse::TOOL;
+        let local = self.muse_pending;
+        let invocation = self.muse.as_ref().and_then(|muse| muse.invocation(&call.turn_id));
+        self.work = Some(Box::pin(async move {
+            let outcome = if local {
+                Some(
+                    dispatcher
+                        .dispatch_local(&call, crate::bridge_muse::TOOL, async move |args| {
+                            muse::invoke(invocation, args, cancelled).await
+                        })
+                        .await,
+                )
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = cancelled => None,
+                    outcome = Box::pin(dispatcher.dispatch(&call)) => Some(outcome),
+                }
+            };
+            (dispatcher, outcome)
+        }));
         Ok(())
     }
 
@@ -312,6 +351,9 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
 
     fn admit_turn(&mut self, thread: &str, turn: &str) -> Result<(), Error> {
         self.active = Some((thread.into(), turn.into()));
+        if let Some(muse) = &mut self.muse {
+            muse.start_turn(turn);
+        }
         // Keep the turn's owner even when the next wake wins the device poll.
         if let Some(owner) = &self.run {
             owner.send_replace(self.current_run.clone());
@@ -326,6 +368,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
 
     fn settle(&mut self, (dispatcher, result): (Dispatcher<H>, Option<ToolResult>)) -> Result<(), Error> {
         self.work = None;
+        self.muse_pending = false;
         self.session_answer_pending = false;
         self.cancel = None;
         self.dispatcher = Some(dispatcher);
@@ -374,6 +417,25 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
     }
     fn bind_session(&mut self, run: Option<Arc<()>>) {
         self.current_run = run;
+    }
+    fn start_muse_run(&mut self, deadline: Instant) -> Result<(), Error> {
+        if let Some(muse) = &mut self.muse {
+            muse.start_run(deadline)?;
+        }
+        Ok(())
+    }
+    async fn finish_muse_run(&mut self) -> Result<(), Error> {
+        if let Some(muse) = &mut self.muse {
+            muse.finish_run();
+        }
+        if self.muse_pending {
+            if let Some(cancel) = self.cancel.take() {
+                let _ = cancel.send(());
+            }
+            let (dispatcher, _) = completed(&mut self.work).await;
+            self.settle((dispatcher, None))?;
+        }
+        Ok(())
     }
     async fn flush_session_answer(&mut self) -> Result<(), Error> {
         if self.session_answer_pending {

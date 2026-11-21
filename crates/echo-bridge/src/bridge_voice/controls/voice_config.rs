@@ -44,9 +44,6 @@ impl Configured {
         if config.codex.home.is_none() {
             return Err(Error::CodexHomeRequired);
         }
-        if config.agent_backend != echo_config::AgentBackend::Client {
-            return Err(Error::Input);
-        }
         Ok(Self {
             kill_path: config.audit.log_dir.join("bridge-kill"),
             // Only servers the operator named: the executable adds the public defaults.

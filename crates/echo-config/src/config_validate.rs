@@ -7,6 +7,9 @@ pub(super) fn reject_secrets(value: &toml::de::DeValue<'_>, path: &str) -> Resul
         toml::de::DeValue::Table(table) => {
             for (key, child) in table {
                 let key = key.get_ref();
+                if path == "agent" && key == "backend" {
+                    return Err(ConfigError::new("agent.backend", "removed; configure Muse with [muse]"));
+                }
                 let field = if path.is_empty() {
                     key.to_string()
                 } else {
@@ -84,13 +87,7 @@ fn schema_field(path: &str, key: &str) -> bool {
         "chatgpt_auth" => crate::config_auth::FIELDS,
         "echo" => &["host", "wyoming_port"],
         "live" => &["mode", "credential_file", "voice", "session_idle_seconds"],
-        "agent" => &[
-            "backend",
-            "max_tool_calls",
-            "task_deadline_seconds",
-            "daily_request_cap",
-            "model",
-        ],
+        "agent" => &["max_tool_calls", "task_deadline_seconds", "daily_request_cap", "model"],
         "muse" => &["url", "ca_file", "credential_file"],
         "mcp" => &["server", "state_dir", "client_id", "scopes", "operator_listen"],
         "screen" => &["listen", "pairing_token_file", "packs"],

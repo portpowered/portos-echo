@@ -6,13 +6,13 @@ use echo_contracts::{ids::TaskId, task::TaskEvent};
 use serde_json::json;
 use tokio::sync::oneshot;
 
-pub(super) struct Prepared {
+pub(crate) struct Prepared {
     pub text: String,
-    pub outcome: Outcome,
+    pub(super) outcome: Outcome,
 }
 
 impl Prepared {
-    pub fn new(text: &str, outcome: Outcome) -> Self {
+    pub(super) fn new(text: &str, outcome: Outcome) -> Self {
         Self {
             text: text.into(),
             outcome,
@@ -20,10 +20,16 @@ impl Prepared {
     }
 }
 
-const UNAVAILABLE: &str = "Muse is unavailable. Please try again.";
+pub(crate) const UNAVAILABLE: &str = "Muse is unavailable. Please try again.";
+impl Prepared {
+    pub(crate) fn success(&self) -> bool {
+        matches!(self.outcome, Outcome::Completed)
+    }
+}
+
 const DEADLINE: &str = "Muse did not report a result in time";
 
-pub(super) async fn execute(
+pub(crate) async fn execute(
     backend: &impl AgentBackend,
     task: Task,
     run: &str,

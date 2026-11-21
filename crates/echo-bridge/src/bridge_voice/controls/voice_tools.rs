@@ -198,6 +198,7 @@ pub(super) struct Tools {
     pub host: Option<Local<Policy<Mcp>>>,
     pub budget: ToolBudget,
     pub(super) skills: RunnerSkills,
+    muse: Option<Arc<crate::bridge_muse::Backend>>,
     allowed: Vec<String>,
     server: Option<String>,
     specs: Option<Vec<ToolSpec>>,
@@ -213,6 +214,7 @@ impl Tools {
             host: None,
             budget: ToolBudget::new(config.agent.daily_request_cap, move || Ok(utc_day())),
             skills: RunnerSkills::default(),
+            muse: None,
             allowed: config
                 .mcp
                 .server
@@ -225,6 +227,15 @@ impl Tools {
             portos_permissions: None,
             trace: None,
         }
+    }
+
+    pub(super) fn with_muse(mut self, config: &BridgeConfig, local: bool) -> Self {
+        self.muse = config
+            .muse
+            .as_ref()
+            .and_then(|muse| crate::bridge_muse::Backend::open(muse, local).ok())
+            .map(Arc::new);
+        self
     }
 
     pub(super) fn with_portos_permissions(mut self, permissions: Option<PortosPermissions>) -> Self {
@@ -311,6 +322,7 @@ impl Tools {
         let mut local = session_specs().to_vec();
         local.extend(self.host.as_ref().ok_or(Error::Unavailable)?.notes.specs());
         local.extend(self.skills.spec());
+        local.extend(self.muse.as_ref().map(|_| crate::bridge_muse::tool_spec()));
         local_catalog(self.specs.clone().unwrap_or_default(), &self.allowed, local)
     }
 
@@ -379,6 +391,7 @@ pub(super) fn session_catalog(specs: Vec<ToolSpec>, allowed: &[String]) -> Resul
 
 fn local_catalog(specs: Vec<ToolSpec>, allowed: &[String], local: Vec<ToolSpec>) -> Result<Catalog, Error> {
     let mut reserved = NAMES.to_vec();
+    reserved.push(crate::bridge_muse::TOOL);
     if local.iter().any(|spec| spec.name == READ_SKILL) {
         reserved.push(READ_SKILL);
     }
@@ -444,7 +457,16 @@ where
                 catalog,
                 tools.budget.clone(),
             ),
-            Some((receiver, run, tools.skills.is_enabled())),
+            Some((
+                receiver,
+                run,
+                tools.skills.is_enabled(),
+                tools
+                    .muse
+                    .clone()
+                    .zip(tools.trace.clone())
+                    .map(|(backend, trace)| crate::bridge_codex::MuseTool::new(backend, trace)),
+            )),
             (options.session, opened),
             cancelled.as_mut(),
             &mut observe,
@@ -463,3 +485,7 @@ where
 #[cfg(test)]
 #[path = "voice_tools/mcp_trust_tests.rs"]
 mod mcp_trust_tests;
+
+#[cfg(test)]
+#[path = "voice_tools/muse_tests.rs"]
+mod muse_tests;

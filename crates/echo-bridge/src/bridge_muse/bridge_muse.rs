@@ -12,6 +12,21 @@ use reqwest::Method;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::Mutex;
 
+pub(crate) const TOOL: &str = "ask_muse";
+
+pub(crate) fn tool_spec() -> echo_agent_api::ToolSpec {
+    echo_agent_api::ToolSpec {
+        name: TOOL.into(),
+        description: "Ask Muse to handle the user’s request and report the result.".into(),
+        input_schema: serde_json::json!({
+            "type":"object",
+            "additionalProperties":false,
+            "required":["request"],
+            "properties":{"request":{"type":"string","minLength":1}}
+        }),
+    }
+}
+
 pub struct Backend {
     http: Http,
     sessions: Mutex<HashMap<TaskId, Session>>,

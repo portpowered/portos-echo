@@ -1,4 +1,4 @@
-use echo_config::{AgentBackend, BridgeConfig};
+use echo_config::BridgeConfig;
 use std::path::Path;
 
 const EXAMPLE: &str = include_str!("../../../examples/bridge.example.toml");
@@ -19,29 +19,29 @@ fn error(input: &str, expected: &str) {
 }
 
 #[test]
-fn muse_profile_defaults_to_client_and_preserves_agent_limits() {
+fn muse_configuration_is_optional_and_does_not_open_its_files() {
     let default = BridgeConfig::from_toml_str(EXAMPLE).unwrap();
-    assert_eq!(default.agent_backend, AgentBackend::Client);
     assert_eq!(default.muse, None);
-    let explicit = BridgeConfig::from_toml_str(&selected("'client'")).unwrap();
-    assert_eq!(explicit, default);
-    let muse = BridgeConfig::from_toml_str(&format!("{}{MUSE}", selected("'muse'"))).unwrap();
-    assert_eq!(muse.agent_backend, AgentBackend::Muse);
-    assert_eq!(muse.agent, default.agent);
-    let config = muse.muse.unwrap();
-    assert_eq!(config.url, "https://127.0.0.1:7448");
-    assert_eq!(config.ca_file, Path::new("absent/ca.der"));
-    assert_eq!(config.credential_file, Path::new("~/absent/muse"));
+    let config = BridgeConfig::from_toml_str(&format!("{EXAMPLE}{MUSE}")).unwrap();
+    assert_eq!(config.agent, default.agent);
+    let muse = config.muse.unwrap();
+    assert_eq!(muse.url, "https://127.0.0.1:7448");
+    assert_eq!(muse.ca_file, Path::new("absent/ca.der"));
+    assert_eq!(muse.credential_file, Path::new("~/absent/muse"));
 }
 
 #[test]
-fn muse_section_is_optional_for_client_and_required_when_selected() {
-    error(&selected("'muse'"), "muse: required for muse backend");
-    let client = BridgeConfig::from_toml_str(&format!("{EXAMPLE}{MUSE}")).unwrap();
-    assert_eq!(client.agent_backend, AgentBackend::Client);
-    assert_eq!(client.muse.unwrap().credential_file, Path::new("~/absent/muse"));
-    for value in ["'SYNTHETIC_VALUE'", "true", "12", "[]", "{}"] {
-        error(&selected(value), "agent.backend: invalid type or value");
+fn retired_backend_has_one_migration_diagnostic() {
+    for value in [
+        "'client'",
+        "'muse'",
+        "'SYNTHETIC_VALUE'",
+        "true",
+        "12",
+        "[]",
+        "{token='SYNTHETIC_VALUE'}",
+    ] {
+        error(&selected(value), "agent.backend: removed; configure Muse with [muse]");
     }
 }
 
@@ -124,10 +124,6 @@ fn muse_inline_secrets_are_rejected_before_decoding() {
         error(
             &format!("{EXAMPLE}{MUSE}{key}='SYNTHETIC_VALUE'\n"),
             &format!("muse.{key}: secrets go in files, not config"),
-        );
-        error(
-            &selected(&format!("{{{key}='SYNTHETIC_VALUE'}}")),
-            &format!("agent.backend.{key}: secrets go in files, not config"),
         );
     }
 }

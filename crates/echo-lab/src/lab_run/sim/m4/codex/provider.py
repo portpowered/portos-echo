@@ -135,7 +135,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def transcripts(self, reply):
         portos = isinstance(delegation, tools_provider.PortosDelegation)
-        for role, text in [('user', delegation.utterance if portos else 'ping'), ('assistant', reply)]:
+        for role, text in [('user', getattr(delegation, 'utterance', 'ping')), ('assistant', reply)]:
             kind = 'input' if role == 'user' else 'output'
             frame(self.connection, {'type': kind + '_transcript.added', 'item': {'text': text}})
             frame(self.connection, {'type': 'turn.done', 'turn': {'role': role, 'transcript': text}})
@@ -158,6 +158,8 @@ try:
             hold_model = command.get('hold_model', False)
             if 'portos' in command:
                 delegation = tools_provider.PortosDelegation(command['tools'], command['portos'] == 'readonly')
+            elif 'muse' in command:
+                delegation = tools_provider.MuseDelegation(command['tools'], command['muse'])
             elif command.get('mcp'):
                 delegation = tools_provider.McpDelegation(command['tools'])
             else:

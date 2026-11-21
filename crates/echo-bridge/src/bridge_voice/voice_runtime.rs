@@ -391,6 +391,7 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
                     .delegation
                     .map(|config| {
                         super::voice_tools::Tools::new(config, options.utc_day.clone())
+                            .with_muse(config, options.host.routes.is_some())
                             .with_portos_permissions(grant.permissions.clone())
                             .with_runner_skills(options.runner_skills)
                     });

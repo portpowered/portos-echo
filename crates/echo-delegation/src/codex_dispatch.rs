@@ -181,6 +181,21 @@ impl<H: ToolHost> Dispatcher<H> {
         }
     }
 
+    /// Dispatch a bridge-local operation with runtime context owned by the IO caller.
+    /// This uses the same catalog, turn admission, and replay protection as MCP.
+    pub async fn dispatch_local(
+        &mut self,
+        call: &ToolCall,
+        name: &str,
+        effect: impl AsyncFnOnce(&serde_json::Value) -> ToolResult,
+    ) -> ToolResult {
+        match self.admit(call) {
+            Ok(admitted) if admitted == name => effect(&call.arguments).await,
+            Ok(_) => failed(&DispatchError::Refused.to_string()),
+            Err(error) => failed(&error.to_string()),
+        }
+    }
+
     fn admit(&mut self, call: &ToolCall) -> Result<String, DispatchError> {
         let turn = self.active.as_mut().ok_or(DispatchError::Stale)?;
         if call.thread_id != self.thread

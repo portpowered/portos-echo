@@ -16,7 +16,7 @@ pub use config_codex::{
     CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, LIVE_SESSION_GUIDANCE, RUNNER_INSTRUCTIONS, RUNNER_SESSION_GUIDANCE,
     WebSearch, realtime_voices,
 };
-pub use config_muse::{AgentBackend, MuseConfig};
+pub use config_muse::MuseConfig;
 pub use config_screen::ScreenPackDownload;
 pub use config_settings::{EffectiveConfig, SettingsOptions, SettingsOverlay, SettingsServerTools};
 pub use config_voice::VoiceConfig;
@@ -104,7 +104,6 @@ pub struct BridgeConfig {
     pub audio: AudioConfig,
     pub clock: ClockConfig,
     pub agent: AgentConfig,
-    pub agent_backend: AgentBackend,
     pub muse: Option<MuseConfig>,
     pub mcp: McpConfig,
     pub screen: ScreenConfig,

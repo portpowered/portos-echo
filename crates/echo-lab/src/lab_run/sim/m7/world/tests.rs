@@ -39,7 +39,7 @@ async fn start(world: &mut World, root: &Path, bridge: &Path, host: &Host) -> Re
 
 async fn close(world: &mut World) -> Result<(), String> {
     let mut owned = std::mem::take(world);
-    let mut completion = Completion::new("M7 daemon/helper/bridge/relay/Live/model/spoof/host", async move {
+    let mut completion = Completion::new("M7 daemon/helper/bridge/relay/provider/spoof/host", async move {
         let result = owned.close().await;
         (owned, result)
     });
@@ -86,12 +86,11 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
     let bridge = world.bridge.as_mut().unwrap().observe_collection();
     let host = world.host.as_mut().unwrap().observe_collection();
     // Cancel after a genuine submitted task has emitted Progress, before report.
-    let journey = async {
-        world.control(json!({"action":"finite","pcm":fixture()})).await?;
-        world.progress().await?;
+    let journey = world.speak_with(async |root, _muse| {
+        progress(root).await?;
         std::fs::write(&cancel, "cancel").unwrap();
         std::future::pending::<Result<(), String>>().await
-    };
+    });
     assert_eq!(
         super::super::super::controlled(
             journey,
@@ -111,7 +110,7 @@ async fn m7_cancel_pending_task_joins_all_owners_and_removes_private_world() {
             .trace
             .records
             .iter()
-            .filter(|e| e["event"] == "session.commentary.append")
+            .filter(|e| e["event"] == "muse.terminal")
             .count(),
         0
     );

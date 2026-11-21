@@ -16,7 +16,6 @@ pub struct Settings {
     pub sim_epoch: Option<u64>,
     pub mcp: Option<crate::bridge_mcp::Settings>,
     pub kill_path: Option<PathBuf>,
-    pub muse: Option<(echo_config::AgentConfig, echo_config::MuseConfig)>,
     pub delegation: Option<(echo_config::AgentConfig, echo_config::McpServer)>,
     pub screen: Option<echo_config::ScreenConfig>,
     pub wyoming: SocketAddr,
@@ -185,7 +184,6 @@ fn lab_settings(lab: [Option<String>; 3], health: Option<&str>) -> Result<Settin
         mcp: None,
         kill_path: None,
         delegation: None,
-        muse: None,
         screen: None,
         wyoming: loopback(&wyoming, false)?,
         live_url: lab_origin(&url)?,
@@ -210,17 +208,12 @@ fn configured(
     let effective = echo_config::BridgeConfig::load_effective(config).map_err(|error| prompt_config_error(&error))?;
     let config = effective.config.clone();
     let runner_skills = RunnerSkills::load(&config)?;
-    let muse = if config.agent_backend == echo_config::AgentBackend::Muse {
-        Some((config.agent.clone(), config.muse.clone().ok_or(Error::Input)?))
-    } else {
-        None
-    };
     let mode = match config.live.mode {
         echo_config::LiveMode::Chatgpt => LiveAuthMode::Chatgpt,
         echo_config::LiveMode::ApiKey => LiveAuthMode::ApiKey,
     };
     let (live_url, model_url) = configured_origins(&config, origins)?;
-    let credential = if muse.is_none() && (origins.is_none() || config.codex.home.is_some()) {
+    let credential = if origins.is_none() || config.codex.home.is_some() {
         Provider::Unavailable
     } else {
         Provider::Resolved(
@@ -234,18 +227,9 @@ fn configured(
         runner_skills,
         sim_clock: false,
         sim_epoch: None,
-        mcp: if muse.is_none() {
-            crate::bridge_mcp::Settings::configured(&config)?
-        } else {
-            None
-        },
-        muse,
+        mcp: crate::bridge_mcp::Settings::configured(&config)?,
         kill_path: Some(config.audit.log_dir.join("bridge-kill")),
-        delegation: if config.agent_backend == echo_config::AgentBackend::Client {
-            config.mcp.server.first().cloned().map(|server| (config.agent, server))
-        } else {
-            None
-        },
+        delegation: config.mcp.server.first().cloned().map(|server| (config.agent, server)),
         screen: Some(config.screen),
         wyoming: echo_address(&config.echo.host, config.echo.wyoming_port)?,
         live_url,
@@ -305,9 +289,7 @@ fn configured_origins(
     }
     // Only the retained legacy path consumes this endpoint. Codex refresh uses
     // the owned child's explicit LocalRoutes, never legacy auth configuration.
-    if config.live.mode == echo_config::LiveMode::Chatgpt
-        && (config.codex.home.is_none() || config.agent_backend == echo_config::AgentBackend::Muse)
-    {
+    if config.live.mode == echo_config::LiveMode::Chatgpt && config.codex.home.is_none() {
         loopback_endpoint(&config.chatgpt_auth.token_endpoint)?;
     }
     Ok((live.into(), Some(model.into())))
@@ -337,6 +319,7 @@ fn prompt_config_error(error: &echo_config::ConfigError) -> Error {
         "codex.web_search:",
         "codex.skills:",
         "codex.skills[",
+        "agent.backend: removed;",
     ]
     .iter()
     .any(|prefix| text.starts_with(prefix))
@@ -411,9 +394,6 @@ mod tests {
             Ok(("http://127.0.0.1:1".into(), Some("http://127.0.0.1:2".into())))
         );
         config.echo.host = "non-loopback.invalid".into();
-        assert_eq!(configured_origins(&config, origins), Err(Error::Input));
-        config.echo.host = "127.0.0.1".into();
-        config.agent_backend = echo_config::AgentBackend::Muse;
         assert_eq!(configured_origins(&config, origins), Err(Error::Input));
     }
 }

@@ -4,32 +4,45 @@ use super::*;
 fn world(negative: bool) -> World {
     let mut world = World::default();
     for event in [
-        "session.delegation.created",
+        "delegation.created",
+        "item/tool/call",
         "muse.submit",
         "muse.progress",
         "muse.terminal",
-        "session.commentary.append",
+        "delegation.tool",
         "reply.played",
-        "reply.started",
     ] {
         world
             .trace
             .records
-            .push(json!({"event":event,"elapsed_ms":0,"run_id":"run-1","delegation_id":"d-1","task_id":"t-1"}));
+            .push(json!({"event":event,"elapsed_ms":0,"run_id":"run-1",
+            "delegation_id":"d-1","task_id":"t-1","name":"ask_muse","kind":"agent",
+            "thread_id":"thread","turn_id":"turn","call_id":"tool-local","request_id":7}));
     }
-    world.trace.records[3]["status"] = json!(if negative { "failed" } else { "completed" });
+    let status = json!(if negative { "failed" } else { "completed" });
+    world.trace.records[4]["status"] = status.clone();
+    world.trace.records[5]["status"] = status;
+    world.trace.records[6]["outcome"] = json!("played");
     if negative {
-        world.trace.records[3]["retryable"] = json!(false);
+        world.trace.records[4]["retryable"] = json!(false);
     }
     world.completion = json!({"event":"bridge.run_completed","run_id":"run-1"});
     world.playback = json!({"event":"host.ack","pcm_bytes":9600,"nonzero_bytes":9000});
     world.audibility = json!({"pcm_bytes":9600,"nonzero_samples":4800,"audible_samples":4700,"host":world.playback});
-    world.ui_states = ["ready", "listening", "connected", "speaking", "ready"]
-        .map(|state| json!({"state":state}))
-        .into();
+    world.ui_states = [
+        "ready",
+        "listening",
+        "connected",
+        "thinking",
+        "speaking",
+        "connected",
+        "ready",
+    ]
+    .map(|state| json!({"state":state}))
+    .into();
     world.muse.calls = vec![
         json!({"argv":["send-user-msg","--session-id","00000000-0000-4000-8000-000000000001","--wait","1",
-        "Execute the delegated request and report its result.\nContext: {\"delegation\":{\"id\":\"d-1\",\"target\":\"client\"}}\nTask ID: t-1\nWhen you are finished, call the echo.report.result command with task_id t-1, status completed or failed, and a short summary. Do not report success any other way."],"stdin":""}),
+        "Run the test job\nContext: null\nTask ID: t-1\nWhen you are finished, call the echo.report.result command with task_id t-1, status completed or failed, and a short summary. Do not report success any other way."],"stdin":""}),
     ];
     if !negative {
         world
@@ -37,27 +50,15 @@ fn world(negative: bool) -> World {
             .reports
             .push(json!({"exit":0,"stderr":"","stdout":"{\"accepted\":true,\"task_id\":\"t-1\"}"}));
     }
-    let mut sent = vec![DialogueSent::Text(
-        json!({"type":"response.audio_transcript.done","transcript":if negative { DEADLINE } else { SUCCESS }})
-            .to_string(),
-    )];
-    sent.extend((0..10).map(|sequence| {
-        DialogueSent::Audio(echo_live::AudioFrame {
-            sequence,
-            timestamp: u32::from(sequence) * 960,
-            payload: crate::lab_run::sim::m2::codex::tone::packet(sequence).unwrap().payload,
-        })
-    }));
-    world.dialogue = vec![echo_live::fake::DialogueCall {
-        call_index: 0,
-        delegation_id: "d-1".into(),
-        sent,
-        rejected_commentary: 0,
-        received_audio: 44,
-        reply_completed: true,
-        closed: true,
-        failure: None,
-    }];
+    world.muse.admission = json!({"task_id":"t-1","session_id":"00000000-0000-4000-8000-000000000001",
+        "deadline_unix_seconds":109,"task":{"deadline_seconds":9,"delegation_id":"d-1"}});
+    let answer = if negative { DEADLINE } else { SUCCESS };
+    world.dialogue = json!({"delegations":["d-1"],"appends":["d-1"],"sidebands":1,"external":0,
+        "tool_output":answer,
+        "models":[{"outputs":0,"tools":["ask_muse","extend_session","end_session"]},
+                  {"outputs":1,"tools":["ask_muse","extend_session","end_session"]}],
+        "transcripts":[{"role":"user","text":"Computer, ask Muse to run the test job"},
+                       {"role":"assistant","text":answer}]});
     world
 }
 
@@ -82,7 +83,7 @@ fn m7_identity_and_duplicate_diagnostics_name_expected_and_observed() {
         "m7 raw task ID: expected \"t-1\"; observed \"another\""
     );
     let mut wrong = world(false);
-    wrong.trace.records.push(wrong.trace.records[3].clone());
+    wrong.trace.records.push(wrong.trace.records[4].clone());
     assert_eq!(
         observe(&wrong, false).unwrap_err(),
         "m7 muse.terminal: expected 1; observed 2"
@@ -91,7 +92,7 @@ fn m7_identity_and_duplicate_diagnostics_name_expected_and_observed() {
     wrong.trace.records.push(wrong.trace.records[6].clone());
     assert_eq!(
         observe(&wrong, false).unwrap_err(),
-        "m7 reply.started: expected 1; observed 2"
+        "m7 reply.played: expected 1; observed 2"
     );
 }
 
@@ -113,7 +114,7 @@ fn m7_wrong_missing_or_stale_identity_and_extra_outcomes_are_rejected() {
                 wrong.completion["run_id"] = json!("stale");
             }
             4 => {
-                wrong.trace.records.push(wrong.trace.records[3].clone());
+                wrong.trace.records.push(wrong.trace.records[4].clone());
             }
             5 => {
                 wrong.trace.records.push(wrong.trace.records[5].clone());
@@ -131,22 +132,22 @@ fn m7_wrong_missing_or_stale_identity_and_extra_outcomes_are_rejected() {
                 wrong.muse.reports[0]["exit"] = json!(1);
             }
             10 => {
-                wrong.dialogue[0].delegation_id = "stale".into();
+                wrong.dialogue["delegations"] = json!(["stale"]);
             }
             11 => {
-                wrong.dialogue[0].sent.pop();
+                wrong.dialogue["tool_output"] = json!("unexpected");
             }
             12 => {
                 wrong.playback["pcm_bytes"] = json!(0);
             }
             13 => {
-                wrong.model_requests = 1;
+                wrong.dialogue["models"] = json!([]);
             }
             14 => {
                 wrong.tool_calls = 1;
             }
             _ => {
-                wrong.trace.records.swap(2, 3);
+                wrong.trace.records.swap(3, 4);
             }
         }
         assert!(observe(&wrong, false).is_err(), "mutation {index}");

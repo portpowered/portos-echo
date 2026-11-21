@@ -1,4 +1,4 @@
-use super::{Error, Stats, VoicePort, session_controller::Controller};
+use super::{Error, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
 use crate::bridge_runtime::bridge_pacing::Question;
 use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Cut, Discard, Ear, QUIET, ReplyMeter, ReplyQuality};
@@ -23,6 +23,24 @@ const UPLINK_BACKLOG: usize = 1500;
 pub(super) enum UserSpeech {
     Quiet,
     Active,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Stats {
+    pub received_chunks: u64,
+    pub dropped_chunks: u64,
+    pub microphone_chunks: u64,
+    pub microphone_frames: u64,
+    pub microphone_tail: usize,
+    /// Speech evicted because the media sender stalled past the backlog bound.
+    pub uplink_dropped: u64,
+    pub reply_received: u64,
+    pub reply_sent: u64,
+    pub reply_dropped: u64,
+    /// The settled reply's pacing and discard facts.
+    pub quality: ReplyQuality,
+    /// The barge-in that cut the settled reply.
+    pub cut: Option<Box<Cut>>,
 }
 
 pub(super) struct Source {

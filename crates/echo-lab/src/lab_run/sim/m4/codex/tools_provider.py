@@ -71,19 +71,25 @@ class Delegation:
             'type': 'delegation', 'target': 'client', 'id': 'delegation-local',
             'content': [{'type': 'input_text', 'text': 'Call ui_show_emotion with name happy and report the result.' if self.emotion else 'Call test_echo with text delegated echo and report the result.'}]}}
 
-    def respond(self, body):
+    def expected_tools(self):
         expected = function_tools(self.tools)
         expected[1]['parameters']['properties']['ms'].pop('minimum')
-        assert body['tools'] == expected, 'model exposed tools beyond exact dynamic catalog'
+        return expected
+
+    def tool_call(self):
+        return ('ui_show_emotion', '{"name":"happy"}') if self.emotion else ('test_echo', '{"text":"delegated echo"}')
+
+    def respond(self, body):
+        assert body['tools'] == self.expected_tools(), 'model exposed tools beyond exact dynamic catalog'
         assert body['model'] == 'gpt-5.4', 'wrong delegated model'
         outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
         index = len(self.models)
         assert index < 2, 'unexpected model retry'
         if index == 0:
             assert not outputs, 'premature tool output'
+            name, arguments = self.tool_call()
             item = {'type': 'function_call', 'id': 'fc-local', 'call_id': 'tool-local',
-                    'name': 'ui_show_emotion' if self.emotion else 'test_echo',
-                    'arguments': '{"name":"happy"}' if self.emotion else '{"text":"delegated echo"}', 'status': 'completed'}
+                    'name': name, 'arguments': arguments, 'status': 'completed'}
         else:
             assert len(outputs) == 1 and outputs[0]['call_id'] == 'tool-local', 'tool identity mismatch'
             # The pinned engine encodes dynamic-tool content as a JSON text value.
@@ -120,6 +126,34 @@ class Delegation:
 
     def snapshot(self):
         return {'delegations': self.delegations, 'models': self.models, 'appends': self.appends}
+
+
+class MuseDelegation(Delegation):
+    utterance = 'Computer, ask Muse to run the test job'
+    request = 'Run the test job'
+
+    def __init__(self, tools, reply):
+        super().__init__(tools, False)
+        self.reply = reply
+        self.tool_output = None
+
+    def begin(self):
+        event = super().begin()
+        event['item']['content'] = [{'type': 'input_text', 'text': self.utterance}]
+        return event
+
+    def expected_tools(self):
+        return function_tools(self.tools)
+
+    def tool_call(self):
+        return ('ask_muse', json.dumps({'request': self.request}))
+
+    def check_output(self, output):
+        assert output == self.reply, 'exact Muse tool output mismatch'
+        self.tool_output = output
+
+    def snapshot(self):
+        return {**super().snapshot(), 'tool_output': self.tool_output}
 
 
 class McpDelegation:

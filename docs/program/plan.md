@@ -158,12 +158,13 @@ Consequences:
 | S3 Screen client | A minimal WebView app as hassmic's home app showing the bridge's page: memory with hassmic running, coexistence with the light band and hassmic's face and words layers, touch focus, start on boot | `echo-screen`'s shape (ADR); the fallback is Kiosk Satellite pointed at the page |
 | S4 Live tools | `gpt-live-1` lists function calling. Tools declared directly on the Live session could skip the delegated model for one-step requests | Measured only; nothing depends on it |
 
-### 3.2 Backend profiles
+### 3.2 Muse tool
 
-1. **C: client execution on the bridge** (above). The shipping path for M4–M6.
-2. **B: Muse** through the gadget SDK wrapper (section 7). Feature-gated, for M7.
-
-Per install, exactly one profile executes tools (the RFC's single-writer invariant).
+The Codex voice path owns tool admission for M4–M7. A usable `[muse]` connection adds the bridge-owned
+`ask_muse` tool alongside the existing catalog. A matching live handoff and turn authorize one attempt per
+native tool request. The tool sends only its request and the handoff's correlation ID to the HTTPS service
+(section 7). Muse shares the remaining Wyoming run time described in section 3. The bridge joins cancellation
+before releasing the owning run. Remove `agent.backend` from older configurations.
 
 ### 3.3 The Codex app server
 

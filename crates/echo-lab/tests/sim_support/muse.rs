@@ -58,15 +58,17 @@ fn check(case: &Value, negative: bool) {
         "delegation_count",
         "muse_submit_count",
         "terminal_count",
-        "commentary_count",
+        "native_tool_call_count",
+        "native_append_count",
         "spoken_reply_count",
         "gadget_submit_count",
     ] {
         assert_eq!(case[field], 1, "{field}");
     }
-    for field in ["client_tool_call_count", "responses_request_count"] {
+    for field in ["client_tool_call_count", "legacy_dispatch_count"] {
         assert_eq!(case[field], 0, "{field}");
     }
+    assert_eq!(case["responses_request_count"], 2);
     check_terminal(case, negative);
 }
 
@@ -146,7 +148,9 @@ fn check_audio(case: &Value) {
             json!("ready"),
             json!("listening"),
             json!("connected"),
+            json!("thinking"),
             json!("speaking"),
+            json!("connected"),
             json!("ready")
         ])
     );

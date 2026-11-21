@@ -95,7 +95,6 @@ pub(super) fn decode(value: Value<'_>) -> Result<(BridgeConfig, Vec<ConfigError>
     let mut root = Fields::new(value, "config")?;
     let home = root.table.remove("home").map(|v| home(v.into_inner())).transpose()?;
     let mut warnings = Vec::new();
-    let agent_backend;
     let result = BridgeConfig {
         home,
         wake_earcon: root.optional("wake_earcon")?.unwrap_or(true),
@@ -126,12 +125,7 @@ pub(super) fn decode(value: Value<'_>) -> Result<(BridgeConfig, Vec<ConfigError>
             .transpose()?
             .unwrap_or_default(),
         clock: crate::config_clock::decode(root.table.remove("clock").map(Spanned::into_inner))?,
-        agent: {
-            let (agent, backend) = agent(root.node("agent")?, &mut warnings)?;
-            agent_backend = backend;
-            agent
-        },
-        agent_backend,
+        agent: agent(root.node("agent")?, &mut warnings)?,
         muse: root
             .table
             .remove("muse")
@@ -191,7 +185,7 @@ fn audio(value: Value<'_>) -> Result<crate::AudioConfig, ConfigError> {
     Ok(result)
 }
 
-fn agent(value: Value<'_>, warnings: &mut Vec<ConfigError>) -> Result<(AgentConfig, crate::AgentBackend), ConfigError> {
+fn agent(value: Value<'_>, warnings: &mut Vec<ConfigError>) -> Result<AgentConfig, ConfigError> {
     let mut f = Fields::new(value, "agent")?;
     for (present, field) in [
         (f.discard("max_tool_calls"), "agent.max_tool_calls"),
@@ -201,7 +195,6 @@ fn agent(value: Value<'_>, warnings: &mut Vec<ConfigError>) -> Result<(AgentConf
             warnings.push(ConfigError::new(field, "deprecated and ignored"));
         }
     }
-    let backend = f.optional("backend")?.unwrap_or_default();
     let result = AgentConfig {
         max_tool_calls: 8,
         task_deadline_seconds: 60,
@@ -209,7 +202,7 @@ fn agent(value: Value<'_>, warnings: &mut Vec<ConfigError>) -> Result<(AgentConf
         model: f.optional("model")?,
     };
     f.finish()?;
-    Ok((result, backend))
+    Ok(result)
 }
 
 fn mcp(value: Value<'_>) -> Result<McpConfig, ConfigError> {

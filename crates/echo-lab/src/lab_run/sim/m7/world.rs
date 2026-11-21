@@ -1,7 +1,7 @@
 //! One fresh production Muse journey, using the shared finite Wyoming observer.
 use super::super::{
     m4::{
-        model::Model,
+        codex::{self, provider::Provider},
         screen::Screen,
         wire::Relay,
         world::{self, fixture},
@@ -9,8 +9,7 @@ use super::super::{
     process::{self, Process},
     trace::Trace,
 };
-use super::{live::Live, muse::Muse, oracle};
-use echo_live::fake::DialogueCall;
+use super::{muse::Muse, oracle};
 use echo_spoof_mcp::{Options, Spoof};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -24,18 +23,16 @@ pub struct World {
     host: Option<Process>,
     bridge: Option<Process>,
     relay: Option<Relay>,
-    live: Option<Live>,
-    model: Option<Model>,
+    provider: Option<Provider>,
     spoof: Option<Spoof>,
     root: PathBuf,
     pub trace: Trace,
     pub speaking: Option<Value>,
-    pub dialogue: Vec<DialogueCall>,
+    pub dialogue: Value,
     pub completion: Value,
     pub playback: Value,
     pub audibility: Value,
     pub ui_states: Vec<Value>,
-    pub model_requests: usize,
     pub tool_calls: usize,
 }
 
@@ -63,16 +60,13 @@ impl World {
                 .await
                 .map_err(|_| "m7: spoof startup failed")?,
         );
-        self.model = Some(Model::bind_controlled(false, async { Ok(()) }, None).await?);
         let text = if negative { DEADLINE } else { SUCCESS };
-        self.live = Some(Live::bind(text).await?);
+        self.provider = Some(Provider::start_muse(python, text).await?);
         self.configure()?;
-        self.bridge = Some(Process::start(&mut world::command(
-            root,
-            bridge,
-            self.live.as_ref().ok_or("m7: missing Live")?.base_url(),
-            &self.model.as_ref().ok_or("m7: missing model")?.origin,
-        ))?);
+        let origin = &self.provider.as_ref().ok_or("m7: missing provider")?.origin;
+        self.bridge = Some(Process::start(
+            world::command(root, bridge, origin, origin).arg("--sim-clock"),
+        )?);
         self.bridge
             .as_mut()
             .ok_or("m7: missing bridge")?
@@ -87,13 +81,13 @@ impl World {
             self.relay.as_ref().ok_or("m7: missing relay")?.address.port(),
             self.spoof.as_ref().ok_or("m7: missing spoof")?,
         )?;
+        codex::configure(&self.root)?;
         let path = self.root.join("bridge.toml");
         let config = std::fs::read_to_string(&path).map_err(|_| "m7: missing config")?;
         let (head, tail) = config.split_once("[[mcp.server]]").ok_or("m7: missing MCP section")?;
         let (_, tail) = tail.split_once("[screen]").ok_or("m7: missing screen section")?;
-        let config = format!("{head}[mcp]\nserver = []\n[screen]{tail}")
-            .replace("[agent]", "[agent]\nbackend = 'muse'")
-            .replace("[voice]", "[voice]\nsession_max_seconds = 10");
+        let config =
+            format!("{head}[mcp]\nserver = []\n[screen]{tail}").replace("[voice]", "[voice]\nsession_max_seconds = 10");
         std::fs::write(
             path,
             format!(
@@ -113,54 +107,41 @@ impl World {
     }
 
     pub async fn speak(&mut self, negative: bool) -> Result<(), String> {
+        self.speak_with(async |root, muse| muse.terminal(&progress(root).await?, negative).await)
+            .await
+    }
+
+    async fn speak_with(
+        &mut self,
+        task: impl AsyncFnOnce(&Path, &mut Muse) -> Result<(), String>,
+    ) -> Result<(), String> {
         let mut screen = Screen::connect(&self.root).await?;
         self.ui_states.push(screen.expect("ready").await?);
         self.control(json!({"action":"finite","pcm":fixture()})).await?;
-        self.ui_states.push(screen.expect("listening").await?);
-        self.ui_states.push(screen.expect("connected").await?);
-        let id = self.progress().await?;
-        self.muse.terminal(&id, negative).await?;
-        let speaking = screen.expect("speaking").await?;
-        self.ui_states.push(speaking.clone());
+        let provider = self.provider.as_mut().ok_or("m7: missing provider")?;
+        let bridge = self.bridge.as_mut().ok_or("m7: missing bridge")?;
+        let relay = self.relay.as_ref().ok_or("m7: missing relay")?;
+        let (connected, ready) = tokio::sync::oneshot::channel();
+        let mut clock = Value::Null;
+        let (completion, speaking, ()) = tokio::try_join!(
+            codex::settle(bridge, provider, relay, ready, &mut clock),
+            observe_screen(&mut screen, &mut self.ui_states, connected),
+            task(&self.root, &mut self.muse),
+        )?;
+        self.completion = completion;
         self.speaking = Some(speaking);
-        self.completion = self
-            .bridge
-            .as_mut()
-            .ok_or("m7: missing bridge")?
-            .expect("bridge.run_completed")
-            .await?;
-        self.ui_states.push(screen.expect("ready").await?);
         self.playback = self.control(json!({"action":"playback"})).await?;
-        self.relay.as_ref().ok_or("m7: missing relay")?.timing().sample()?;
-        self.audibility = self
-            .relay
-            .as_ref()
-            .ok_or("m7: missing relay")?
-            .timing()
-            .audible_reply(&self.playback)?;
-        let live = self.live.as_mut().ok_or("m7: missing Live")?;
-        live.completed().await?;
-        self.dialogue = live.calls();
+        let timing = self.relay.as_ref().ok_or("m7: missing relay")?.timing();
+        timing.sample()?;
+        self.audibility = timing.audible_reply(&self.playback)?;
         self.muse.collect()
-    }
-
-    async fn progress(&self) -> Result<String, String> {
-        loop {
-            let raw = std::fs::read(self.root.join("trace")).map_err(|_| "m7: missing trace")?;
-            let mut trace = Trace::default();
-            trace.append(&raw)?;
-            if let Some(record) = trace.records.iter().find(|e| e["event"] == "muse.progress") {
-                return record["task_id"]
-                    .as_str()
-                    .map(str::to_owned)
-                    .ok_or("m7: missing progress ID".into());
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
     }
 
     pub async fn close(&mut self) -> Result<(), String> {
         let mut failures = vec![];
+        if let Some(provider) = &self.provider {
+            failures.extend(provider.quiesce().await.err());
+        }
         self.close_bridge(&mut failures).await;
         self.close_peers(&mut failures).await;
         if let Err(error) = self.muse.close().await {
@@ -197,9 +178,6 @@ impl World {
                 failures.push(error);
             }
         }
-        if let Some(model) = &self.model {
-            self.model_requests = model.requests();
-        }
         if let Some(spoof) = &self.spoof {
             match spoof.snapshot() {
                 Ok(snapshot) => self.tool_calls = snapshot.calls.len(),
@@ -214,15 +192,11 @@ impl World {
         {
             failures.push(error);
         }
-        if let Some(live) = self.live.take()
-            && live.shutdown().await.is_err()
-        {
-            failures.push("m7: Live cleanup failed".into());
-        }
-        if let Some(model) = self.model.take()
-            && let Err(error) = model.close().await
-        {
-            failures.push(error);
+        if let Some(provider) = self.provider.take() {
+            match provider.close().await {
+                Ok(snapshot) => self.dialogue = snapshot,
+                Err(error) => failures.push(error),
+            }
         }
         if let Some(spoof) = self.spoof.take()
             && spoof.shutdown().await.is_err()
@@ -233,5 +207,38 @@ impl World {
 
     pub fn observation(&self, negative: bool) -> Result<Value, String> {
         oracle::observe(self, negative)
+    }
+}
+
+async fn observe_screen(
+    screen: &mut Screen,
+    states: &mut Vec<Value>,
+    connected: tokio::sync::oneshot::Sender<()>,
+) -> Result<Value, String> {
+    for state in ["listening", "connected"] {
+        states.push(screen.expect(state).await?);
+    }
+    connected.send(()).map_err(|()| "m7: connection observer abandoned")?;
+    states.push(screen.expect("thinking").await?);
+    let speaking = screen.expect("speaking").await?;
+    states.push(speaking.clone());
+    states.push(screen.expect("connected").await?);
+    states.push(screen.expect("ready").await?);
+    Ok(speaking)
+}
+
+async fn progress(root: &Path) -> Result<String, String> {
+    let mut checks = tokio::time::interval(std::time::Duration::from_millis(5));
+    loop {
+        checks.tick().await;
+        let raw = std::fs::read(root.join("trace")).map_err(|_| "m7: missing trace")?;
+        let mut trace = Trace::default();
+        trace.append(&raw)?;
+        if let Some(record) = trace.records.iter().find(|e| e["event"] == "muse.progress") {
+            return record["task_id"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or("m7: missing progress ID".into());
+        }
     }
 }

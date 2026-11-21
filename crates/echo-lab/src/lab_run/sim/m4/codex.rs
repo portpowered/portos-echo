@@ -8,7 +8,7 @@ mod host_tests;
 #[cfg(test)]
 #[path = "world/lifecycle.rs"]
 mod lifecycle;
-mod provider;
+pub(in crate::lab_run::sim) mod provider;
 mod receipts;
 #[cfg(test)]
 mod tests;
@@ -309,7 +309,7 @@ impl Case {
     }
 }
 
-fn configure(root: &Path) -> Result<(), String> {
+pub(in crate::lab_run::sim) fn configure(root: &Path) -> Result<(), String> {
     let path = root.join("bridge.toml");
     let text = std::fs::read_to_string(&path)
         .map_err(|_| "m4: missing config")?
@@ -326,7 +326,7 @@ fn configure(root: &Path) -> Result<(), String> {
     .map_err(|_| "m4: cannot configure Codex".into())
 }
 
-async fn settle(
+pub(in crate::lab_run::sim) async fn settle(
     bridge: &mut Process,
     provider: &mut Provider,
     relay: &Relay,

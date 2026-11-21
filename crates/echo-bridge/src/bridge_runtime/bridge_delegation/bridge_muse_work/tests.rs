@@ -1,16 +1,13 @@
-//! T1: one bridge component with explicit in-memory task and Live boundaries.
+//! T1: one bridge component with an in-memory task backend.
 use super::*;
 use echo_agent_api::AgentError;
 use echo_contracts::ids::DelegationId;
 use serde_json::Value;
-use std::time::Duration;
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
-use tokio::{sync::Notify, time::Instant};
-#[path = "trace_tests.rs"]
-mod trace_tests;
+use tokio::sync::Notify;
 
 #[derive(Default)]
 struct State {
@@ -57,9 +54,6 @@ impl AgentBackend for Fake {
         self.state.cancels.lock().unwrap().push(id.clone());
         std::future::ready(Ok(()))
     }
-}
-fn cutoff() -> Instant {
-    Instant::now() + Duration::from_millis(4_999)
 }
 fn id() -> TaskId {
     TaskId::new("task-raw-7").unwrap()
@@ -248,171 +242,4 @@ async fn muse_work_failure_sanitizes_untrusted_message_and_forces_nonretryable_t
         terminal["retryable"] = false.into();
         assert_eq!(witness.records(), vec![fields("muse.submit"), terminal]);
     }
-}
-
-#[derive(Default)]
-struct Live(Vec<(DelegationId, String)>, bool);
-impl crate::bridge_runtime::journey::bridge_live::LivePort for Live {
-    fn send_audio(
-        &mut self,
-        _: echo_live::AudioFrame,
-        _: std::time::Instant,
-    ) -> impl std::future::Future<Output = Result<(), echo_live::call::CallError>> {
-        std::future::ready(Err(echo_live::call::CallError::Decode))
-    }
-    fn receive_event(
-        &mut self,
-        _: std::time::Instant,
-    ) -> impl std::future::Future<Output = Result<echo_contracts::live::LiveEvent, echo_live::call::CallError>> {
-        std::future::ready(Err(echo_live::call::CallError::Decode))
-    }
-    fn append_commentary(
-        &mut self,
-        id: DelegationId,
-        text: String,
-    ) -> impl std::future::Future<Output = Result<(), echo_live::call::CallError>> {
-        self.0.push((id, text));
-        std::future::ready(if self.1 {
-            Err(echo_live::call::CallError::Decode)
-        } else {
-            Ok(())
-        })
-    }
-    fn pop_audio(&mut self) -> Option<echo_live::AudioFrame> {
-        None
-    }
-    fn close(&mut self) {
-        unreachable!()
-    }
-}
-
-fn delegation(id: &str, target: &str) -> echo_contracts::live::LiveEvent {
-    serde_json::from_value(
-        json!({"type":"session.delegation.created","delegation":{"id":id,"target":target,"input":"private request"}}),
-    )
-    .unwrap()
-}
-
-#[tokio::test(start_paused = true)]
-async fn bridge_muse_host_delivers_once_on_owner_and_deduplicates_busy_or_unsupported_work() {
-    use super::super::bridge_muse_host::Muse;
-    let fake = fake(vec![TaskEvent::Completed {
-        task_id: id(),
-        summary: "completed test job".into(),
-    }]);
-    let state = fake.state.clone();
-    let mut host = Muse::new(fake, 1, Arc::new(|| 7));
-    let mut witness = Witness::new();
-    let event = delegation("delegation-raw-7", "client");
-    assert!(host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap());
-    assert!(!host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap());
-    assert!(
-        !host
-            .dispatch(&delegation("busy", "client"), "run-7", &mut witness.trace, cutoff())
-            .unwrap()
-    );
-    assert!(
-        !host
-            .dispatch(
-                &delegation("responses", "responses"),
-                "run-7",
-                &mut witness.trace,
-                cutoff()
-            )
-            .unwrap()
-    );
-    host.ready().await;
-    let mut live = Live::default();
-    host.service(&mut live, &mut witness.trace).await.unwrap();
-    host.service(&mut live, &mut witness.trace).await.unwrap();
-    assert_eq!(live.0, vec![(task().delegation_id, "completed test job".into())]);
-    let mut expected = task();
-    expected.context = serde_json::to_value(event).unwrap();
-    assert_eq!(*state.tasks.lock().unwrap(), vec![expected]);
-    assert!(!host.abandon().await);
-    assert_eq!(*state.cancels.lock().unwrap(), vec![]);
-    assert_eq!(
-        witness
-            .records()
-            .iter()
-            .filter(|v| v["event"] == "session.commentary.append")
-            .count(),
-        1
-    );
-}
-
-#[tokio::test(start_paused = true)]
-async fn bridge_muse_host_abandon_joins_cancel_and_suppresses_late_commentary() {
-    use super::super::bridge_muse_host::Muse;
-    let fake = fake(vec![]);
-    let state = fake.state.clone();
-    let mut host = Muse::new(fake, 1, Arc::new(|| 7));
-    let mut witness = Witness::new();
-    assert!(
-        !host
-            .dispatch(
-                &delegation("expired", "client"),
-                "run-7",
-                &mut witness.trace,
-                Instant::now()
-            )
-            .unwrap()
-    );
-    assert!(state.tasks.lock().unwrap().is_empty());
-    assert!(
-        host.dispatch(
-            &delegation("delegation-raw-7", "client"),
-            "run-7",
-            &mut witness.trace,
-            cutoff()
-        )
-        .unwrap()
-    );
-    state.polled.notified().await;
-    assert!(host.abandon().await);
-    assert!(!host.abandon().await);
-    let mut live = Live::default();
-    host.service(&mut live, &mut witness.trace).await.unwrap();
-    assert_eq!(live.0, vec![]);
-    assert_eq!(*state.cancels.lock().unwrap(), vec![id()]);
-    assert_eq!(
-        witness
-            .records()
-            .iter()
-            .map(|v| v["event"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        vec!["session.delegation.created", "muse.submit", "delegation.resolved"]
-    );
-}
-
-#[tokio::test(start_paused = true)]
-async fn bridge_muse_host_budget_survives_new_calls_and_cancellation_then_rolls_over_at_new_day() {
-    use super::super::bridge_muse_host::Muse;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    let fake = fake(vec![]);
-    let state = fake.state.clone();
-    let day = Arc::new(AtomicU64::new(7));
-    let clock = day.clone();
-    let mut host = Muse::new(fake, 1, Arc::new(move || clock.load(Ordering::Relaxed)));
-    let mut witness = Witness::new();
-    let event = delegation("delegation-raw-7", "client");
-    assert!(host.dispatch(&event, "run-7", &mut witness.trace, cutoff()).unwrap());
-    state.polled.notified().await;
-    assert!(host.abandon().await);
-    host.new_call();
-    assert!(host.dispatch(&event, "run-8", &mut witness.trace, cutoff()).unwrap());
-    let mut live = Live::default();
-    host.service(&mut live, &mut witness.trace).await.unwrap();
-    assert_eq!(
-        live.0,
-        vec![(task().delegation_id, "daily request limit reached".into())]
-    );
-    assert_eq!(state.tasks.lock().unwrap().len(), 1);
-    day.store(8, Ordering::Relaxed);
-    host.new_call();
-    assert!(host.dispatch(&event, "run-9", &mut witness.trace, cutoff()).unwrap());
-    state.polled.notified().await;
-    assert!(host.abandon().await);
-    assert_eq!(state.tasks.lock().unwrap().len(), 2);
-    assert_eq!(*state.cancels.lock().unwrap(), vec![id(), id()]);
 }

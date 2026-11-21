@@ -202,10 +202,10 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `clock.servers` | Array of at most 8 `host` or `host:port` names (port 123 when omitted). Default: `0.pool.ntp.org` to `3.pool.ntp.org`. `[]` turns measurement off. | restart / no |
 | `clock.interval_seconds` | Integer 60–86400, default 3600; time between measurements after the one at startup. | restart / no |
 | `agent` | Required delegated-task policy table. | restart / no |
-| `agent.backend` | `client` (default) or `muse` parses; current Codex voice runtime admits only client. | restart / no |
+| `agent.backend` | Removed. Delete this key and configure the optional `[muse]` table to enable Muse. | rejected |
 | `agent.daily_request_cap` | Unsigned 64-bit integer, default 500; UTC-day delegated-request cap. Overlay must also fit signed TOML integer. | boundary / yes |
 | `agent.model` | Optional nonblank runner-model alias, lowest precedence. | restart / no |
-| `muse` | Optional legacy backend table; required by muse selection; not used by current Codex voice path. | restart / no |
+| `muse` | Optional connection for the Codex voice tool `ask_muse`. The bridge advertises it after loading a usable CA and credential. Tasks use the remaining Wyoming run time. | restart / no |
 | `muse.url` | Required HTTPS origin without credentials, query, fragment or non-root path; optional valid u16 port. | restart / no |
 | `muse.ca_file` | Required nonblank literal CA path. | restart / no |
 | `muse.credential_file` | Required nonblank literal credential path. | restart / no |

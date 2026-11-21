@@ -1,6 +1,5 @@
 //! Join raw independent observers before publishing any M7 measurements.
 use super::world::{DEADLINE, SUCCESS, World};
-use echo_live::fake::DialogueSent;
 use serde_json::{Value, json};
 
 fn equal(label: &str, actual: &Value, expected: &Value) -> Result<(), String> {
@@ -21,47 +20,25 @@ fn one<'a>(records: &'a [Value], event: &str) -> Result<&'a Value, String> {
 
 pub fn observe(world: &World, negative: bool) -> Result<Value, String> {
     let records = &world.trace.records;
-    let created = one(records, "session.delegation.created")?;
-    let run = created["run_id"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or("m7: missing raw run ID")?;
-    let delegation = created["delegation_id"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or("m7: missing raw delegation ID")?;
+    let created = one(records, "delegation.created")?;
+    let run = required(created, "run_id")?;
+    let delegation = required(created, "delegation_id")?;
     equal("completed run", &world.completion["run_id"], &json!(run))?;
-    let submitted = one(records, "muse.submit")?;
-    let task = submitted["task_id"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or("m7: missing raw task ID")?;
-    let progress = records
-        .iter()
-        .filter(|e| e["event"] == "muse.progress")
-        .collect::<Vec<_>>();
-    if progress.is_empty() {
+    let task = required(one(records, "muse.submit")?, "task_id")?;
+    let progress = records.iter().filter(|event| event["event"] == "muse.progress").count();
+    if progress == 0 {
         return Err("m7: expected at least one Progress".into());
     }
     identities(records, run, delegation, task)?;
     let terminal = one(records, "muse.terminal")?;
-    equal(
-        "terminal status",
-        &terminal["status"],
-        &json!(if negative { "failed" } else { "completed" }),
-    )?;
+    let status = if negative { "failed" } else { "completed" };
+    equal("terminal status", &terminal["status"], &json!(status))?;
     if negative {
         equal("retryable", &terminal["retryable"], &json!(false))?;
     }
-    let commentary = one(records, "session.commentary.append")?;
-    equal(
-        "commentary delegation",
-        &commentary["delegation_id"],
-        &json!(delegation),
-    )?;
-    equal("commentary run", &commentary["run_id"], &json!(run))?;
+    native_tool(records, run, delegation, status)?;
     ordering(records)?;
-    let session = gadget(&world.muse.calls, task, delegation)?;
+    let (session, deadline) = gadget(world, task, delegation)?;
     let report = report(&world.muse.reports, task, negative)?;
     let text = dialogue(world, delegation, negative)?;
     playback(world, run)?;
@@ -69,14 +46,38 @@ pub fn observe(world: &World, negative: bool) -> Result<Value, String> {
         json!({"event":"m7.case","case":if negative {"no_report"} else {"success"},
         "run_id":run,"delegation_id":delegation,"task_id":task,"gadget_session_id":session,
         "report_task_id":report,"transcript":text,"delegation_count":1,"muse_submit_count":1,
-        "progress_count":progress.len(),"terminal_count":1,"completed_count":usize::from(!negative),
-        "failed_count":usize::from(negative),"spoken_reply_count":1,"commentary_count":1,
+        "progress_count":progress,"terminal_count":1,"completed_count":usize::from(!negative),
+        "failed_count":usize::from(negative),"spoken_reply_count":1,"native_tool_call_count":1,
+        "native_append_count":1,"legacy_dispatch_count":0,"model_tool_output":world.dialogue["tool_output"],
         "gadget_submit_count":world.muse.calls.len(),"report_accepted_count":world.muse.reports.len(),
         "report_attempt_count":world.muse.reports.len(),"reply_pcm_bytes":world.playback["pcm_bytes"],
         "audibility":world.audibility,"ui_states":world.ui_states,
-        "client_tool_call_count":world.tool_calls,"responses_request_count":world.model_requests,
-        "retryable":if negative {json!(false)} else {Value::Null},"deadline_seconds":10}),
+        "client_tool_call_count":world.tool_calls,"responses_request_count":2,
+        "retryable":if negative {json!(false)} else {Value::Null},"deadline_seconds":deadline}),
     )
+}
+
+fn required<'a>(record: &'a Value, key: &str) -> Result<&'a str, String> {
+    record[key]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| format!("m7: missing {key}"))
+}
+
+fn native_tool(records: &[Value], run: &str, delegation: &str, status: &str) -> Result<(), String> {
+    let request = one(records, "item/tool/call")?;
+    let result = one(records, "delegation.tool")?;
+    equal("native tool name", &request["name"], &json!("ask_muse"))?;
+    equal("native request run", &request["run_id"], &json!(run))?;
+    equal("native call ID", &request["call_id"], &json!("tool-local"))?;
+    for kind in ["name", "run_id", "thread_id", "turn_id", "call_id", "request_id"] {
+        if request[kind].is_null() || result[kind] != request[kind] {
+            return Err(format!("m7: native tool receipt mismatch for {kind}"));
+        }
+    }
+    equal("native delegation ID", &result["delegation_id"], &json!(delegation))?;
+    equal("native tool kind", &result["kind"], &json!("agent"))?;
+    equal("native tool status", &result["status"], &json!(status))
 }
 
 fn identities(records: &[Value], run: &str, delegation: &str, task: &str) -> Result<(), String> {
@@ -92,10 +93,9 @@ fn identities(records: &[Value], run: &str, delegation: &str, task: &str) -> Res
 
 fn playback(world: &World, run: &str) -> Result<(), String> {
     let records = &world.trace.records;
-    let started = one(records, "reply.started")?;
-    equal("reply start run", &started["run_id"], &json!(run))?;
     let reply = one(records, "reply.played")?;
     equal("reply run", &reply["run_id"], &json!(run))?;
+    equal("reply playback", &reply["outcome"], &json!("played"))?;
     let audio = &world.audibility;
     if world.playback["pcm_bytes"] != 9600
         || world.playback["nonzero_bytes"].as_u64().is_none_or(|n| n == 0)
@@ -113,11 +113,23 @@ fn playback(world: &World, run: &str) -> Result<(), String> {
     equal(
         "screen sequence",
         &json!(states),
-        &json!(["ready", "listening", "connected", "speaking", "ready"]),
+        &json!([
+            "ready",
+            "listening",
+            "connected",
+            "thinking",
+            "speaking",
+            "connected",
+            "ready"
+        ]),
     )?;
-    equal("client model requests", &json!(world.model_requests), &json!(0))?;
     equal("client tool calls", &json!(world.tool_calls), &json!(0))?;
-    if records.iter().any(|e| e["event"] == "tools/call") {
+    if records.iter().any(|e| {
+        matches!(
+            e["event"].as_str(),
+            Some("tools/call" | "session.delegation.created" | "session.commentary.append")
+        )
+    }) {
         return Err("m7: unexpected client execution".into());
     }
     Ok(())
@@ -141,11 +153,12 @@ fn ordering(records: &[Value]) -> Result<(), String> {
     }
     let mut previous = None;
     for event in [
-        "session.delegation.created",
+        "delegation.created",
+        "item/tool/call",
         "muse.submit",
         "muse.progress",
         "muse.terminal",
-        "session.commentary.append",
+        "delegation.tool",
         "reply.played",
     ] {
         let index = records
@@ -160,10 +173,27 @@ fn ordering(records: &[Value]) -> Result<(), String> {
     Ok(())
 }
 
-fn gadget(calls: &[Value], task: &str, delegation: &str) -> Result<String, String> {
+fn gadget(world: &World, task: &str, delegation: &str) -> Result<(String, u64), String> {
+    let calls = &world.muse.calls;
     if calls.len() != 1 {
         return Err(format!("m7 gadget submits: expected 1; observed {}", calls.len()));
     }
+    let record = &world.muse.admission;
+    equal("daemon task ID", &record["task_id"], &json!(task))?;
+    equal(
+        "daemon delegation ID",
+        &record["task"]["delegation_id"],
+        &json!(delegation),
+    )?;
+    let deadline = record["task"]["deadline_seconds"]
+        .as_u64()
+        .filter(|seconds| (1..=10).contains(seconds))
+        .ok_or("m7: invalid admitted deadline")?;
+    equal(
+        "daemon absolute deadline",
+        &record["deadline_unix_seconds"],
+        &json!(100 + deadline),
+    )?;
     let argv = calls[0]["argv"]
         .as_array()
         .filter(|a| a.len() == 6)
@@ -177,23 +207,12 @@ fn gadget(calls: &[Value], task: &str, delegation: &str) -> Result<String, Strin
         .as_str()
         .filter(|s| s.len() == 36 && s.as_bytes()[14] == b'4')
         .ok_or("m7: invalid gadget session")?;
-    let prompt = argv[5].as_str().ok_or("m7: missing gadget prompt")?;
-    let prefix = "Execute the delegated request and report its result.\nContext: ";
-    let suffix = format!(
-        "\nTask ID: {task}\nWhen you are finished, call the echo.report.result command with task_id {task}, status completed or failed, and a short summary. Do not report success any other way."
+    equal("gadget-to-daemon session", &record["session_id"], &json!(session))?;
+    let expected = format!(
+        "Run the test job\nContext: null\nTask ID: {task}\nWhen you are finished, call the echo.report.result command with task_id {task}, status completed or failed, and a short summary. Do not report success any other way."
     );
-    let context = prompt
-        .strip_prefix(prefix)
-        .and_then(|s| s.strip_suffix(&suffix))
-        .ok_or("m7: gadget task ID/prompt mismatch")?;
-    let context: Value = serde_json::from_str(context).map_err(|_| "m7: invalid delegated context")?;
-    equal("gadget delegation ID", &context["delegation"]["id"], &json!(delegation))?;
-    equal(
-        "gadget delegation target",
-        &context["delegation"]["target"],
-        &json!("client"),
-    )?;
-    Ok(session.into())
+    equal("gadget request and correlation", &argv[5], &json!(expected))?;
+    Ok((session.into(), deadline))
 }
 
 fn report(reports: &[Value], task: &str, negative: bool) -> Result<String, String> {
@@ -216,39 +235,33 @@ fn report(reports: &[Value], task: &str, negative: bool) -> Result<String, Strin
 }
 
 fn dialogue(world: &World, delegation: &str, negative: bool) -> Result<String, String> {
-    if world.dialogue.len() != 1 {
-        return Err("m7: expected one Live call".into());
-    }
-    let call = &world.dialogue[0];
-    if call.call_index != 0
-        || call.delegation_id != delegation
-        || call.failure.is_some()
-        || call.rejected_commentary != 0
-        || !call.reply_completed
-    {
-        return Err("m7: invalid or stale Live observation".into());
-    }
-    let sent = call
-        .sent
-        .iter()
-        .filter_map(|sent| match sent {
-            DialogueSent::Text(text) => serde_json::from_str::<Value>(text)
-                .ok()
-                .filter(|e| e["type"] == "response.audio_transcript.done"),
-            DialogueSent::Audio(_) => None,
-        })
-        .collect::<Vec<_>>();
-    if sent.len() != 1 {
-        return Err("m7: expected one sent transcript".into());
-    }
+    let provider = &world.dialogue;
     let expected = if negative { DEADLINE } else { SUCCESS };
-    equal("spoken transcript", &sent[0]["transcript"], &json!(expected))?;
-    let frames = call
-        .sent
-        .iter()
-        .filter(|sent| matches!(sent, DialogueSent::Audio(_)))
-        .count();
-    equal("reply frames", &json!(frames), &json!(10))?;
+    equal("native delegations", &provider["delegations"], &json!([delegation]))?;
+    equal("native appends", &provider["appends"], &json!([delegation]))?;
+    equal("loopback sideband", &provider["sidebands"], &json!(1))?;
+    equal("external provider requests", &provider["external"], &json!(0))?;
+    equal("model-visible output", &provider["tool_output"], &json!(expected))?;
+    let models = provider["models"]
+        .as_array()
+        .filter(|models| models.len() == 2)
+        .ok_or("m7: expected exactly two model requests")?;
+    for (index, model) in models.iter().enumerate() {
+        equal(
+            "model catalog",
+            &model["tools"],
+            &json!(["ask_muse", "extend_session", "end_session"]),
+        )?;
+        equal("model output count", &model["outputs"], &json!(index))?;
+    }
+    equal(
+        "spoken transcript",
+        &provider["transcripts"],
+        &json!([
+            {"role":"user","text":"Computer, ask Muse to run the test job"},
+            {"role":"assistant","text":expected}
+        ]),
+    )?;
     Ok(expected.into())
 }
 

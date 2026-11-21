@@ -96,10 +96,9 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'_, R, W> {
                 if let Some(id) = id
                     && self.handoffs.len() < 1024
                     && self.handoffs.insert(id.into())
+                    && let Ok(id) = echo_contracts::ids::DelegationId::new(id)
                 {
-                    // The item carries the user's words and the transcript, never a
-                    // model-authored request, so it cannot name the turn's purpose.
-                    return Event::ReplyHandoff;
+                    return Event::ReplyHandoff(id);
                 }
                 Event::Other
             }

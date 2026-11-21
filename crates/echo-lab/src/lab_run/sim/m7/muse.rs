@@ -11,6 +11,7 @@ pub struct Muse {
     pub url: String,
     pub calls: Vec<Value>,
     pub reports: Vec<Value>,
+    pub admission: Value,
 }
 
 pub fn prebuilt() -> Result<PathBuf, String> {
@@ -75,10 +76,26 @@ impl Muse {
     }
 
     pub async fn terminal(&mut self, id: &str, negative: bool) -> Result<(), String> {
+        let raw = std::fs::read(self.root.join("tasks.json")).map_err(|_| "m7: missing durable task")?;
+        let snapshot: Value = serde_json::from_slice(&raw).map_err(|_| "m7: invalid durable task")?;
+        let tasks = snapshot["tasks"]
+            .as_array()
+            .filter(|tasks| tasks.len() == 1)
+            .ok_or("m7: expected one durable task")?;
+        let record = &tasks[0];
+        if record["task_id"] != id || record["state"] != "live" {
+            return Err("m7: progress must belong to the current live task".into());
+        }
+        let deadline = record["deadline_unix_seconds"]
+            .as_u64()
+            .ok_or("m7: missing task deadline")?;
+        self.admission = record.clone();
         if negative {
             let daemon = self.daemon.as_mut().ok_or("m7: missing daemon")?;
-            daemon.send(&json!({"operation":"set_time","unix_seconds":110})).await?;
-            if daemon.line().await? != json!({"clock_unix_seconds":110}) {
+            daemon
+                .send(&json!({"operation":"set_time","unix_seconds":deadline}))
+                .await?;
+            if daemon.line().await? != json!({"clock_unix_seconds":deadline}) {
                 return Err("m7: deadline clock acknowledgement mismatch".into());
             }
         } else {
