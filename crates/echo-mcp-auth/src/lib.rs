@@ -16,7 +16,7 @@ mod wire;
 #[path = "auth_tests/mock.rs"]
 pub mod mock;
 
-pub use auth::{AuthClient, LinkInstructions};
+pub use auth::{AuthClient, GrantStatus, LinkInstructions};
 use echo_contracts::secret::Secret;
 use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};
 

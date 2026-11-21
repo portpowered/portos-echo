@@ -48,6 +48,10 @@ export function mountPortos(
     let timer: ReturnType<typeof setTimeout> | undefined;
     let read: AbortController | undefined;
     const linkStatus = element("p");
+    const relinkAdvice = element(
+        "p",
+        "Relink to use this Echo's own Port OS client",
+    );
     const operationStatus = element("p");
     operationStatus.setAttribute("aria-live", "polite");
     const granted = element("p");
@@ -55,6 +59,7 @@ export function mountPortos(
     const buttons = accountButtons(parent, "Port OS", start);
     parent.section.append(
         linkStatus,
+        relinkAdvice,
         buttons.controls,
         operationStatus,
         challenge.instruction,
@@ -71,6 +76,7 @@ export function mountPortos(
 
     function render() {
         linkStatus.textContent = linkLabels[status.link_status];
+        relinkAdvice.hidden = status.relink_advised !== true;
         granted.hidden = status.server === undefined;
         const scopes = status.server?.granted_scopes.join(", ");
         granted.textContent = "Granted scopes: " + (scopes || "None");

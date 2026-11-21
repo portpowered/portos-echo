@@ -5,6 +5,73 @@ import { response } from "./page.mjs";
 import { open, portosStatus, v2Snapshot } from "./page-v2.mjs";
 import { snapshot as pixelSnapshot } from "../support/snapshot.mjs";
 
+test("Port OS Settings shows legacy relink advice only for a true flag", async (t) => {
+    for (const flag of [true, false, undefined]) {
+        const data = v2Snapshot();
+        if (flag !== undefined) data.portos.relink_advised = flag;
+        const page = await open(t, data, 200, {
+            context: { viewport: { width: 960, height: 600 } },
+        });
+        const row = page.getByRole("region", { name: "Port OS", exact: true });
+        const unlink = row.getByRole("button", { name: "Remove Port OS link" });
+        await unlink.waitFor();
+        const advice = row.getByText(
+            "Relink to use this Echo's own Port OS client",
+            { exact: true },
+        );
+        assert.equal(await advice.isVisible(), flag === true);
+        const back = page.getByRole("button", { name: "Back", exact: true });
+        await back.press("Tab");
+        assert.equal(
+            await unlink.evaluate((node) => node === document.activeElement),
+            true,
+        );
+        await unlink.press("Tab");
+        assert.equal(
+            await page
+                .getByRole("button", { name: "Load screen packs" })
+                .evaluate((node) => node === document.activeElement),
+            true,
+        );
+        assert.equal(
+            await row.evaluate((node) => node.scrollWidth <= node.clientWidth),
+            true,
+        );
+        await back.press("Enter");
+        await page
+            .getByRole("button", { name: "Settings", exact: true })
+            .press("Enter");
+        await unlink.waitFor();
+        assert.equal(await advice.isVisible(), flag === true);
+    }
+});
+
+test("Port OS Settings rejects nonboolean advice and unexpected client identity", async (t) => {
+    for (const invalid of [
+        { relink_advised: "true" },
+        { relink_advised: null },
+        { client_id: "synthetic-client" },
+    ]) {
+        const data = v2Snapshot();
+        Object.assign(data.portos, invalid);
+        const page = await open(t, data);
+        assert.equal(
+            await page.locator(".settings-panel [role=status]").textContent(),
+            "Settings response could not be read",
+        );
+        assert.equal(
+            await page
+                .getByRole("region", { name: "Port OS", exact: true })
+                .count(),
+            0,
+        );
+        assert.deepEqual(
+            (await allCalls(page)).map(({ method }) => method),
+            ["GET"],
+        );
+    }
+});
+
 test("960×600 Settings starts with both Accounts, then Presentation", async (t) => {
     const data = v2Snapshot();
     data.portos.link_status = "link_required";

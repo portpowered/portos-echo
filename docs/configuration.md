@@ -167,9 +167,13 @@ Start with narrow read scopes, a small explicit `allow_tools`, local home groups
 the default caps, loopback listeners and private credentials. The example includes `control`; remove it for
 a read-only installation.
 
-If an older installation set `mcp.client_id` to the built-in CLI client, remove that line and restart the bridge
-before relinking to give the Echo its own client. The existing grant retains its original client until you approve
-the new link.
+When you link Port OS with `mcp.client_id` omitted, the bridge registers its own public client. The approval page
+uses the configured `mcp.client_name`, which defaults to `Port OS Echo`. Set `mcp.client_id` to use an existing
+registered public client.
+
+Settings > Accounts > Port OS advises relinking when the current grant uses the built-in CLI client. If an older
+installation set `mcp.client_id` to that client, remove the line and restart the bridge before relinking. The
+existing grant keeps its original client until you approve a replacement link or remove the link.
 
 ## Configuration reference
 

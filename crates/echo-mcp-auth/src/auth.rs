@@ -57,6 +57,13 @@ struct State {
     uncertain: bool,
 }
 
+/// Public presentation facts from one usable committed grant.
+#[derive(Default)]
+pub struct GrantStatus {
+    pub scopes: Option<Vec<String>>,
+    pub uses_legacy_cli: bool,
+}
+
 pub struct AuthClient {
     options: AuthOptions<LinkClient>,
     metadata: Metadata,
@@ -152,19 +159,27 @@ impl AuthClient {
 
     /// Copy only the scopes of the locally committed usable grant.
     pub async fn granted_scopes(&self) -> Option<Vec<String>> {
+        self.grant_status().await.scopes
+    }
+
+    /// Read presentation facts without acquiring a token or changing the grant.
+    pub async fn grant_status(&self) -> GrantStatus {
         let state = self.state.lock().await;
-        if !self.has_grant() {
-            return None;
+        let Some(grant) = state.record.grant.as_ref().filter(|_| self.has_grant()) else {
+            return GrantStatus::default();
+        };
+        GrantStatus {
+            scopes: Some(
+                grant
+                    .expose()
+                    .scope
+                    .split_ascii_whitespace()
+                    .map(str::to_owned)
+                    .collect(),
+            ),
+            uses_legacy_cli: state.record.client_id.as_deref()
+                == Some("port1/systems/zero/oauth-clients/command-line-interface"),
         }
-        let grant = state.record.grant.as_ref()?;
-        Some(
-            grant
-                .expose()
-                .scope
-                .split_ascii_whitespace()
-                .map(str::to_owned)
-                .collect(),
-        )
     }
 
     fn now(&self) -> u64 {
