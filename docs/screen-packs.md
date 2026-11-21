@@ -455,8 +455,9 @@ release downloads in tests.
 Companion 0.2.2 is an optional cel-shaded character with poses for Echo's screen
 states and a happy emote. In Listening, she tilts her head with her mouth closed.
 Beside a card (link code, approval, error) she stands left of centre from the
-clip's first frame. The idle loop breathes and blinks at 10 fps; the other
-clips are 30 fps.
+clip's first frame. The idle loop is one slow breath at 10 fps and then a
+12-second hold with two blinks; while nothing changes the clip carries no
+frames, which keeps the display's idle cost low. The other clips are 30 fps.
 Her `mouth` set drives [lip sync](#lip-sync): the neutral frame is the closed
 mouth, `mouth-half.png` and `mouth-open.png` the other two, and each vowel
 drawing under `scripts/packs/companion/art/` is published when it exists.
