@@ -26,27 +26,13 @@ pub use endpoint::EndpointGrant;
 mod tests;
 
 #[derive(Deserialize)]
-pub(crate) struct DeviceChallenge {
-    pub(crate) device_code: Secret<String>,
-    pub(crate) user_code: String,
-    pub(crate) verification_uri: String,
-    pub(crate) expires_in: u64,
+struct DeviceChallenge {
+    device_code: Secret<String>,
+    user_code: String,
+    verification_uri: String,
+    expires_in: u64,
     #[serde(default = "default_interval")]
-    pub(crate) interval: u64,
-}
-
-impl DeviceChallenge {
-    pub(crate) fn validate(&self) -> Result<(), AuthError> {
-        discovery::safe_url(&self.verification_uri).map_err(|_| AuthError::Protocol)?;
-        if self.device_code.expose().is_empty()
-            || self.user_code.is_empty()
-            || self.expires_in == 0
-            || self.interval == 0
-        {
-            return Err(AuthError::Protocol);
-        }
-        Ok(())
-    }
+    interval: u64,
 }
 
 /// Display only the public user code, verification URI and expiry to the user.
@@ -254,7 +240,14 @@ impl AuthClient {
         else {
             return Err(AuthError::Protocol);
         };
-        link.validate()?;
+        discovery::safe_url(&link.verification_uri).map_err(|_| AuthError::Protocol)?;
+        if link.device_code.expose().is_empty()
+            || link.user_code.is_empty()
+            || link.expires_in == 0
+            || link.interval == 0
+        {
+            return Err(AuthError::Protocol);
+        }
         Ok(LinkInstructions {
             device_code: link.device_code,
             user_code: link.user_code,

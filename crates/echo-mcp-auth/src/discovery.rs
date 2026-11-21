@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use url::Url;
 
-#[derive(Clone, Deserialize)]
+#[derive(Deserialize)]
 pub(crate) struct Metadata {
     pub issuer: String,
     pub device_authorization_endpoint: String,

@@ -91,9 +91,10 @@ api_base = "https://api.example.invalid"
 ```
 
 Set network destinations in the base file. The optional WSS template ends in
-`/devices/{authLinkId}`. The optional API base uses HTTPS. Omit inline credentials, queries,
-fragments and other substitutions from both. Settings shows an unavailable state until the endpoint
-issuer and an authoritative route resolver are available. To downgrade, remove this section from
+`/devices/{authLinkId}`. The API base defaults to the configured Port OS grant's HTTPS resource
+origin. Omit inline credentials, queries, fragments and other substitutions from both. Settings shows
+an unavailable state until the endpoint issuer and an authoritative route resolver are available.
+To downgrade, remove this section from
 the base file and Settings overlay.
 
 ### Muse
@@ -272,7 +273,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `portos_endpoint.enabled` | Boolean, default false. Opts in once the endpoint service prerequisites are available. | save / yes |
 | `portos_endpoint.device_name` | Defaults to `Echo Show`. A nonblank name of 1 to 64 Unicode characters without controls. | save / yes |
 | `portos_endpoint.gateway_url` | Optional WSS template ending in `/devices/{authLinkId}`. | restart / no |
-| `portos_endpoint.api_base` | Optional HTTPS API base. | restart / no |
+| `portos_endpoint.api_base` | Optional HTTPS API base. Defaults to the configured Port OS grant's HTTPS resource origin. | restart / no |
 | `screen` | Required screen transport table. | restart / no |
 | `screen.listen` | Socket address; decoder defaults to all IPv4 interfaces on port 16900. Runtime device config must use 127.0.0.1:16900. | restart / no |
 | `screen.pairing_token_file` | Required literal private token-file path. | restart / no |

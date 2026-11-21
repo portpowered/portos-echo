@@ -1,6 +1,24 @@
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[test]
+fn endpoint_api_uses_the_configured_grant_origin_when_omitted() {
+    let mut config = BridgeConfig::from_toml_str(include_str!("../../../../examples/bridge.echo.toml")).unwrap();
+    config.mcp.server[0].url = "https://api.example.invalid:8443/mcp".into();
+    assert_eq!(
+        endpoint_api(&config).as_deref(),
+        Some("https://api.example.invalid:8443")
+    );
+    config.portos_endpoint.api_base = Some("https://endpoint.example.invalid".into());
+    assert_eq!(
+        endpoint_api(&config).as_deref(),
+        Some("https://endpoint.example.invalid")
+    );
+    config.portos_endpoint.api_base = None;
+    config.mcp.server.clear();
+    assert_eq!(endpoint_api(&config), None);
+}
+
 #[derive(Default)]
 struct DelayedRoute(AtomicBool);
 

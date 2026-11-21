@@ -4,7 +4,7 @@ mod tests;
 mod transport;
 
 use crate::bridge_mcp::Grant;
-use echo_config::BridgeConfig;
+use echo_config::{BridgeConfig, McpAuth};
 use echo_mcp_auth::{AuthError, EndpointExchange, EndpointRegistration, EndpointTokenSource, ExchangeError};
 use std::{
     future::{Future, pending},
@@ -97,14 +97,14 @@ impl Runtime {
         // The Port OS route lookup is pending. Production supplies no resolver
         // and makes no endpoint authorization, install or gateway requests.
         let resolver = resolver?;
-        let api = config.portos_endpoint.api_base.as_deref()?;
+        let api = endpoint_api(config)?;
         let gateway = config.portos_endpoint.gateway_url.as_deref()?;
-        let exchange = EndpointExchange::open(api, REQUEST_TIMEOUT).ok()?;
-        let transport = Transport::new(gateway, api, false)?;
+        let exchange = EndpointExchange::open(&api, REQUEST_TIMEOUT).ok()?;
+        let transport = Transport::new(gateway, &api, false)?;
         let home = config.mcp.state_dir.clone()?;
         Some(Self::new(
             home,
-            api.into(),
+            api,
             resolver,
             exchange,
             transport,
@@ -262,6 +262,20 @@ impl Runtime {
             .serve(&install.auth_link_id, &route, &tokens, &self.status)
             .await)
     }
+}
+
+fn endpoint_api(config: &BridgeConfig) -> Option<String> {
+    if let Some(api) = &config.portos_endpoint.api_base {
+        return Some(api.clone());
+    }
+    // This is the same first server that supplies the configured Port OS grant.
+    let server = config
+        .mcp
+        .server
+        .first()
+        .filter(|server| server.auth == McpAuth::PortosDeviceCode)?;
+    let resource = reqwest::Url::parse(&server.url).ok()?;
+    (resource.scheme() == "https").then(|| resource.origin().ascii_serialization())
 }
 
 async fn linked_owner(current_grant: &impl Fn() -> Option<Arc<Grant>>, status: &watch::Sender<Status>) -> Arc<Grant> {
