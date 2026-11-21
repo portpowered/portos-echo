@@ -224,6 +224,7 @@ async fn handed(lips: Option<Lips>) -> (Vec<Duration>, Option<Duration>, LipStat
             mouth.wrote(&frame, now);
             times.push(now - start);
         }
+        mouth.settle();
         let mut end = None;
         while let Some(due) = mouth.due() {
             mouth.poll(due);

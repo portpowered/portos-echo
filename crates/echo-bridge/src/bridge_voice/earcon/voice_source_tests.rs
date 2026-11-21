@@ -1,3 +1,4 @@
+use super::voice_mouth::GAP_HOLD;
 use super::*;
 
 fn frame(level: i16) -> Vec<u8> {
@@ -88,10 +89,14 @@ async fn mouth_opens_and_closes_on_the_echo_playout_clock_not_on_writes() {
     assert_eq!(mouth.due(), Some(t0 + FRAME + OUTPUT_DELAY));
     assert_eq!(mouth.poll(t0 + OUTPUT_DELAY), None);
     assert_eq!(mouth.poll(t0 + FRAME + OUTPUT_DELAY), Some(true));
-    // Five audible frames after the leading silence finish at 120 ms.
-    assert_eq!(mouth.due(), Some(t0 + FRAME * 6 + OUTPUT_DELAY));
+    // Five audible frames after the leading silence finish at 120 ms. More
+    // audio may follow, so the close waits out the gap hold.
+    assert_eq!(mouth.due(), Some(t0 + FRAME * 6 + OUTPUT_DELAY + GAP_HOLD));
     // Quiet frames keep the clock running but never reopen or extend it.
     mouth.wrote(&frame(-QUIET.cast_signed()), t0 + FRAME * 3);
+    // The reply is complete: the mouth closes with its last sound.
+    mouth.settle();
+    assert_eq!(mouth.due(), Some(t0 + FRAME * 6 + OUTPUT_DELAY));
     assert_eq!(mouth.poll(t0 + FRAME * 6 + OUTPUT_DELAY), Some(false));
     assert_eq!(mouth.due(), None);
 }
@@ -101,6 +106,7 @@ async fn mouth_restarts_the_clock_after_the_echo_ran_dry() {
     let mut mouth = Mouth::default();
     let t0 = Instant::now();
     mouth.wrote(&frame(1000), t0);
+    mouth.settle();
     assert_eq!(mouth.poll(t0 + OUTPUT_DELAY), Some(true));
     assert_eq!(mouth.poll(t0 + FRAME + OUTPUT_DELAY), Some(false));
     let later = t0 + Duration::from_secs(3);
@@ -122,13 +128,17 @@ async fn mouth_quiet_thresholds_never_schedule_a_transition() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn mouth_preserves_quiet_gaps_even_when_all_audio_is_written_ahead() {
+async fn mouth_preserves_quiet_gaps_of_the_hold_even_when_all_audio_is_written_ahead() {
     let mut mouth = Mouth::default();
     let t0 = Instant::now();
-    for level in [65, 0, -65] {
-        mouth.wrote(&frame(level), t0);
+    // One audible frame, 300 ms of quiet, one audible frame.
+    mouth.wrote(&frame(65), t0);
+    for _ in 0..15 {
+        mouth.wrote(&frame(0), t0);
     }
-    for (offset, open) in [(0, true), (1, false), (2, true), (3, false)] {
+    mouth.wrote(&frame(-65), t0);
+    mouth.settle();
+    for (offset, open) in [(0, true), (1, false), (16, true), (17, false)] {
         let due = t0 + OUTPUT_DELAY + FRAME * offset;
         assert_eq!(mouth.poll(due - Duration::from_nanos(1)), None);
         assert_eq!(mouth.poll(due), Some(open));
@@ -160,8 +170,12 @@ async fn acknowledgement_playout_returns_directly_to_screen_thinking() {
         let now = Instant::now();
         mouth.wrote(&frame(1000), now);
         assert!(!delegation.answered());
+        // The acknowledgement's quiet lasts the gap hold: the mouth closes.
+        let quiet = u32::try_from(GAP_HOLD.as_millis() / FRAME.as_millis()).unwrap();
         if queued_audio {
-            mouth.wrote(&frame(0), now);
+            for _ in 0..quiet {
+                mouth.wrote(&frame(0), now);
+            }
             mouth.wrote(&frame(1000), now);
         }
 
@@ -171,7 +185,9 @@ async fn acknowledgement_playout_returns_directly_to_screen_thinking() {
         };
         tokio::time::advance(OUTPUT_DELAY).await;
         project_mouth(&mut mouth);
-        tokio::time::advance(FRAME).await;
+        // Audio already queued past the hold closes the mouth with the last
+        // sound; with none queued the close waits the hold for more.
+        tokio::time::advance(if queued_audio { FRAME } else { FRAME + GAP_HOLD }).await;
         project_mouth(&mut mouth);
         assert_eq!(mouth.voiced(), queued_audio);
         assert_eq!(states.try_recv().unwrap(), UiState::Speaking);
@@ -179,7 +195,7 @@ async fn acknowledgement_playout_returns_directly_to_screen_thinking() {
         assert!(states.try_recv().is_err());
 
         if queued_audio {
-            tokio::time::advance(FRAME).await;
+            tokio::time::advance(FRAME * quiet).await;
             project_mouth(&mut mouth);
             assert_eq!(states.try_recv().unwrap(), UiState::Speaking);
             assert!(states.try_recv().is_err());

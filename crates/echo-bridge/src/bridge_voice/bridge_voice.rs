@@ -330,6 +330,9 @@ async fn drive<L: EchoLink>(
             drop(sink.take());
             played = Some(Instant::now() + options.played_timeout);
         }
+        if source.reply.drained() && pending.is_none() {
+            source.mouth.settle();
+        }
         let (deadline, on_timeout) = voice_wait::deadline(source, played);
         tokio::select! {
             // Timeouts cannot be starved by a continuously ready peer.
