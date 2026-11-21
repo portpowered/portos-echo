@@ -22,7 +22,7 @@ async fn muse_tool_advertised_once_only_with_usable_connection_files() {
     let ca = root.path().join("synthetic.der");
     let credential = root.path().join("synthetic-credential");
     let mut trace = Trace::open(&root.path().join("trace"), "api_key").unwrap();
-    let screen = Screen::bind(None).await.unwrap();
+    let mut screen = Screen::bind(None).await.unwrap();
     let connection = echo_config::MuseConfig {
         url: "https://127.0.0.1:1".into(),
         ca_file: ca.clone(),

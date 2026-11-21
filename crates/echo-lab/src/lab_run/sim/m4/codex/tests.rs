@@ -412,9 +412,9 @@ async fn capture(socket: &mut TcpStream) {
 }
 fn text(negative: bool) -> &'static str {
     if negative {
-        super::super::model::FALLBACK
+        super::super::FALLBACK
     } else {
-        super::super::model::SUCCESS
+        super::super::SUCCESS
     }
 }
 

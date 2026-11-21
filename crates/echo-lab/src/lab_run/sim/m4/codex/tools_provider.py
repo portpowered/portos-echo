@@ -76,11 +76,14 @@ class Delegation:
         expected[1]['parameters']['properties']['ms'].pop('minimum')
         return expected
 
+    def check_tools(self, tools):
+        assert tools == self.expected_tools(), 'model exposed tools beyond exact dynamic catalog'
+
     def tool_call(self):
         return ('ui_show_emotion', '{"name":"happy"}') if self.emotion else ('test_echo', '{"text":"delegated echo"}')
 
     def respond(self, body):
-        assert body['tools'] == self.expected_tools(), 'model exposed tools beyond exact dynamic catalog'
+        self.check_tools(body['tools'])
         assert body['model'] == 'gpt-5.4', 'wrong delegated model'
         outputs = [item for item in body['input'] if item.get('type') == 'function_call_output']
         index = len(self.models)
@@ -143,7 +146,11 @@ class MuseDelegation(Delegation):
         return event
 
     def expected_tools(self):
-        return function_tools(self.tools)
+        tools = function_tools(self.tools)
+        return tools[1:-1] + tools[:1] + tools[-1:]
+
+    def check_tools(self, tools):
+        assert tools == self.expected_tools(), f'Muse fixture catalog mismatch: {tools!r}'
 
     def tool_call(self):
         return ('ask_muse', json.dumps({'request': self.request}))

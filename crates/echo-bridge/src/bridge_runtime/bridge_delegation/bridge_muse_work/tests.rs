@@ -7,7 +7,7 @@ use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
-use tokio::sync::Notify;
+use tokio::{sync::Notify, time::Duration};
 
 #[derive(Default)]
 struct State {

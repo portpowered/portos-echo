@@ -91,7 +91,7 @@ impl World {
         std::fs::write(
             path,
             format!(
-                "{config}\n[muse]\nurl = '{}'\nca_file = '{}'\ncredential_file = '{}'\n",
+                "{config}\n[trace]\npayloads = false\n[muse]\nurl = '{}'\nca_file = '{}'\ncredential_file = '{}'\n",
                 self.muse.url,
                 self.muse.root.join("server.der").display(),
                 self.muse.root.join("muse-credential").display()

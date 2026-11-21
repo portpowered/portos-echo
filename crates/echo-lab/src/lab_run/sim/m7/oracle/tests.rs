@@ -55,8 +55,8 @@ fn world(negative: bool) -> World {
     let answer = if negative { DEADLINE } else { SUCCESS };
     world.dialogue = json!({"delegations":["d-1"],"appends":["d-1"],"sidebands":1,"external":0,
         "tool_output":answer,
-        "models":[{"outputs":0,"tools":["ask_muse","extend_session","end_session"]},
-                  {"outputs":1,"tools":["ask_muse","extend_session","end_session"]}],
+        "models":[{"outputs":0,"tools":["extend_session","end_session","ask_muse"]},
+                  {"outputs":1,"tools":["extend_session","end_session","ask_muse"]}],
         "transcripts":[{"role":"user","text":"Computer, ask Muse to run the test job"},
                        {"role":"assistant","text":answer}]});
     world

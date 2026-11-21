@@ -250,7 +250,7 @@ fn dialogue(world: &World, delegation: &str, negative: bool) -> Result<String, S
         equal(
             "model catalog",
             &model["tools"],
-            &json!(["ask_muse", "extend_session", "end_session"]),
+            &json!(["extend_session", "end_session", "ask_muse"]),
         )?;
         equal("model output count", &model["outputs"], &json!(index))?;
     }

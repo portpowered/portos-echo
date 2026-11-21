@@ -255,11 +255,15 @@ fn admitted_instructions(
 ) -> Result<(String, String), Error> {
     let prompts = super::prompts::snapshot(call.instructions, call.prompt, trace)?;
     // A call with tools advertises end_session, so it carries its guidance.
-    let (runner, voice) = super::voice_config::session_guidance(prompts, tools.is_some());
+    let (runner, mut voice) = super::voice_config::session_guidance(prompts, tools.is_some());
     let (now, zone) = (clock(), call.time_zone);
     let mut runner = super::voice_config::call_instructions(&runner, now, zone)?;
     if let Some(tools) = tools {
         tools.skills.append_instructions(&mut runner);
+        if tools.muse_enabled() {
+            voice.push_str("\n\nHand off an explicit request to use Muse and wait for its result.");
+            runner.push_str("\n\nWhen the user asks to use Muse, call ask_muse with the request itself. Leave transcripts, credentials, and unrelated context out of the request. Relay the tool's outcome honestly.");
+        }
     }
     Ok((runner, super::voice_config::call_instructions(&voice, now, zone)?))
 }

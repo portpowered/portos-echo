@@ -1,5 +1,6 @@
 //! Bounded, synthetic Responses peer. It releases commentary only after exact
 //! function-call output validation; it never records credentials or bodies.
+use super::{FALLBACK, SUCCESS};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -7,9 +8,6 @@ use tokio::{
     sync::{oneshot, watch},
     task::JoinHandle,
 };
-
-pub const SUCCESS: &str = "test echo: delegated echo";
-pub const FALLBACK: &str = "I couldn't call test echo.";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Observation {
@@ -27,12 +25,6 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn requests(&self) -> usize {
-        let observed = self.observed.borrow();
-        // Even an incomplete/rejected accepted request violates Muse isolation.
-        observed.requests.max(observed.accepted_connections)
-    }
-
     #[cfg(test)]
     pub async fn bind(negative: bool) -> Result<Self, String> {
         Self::bind_after(negative, async { Ok(()) }).await

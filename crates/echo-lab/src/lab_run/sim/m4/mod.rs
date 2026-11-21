@@ -3,7 +3,11 @@
 pub(super) mod codex;
 pub(crate) mod emotion;
 mod golden;
-pub(super) mod model;
+#[cfg(test)]
+mod model;
+
+pub const SUCCESS: &str = "test echo: delegated echo";
+pub const FALLBACK: &str = "I couldn't call test echo.";
 pub(super) mod screen;
 pub(super) mod wire;
 pub(super) mod world;

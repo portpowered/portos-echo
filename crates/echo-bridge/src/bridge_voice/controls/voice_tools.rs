@@ -229,6 +229,10 @@ impl Tools {
         }
     }
 
+    pub(super) fn muse_enabled(&self) -> bool {
+        self.muse.is_some()
+    }
+
     pub(super) fn with_muse(mut self, config: &BridgeConfig, local: bool) -> Self {
         self.muse = config
             .muse
