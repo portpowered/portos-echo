@@ -105,6 +105,8 @@ test("F09: pending, reject, timeout and authorization errors never retry or repl
                     .isDisabled(),
                 true,
             );
+            // A pending action writes no progress line.
+            assert.equal(await page.getByRole("status").textContent(), "");
             await page.clock.runFor(10000);
         }
         assert.equal(
@@ -123,6 +125,24 @@ test("F09: pending, reject, timeout and authorization errors never retry or repl
         );
     }
     assert.equal((await calls(page)).length, 4);
+    // The failure report clears itself; no newer frame is needed.
+    await page.clock.runFor(3999);
+    assert.equal(
+        await page.getByRole("status").textContent(),
+        "Action could not be sent",
+    );
+    await page.clock.runFor(1);
+    assert.equal(await page.getByRole("status").textContent(), "");
+    assert.equal(await page.evaluate(() => window.timers.size), 0);
+    // An accepted action shows nothing either.
+    await page.evaluate(() => {
+        window.postStatus = 204;
+    });
+    await page.getByRole("button", { name: "Allow", exact: true }).click();
+    await page.locator("button:enabled").first().waitFor();
+    assert.equal((await calls(page)).length, 5);
+    assert.equal(await page.getByRole("status").textContent(), "");
+    assert.equal(await page.evaluate(() => window.timers.size), 0);
     await page.evaluate(() => window.streams[0].onerror());
     assert.equal(
         await page.getByRole("status").textContent(),

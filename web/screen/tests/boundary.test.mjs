@@ -181,8 +181,6 @@ test("F17: reconnect replay keeps order; replacement/unload abort pending action
     });
     await page.clock.runFor(10000);
     assert.equal((await calls(page)).length, 2);
-    assert.equal(
-        await page.getByRole("status").textContent(),
-        "Sending action…",
-    );
+    // Neither a pending nor an accepted action writes a progress line.
+    assert.equal(await page.getByRole("status").textContent(), "");
 });

@@ -307,19 +307,15 @@ test("F25 generated template: production TLS install/writer/SSE, real media and 
     assert.deepEqual(await f.next(), {
         action: { action: "tap", target: "primary" },
     });
-    const feedback = page.getByText("Action sent; waiting for screen update", {
-        exact: true,
-    });
-    await feedback.waitFor();
-    const statusBox = await feedback.boundingBox();
-    const clockBox = await page.locator(".pack-clock").boundingBox();
-    assert.ok(statusBox && clockBox);
-    assert.ok(
-        statusBox.x >= clockBox.x + clockBox.width ||
-            clockBox.x >= statusBox.x + statusBox.width ||
-            statusBox.y >= clockBox.y + clockBox.height ||
-            clockBox.y >= statusBox.y + statusBox.height,
-        "Ready action feedback must leave the template clock readable",
+    // An accepted tap draws nothing over the face: the controls come back
+    // and the status line stays empty and invisible.
+    await page.locator("button.home-tap:enabled").waitFor();
+    const feedback = page.locator('[role="status"]');
+    assert.equal(await feedback.textContent(), "");
+    assert.equal(
+        await feedback.isVisible(),
+        false,
+        "An accepted Ready tap must leave no status box over the face",
     );
     await mkdir("test-results/screenshots", { recursive: true });
     await page.screenshot({
