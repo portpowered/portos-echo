@@ -2,8 +2,47 @@
 
 use serde::{Deserialize, Serialize};
 
+mod session;
+pub use session::{EndSession, EndSessionOutcome, EndedReason, SessionEnded, StartSession, StartSessionOutcome};
+
 pub const ECHO_PLUGIN: &str = "port1/systems/zero/plugins/echo-show";
 pub const VERSION: &str = "1.0";
+
+#[derive(Deserialize)]
+pub struct Downlink {
+    pub header: CommandHeader,
+    pub target: CommandTarget,
+    pub payload: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandHeader {
+    pub namespace: String,
+    pub name: String,
+    pub version: String,
+    pub message_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct CommandTarget {
+    #[serde(rename = "type")]
+    _kind: RouteType,
+    pub value: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum RouteType {
+    Route,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandReply<'a, T> {
+    pub request_id: &'a str,
+    pub outcome: T,
+}
 
 #[derive(Serialize)]
 pub struct Uplink<'a, T> {
@@ -54,7 +93,7 @@ pub struct ReportState<'a> {
     pub muted: Option<bool>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssistantState {
     Idle,
@@ -64,7 +103,7 @@ pub enum AssistantState {
     Muted,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionOrigin {
     Wake,

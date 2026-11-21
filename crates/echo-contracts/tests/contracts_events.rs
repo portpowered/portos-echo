@@ -1,5 +1,10 @@
 //! T2 exact synthetic task/Live messages; uncaptured Wyoming arms are synthetic.
+use echo_contracts::endpoint::{
+    AssistantState, CommandReply, Downlink, ECHO_PLUGIN, EndSession, EndSessionOutcome, EndedReason, SessionEnded,
+    SessionOrigin, StartSession, StartSessionOutcome, Uplink, VERSION,
+};
 use echo_contracts::{ids::DelegationId, live::*, wyoming::*};
+use serde_json::to_value;
 use serde_json::{Value, json};
 
 #[test]
@@ -120,4 +125,94 @@ fn external_data_replaces_non_object_and_missing_inline() {
             WyomingEvent::Other("future".into(), json!(["external"]))
         );
     }
+}
+
+#[test]
+fn endpoint_start_command_preserves_route_and_text() {
+    let text = "é".repeat(2_000);
+    let command: Downlink = serde_json::from_value(json!({
+        "header": {"namespace":"assistant-session","name":"start-session","version":VERSION,"messageId":"request-1"},
+        "target": {"type":"ROUTE","value":"resolved-route"},
+        "payload": {"initialText":text,"reason":"synthetic reason"}
+    }))
+    .unwrap();
+    assert_eq!(command.header.namespace, "assistant-session");
+    assert_eq!(command.header.name, "start-session");
+    assert_eq!(command.header.version, "1.0");
+    assert_eq!(command.header.message_id, "request-1");
+    assert_eq!(command.target.value, "resolved-route");
+    let payload: StartSession = serde_json::from_value(Value::Object(command.payload)).unwrap();
+    assert_eq!(payload.initial_text.as_deref(), Some(text.as_str()));
+    assert!(payload.listen);
+    assert_eq!(payload.reason, "synthetic reason");
+}
+
+#[test]
+fn endpoint_command_rejects_bad_wire_types() {
+    for payload in [
+        json!({"initialText":"missing reason"}),
+        json!({"reason":"test","initialText":null}),
+        json!({"reason":"test","initialText":"x".repeat(2_001)}),
+        json!({"reason":"test","listen":"false"}),
+    ] {
+        assert!(serde_json::from_value::<StartSession>(payload).is_err());
+    }
+    let mic: StartSession = serde_json::from_value(json!({"reason":"mic","listen":false})).unwrap();
+    assert_eq!(mic.initial_text, None);
+    assert!(!mic.listen);
+    for (kind, payload) in [("DEVICE", json!({})), ("ROUTE", json!([]))] {
+        let command = json!({
+            "header":{"namespace":"assistant-session","name":"end-session","version":VERSION,"messageId":"request-2"},
+            "target":{"type":kind,"value":"resolved-route"},"payload":payload
+        });
+        assert!(serde_json::from_value::<Downlink>(command).is_err());
+    }
+}
+
+#[test]
+fn endpoint_session_replies_keep_request_ids_and_resolved_route() {
+    let receipt = CommandReply {
+        request_id: "request-1",
+        outcome: StartSessionOutcome::admitted("session-1", AssistantState::Thinking),
+    };
+    assert_eq!(
+        to_value(Uplink::new("start-session", "resolved-route", receipt)).unwrap(),
+        json!({
+            "header":{"namespace":ECHO_PLUGIN,"name":"start-session","version":"1.0"},
+            "target":{"type":"ROUTE","value":"resolved-route"},
+            "payload":{"requestId":"request-1","outcome":{"ok":true,"sessionId":"session-1","state":"thinking"}}
+        })
+    );
+    let end: EndSession = serde_json::from_value(json!({"sessionId":"session-1"})).unwrap();
+    assert_eq!(end.session_id, "session-1");
+    let receipt = CommandReply {
+        request_id: "request-2",
+        outcome: EndSessionOutcome::closed(),
+    };
+    assert_eq!(
+        to_value(Uplink::new("end-session", "resolved-route", receipt)).unwrap(),
+        json!({
+            "header":{"namespace":ECHO_PLUGIN,"name":"end-session","version":"1.0"},
+            "target":{"type":"ROUTE","value":"resolved-route"},
+            "payload":{"requestId":"request-2","outcome":{"ok":true,"state":"idle","ending":false}}
+        })
+    );
+}
+
+#[test]
+fn endpoint_session_ended_is_unsolicited_and_preserves_identity() {
+    let ended = SessionEnded {
+        session_id: "session-1",
+        origin: SessionOrigin::Wake,
+        reason: EndedReason::Remote,
+        ended_at: "2026-11-21T12:00:00Z",
+    };
+    assert_eq!(
+        to_value(Uplink::new("session-ended", "resolved-route", ended)).unwrap(),
+        json!({
+            "header":{"namespace":ECHO_PLUGIN,"name":"session-ended","version":"1.0"},
+            "target":{"type":"ROUTE","value":"resolved-route"},
+            "payload":{"sessionId":"session-1","origin":"wake","reason":"remote","endedAt":"2026-11-21T12:00:00Z"}
+        })
+    );
 }
