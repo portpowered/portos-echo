@@ -346,7 +346,12 @@ async function checkNative(page, { text, buttons }) {
             .click({ trial: true });
 }
 
-export function checkHandoffs(rows, expectedClips) {
+// A held clip (one named in held) shows no frame while its pose holds, and
+// its last frame may end the clip unseen. A replay of one is known to have
+// played through by the time from its first frame to the next replay's. The
+// first replay's first frame may be seen late, behind the entry and reveal,
+// so that time is checked from the second replay on.
+export function checkHandoffs(rows, expectedClips, { held = [] } = {}) {
     const heads = rows.filter(({ boundary }) => boundary === "head");
     const tails = rows.filter(({ boundary }) => boundary === "tail");
     assert.deepEqual(
@@ -358,23 +363,31 @@ export function checkHandoffs(rows, expectedClips) {
         const head = heads[index + 1];
         assert.equal(tail.replay, index);
         assert.notEqual(tail.element, head.element);
+        const holds = held.includes(tail.clip);
         assert.ok(
-            tail.ended && tail.duration - tail.mediaTime <= 0.12,
+            tail.ended && (holds || tail.duration - tail.mediaTime <= 0.12),
             diagnostic(tail),
         );
         assert.ok(
             head.mediaTime <= 0.1 && head.observedAt > tail.observedAt,
             diagnostic(head),
         );
-        assert.ok(
-            rows.some(
-                (row) =>
-                    row.replay === index &&
-                    row.boundary === "playing" &&
-                    row.mediaTime > tail.duration / 3 &&
-                    row.mediaTime < (2 * tail.duration) / 3,
-            ),
-        );
+        if (holds && index > 0)
+            assert.ok(
+                head.observedAt - heads[index].observedAt >=
+                    (2000 * tail.duration) / 3,
+                diagnostic(head),
+            );
+        else if (!holds)
+            assert.ok(
+                rows.some(
+                    (row) =>
+                        row.replay === index &&
+                        row.boundary === "playing" &&
+                        row.mediaTime > tail.duration / 3 &&
+                        row.mediaTime < (2 * tail.duration) / 3,
+                ),
+            );
     }
 }
 
@@ -389,7 +402,9 @@ export async function checkHeldLinkCode(f) {
     const url = page.url();
     const { rows, samples } = await playbackTrace(observer);
     for (const row of rows) console.log(`LINK_REPLAY ${diagnostic(row)}`);
-    checkHandoffs(rows, Array(4).fill("setup.webm"));
+    checkHandoffs(rows, Array(4).fill("setup.webm"), {
+        held: ["setup.webm"],
+    });
     assert.ok(seq);
     assert.equal(await presentation.getAttribute("data-seq"), seq);
     assert.equal(page.url(), url);
@@ -763,13 +778,21 @@ async function count(window_ms) {
     return { frames: frames / seconds, armed: armed / seconds };
 }
 
-export async function checkIdleCost({ page }) {
-    await page.waitForFunction(
-        (selector) =>
-            document.querySelector(selector)?.currentTime >= 0.4 &&
-            !document.querySelector(".pack-stage video[data-leaving]"),
-        activeVideo,
-    );
+// The cost of the clip on the stage, measured over window_ms once it has
+// settled: the frames the display is given a second, with every timer and
+// frame callback the page arms itself, and the main thread's work over all
+// but the first second and the last two.
+async function playbackCost(page, label, window_ms) {
+    // A loop that has just ended stays in view, paused, until its replay
+    // shows its first frame.
+    await page.waitForFunction((selector) => {
+        const video = document.querySelector(selector);
+        return (
+            video?.currentTime >= 0.4 &&
+            !video.paused &&
+            !document.querySelector(".pack-stage video[data-leaving]")
+        );
+    }, activeVideo);
     // The causes, each on its own: nothing recolours or resamples the video
     // while it plays, and the loop plays at its own rate.
     const styles = await page.locator(activeVideo).evaluate((video) => {
@@ -786,11 +809,11 @@ export async function checkIdleCost({ page }) {
         }
         return { chain, paused: video.paused, rate: video.playbackRate };
     });
-    for (const [label, ...effects] of styles.chain)
+    for (const [node, ...effects] of styles.chain)
         assert.deepEqual(
             effects,
             ["none", "none", "normal", "none"],
-            `${label} adds a per-frame effect to the idle clip`,
+            `${node} adds a per-frame effect to the ${label} clip`,
         );
     assert.deepEqual([styles.paused, styles.rate], [false, 1]);
 
@@ -802,12 +825,10 @@ export async function checkIdleCost({ page }) {
                 ({ name, value }) => [name, value],
             ),
         );
-    // The frames the display is given are counted over the whole window, with
-    // every timer and frame callback the page arms itself.
-    const counting = page.evaluate(count, 7000);
+    const counting = page.evaluate(count, window_ms);
     await page.waitForTimeout(1000);
     const before = await metrics();
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(window_ms - 3000);
     const after = await metrics();
     const seconds = after.Timestamp - before.Timestamp;
     const rate = (name) => ((after[name] - before[name]) * 1000) / seconds;
@@ -819,17 +840,103 @@ export async function checkIdleCost({ page }) {
     const shown = await counting;
     await session.detach();
     console.log(
-        `B8 idle frames_per_s=${shown.frames.toFixed(1)} armed_per_s=${shown.armed.toFixed(2)} task_ms_per_s=${cost.task.toFixed(1)} script_ms_per_s=${cost.script.toFixed(2)} layout_ms_per_s=${cost.layout.toFixed(2)} layouts=${after.LayoutCount - before.LayoutCount} recalcs=${after.RecalcStyleCount - before.RecalcStyleCount}`,
-    );
-    assert.ok(
-        shown.frames > 0 && shown.frames <= idleBudget.frames,
-        `idle shows ${shown.frames.toFixed(1)} frames a second`,
+        `B8 ${label} frames_per_s=${shown.frames.toFixed(1)} armed_per_s=${shown.armed.toFixed(2)} task_ms_per_s=${cost.task.toFixed(1)} script_ms_per_s=${cost.script.toFixed(2)} layout_ms_per_s=${cost.layout.toFixed(2)} layouts=${after.LayoutCount - before.LayoutCount} recalcs=${after.RecalcStyleCount - before.RecalcStyleCount}`,
     );
     // A loop that re-arms itself every frame would arm 10 or more a second.
-    assert.ok(shown.armed <= 2, `idle arms ${shown.armed} timers a second`);
+    assert.ok(shown.armed <= 2, `${label} arms ${shown.armed} timers a second`);
+    return { shown, cost };
+}
+
+function checkBudget(label, { shown, cost }, budget) {
+    assert.ok(
+        shown.frames <= budget.frames,
+        `${label} shows ${shown.frames.toFixed(1)} frames a second`,
+    );
     for (const [name, value] of Object.entries(cost))
         assert.ok(
-            value <= idleBudget[name],
-            `idle ${name} cost is ${value.toFixed(2)} ms a second`,
+            value <= budget[name],
+            `${label} ${name} cost is ${value.toFixed(2)} ms a second`,
         );
 }
+
+export async function checkIdleCost({ page }) {
+    const measured = await playbackCost(page, "idle", 7000);
+    assert.ok(measured.shown.frames > 0, "idle shows no frame");
+    checkBudget("idle", measured, idleBudget);
+}
+
+// Error, approval, the link code and muted show a pose that does not move,
+// yet as 30 fps clips the display decoded and redrew 30 frames a second of
+// it: Error measured about 71% of a core on the Echo. Each is now a hold
+// that codes only its cross-fades and its last frame, so while the pose
+// holds the display is given no frame at all. Measured here in headless
+// Chromium over four seconds of each state:
+//
+//                                30 fps clip   hold   budget
+//     frames shown per second,
+//       error                         30.0      0.0        2
+//       approval                      29.8      0.0        2
+//       link code                     29.3      1.2        2
+//       muted                         27.8      0.0        2
+//     main-thread task ms per second,
+//       error                         14.6      3.1
+//       approval                      14.9      2.8
+//       link code                     19.4      7.1
+//       muted                         27.4      2.9
+//     ms from the state to her pose,
+//       error, approval, muted     30-83    47-62     1500
+//       link code (with its entry)   622      621     1500
+//
+// The link code's loop is two seconds, so a replay shows two frames in a
+// window; the others loop every ten seconds. The main-thread budgets are the
+// idle loop's.
+const stillBudget = { ...idleBudget, frames: 2 };
+// From the state change to her new pose on the stage, link code entry
+// included; a clip revealed on its last frame takes 2 to 10 seconds.
+const revealBudget = 1500;
+const stills = {
+    error: {
+        frame: { state: "error", message: "Local action failed", relink: true },
+        clip: "error",
+    },
+    approval: {
+        frame: presentations.find(({ clip }) => clip === "approval").frame,
+        clip: "approval",
+    },
+    link_code: { frame: link.frame, clip: "setup" },
+    muted: { frame: { state: "muted" }, clip: "muted" },
+};
+
+export const checkStillCost =
+    (...names) =>
+    async ({ page, update }) => {
+        for (const name of names) {
+            const { frame, clip } = stills[name];
+            const asked = performance.now();
+            await update(frame);
+            await playing(page, `${clip}.webm`, id);
+            // The page reveals a clip on the first frame it presents once it
+            // plays; a hold must not put that frame seconds away.
+            const reveal = performance.now() - asked;
+            console.log(`B8 ${name} revealed_ms=${reveal.toFixed(0)}`);
+            assert.ok(
+                reveal <= revealBudget,
+                `${name} shows ${reveal.toFixed(0)} ms after the state changes`,
+            );
+            const measured = await playbackCost(page, name, 4000);
+            // The pose is still on the stage, and still playing, at the end.
+            await page.waitForFunction(
+                ({ selector, name }) => {
+                    const video = document.querySelector(selector);
+                    return (
+                        video &&
+                        !video.paused &&
+                        new URL(video.dataset.clip).pathname.endsWith(name)
+                    );
+                },
+                { selector: activeVideo, name: `/${id}/${clip}.webm` },
+                { timeout: 3000 },
+            );
+            checkBudget(name, measured, stillBudget);
+        }
+    };

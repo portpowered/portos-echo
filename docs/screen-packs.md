@@ -469,10 +469,11 @@ states and a happy emote. In Listening, she tilts her head with her mouth closed
 Beside a card (link code, approval, error) she stands left of centre from the
 clip's first frame. The idle loop is one slow breath at 10 fps and then a
 12-second hold with two blinks; while nothing changes the clip carries no
-frames, which keeps the display's idle cost low. The other clips are 30 fps.
-Her `mouth` set drives [lip sync](#lip-sync): the neutral frame is the closed
-mouth, `mouth-half.png` and `mouth-open.png` the other two, and each vowel
-drawing under `scripts/packs/companion/art/` is published when it exists.
+frames, which keeps the display's idle cost low. The still state poses are
+holds too (see [A still pose is a hold](#a-still-pose-is-a-hold)); Listening,
+Speaking and the happy emote are 30 fps throughout. Her `mouth` set drives
+[lip sync](#lip-sync): the neutral frame is the closed mouth, `mouth-half.png`
+and `mouth-open.png` the other two, and each vowel drawing under `scripts/packs/companion/art/` is published when it exists.
 The clock and date sit bottom right, over the character. Codex image generation
 produced an original reference sheet and edited it into the poses. The checked-in PNGs and their
 [generation prompts](../scripts/packs/companion/prompts.md) are the source for
@@ -505,6 +506,46 @@ frame is meant to change. `tests/test_companion_screen_pack.py`
 (`CompanionMasks`, run by `make test-unit-python`) checks that the placed mouth
 frames equal the master outside their region, that every two mouth frames agree
 there, and that the feather adds at most 12 levels between neighbouring pixels.
+
+### A still pose is a hold
+
+A static state is a hold, not a 30 fps clip. The display decodes and redraws
+every frame a clip gives it, whether or not the picture changed: on the Echo a
+playing clip costs about 16% of a core with nothing changing and about 3% more
+for each frame it shows a second, and the Error screen took about 71% as a
+30 fps clip. A state clip whose pose does not move therefore carries a frame
+only where the picture changes: the cross-fade at each end, at 30 fps, and the
+clip's last frame, so the loop keeps its length. Otherwise one frame is shown
+until the next, coded with variable frame timing (`-fps_mode vfr`) like the
+idle loop's hold, so the display is given no frame while the pose holds. The
+player has a still only for the rest frame and the lip-sync mouths, never for a
+state, so a held pose is a short clip rather than an image.
+
+- Companion's held clips are listed in `HELD` in
+  `scripts/packs/companion/render.py`: Connecting, Thinking, Muted and the three
+  card poses (setup, approval, error). A new state whose pose is still joins
+  `HELD`. Listening, Speaking and the happy emote move every frame and stay
+  30 fps; the idle loop is a breath and a hold.
+- A held clip also keeps its second frame. The page reveals a clip on the first
+  frame it presents once the clip plays, and without that frame it would be
+  the last one, seconds later, with the previous state's clip still in view.
+- A held loop costs nothing while it holds, so it can be long: Muted loops every
+  10 seconds, like the approval and error cards.
+- The MP4 is selected after the background is laid under it, and its frames
+  are coded in order (`-bf 0`). Otherwise the MP4 comes out at a constant rate
+  with its holds dropped, or lists a shorter length than its frames span.
+
+`tests/test_companion_screen_pack.py` (`CompanionHolds`, run by
+`make test-unit-python`) encodes every held clip both ways from the same
+frames and decodes both at 30 fps: each VP9 frame of the held clip equals the
+30 fps clip's frame of that time, each H.264 frame is within 1 mean level of it,
+and a held clip codes at most 23 frames. `CompanionPack` checks that every clip
+lasts its full length in both codecs. The screen integration tests `T3
+Companion error and approval stay cheap to draw` and `T3 Companion link code
+and muted stay cheap to draw` count the frames the page is given a second in
+each state, with a budget of 2 that a 30 fps clip fails. In headless Chromium
+the 30 fps clips gave 28 to 30 frames a second and the holds give none, apart
+from the link code's two-second loop at about 1.
 
 On Linux with Python 3 and ffmpeg (libvpx-vp9 and libx264 enabled):
 

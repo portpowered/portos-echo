@@ -10,6 +10,7 @@ import {
     checkHeldLinkCode,
     checkIdleCost,
     checkInterruptedEntry,
+    checkStillCost,
     checkSteadyColour,
     checkStillBody,
     playbackTrace,
@@ -353,7 +354,7 @@ async function alternatePlayback(f) {
         presentations.find(([state]) => state.state === "link_code")[0],
     );
     const { rows } = await playbackTrace(observer);
-    checkHandoffs(rows, setup);
+    checkHandoffs(rows, setup, { held: ["setup.mp4"] });
     assert.ok(rows.every(({ art }) => art));
     await mp4.close();
     await f.page.emulateMedia({ reducedMotion: "reduce" });
@@ -535,6 +536,16 @@ test(
 test(
     "T3 Companion idle home screen stays cheap to draw",
     withSelected(checkIdleCost),
+);
+
+test(
+    "T3 Companion error and approval stay cheap to draw",
+    withSelected(checkStillCost("error", "approval")),
+);
+
+test(
+    "T3 Companion link code and muted stay cheap to draw",
+    withSelected(checkStillCost("link_code", "muted")),
 );
 
 test(
