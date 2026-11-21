@@ -1,41 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { settingsPage as basePage, response } from "./page.mjs";
+import { response } from "./page.mjs";
 import { calls } from "../browser.mjs";
-
-async function settingsPage(t) {
-    let page;
-    // Capture the rendered controls before the shared context cleanup, including
-    // failures. A bounded action reports its exact locator before the test cap.
-    t.after(async () => {
-        if (page)
-            await page.screenshot({
-                path: `test-results/screenshots/${t.name.replace(/[^a-z0-9]/gi, "-")}.png`,
-            });
-    });
-    page = await basePage(t);
-    page.setDefaultTimeout(5000);
-    return page;
-}
-
-const empty = {
-    version: 1,
-    revision: 0,
-    active: null,
-    warning: null,
-    installed: [],
-    jobs: [],
-};
-const base = "http://127.0.0.1:4173/screen-packs/v1";
-const token = "?token=synthetic-screen-pair";
-const status = (page) => page.locator(".settings-panel [role=status]");
-async function load(page, data = empty) {
-    await response(page, data);
-    await page
-        .getByRole("button", { name: /^(Load screen packs|Refresh packs)$/ })
-        .click();
-    assert.equal(await status(page).textContent(), "Screen packs loaded");
-}
+import {
+    base,
+    empty,
+    load,
+    saveResponse,
+    settingsPage,
+    status,
+    token,
+} from "./pack-fixture.mjs";
+import "./pack-carousel.mjs";
 
 test("packs: explicit empty catalog, queued install, safe failure and pairing states", async (t) => {
     const page = await settingsPage(t);
@@ -52,6 +28,18 @@ test("packs: explicit empty catalog, queued install, safe failure and pairing st
     assert.equal(
         await page.getByLabel("Screen pack", { exact: true }).inputValue(),
         "",
+    );
+    assert.equal(
+        await page
+            .getByRole("option", { name: "Default", exact: true })
+            .isDisabled(),
+        true,
+    );
+    assert.equal(
+        await page
+            .getByRole("group", { name: "Installed screen packs" })
+            .count(),
+        0,
     );
     assert.equal((await calls(page)).at(-1).url, base + token);
     const url = page.getByLabel("Pack HTTPS URL", { exact: true });
@@ -148,7 +136,12 @@ test("packs: authenticated preview, layout-only, selection and focus preserve vo
             version: "1.0.0",
             rest_url: "/screen-packs/v1/template@1.0.0/rest.png",
         },
-        { id: "layout", name: "layout", version: "1.0.0", rest_url: null },
+        {
+            id: "layout",
+            name: "<b>layout</b>",
+            version: "1.0.0",
+            rest_url: null,
+        },
     ];
     await page
         .getByLabel("voice.md", { exact: true })
@@ -167,24 +160,22 @@ test("packs: authenticated preview, layout-only, selection and focus preserve vo
             .count(),
         1,
     );
+    assert.equal(
+        await page
+            .getByRole("button", { name: "<b>layout</b> 1.0.0", exact: true })
+            .getByText("<b>layout</b> 1.0.0", { exact: true })
+            .isVisible(),
+        true,
+    );
     await page
         .getByLabel("Screen pack", { exact: true })
         .selectOption("layout");
-    // Route two sequential replies through the controlled fetch boundary.
-    await page.evaluate(
-        (snapshot) => {
-            const fetch = window.fetch;
-            window.fetch = (url, options) => {
-                window.postStatus = 200;
-                window.responseBody =
-                    options.method === "POST"
-                        ? { version: 1, restart_pending: true }
-                        : snapshot;
-                return fetch(url, options);
-            };
-        },
-        { ...empty, revision: 1, active: "layout", installed },
-    );
+    await saveResponse(page, 200, {
+        ...empty,
+        revision: 1,
+        active: "layout",
+        installed,
+    });
     await page
         .getByRole("button", { name: "Use screen pack", exact: true })
         .click();
@@ -212,14 +203,6 @@ test("packs: authenticated preview, layout-only, selection and focus preserve vo
             .evaluate((node) => node === document.activeElement),
         true,
     );
-    await page.getByLabel("Screen pack", { exact: true }).selectOption("");
-    await page
-        .getByRole("button", { name: "Use screen pack", exact: true })
-        .click();
-    assert.deepEqual(JSON.parse((await calls(page)).at(-2).body), {
-        version: 1,
-        screen_pack: "",
-    });
 });
 
 test("packs: malformed catalog and escaping preview are inert, cancelled load cannot render", async (t) => {
@@ -354,6 +337,23 @@ test("packs: pending load disables writes, preserves keyboard focus and reports 
         1,
     );
     assert.equal(await page.getByRole("img").count(), 0);
+    await page.keyboard.press("Tab");
+    const card = page.getByRole("button", { name: "template 1.0.0" });
+    assert.equal(
+        await card.evaluate((node) => node === document.activeElement),
+        true,
+    );
+    await page.keyboard.press("Enter");
+    assert.equal(await card.getAttribute("aria-pressed"), "true");
+    assert.equal(
+        await page.getByLabel("Screen pack", { exact: true }).inputValue(),
+        "template@1.0.0",
+    );
+    for (const name of ["Previous", "Next"])
+        assert.equal(
+            await page.getByRole("button", { name, exact: true }).count(),
+            0,
+        );
     await page.keyboard.press("Tab");
     assert.equal(
         await page

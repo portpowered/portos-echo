@@ -19,6 +19,120 @@ type Perform = (
     message?: string,
 ) => Promise<void>;
 
+type Pack = PackSnapshot["installed"][number];
+
+function packCard(actions: string, pack: Pack) {
+    const title = `${pack.name} ${pack.version}`;
+    const card = element("button");
+    card.type = "button";
+    card.className = "pack-card";
+    card.setAttribute("aria-label", title);
+    const preview = element("span");
+    preview.className = "pack-preview";
+    if (pack.rest_url) {
+        const image = element("img");
+        image.alt = `${pack.name} rest pose`;
+        image.referrerPolicy = "no-referrer";
+        image.loading = "lazy";
+        image.addEventListener(
+            "error",
+            () => {
+                image.replaceWith(element("span", "Preview unavailable"));
+            },
+            { once: true },
+        );
+        image.src = previewUrl(actions, pack.id, pack.rest_url);
+        preview.append(image);
+    } else {
+        preview.append(element("span", "Layout only — no character preview"));
+    }
+    const marker = element("span", "✓ Selected");
+    marker.className = "pack-marker";
+    marker.setAttribute("aria-hidden", "true");
+    card.append(preview, element("span", title), marker);
+    return card;
+}
+
+function mountCarousel(
+    catalog: HTMLElement,
+    actions: string,
+    packs: Pack[],
+    active: string | null,
+    select: HTMLSelectElement,
+) {
+    const rail = element("div");
+    rail.className = "pack-rail";
+    rail.setAttribute("role", "group");
+    rail.setAttribute("aria-label", "Installed screen packs");
+    const cards = packs.map((pack) => ({
+        pack,
+        button: packCard(actions, pack),
+    }));
+    const navigation = element("div");
+    navigation.className = "pack-navigation";
+    const previous = element("button", "Previous");
+    const next = element("button", "Next");
+    previous.type = next.type = "button";
+    let current = 0;
+
+    function mark(selected: number) {
+        if (selected !== -1) current = selected;
+        cards.forEach(({ button }, index) => {
+            button.tabIndex = index === current ? 0 : -1;
+            button.setAttribute("aria-pressed", String(index === selected));
+        });
+        previous.setAttribute("aria-disabled", String(current === 0));
+        next.setAttribute(
+            "aria-disabled",
+            String(current === cards.length - 1),
+        );
+        const selectedButton = cards[selected]?.button;
+        if (!selectedButton) return;
+        const card = selectedButton.getBoundingClientRect();
+        const viewport = rail.getBoundingClientRect();
+        // Scroll the rail only. scrollIntoView can also move the Settings panel.
+        rail.scrollBy({
+            left:
+                card.left + card.width / 2 - viewport.left - viewport.width / 2,
+        });
+    }
+
+    function pick(index: number, focus = false) {
+        const card = cards[index];
+        if (!card) return;
+        const { id } = card.pack;
+        select.value = isDefault(id) ? "default" : id;
+        mark(index);
+        if (focus) card.button.focus({ preventScroll: true });
+    }
+
+    cards.forEach(({ button }, index) => {
+        button.addEventListener("click", () => pick(index));
+        button.addEventListener("keydown", (event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            pick(index + (event.key === "ArrowLeft" ? -1 : 1), true);
+        });
+    });
+    select.addEventListener("change", () => {
+        // Default is an alias. Only the catalog confirms its effective id.
+        mark(
+            select.value === "default"
+                ? -1
+                : packs.findIndex((pack) => pack.id === select.value),
+        );
+    });
+    previous.addEventListener("click", () => pick(current - 1));
+    next.addEventListener("click", () => pick(current + 1));
+    rail.append(...cards.map(({ button }) => button));
+    catalog.prepend(rail);
+    if (cards.length > 1) {
+        navigation.append(previous, next);
+        rail.after(navigation);
+    }
+    mark(packs.findIndex((pack) => pack.id === active));
+}
+
 // Uses the settings panel's one pending request, cancellation and focus owner.
 // Explicit refresh avoids an unbounded polling task when settings are hidden.
 export function packControls(actions: string, perform: Perform): HTMLElement {
@@ -73,30 +187,14 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
                 option.value = pack.id;
                 select.append(option);
             }
-            const item = element("div");
-            item.append(element("p", `${pack.name} ${pack.version}`));
-            if (pack.rest_url) {
-                const image = element("img");
-                image.alt = `${pack.name} rest pose`;
-                image.referrerPolicy = "no-referrer";
-                image.loading = "lazy";
-                image.src = previewUrl(actions, pack.id, pack.rest_url);
-                image.addEventListener(
-                    "error",
-                    () => {
-                        image.replaceWith(element("p", "Preview unavailable"));
-                    },
-                    { once: true },
-                );
-                item.append(image);
-            } else
-                item.append(element("p", "Layout only — no character preview"));
-            catalog.append(item);
         }
         const disable = element("option", "Disable screen packs");
         disable.value = "";
         select.append(disable);
-        select.value = data.active ?? "";
+        select.value =
+            data.active && isDefault(data.active)
+                ? "default"
+                : (data.active ?? "");
         const save = element("button", "Use screen pack");
         const form = element("form");
         form.append(label, select, save);
@@ -115,7 +213,7 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
                 return "Screen pack saved. Appearance updates without restarting the bridge.";
             }, "Saving screen pack…");
         });
-        if (!data.installed.length)
+        if (!installed.length)
             catalog.append(element("p", "No screen packs installed"));
         if (data.warning)
             catalog.append(
@@ -132,6 +230,8 @@ export function packControls(actions: string, perform: Perform): HTMLElement {
                     `Download ${job.id}: ${job.status}${job.reason ? ` (${job.reason.replace(/_/g, " ")})` : ""}`,
                 ),
             );
+        if (installed.length)
+            mountCarousel(catalog, actions, installed, data.active, select);
     }
     return section;
 }
