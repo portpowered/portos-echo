@@ -12,6 +12,9 @@ pub(super) const HANDBACK_GRACE: Duration = Duration::from_secs(20);
 /// from the user's last end of speech, never while they are still speaking,
 /// and again from the last reply audio written while the reply is voiced: a
 /// reply of any length plays to its end, and one that stalls still ends.
+/// The user's speech never holds the run past its cap: the pinned V3 session
+/// forwards no speech-stopped, so a speech start it never transcribes would
+/// otherwise leave the reply waiting with no deadline at all.
 pub(super) fn deadline(source: &Source, played: Option<Instant>) -> (Option<Instant>, Error) {
     if played.is_some() {
         return (played, Error::Deadline);
@@ -23,13 +26,16 @@ pub(super) fn deadline(source: &Source, played: Option<Instant>) -> (Option<Inst
     }
     let speaking = source.user_speech == UserSpeech::Active;
     if source.delegation.waiting() {
-        let active = speaking || source.mouth.voiced() || (source.controller.speaking() && !source.delegation.held());
-        return match source.delegation.resolved().filter(|_| !active) {
+        let answering = source.mouth.voiced() || (source.controller.speaking() && !source.delegation.held());
+        return match source.delegation.resolved().filter(|_| !speaking && !answering) {
             Some(resolved) => (Some(owed(source, resolved)), Error::NoResponse),
-            None => (source.run_ceiling.filter(|_| !active), Error::SessionCeiling),
+            None => (source.run_ceiling.filter(|_| !answering), Error::SessionCeiling),
         };
     }
-    ((!speaking).then_some(source.answer_due), Error::NoResponse)
+    if speaking {
+        return (source.run_ceiling, Error::SessionCeiling);
+    }
+    (Some(source.answer_due), Error::NoResponse)
 }
 
 /// A resolved hand-off holds the run for its answer: to the end of the
@@ -42,14 +48,19 @@ fn owed(source: &Source, resolved: Instant) -> Instant {
 
 /// The wait between replies and what its expiry returns: a running turn has
 /// the run ceiling, a resolved one its answer's grace, the rest the listen window.
+/// Speech renews the listen window and defers a resolved turn's grace, but
+/// neither outlasts the run ceiling: a capped listen closes as idle does.
 pub(super) fn listening(source: &Source, idle: Instant) -> (Option<Instant>, Result<bool, Error>) {
     if !source.delegation.waiting() {
-        return (Some(idle), Ok(false));
+        return (
+            Some(source.run_ceiling.map_or(idle, |ceiling| idle.min(ceiling))),
+            Ok(false),
+        );
     }
     let quiet = source.user_speech == UserSpeech::Quiet;
-    match source.delegation.resolved() {
-        Some(resolved) => (quiet.then(|| owed(source, resolved)), Err(Error::NoResponse)),
-        None => (source.run_ceiling.filter(|_| quiet), Err(Error::SessionCeiling)),
+    match source.delegation.resolved().filter(|_| quiet) {
+        Some(resolved) => (Some(owed(source, resolved)), Err(Error::NoResponse)),
+        None => (source.run_ceiling, Err(Error::SessionCeiling)),
     }
 }
 
@@ -233,7 +244,8 @@ mod tests {
         source.delegation.started();
         source.user_speech = UserSpeech::Active;
         tokio::time::advance(Duration::from_secs(30)).await;
-        assert_eq!(deadline(&source, None).0, None);
+        // Speech defers the answer's wait, never the run's ceiling.
+        assert_eq!(deadline(&source, None), (Some(ceiling), Error::SessionCeiling));
         source.user_speech = UserSpeech::Quiet;
         source.spoke();
         assert_eq!(deadline(&source, None).0, None);

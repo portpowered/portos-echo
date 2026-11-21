@@ -107,6 +107,8 @@ mod barge_cases;
 mod cases;
 #[path = "recovery/no_answer_cases.rs"]
 mod no_answer_cases;
+#[path = "recovery/run_cap_cases.rs"]
+mod run_cap_cases;
 #[tokio::test(start_paused = true)]
 async fn voice_transcript_drains_accepted_pcm_paces_then_requires_actual_played() {
     let observer = Observer::default();
