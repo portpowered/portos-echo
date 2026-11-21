@@ -372,7 +372,8 @@ selects `"live"`. Live search allows external web access; cached search sets pro
 is not exposed. Conventional models receive one hosted `web_search` declaration. Responses Lite models,
 including `gpt-6.1-sol`, receive the pin's standalone `web.run` extension instead, using the authenticated
 provider search API. Neither form adds local fetch, process, browser or file authority.
-The complete bridge dynamic catalog remains unchanged; native direct tools are exactly that catalog. Every other built-in effect stays disabled and `mcp_servers` stays `{}`.
+The complete bridge dynamic catalog remains unchanged; native direct tools are exactly that catalog.
+Every other built-in effect stays disabled and `mcp_servers` stays `{}`.
 Thread settings and local overrides set `features.code_mode.direct_only_tool_namespaces=["functions"]`
 so the bridge's own tools are direct declarations. `web.run` is not: for a code-mode-only Responses Lite
 model the live backend reserves it and refuses a client declaration with HTTP 400, which failed every
@@ -528,8 +529,10 @@ model only as one developer message, and with the guidance after a base prompt t
 model answered "end the call" with a farewell and no hand-off (Echo, 2026-11-21); leading with it, the
 model hands off and the runner calls `end_session`. That guidance is not in the prompt files and an edit
 cannot drop it, so a home seeded by an older install still ends a run on goodbye. The runner guidance
-also maps "hold on" to one `extend_session` call with the requested seconds. An applied `end_session`
-ends the run at once: the bridge cuts the open reply, drops the delegation it waited for and interrupts
+also maps "hold on" to one `extend_session` call with the requested seconds, and the voice guidance
+makes that hand-off mandatory: an acknowledgement alone does not hold the call (Echo, 2026-11-21).
+An applied `end_session` ends the run at once: the bridge drops the delegation it waited for, cuts a
+reply opened for the turn that has not spoken yet (an audible farewell plays out first) and interrupts
 the running delegated turn (best effort: a missed acknowledgement cancels the request and keeps the
 call). Only the automatic ends (no answer, idle) wait for a running turn, up to `voice.session_max_seconds`.
 

@@ -253,14 +253,16 @@ impl Source {
     }
 
     /// An applied `end_session` supersedes everything (owner, 2026-11-21):
-    /// nothing delegated is owed any more, and an open reply stops where it is,
-    /// as a barge-in cut does. Between replies there is nothing to stop.
+    /// nothing delegated is owed any more, and a reply opened for it stops at
+    /// once, as a barge-in cut does. A reply already audible is the Live
+    /// voice's farewell for the end's hand-off: it finishes, and the run ends
+    /// at its playback boundary. Between replies there is nothing to stop.
     pub fn end_if_ended(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
         if !self.session.ending() || self.controller.cutting() || self.controller.closing() {
             return Ok(());
         }
         self.delegation = Delegation::default();
-        if self.controller.idle_deadline().is_some() {
+        if self.controller.idle_deadline().is_some() || self.mouth.voiced() {
             return Ok(());
         }
         self.stale = true;

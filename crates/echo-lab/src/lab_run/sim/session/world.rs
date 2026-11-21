@@ -50,6 +50,9 @@ pub(super) struct World {
     question: Option<long_wait::Question>,
     recovery: bool,
     media_boundary: Option<MediaBoundary>,
+    /// The delegated turn ends the session before anything is voiced: the
+    /// turn settles when the run ends, with no reply to play.
+    ends_unvoiced: bool,
 }
 
 impl World {
@@ -67,6 +70,7 @@ impl World {
         self.private = Some(Root::create(root.into())?);
         self.root = root.into();
         self.recovery = journey.recovers();
+        self.ends_unvoiced = journey == super::Journey::End;
         self.media_boundary = (journey == super::Journey::ActiveMedia).then_some(MediaBoundary::Waiting);
         let address = self.start_device(python, journey).await?;
         let provider = Provider::start(python, script).await?;
@@ -208,6 +212,9 @@ impl World {
             let milliseconds = gates.advance(provider, &timing, admitted, playback_pending).await?;
             self.step(milliseconds).await?;
             if gates.idle && self.played()? > replies {
+                return Ok(());
+            }
+            if self.ends_unvoiced && self.completed {
                 return Ok(());
             }
             if self.epoch() > started + STALL_MS {

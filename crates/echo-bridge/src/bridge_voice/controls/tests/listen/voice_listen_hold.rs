@@ -1,7 +1,8 @@
 //! T1: the session hold tool on the real run loop, with the Echo's own
 //! windows: a 15 s listen window and the default 600 s session bound. An
-//! `extend_session` grant keeps a silent run listening to its deadline, and an
-//! explicit end during the grant still closes the run at once.
+//! `extend_session` grant keeps a silent run listening to its deadline, also
+//! after an answered question, and an explicit end during the grant still
+//! closes the run at once. Without the grant the run ends at its listen window.
 use super::super::super::Stats;
 use super::*;
 use crate::bridge_codex::SessionCommand;
@@ -31,27 +32,57 @@ impl VoicePort for RunPort<'_> {
 }
 
 /// "Hold on for two minutes": the reply plays, then the agent's
-/// `extend_session(120)` is applied while the run listens in silence.
+/// `extend_session(120)` is applied while the run listens in silence, also
+/// when an answered question came first.
 #[tokio::test(start_paused = true)]
 async fn voice_listen_hold_grant_keeps_a_silent_run_to_its_deadline() {
-    let end = hold(None).await;
+    for answered in [false, true] {
+        let end = hold(answered, Then::WaitOut).await;
+        assert_eq!(end.result, Ok(()));
+        // Not cut at the 15 s listen window, alive at 119 s, and over exactly
+        // at the granted deadline: 120 s beyond the listen window it extended.
+        assert!(end.alive_at_119);
+        assert!(end.deadline - end.granted >= Duration::from_secs(120));
+        assert_eq!(end.ended, end.deadline);
+        assert_eq!(end.receipts, ["extend_session:applied"]);
+    }
+}
+
+/// The device run of 2026-11-21: "What time is it?" was answered, then "Hold
+/// on for two minutes." got only a spoken acknowledgement, with no hand-off
+/// and so no grant. A listening run cannot tell that from a goodbye: it ends
+/// 15 s after the acknowledgement played. Only the `extend_session` grant
+/// above holds it, so the Live guidance makes the hold hand-off mandatory.
+#[tokio::test(start_paused = true)]
+async fn voice_listen_hold_acknowledged_without_a_grant_ends_at_the_listen_window() {
+    let end = hold(true, Then::Acknowledge).await;
     assert_eq!(end.result, Ok(()));
-    // Not cut at the 15 s listen window, alive at 119 s, and over exactly at
-    // the granted deadline: 120 s beyond the listen window it extended.
-    assert!(end.alive_at_119);
-    assert!(end.deadline - end.granted >= Duration::from_secs(120));
-    assert_eq!(end.ended, end.deadline);
-    assert_eq!(end.receipts, ["extend_session:applied"]);
+    assert!(!end.alive_at_119);
+    assert_eq!(end.ended - end.granted, Duration::from_secs(15));
+    assert!(end.receipts.is_empty());
 }
 
 /// An explicit end 60 s into the 120 s grant closes the run at once.
 #[tokio::test(start_paused = true)]
 async fn voice_listen_explicit_end_during_a_hold_closes_at_once() {
-    let end = hold(Some(Duration::from_secs(60))).await;
-    assert_eq!(end.result, Ok(()));
-    assert_eq!(end.ended - end.granted, Duration::from_secs(60));
-    assert!(end.ended < end.deadline);
-    assert_eq!(end.receipts, ["extend_session:applied", "end_session:applied"]);
+    for answered in [false, true] {
+        let end = hold(answered, Then::End(Duration::from_secs(60))).await;
+        assert_eq!(end.result, Ok(()));
+        assert_eq!(end.ended - end.granted, Duration::from_secs(60));
+        assert!(end.ended < end.deadline);
+        assert_eq!(end.receipts, ["extend_session:applied", "end_session:applied"]);
+    }
+}
+
+/// What follows the hold's acknowledgement.
+#[derive(Clone, Copy)]
+enum Then {
+    /// The grant, then silence to its deadline.
+    WaitOut,
+    /// The grant, then an explicit end after this long.
+    End(Duration),
+    /// No grant: only the acknowledgement was spoken.
+    Acknowledge,
 }
 
 struct Hold {
@@ -94,7 +125,10 @@ fn options() -> Options {
     }
 }
 
-async fn hold(end_after: Option<Duration>) -> Hold {
+/// One run: optionally an answered question first, then the hold's
+/// acknowledgement, then `then`. Without a grant, `granted` is when the
+/// acknowledgement played and `deadline` its listen window.
+async fn hold(answered: bool, then: Then) -> Hold {
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -122,13 +156,34 @@ async fn hold(end_after: Option<Duration>) -> Hold {
             Ok(())
         },
     ));
-    reply(&tx, 5000).await;
-    super::settle(&mut work, &observer, &seen.played, 1).await;
+    if answered {
+        // "What time is it?" answered; then the user speaks again.
+        reply(&tx, 5000).await;
+        super::settle(&mut work, &observer, &seen.played, 1).await;
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+        poll(work.as_mut()).await;
+    }
+    let acknowledged = 1 + usize::from(answered);
+    reply(&tx, -5000).await;
+    super::settle(&mut work, &observer, &seen.played, acknowledged).await;
     let run = owner.borrow().clone().unwrap();
-    let (granted, deadline) = extend(&tx, &mut work, &run, opened).await;
-    let (result, alive_at_119) = match end_after {
-        Some(after) => (end_explicitly(&tx, work, &run, after).await, false),
-        None => wait_out(work, &observer, deadline).await,
+    let (granted, deadline, result, alive_at_119) = match then {
+        Then::Acknowledge => {
+            let played = Instant::now();
+            let deadline = played + Duration::from_secs(15);
+            let (result, alive) = wait_out(work, &observer, deadline).await;
+            (played, deadline, result, alive)
+        }
+        Then::WaitOut => {
+            let (granted, deadline) = extend(&tx, &mut work, &run, opened).await;
+            let (result, alive) = wait_out(work, &observer, deadline).await;
+            (granted, deadline, result, alive)
+        }
+        Then::End(after) => {
+            let (granted, deadline) = extend(&tx, &mut work, &run, opened).await;
+            (granted, deadline, end_explicitly(&tx, work, &run, after).await, false)
+        }
     };
     assert!(observer.commands().contains(&Command::EndRun));
     Hold {
@@ -175,16 +230,19 @@ async fn end_explicitly<W: Future<Output = Result<Stats, Error>>>(
     result
 }
 
-/// Silence through the grant: alive at 119 s and just before the deadline,
-/// over at it.
+/// Silence to `deadline`: whether the run is alive 119 s in (false when the
+/// deadline comes sooner), then alive just before the deadline and over at it.
 async fn wait_out<W: Future<Output = Result<Stats, Error>>>(
     mut work: Pin<Box<W>>,
     observer: &Observer,
     deadline: Instant,
 ) -> (Result<(), Error>, bool) {
-    tokio::time::advance(Duration::from_secs(119)).await;
-    poll(work.as_mut()).await;
-    let alive = !observer.commands().contains(&Command::EndRun);
+    let probe = Duration::from_secs(119);
+    let alive = Instant::now() + probe < deadline && {
+        tokio::time::advance(probe).await;
+        poll(work.as_mut()).await;
+        !observer.commands().contains(&Command::EndRun)
+    };
     let early = deadline.checked_duration_since(Instant::now()).unwrap();
     tokio::time::advance(early.checked_sub(Duration::from_millis(1)).unwrap()).await;
     poll(work.as_mut()).await;

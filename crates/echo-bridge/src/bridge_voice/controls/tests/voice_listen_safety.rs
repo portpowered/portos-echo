@@ -292,13 +292,14 @@ async fn voice_listen_transport_eof_and_closed_call_never_become_idle_success() 
 }
 
 /// An applied `end_session` supersedes everything (owner, 2026-11-21): the
-/// delegated turn still running owes nothing more, the farewell stops where it
-/// is, and the run closes at once instead of waiting for the turn's answer.
+/// delegated turn still running owes nothing more, and the run closes as soon
+/// as the farewell already being spoken has played, uncut, instead of waiting
+/// for the turn's answer.
 #[tokio::test(start_paused = true)]
-async fn voice_listen_runner_end_cuts_the_farewell_and_the_running_delegation() {
-    use Step::{End, Handoff, Reply};
+async fn voice_listen_runner_end_keeps_the_farewell_and_drops_the_running_delegation() {
+    use Step::{End, Handoff, Played, Reply};
     for first in [false, true] {
-        goodbye_with_end(&[Handoff(first), Reply, End]).await;
+        goodbye_with_end(&[Handoff(first), Reply, End, Played], 0).await;
     }
 }
 
@@ -307,7 +308,7 @@ async fn voice_listen_runner_end_cuts_the_farewell_and_the_running_delegation() 
 async fn voice_listen_runner_end_before_the_farewell_closes_at_once() {
     use Step::{End, Handoff};
     for first in [false, true] {
-        goodbye_with_end(&[Handoff(first), End]).await;
+        goodbye_with_end(&[Handoff(first), End], 1).await;
     }
 }
 
@@ -317,9 +318,9 @@ async fn voice_listen_runner_end_before_the_farewell_closes_at_once() {
 async fn voice_listen_runner_end_after_played_closes_without_another_listen_window() {
     use Step::{Asked, End, Handoff, Heard, Played, Reply};
     for first in [false, true] {
-        goodbye_with_end(&[Reply, Played, Heard, Handoff(first), End]).await;
-        goodbye_with_end(&[Reply, Played, Heard, Asked, Handoff(first), End]).await;
-        goodbye_with_end(&[Reply, Played, Heard, Asked, Handoff(first), Reply, End]).await;
+        goodbye_with_end(&[Reply, Played, Heard, Handoff(first), End], 1).await;
+        goodbye_with_end(&[Reply, Played, Heard, Asked, Handoff(first), End], 1).await;
+        goodbye_with_end(&[Reply, Played, Heard, Asked, Handoff(first), Reply, End, Played], 0).await;
     }
 }
 
@@ -334,7 +335,7 @@ enum Step {
     Asked,
 }
 
-async fn goodbye_with_end(steps: &[Step]) {
+async fn goodbye_with_end(steps: &[Step], cuts: usize) {
     let device = Observer::default();
     let mut client = FakeConnector::new(device.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -391,7 +392,7 @@ async fn goodbye_with_end(steps: &[Step]) {
     assert!(!source.delegation.in_flight());
     assert!(source.controller.ready_to_close(true, true));
     let commands = device.commands();
-    assert_eq!(commands.iter().filter(|cmd| matches!(cmd, Command::Cut(_))).count(), 1);
+    assert_eq!(commands.iter().filter(|cmd| matches!(cmd, Command::Cut(_))).count(), cuts);
 }
 
 async fn goodbye_run<T>(
