@@ -201,14 +201,20 @@ for leaf in screen_home .echo-screen-home; do
   test ! -e /data/local/hassmic/state/\$leaf || test \"\$(stat -c %h /data/local/hassmic/state/\$leaf)\" = 1
 done
 test -f '${device:?}/apk/echo-screen.apk'
-packages=\$(pm list packages org.portos.echoscreen)
-if ! printf '%s\\n' \"\$packages\" | awk '\$0 == \"package:org.portos.echoscreen\" { found=1 } END { exit !found }'; then
+# Version 2 is the first release declaring CAMERA. Keep same-signature upgrades in place.
+packages=\$(pm list packages --show-versioncode org.portos.echoscreen)
+if ! printf '%s\\n' \"\$packages\" | awk '\$1 == \"package:org.portos.echoscreen\" && \$2 ~ /^versionCode:[0-9]+\$/ { split(\$2, parts, \":\"); current = parts[2] >= 2 } END { exit !current }'; then
   pm install -r '${device:?}/apk/echo-screen.apk' >/dev/null
 fi
+pm grant org.portos.echoscreen android.permission.CAMERA >/dev/null
 umask 077
 printf '%s\\n' org.portos.echoscreen > /data/local/hassmic/state/.echo-screen-home
 chown system:system /data/local/hassmic/state/.echo-screen-home
 chmod 644 /data/local/hassmic/state/.echo-screen-home
 mv -f /data/local/hassmic/state/.echo-screen-home /data/local/hassmic/state/screen_home
-am start -n org.portos.echoscreen/.MainActivity >/dev/null"
+launched=\$(am start -n org.portos.echoscreen/.MainActivity 2>&1)
+case \"\$launched\" in
+  Error:* | *\"
+Error:\"*) exit 1 ;;
+esac"
 }

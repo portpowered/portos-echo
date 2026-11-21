@@ -1,7 +1,10 @@
 //! A snapshot request owns one cancellable capture and its shutter observation.
 use super::commands::{invalid, refusal};
+use crate::bridge_trace::Trace;
 use base64::{Engine, engine::general_purpose::STANDARD};
+pub(super) use echo_camera::Shutter;
 use echo_contracts::endpoint::{GetSnapshot, MAX_SNAPSHOT_BYTES, Reply, SnapshotReply};
+pub(super) use echo_screen_server::CaptureError;
 use serde_json::Value;
 use std::{
     future::Future,
@@ -11,10 +14,15 @@ use std::{
 };
 use tokio::{
     sync::{Mutex, watch},
-    time::{Instant, timeout_at},
+    time::{Instant, sleep_until},
 };
 
-const CAPTURE_WINDOW: Duration = Duration::from_secs(5);
+#[cfg(target_os = "android")]
+mod native;
+#[cfg(target_os = "android")]
+pub(super) use native::NativeCamera;
+
+pub(super) const CAPTURE_WINDOW: Duration = Duration::from_secs(3);
 /// Port OS refuses a `sampledAtMs` more than 300 s from its own clock.
 const SAMPLE_SKEW: Duration = Duration::from_secs(300);
 
@@ -25,12 +33,21 @@ pub(super) struct Sample {
     pub sampled_at: SystemTime,
 }
 
-pub(super) trait CameraSource: Send + Sync {
-    /// True while closed. Publish each physical transition, including during capture.
-    fn shutter(&self) -> watch::Receiver<bool>;
+pub(super) type CaptureFuture<'a> = Pin<Box<dyn Future<Output = Result<Sample, CaptureError>> + Send + 'a>>;
 
-    /// Dropping the future cancels capture. The source returns only in-memory JPEG.
-    fn capture(&self) -> Pin<Box<dyn Future<Output = Option<Sample>> + Send + '_>>;
+pub(super) trait CameraSource: Send + Sync {
+    fn available(&self) -> bool {
+        true
+    }
+
+    /// Start a fresh observation and publish its first unsafe transition.
+    fn shutter(&self) -> watch::Receiver<Shutter>;
+
+    /// Read the same active hardware observation at the reply commit boundary.
+    fn shutter_now(&self) -> Shutter;
+
+    /// Dropping the future cancels capture.
+    fn capture(&self, deadline: Instant) -> CaptureFuture<'_>;
 }
 
 #[derive(Default)]
@@ -40,41 +57,104 @@ pub(super) struct Camera {
 }
 
 impl Camera {
-    /// Capture one JPEG for a `get-snapshot` command. Refused only while the
-    /// shutter is closed, or when the camera cannot provide one. The reply is
-    /// always inline base64, whatever `responseFormat` asks for, and carries
-    /// the capture time.
-    pub(super) async fn reply(&self, body: Value, received: Instant) -> Result<(SnapshotReply, i64), Reply> {
+    /// Keep observing the shutter while the caller prepares the inline report.
+    pub(super) async fn reply<T>(
+        &self,
+        body: Value,
+        received: Instant,
+        trace: Option<&Trace>,
+        prepare: impl FnOnce(SnapshotReply, i64) -> T,
+    ) -> Result<T, Reply> {
         if !body.is_object() || serde_json::from_value::<GetSnapshot>(body).is_err() {
             return Err(invalid());
         }
-        let source = self.source.as_ref().ok_or_else(|| refusal("NOT_SUPPORTED"))?;
-        let mut shutter = source.shutter();
-        if *shutter.borrow_and_update() || shutter.has_changed().is_err() {
-            return Err(shuttered());
-        }
-        if Instant::now() >= received + CAPTURE_WINDOW {
+        let source = self
+            .source
+            .as_ref()
+            .filter(|source| source.available())
+            .ok_or_else(unavailable)?;
+        let deadline = received + CAPTURE_WINDOW;
+        if Instant::now() >= deadline {
             return Err(timed_out());
         }
         let _capture = self.capture.try_lock().map_err(|_| refusal("CAMERA_BUSY"))?;
-        let sample = tokio::select! {
-            biased;
-            _ = shutter.changed() => return Err(shuttered()),
-            result = timeout_at(received + CAPTURE_WINDOW, source.capture()) => {
-                result.map_err(|_| timed_out())?.ok_or_else(camera_error)?
-            }
-        };
-        let reply = sample.encode()?;
-        if !matches!(shutter.has_changed(), Ok(false)) {
-            return Err(shuttered());
-        }
+        let (sample, shutter) = capture(source.as_ref(), deadline, trace).await?;
+        let (snapshot, sampled_at_ms) = sample.encode()?;
+        let reply = prepare(snapshot, sampled_at_ms);
+        check_commit(source.as_ref(), &shutter, deadline)?;
         Ok(reply)
+    }
+}
+
+async fn capture(
+    source: &dyn CameraSource,
+    deadline: Instant,
+    trace: Option<&Trace>,
+) -> Result<(Sample, watch::Receiver<Shutter>), Reply> {
+    let mut shutter = source.shutter();
+    shutter_open(*shutter.borrow_and_update())?;
+    check_commit(source, &shutter, deadline)?;
+    let sample = tokio::select! {
+        biased;
+        changed = shutter.changed() => {
+            return Err(match (changed, *shutter.borrow()) {
+                (Ok(()), Shutter::Closed | Shutter::Open) => shuttered(),
+                _ => camera_error(),
+            });
+        }
+        () = sleep_until(deadline) => return Err(timed_out()),
+        result = source.capture(deadline) => result.map_err(|error| capture_failure(error, trace))?,
+    };
+    Ok((sample, shutter))
+}
+
+fn check_commit(source: &dyn CameraSource, shutter: &watch::Receiver<Shutter>, deadline: Instant) -> Result<(), Reply> {
+    shutter_open(source.shutter_now())?;
+    match shutter.has_changed() {
+        Ok(false) => {}
+        Ok(true) if *shutter.borrow() != Shutter::Unknown => return Err(shuttered()),
+        _ => return Err(camera_error()),
+    }
+    if Instant::now() >= deadline {
+        return Err(timed_out());
+    }
+    Ok(())
+}
+
+fn shutter_open(state: Shutter) -> Result<(), Reply> {
+    match state {
+        Shutter::Open => Ok(()),
+        Shutter::Closed => Err(shuttered()),
+        Shutter::Unknown => Err(camera_error()),
+    }
+}
+
+fn capture_failure(error: CaptureError, trace: Option<&Trace>) -> Reply {
+    match error {
+        CaptureError::Unavailable => unavailable(),
+        CaptureError::Busy => refusal("CAMERA_BUSY"),
+        CaptureError::PermissionDenied => {
+            if let Some(trace) = trace {
+                let _ = trace.clone().record(
+                    "endpoint.camera_error",
+                    None,
+                    serde_json::json!({"reason": "camera permission denied"}),
+                );
+            }
+            camera_error()
+        }
+        CaptureError::Camera => camera_error(),
+        CaptureError::Timeout => timed_out(),
     }
 }
 
 impl Sample {
     fn encode(self) -> Result<(SnapshotReply, i64), Reply> {
-        if self.width == 0 || self.height == 0 || self.jpeg.is_empty() || self.jpeg.len() > MAX_SNAPSHOT_BYTES {
+        if !(1..=1920).contains(&self.width)
+            || !(1..=1080).contains(&self.height)
+            || self.jpeg.is_empty()
+            || self.jpeg.len() > MAX_SNAPSHOT_BYTES
+        {
             return Err(camera_error());
         }
         let now = crate::bridge_time::now();
@@ -110,4 +190,8 @@ fn timed_out() -> Reply {
 
 fn camera_error() -> Reply {
     refusal("CAMERA_ERROR")
+}
+
+fn unavailable() -> Reply {
+    refusal("NOT_SUPPORTED")
 }

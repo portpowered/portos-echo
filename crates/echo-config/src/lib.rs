@@ -2,6 +2,7 @@
 //! credential paths remain literal and are never opened or expanded.
 
 mod config_auth;
+mod config_camera;
 mod config_clock;
 mod config_codex;
 mod config_decode;
@@ -12,6 +13,7 @@ mod config_settings;
 mod config_validate;
 mod config_voice;
 pub use config_auth::ChatGptAuthConfig;
+pub use config_camera::CameraConfig;
 pub use config_clock::{ClockConfig, DEFAULT_TIME_SERVERS};
 pub use config_codex::{
     CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, LIVE_SESSION_GUIDANCE, RUNNER_INSTRUCTIONS, RUNNER_SESSION_GUIDANCE,
@@ -109,6 +111,7 @@ pub struct BridgeConfig {
     pub muse: Option<MuseConfig>,
     pub mcp: McpConfig,
     pub portos_endpoint: PortosEndpoint,
+    pub camera: CameraConfig,
     pub screen: ScreenConfig,
     pub audit: AuditConfig,
     pub trace: TraceConfig,

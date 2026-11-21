@@ -14,6 +14,7 @@ SH = shutil.which("sh")
 FAKE = ROOT / "target" / "debug" / "echo-lab-fake-adb"
 HOME = ["shell", "printf '%s\\n' org.portos.echoscreen > /data/local/hassmic/state/screen_home && chown system:system /data/local/hassmic/state/screen_home && chmod 644 /data/local/hassmic/state/screen_home"]
 START = ["shell", "am", "start", "-n", "org.portos.echoscreen/.MainActivity"]
+GRANT = ["shell", "pm", "grant", "org.portos.echoscreen", "android.permission.CAMERA"]
 REMOVE = ["shell", "rm", "-f", "/data/local/hassmic/state/screen_home"]
 UNINSTALL = ["uninstall", "org.portos.echoscreen"]
 USAGE = ("Usage: sh scripts/echo-screen-install.sh [--url <page-url>]\n"
@@ -31,7 +32,7 @@ def quote(value):
     return "'" + value.replace("'", "'\\''") + "'"
 
 
-def case(args=(), fail_step=None, missing=None):
+def case(args=(), fail_step=None, missing=None, launch_error=False):
     with tempfile.TemporaryDirectory(prefix="echo-screen-install-") as temporary:
         root = Path(temporary)
         scripts = root / "scripts"
@@ -45,7 +46,7 @@ def case(args=(), fail_step=None, missing=None):
         tools = root / "bin"
         tools.mkdir()
         # A closed PATH: no possibility of falling back to an installed real adb.
-        for name in ("dirname", "sed", "mktemp", "rm"):
+        for name in ("dirname", "sed", "mktemp", "rm", "grep"):
             tool = shutil.which(name)
             if tool:
                 wrapper = tools / name
@@ -58,11 +59,12 @@ def case(args=(), fail_step=None, missing=None):
         fixture = root / "fixture.json"
         install = ["install", "-r", apk.as_posix()]
         sequence = ([REMOVE, UNINSTALL] if args == ("--uninstall",) else
-                    [install, HOME, START + (["--es", "url", quote(args[1])] if len(args) == 2 else [])])
+                    [install, GRANT, HOME, START + (["--es", "url", quote(args[1])] if len(args) == 2 else [])])
         responses = {}
         for index, argv in enumerate(sequence):
             responses[" ".join(argv)] = {
-                "stdout": json.dumps(argv) + "\n" + URL + "\n", "stderr": URL + "\n",
+                "stdout": json.dumps(argv) + "\n" + URL + "\n",
+                "stderr": ("Error: " if launch_error and argv[:len(START)] == START else "") + URL + "\n",
                 "code": 1 if fail_step == index else 0,
             }
         fixture.write_text(json.dumps(responses), encoding="utf-8")
@@ -81,9 +83,12 @@ def case(args=(), fail_step=None, missing=None):
             expected = "APK is not readable" if missing == "apk" else "adb is required"
             require((result.returncode, result.stdout, result.stderr, calls) ==
                     (1, "", f"echo-screen: {expected}\n", []), "prerequisite result differs")
+        elif launch_error:
+            require((result.returncode, result.stdout, result.stderr, calls) ==
+                    (1, "", "echo-screen: launch failed\n", sequence), "API-28 launch error not redacted")
         elif fail_step is not None:
             diagnostics = (["home removal failed", "uninstall failed"] if args == ("--uninstall",) else
-                           ["install failed", "home setup failed", "launch failed"])
+                           ["install failed", "camera permission grant failed", "home setup failed", "launch failed"])
             require((result.returncode, result.stdout, result.stderr) ==
                     (1, "", f"echo-screen: {diagnostics[fail_step]}\n"), "failure output differs or leaked")
             require(calls == sequence[:fail_step + 1], "failure did not stop at exact command")
@@ -95,7 +100,7 @@ def case(args=(), fail_step=None, missing=None):
             require(calls == sequence, "exact adb argv differs")
             if len(args) == 2:
                 # adb's shell concatenation is reproduced using the real local shell.
-                recovered = subprocess.run([SH, "-c", "printf '%s' " + calls[2][-1]], cwd=root,
+                recovered = subprocess.run([SH, "-c", "printf '%s' " + calls[-1][-1]], cwd=root,
                                            capture_output=True, timeout=5)
                 require(recovered.returncode == 0 and recovered.stdout.decode("utf-8") == args[1]
                         and recovered.stderr == b"", "remote quoting changed URL")
@@ -105,8 +110,9 @@ def case(args=(), fail_step=None, missing=None):
 
 def main():
     require(SH is not None and FAKE.is_file(), "build the fake adb and provide POSIX sh first")
-    jobs = [lambda: case(), lambda: case(("--url", URL)), lambda: case(("--uninstall",))]
-    for args, count in (((), 3), (("--url", URL), 3), (("--uninstall",), 2)):
+    jobs = [lambda: case(), lambda: case(("--url", URL)), lambda: case(("--uninstall",)),
+            lambda: case(("--url", URL), launch_error=True)]
+    for args, count in (((), 4), (("--url", URL), 4), (("--uninstall",), 2)):
         jobs.extend(lambda args=args, step=step: case(args, fail_step=step) for step in range(count))
     for missing in ("apk", "adb"):
         jobs.append(lambda missing=missing: case(missing=missing))
@@ -117,7 +123,7 @@ def main():
     jobs.extend(lambda args=args: require(case(args) == 2, "invalid arguments accepted") for args in invalid)
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda job: job(), jobs))
-    print("installer: install=3; install-url=3; uninstall=2; failure-stops=true; url=[redacted]")
+    print("installer: install=4; install-url=4; uninstall=2; grant-before-launch=true; failure-stops=true; url=[redacted]")
 
 
 if __name__ == "__main__":

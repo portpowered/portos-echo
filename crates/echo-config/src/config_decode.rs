@@ -139,6 +139,7 @@ pub(super) fn decode(value: Value<'_>) -> Result<(BridgeConfig, Vec<ConfigError>
             .transpose()?
             .unwrap_or_default(),
         screen: crate::config_screen::decode(root.node("screen")?)?,
+        camera: crate::config_camera::decode(root.table.remove("camera").map(Spanned::into_inner))?,
         audit: audit(root.node("audit")?)?,
         trace: root
             .table

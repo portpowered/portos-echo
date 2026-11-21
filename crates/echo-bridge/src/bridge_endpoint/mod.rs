@@ -92,6 +92,11 @@ pub(crate) struct Runtime {
 }
 
 impl Runtime {
+    #[cfg(target_os = "android")]
+    pub(crate) fn bind_camera(&mut self, exchange: echo_screen_server::Camera, id: String) {
+        self.transport.camera.source = Some(Arc::new(snapshot::NativeCamera::new(exchange, id)));
+    }
+
     pub(crate) fn configured(config: &BridgeConfig) -> Option<(Self, Control)> {
         let api = endpoint_api(config)?;
         let gateway = config.portos_endpoint.gateway_for(&api)?;

@@ -480,6 +480,7 @@ fn nested_secret_diagnostics_use_only_trusted_schema_context() {
     }
 }
 
+mod config_camera;
 mod config_example;
 mod config_profile;
 mod config_screen;

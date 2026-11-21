@@ -1,4 +1,5 @@
 //! Authenticated, bounded loopback screen transport. LAN exposure requires W3 TLS.
+mod camera;
 mod packs;
 mod screen_assets;
 mod screen_core;
@@ -8,6 +9,7 @@ mod screen_mouth;
 mod screen_settings;
 mod screen_url;
 
+pub use camera::{Camera, CaptureError, Sample as CameraSample};
 pub use packs::PackSettings;
 pub use packs::view::{DEFAULT as DEFAULT_PACK, PackCatalog};
 pub use screen_mouth::MouthSender;
@@ -51,6 +53,7 @@ pub struct ScreenServer {
     tasks: Vec<JoinHandle<()>>,
     downloads_started: bool,
     pack_files: Arc<packs::Files>,
+    camera: Option<Camera>,
 }
 
 /// Safe completion for one configured background download. No input URL or path.
@@ -60,6 +63,12 @@ pub struct PackInstallResult {
 }
 
 impl ScreenServer {
+    /// The camera exchange owned by this listener, if explicitly enabled.
+    #[must_use]
+    pub fn camera(&self) -> Option<Camera> {
+        self.camera.clone()
+    }
+
     /// Install configured pins serially outside the voice path. Listener lifetime
     /// owns cancellation and joins synchronous validation before shutdown returns.
     /// Failures retain existing installed directories and never stop the server.
@@ -202,6 +211,20 @@ pub async fn serve_with_settings(
     states: mpsc::Receiver<UiState>,
     settings: Option<mpsc::Sender<SettingsRequest>>,
 ) -> Result<ScreenServer, ScreenServerError> {
+    serve_with_camera(bind, pairing_token, states, settings, false).await
+}
+
+/// Start the screen listener and optionally enable its private native camera exchange.
+///
+/// # Errors
+/// Returns the same fixed input/bind diagnostics as `serve`.
+pub async fn serve_with_camera(
+    bind: SocketAddr,
+    pairing_token: Secret<String>,
+    states: mpsc::Receiver<UiState>,
+    settings: Option<mpsc::Sender<SettingsRequest>>,
+    enable_camera: bool,
+) -> Result<ScreenServer, ScreenServerError> {
     if !bind.ip().is_loopback() {
         return Err(ScreenServerError::InvalidBind);
     }
@@ -216,18 +239,21 @@ pub async fn serve_with_settings(
     let (stop, stop_rx) = watch::channel(false);
     let (drain, drain_rx) = watch::channel(None);
     let pack_files = Arc::new(packs::Files::default());
+    let camera = enable_camera.then(Camera::default);
     if let Some(host) = &settings {
         let _ = pack_files.settings.set(host.downgrade());
     }
-    let app = screen_http::router(
-        core.clone(),
-        actions_tx,
-        stop_rx.clone(),
-        drain_rx.clone(),
-        bound_addr,
+    let app = screen_http::router(screen_http::HttpState {
+        core: core.clone(),
+        actions: actions_tx,
+        stop: stop_rx.clone(),
+        drain: drain_rx.clone(),
+        origin: format!("http://{bound_addr}"),
+        build: screen_assets::build_id(&screen_assets::startup_bundle()).into(),
         settings,
-        pack_files.clone(),
-    );
+        packs: pack_files.clone(),
+        camera: camera.clone(),
+    });
     let listener_task = tokio::spawn(screen_listener::run(listener, app, stop_rx, drain_rx));
     let (publication_requests, requests) = mpsc::channel(32);
     let state_task = tokio::spawn(screen_core::pump(core.clone(), states, requests, stop.clone()));
@@ -242,6 +268,7 @@ pub async fn serve_with_settings(
         tasks: vec![state_task],
         downloads_started: false,
         pack_files,
+        camera,
     })
 }
 
@@ -275,6 +302,7 @@ mod tests {
                 tasks: vec![],
                 downloads_started: false,
                 pack_files: Arc::default(),
+                camera: None,
             },
             requests,
         )

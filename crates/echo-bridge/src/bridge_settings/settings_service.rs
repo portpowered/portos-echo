@@ -62,6 +62,22 @@ impl GrantView {
 }
 
 impl SettingsService {
+    pub(crate) fn with_screen_camera(self, screen: &crate::bridge_runtime::bridge_screen::Screen) -> Self {
+        #[cfg(target_os = "android")]
+        {
+            let mut service = self;
+            if let Some(((runtime, _), exchange)) = service.endpoint.as_mut().zip(screen.camera()) {
+                runtime.bind_camera(exchange, service.host.effective().camera.id.clone());
+            }
+            service
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = screen;
+            self
+        }
+    }
+
     /// Retain the original base and accepted overlay from a single startup read.
     /// Prompt texts must be the already admitted runtime cache, not a second read.
     ///

@@ -40,6 +40,7 @@ status: active; documentation index
 - [Shared bridge contracts](adr/0006-echo-contracts.md)
 - [Bounded Wyoming client](adr/0012-echo-wyoming.md)
 - [ADR guide](adr/README.md)
+- [Native camera shutter boundary](adr/0033-native-camera-shutter.md)
 - [Workspace harness dependencies](adr/0000-workspace-baseline.md)
 - [TOML lanes declarations](adr/0001-xtask-toml.md)
 - [Local milestone schema validation](adr/0003-echo-lab-schema-validation.md)
