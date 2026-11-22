@@ -371,3 +371,7 @@ Both executables were copied and stripped with the same NDK `llvm-strip`.
 | Measurement | Main `dd07ed4d` | A1a `4d04312f` | Signed delta |
 | --- | ---: | ---: | ---: |
 | Stripped armv7 `echo-bridge` (2026-11-22) | 14,942,724 bytes | 15,449,940 bytes | +507,216 bytes |
+
+| Measurement | Coordinator observation (2026-11-22) |
+| --- | --- |
+| ARMv7 `echo-bridge` dependencies and bridge-role startup | The ELF listed `NEEDED libpryon.so` and `NEEDED libOpenSLES.so`. With those dependencies, the bridge role started as `nobody` on the Echo and completed a full voice turn. |

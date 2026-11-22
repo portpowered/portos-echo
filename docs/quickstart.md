@@ -111,6 +111,15 @@ The Codex output includes `codex-app-server`, a PEM `cacert.pem` and redistribut
 The bridge output is `target/armv7-linux-androideabi/release/echo-bridge` (or under `CARGO_TARGET_DIR`).
 The APK is `target/echo-screen/echo-screen.apk`.
 
+During an operator-started A1 T5 window, the coordinator can run `sh a1-override.sh install /data/local/tmp/echo-bridge`
+from an authorized root shell on the Echo after verifying the ARMv7 build and confirming that the fork's Wyoming
+supervisor is already running one child from `/data/local/hassmic/hassmic`. Keep other writers out of the override
+directory during the swap. The helper keeps a dated backup, atomically replaces the executable, prints the old and
+new SHA-256 prefixes, and signals the verified child once. Check that the supervisor restarts `hassmic` and it
+survives the one-minute process check. `sh a1-override.sh rollback` restores the newest complete backup through
+the same procedure. If the helper fails, check the live executable and supervisor before retrying. A missing child
+or stale staging file or lock needs coordinator recovery first. Keep the backups for recovery.
+
 ## Prepare and install configuration
 
 Copy [the Echo example](../examples/bridge.echo.toml) to a private local `bridge.toml` and edit it.
