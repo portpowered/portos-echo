@@ -36,13 +36,19 @@ never from an installer or another guide, so its commands are not repeated here.
    adb devices                 # one device, state "recovery"
    ```
 
-   On the Echo, tap **Advanced > ADB Sideload** and swipe to start it. Then, on the PC:
+   On the Echo, tap **Advanced > ADB Sideload** and swipe to start it. The Echo now waits for a file over USB.
+   `boot-root.zip` stays on your PC: open a terminal in the folder you downloaded it to (or give its full path) and
+   run:
 
    ```sh
    adb sideload boot-root.zip  # ends with "Total xfer: 1.00x"; TWRP shows the install log
    ```
 
-   If sideload is not offered, push the file instead and install it from TWRP's **Install** screen:
+   adb streams the zip over the cable and TWRP installs it as it arrives. Nothing is saved on the Echo first, so
+   there is no file to find or delete on it afterwards.
+
+   If sideload is not offered, copy the file onto the Echo's storage instead, again from the folder that holds it,
+   and install it from TWRP's **Install** screen:
 
    ```sh
    adb push boot-root.zip /sdcard/boot-root.zip
