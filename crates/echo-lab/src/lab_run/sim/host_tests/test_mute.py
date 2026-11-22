@@ -131,13 +131,19 @@ class RealHostMute(unittest.TestCase):
 
     @staticmethod
     def event(stream):
-        header = json.loads(stream.readline())
-        data = header.get("data", {})
-        size = header.get("data_length", 0)
-        if size:
-            data = json.loads(stream.read(size))
-        payload_size = header.get("payload_length", 0)
-        payload = stream.read(payload_size)
-        if len(payload) != payload_size:
-            raise RuntimeError("incomplete host payload")
-        return header["type"], data
+        while True:
+            header = json.loads(stream.readline())
+            data = header.get("data", {})
+            size = header.get("data_length", 0)
+            if size:
+                data = json.loads(stream.read(size))
+            payload_size = header.get("payload_length", 0)
+            payload = stream.read(payload_size)
+            if len(payload) != payload_size:
+                raise RuntimeError("incomplete host payload")
+            if header["type"] != "hassmic-speaker":
+                return header["type"], data
+            # The pin reports its speaker (output, not microphone, mute) on every
+            # connection and on each change; it is not part of the microphone mute.
+            if set(data) != {"volume", "muted"} or payload:
+                raise RuntimeError(f"invalid hassmic-speaker {data}")

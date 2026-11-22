@@ -7,6 +7,7 @@ import contextlib
 from concurrent.futures import Future
 import ctypes
 import hashlib
+import json
 import os
 from pathlib import Path
 import select
@@ -108,6 +109,42 @@ def safe_tail(raw, truncated=False):
     if records[-1]:
         result.append("<redacted>")  # Incomplete records have unknown context.
     return "\n".join(result) or "<empty>"
+
+
+def _exact(stream, length):
+    data = stream.read(length) if length else b""
+    if len(data) != length:
+        raise EOFError("truncated Wyoming event")
+    return data
+
+
+def describe(conn):
+    """Send describe on a connected host socket and return info's data.
+
+    The pin reports its speaker on every connection, ahead of info, and again on
+    any volume or output-mute change: a well-formed hassmic-speaker is consumed.
+    Any other event before info is a failure. Reads unbuffered, so bytes after
+    info stay on the socket for the caller.
+    """
+    conn.sendall(b'{"type":"describe"}\n')
+    with conn.makefile("rb", buffering=0) as stream:
+        while True:
+            line = stream.readline(65537)
+            if not line.endswith(b"\n"):
+                raise EOFError("missing or oversized Wyoming header")
+            head = json.loads(line)
+            data = dict(head.get("data") or {})
+            if head.get("data_length"):
+                data.update(json.loads(_exact(stream, head["data_length"])))
+            payload = _exact(stream, head.get("payload_length", 0))
+            kind = head.get("type")
+            if kind == "info":
+                return data
+            speaker = (kind == "hassmic-speaker" and set(data) == {"volume", "muted"}
+                       and type(data["volume"]) is int and 0 <= data["volume"] <= 100
+                       and type(data["muted"]) is bool and not payload)
+            if not speaker:
+                raise AssertionError(f"expected info, actual={kind!r} data={data}")
 
 
 class ReadinessFailure(RuntimeError):

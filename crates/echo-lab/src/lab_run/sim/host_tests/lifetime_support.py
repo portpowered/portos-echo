@@ -130,10 +130,14 @@ class Controller:
         with socket.create_connection(('127.0.0.1', self.port), timeout=2) as conn:
             conn.sendall(b'{"type":"describe"}\n')
             with conn.makefile('rb') as stream:
-                head = json.loads(stream.readline())
-                assert head['type'] == 'info', head
-                if head.get('data_length'):
-                    json.loads(stream.read(head['data_length']))
+                while True:
+                    head = json.loads(stream.readline())
+                    data = json.loads(stream.read(head['data_length'])) if head.get('data_length') else {}
+                    if head['type'] == 'info':
+                        break
+                    # The pin reports its speaker on every connection, ahead of info.
+                    assert head['type'] == 'hassmic-speaker' and set(data) == {'volume', 'muted'} \
+                        and not head.get('payload_length'), head
 
     def observe_death(self, sig):
         started = time.monotonic()

@@ -50,6 +50,39 @@ class LogicTests(unittest.TestCase):
             session.until("played")
             with self.assertRaisesRegex(AssertionError, "before played"):
                 session.until("played")
+    def test_speaker_reports_are_validated_and_kept_out_of_windows(self):
+        speaker = ({"type": "hassmic-speaker", "data": {"volume": 50, "muted": False}}, b"")
+        info = ({"type": "info", "data": {"satellite": {"name": "Capture Echo"}}}, b"")
+        pong = ({"type": "pong", "data": {}}, b"")
+        chunk = ({"type": "audio-chunk", "data": {"rate": 16000, "width": 2, "channels": 1, "timestamp": 0}}, bytes(1600))
+        session = M.Session("unused")
+        session.sock, session.proc, session.remaining = mock.Mock(), mock.Mock(), lambda: 1
+        # On connect (before info), around a barrier and inside the wake lead-in.
+        with mock.patch.object(M.C, "read_event", side_effect=[speaker, info, speaker, pong]):
+            session.until("info", keep=False)
+            session.until("pong")
+        with mock.patch.object(M.C, "read_event", side_effect=[pong, ({"type": "run-pipeline", "data": {
+                "start_stage": "asr", "end_stage": "tts", "restart_on_end": False, "wake_word_name": "alexa"}}, b""),
+                speaker, (chunk[0], bytes(2048))]):
+            session.wake()
+        self.assertEqual((session.mic, session.lead_remaining), ("lead", 25600 - 2048))
+        session.mic = "active"
+        trial = M.Trial(session, None)
+        with mock.patch.object(M.C, "read_event", side_effect=[speaker, chunk]), \
+                mock.patch.object(time, "monotonic", side_effect=[0, 0, 0, 0, 2]), \
+                mock.patch.object(select, "select", return_value=([session.sock], [], [])):
+            trial.pump(1)
+        kinds = [(row["dir"], row["header"]["type"]) for row in session.rows]
+        self.assertNotIn("hassmic-speaker", [kind for _, kind in kinds])
+        self.assertEqual(kinds[-1], ("echo->bridge", "audio-chunk"))
+        for data, payload in (({"volume": 101, "muted": False}, b""), ({"volume": -1, "muted": False}, b""),
+                              ({"volume": True, "muted": False}, b""), ({"volume": 5, "muted": 0}, b""),
+                              ({"volume": 5}, b""), ({"volume": 5, "muted": False, "extra": 1}, b""),
+                              ({"volume": 5, "muted": False}, b"x")):
+            session.context = "startup"
+            with mock.patch.object(M.C, "read_event", return_value=({"type": "hassmic-speaker", "data": data}, payload)), \
+                    self.assertRaisesRegex(AssertionError, "startup: hassmic-speaker: expected volume=0..100"):
+                session.until("info", keep=False)
     def test_end_run_requires_exactly_one_played_only_for_active_reply(self):
         played = ({"type": "played", "data": {}}, b"")
         pong = ({"type": "pong", "data": {}}, b"")

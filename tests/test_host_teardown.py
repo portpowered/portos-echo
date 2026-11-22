@@ -144,8 +144,7 @@ class PinnedHost(unittest.TestCase):
     def connect(self):
         conn = socket.create_connection(('127.0.0.1', self.host.port), timeout=2)
         self.addCleanup(conn.close)
-        conn.sendall(b'{"type":"describe"}\n')
-        self.assertIn(b'"info"', conn.recv(65536))
+        self.assertEqual(wyoming_host.describe(conn)['satellite']['name'], 'Wyoming Test')
         return conn
 
     def test_host_outlives_start_worker_and_stop_collects_child(self):
@@ -347,8 +346,7 @@ class PinnedHost(unittest.TestCase):
                     self.assertIsNone(sentinel.poll())
                     self.assertIsNone(other.proc.poll())
                     with socket.create_connection(('127.0.0.1', other.port), timeout=2) as conn:
-                        conn.sendall(b'{"type":"describe"}\n')
-                        self.assertIn(b'"info"', conn.recv(65536))
+                        self.assertEqual(wyoming_host.describe(conn)['satellite']['name'], 'Wyoming Test')
                 finally:
                     other.stop()
         finally:

@@ -12,6 +12,13 @@ C = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(C)
 STRATEGIES = ("audio-stop", "pause-satellite", "close-stream", "none")
 OUTPUT = C.ROOT / "tests/fixtures/wyoming"
 PAYLOAD = b"\x01\x00" * 2400
+SPEAKER = "hassmic-speaker"
+def speaker_report(label, data, payload):
+    """hassmic reports its speaker on connecting (before info) and on any volume or output-mute change.
+    A valid report is device state, not part of a measured window; a malformed one still fails."""
+    valid = (set(data) == {"volume", "muted"} and type(data["volume"]) is int and 0 <= data["volume"] <= 100
+             and type(data["muted"]) is bool and not payload)
+    assert valid, f"{label}: expected volume=0..100 muted=bool payload=0, actual data={data} payload={len(payload)}"
 def retain(error, session=None, playback=None, trial=None, **fields):
     """Keep the earliest observed state, before resource cleanup changes it."""
     state = getattr(error, "trial_state", {})
@@ -124,7 +131,10 @@ class Session(C.Session):
         event, payload = C.read_event(self.stream)
         kind, data = event["type"], event["data"]
         label = f"{self.context}: {kind}"
-        if kind == "audio-chunk":
+        if kind == SPEAKER:
+            # Callers skip it: until() keeps waiting, pump() and wake() read on.
+            speaker_report(label, data, payload)
+        elif kind == "audio-chunk":
             assert self.mic in ("active", "lead"), f"{label}: expected no microphone while {self.mic}"
             want = {"rate": 16000, "width": 2, "channels": 1, "timestamp": 0}
             assert type(data.get("timestamp")) is int and data["timestamp"] >= 0, f"{label}: expected nonnegative integer timestamp, actual={data}"
@@ -176,6 +186,8 @@ class Session(C.Session):
         self.proc.send_signal(signal.SIGUSR1)
         self.until("run-pipeline")
         event, payload = self.receive("audio-chunk")
+        while event["type"] == SPEAKER:
+            event, payload = self.receive("audio-chunk")
         assert event["type"] == "audio-chunk", "wake: expected direct lead-in audio-chunk"
         self.rows.append(C.record("echo->bridge", event, payload))
 class Trial:
@@ -194,6 +206,8 @@ class Trial:
             if self.s.sock in ready:
                 event, payload = self.s.receive("played" if self.s.stop_pending else None)
                 kind = event["type"]
+                if kind == SPEAKER:
+                    continue
                 if kind == "audio-chunk":
                     if self.chunk:
                         continue
