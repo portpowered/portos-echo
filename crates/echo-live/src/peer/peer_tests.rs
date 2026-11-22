@@ -251,6 +251,7 @@ fn payload_admission_uses_exact_byte_bounds() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn consent_requires_nine_unanswered_probes_and_the_final_response_window() {
     let tick = Instant::now();
     let mut consent = Consent::default();
@@ -276,6 +277,7 @@ fn consent_requires_nine_unanswered_probes_and_the_final_response_window() {
 // T3: an elapsed caller tick may start a consent check, but must not revoke
 // an established channel before that check has had a chance to get a response.
 #[tokio::test(start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "Paused test ceiling")]
 async fn t3_elapsed_ticks_keep_exact_delivery_and_dead_remote_loses_readiness() {
     let (mut a, mut b) = Box::pin(pair()).await;
     for seconds in [12, 59] {

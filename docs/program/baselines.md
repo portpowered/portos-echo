@@ -25,7 +25,7 @@ for pauseable scheduling.
 | Standard method | Legacy production | Legacy test |
 | --- | ---: | ---: |
 | `SystemTime::now` | 18 | 19 |
-| `Instant::now` | 25 | 47 |
+| `Instant::now` | 25 | 52 |
 
 ## Development profile size (2026-11-17)
 

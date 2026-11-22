@@ -120,7 +120,7 @@ impl LinkEvents for Events {
             }
             // Speaker reports update the link's state, before or after Info.
             if let Some(event) = &self.pending
-                && matches!(&event.event, WyomingEvent::Other(name, _) if name == "hassmic-speaker")
+                && super::speaker_events::report_data(&event.event).is_some()
             {
                 self.speaker.publish(event.speaker);
                 self.pending = None;
