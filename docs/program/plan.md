@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 21
+last modified: 2026, november, 22
 status: active; the program plan. It wins over the drafts in docs/design/
 ---
 
@@ -481,9 +481,15 @@ Every change names its tier and its oracle. Every milestone names the tiers it r
 ### 8.2 One scenario file, many drivers
 
 Each milestone and failure case is written **once**, as data, and run in simulation, against the cloud and on the
-device. The drivers differ; the oracle does not. The `sim` and `cloud` drivers run the real hassmic code:
-`hassmic-host`, echo-dot-assist's host build at the pinned commit, which reads file audio, takes `SIGUSR1` as a
-wake word and speaks the same Wyoming as the Echo. CI builds it once and caches it (`el-w0-hassmic-host`).
+device. Every driver uses the same oracle. The host satellite used in place of the Echo defaults to the
+vendored hassmic C code in the Linux `echo-bridge device` build. `scripts/hassmic-host.sh build` stages the bridge
+ELF at `.cache/hassmic-host/vendored/hassmic-host` without fetching the fork. The staged executable enters the device
+role when invoked as `hassmic-host`. It reads file audio, takes `SIGUSR1` as a wake word and speaks the same
+Wyoming as the Echo over TCP.
+
+For one release, set `HASSMIC_HOST_FROM_FORK=1` when building and launching the simulator to select the original
+host build from the fork at `hassmic.pin`. That build uses a separate directory keyed by the fork commit. Leave
+the variable unset to use the vendored build.
 
 ```yaml
 # tests/scenarios/m4-spoof-tool.yaml
@@ -746,9 +752,11 @@ these floors. `make coverage` still checks them when run by hand. The floors are
 
 Generated code is excluded through one list in `.config/coverage.toml`; adding to it needs an ADR.
 
-**Time budget.** Required checks finish in under 10 minutes with a warm cache (the `hassmic-host` build is
-cached by its pinned commit). Each T1 test has a 30 s timeout and each T3 scenario 120 s, on the fake clock. A
-check that outgrows its budget becomes its own plan item; it is never made optional.
+**Time budget.** Required checks finish in under 10 minutes with a warm cache. The shared simulation action keys
+the staged `hassmic-host` cache by runner OS and a hash of the vendored source and shims, `hassmic.pin`, the
+workspace crates, the host build script, the Cargo configuration, workspace manifest and lockfile, and the Rust
+toolchain file. Each T1 test has a 30 s timeout and each T3 scenario 120 s, on the fake clock. A check that
+outgrows its budget becomes its own plan item; it is never made optional.
 
 Nightly and on label, never on the pull request path:
 
