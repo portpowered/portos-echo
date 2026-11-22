@@ -114,8 +114,9 @@ jobs:
           make build-echo
           target=target/armv7-linux-androideabi/release
           tools=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
-          entry=$(find "$target/build" -path '*/echo-device-sys-*/out/hassmic_main.c' -print -quit)
+          entry=$(find "$target/build" -name hassmic_main.c -exec grep -lF 'int unix_listener = echo_hassmic_prepare_listener();' {} + | head -n 1)
           test -n "$entry"
+          printf 'Generated entry %s\n' "$entry"
           "$tools/armv7a-linux-androideabi24-clang" -E -Ithird_party/hassmic/src/include -Ithird_party/hassmic/src/hassmic -DVERSION='"check"' -DBUILD='"check"' "$entry" > "$RUNNER_TEMP/hassmic.i"
           grep -F 'int unix_listener = echo_hassmic_prepare_listener();' "$RUNNER_TEMP/hassmic.i"
           grep -F 'int ls = unix_listener;' "$RUNNER_TEMP/hassmic.i"
