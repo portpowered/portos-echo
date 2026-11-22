@@ -77,7 +77,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 identity = tools_provider.model_identity(body)
                 case = manual_cases.get(identity)
                 assert case is not None, 'model request for unknown delegation'
-            data = case.accept_model(body)
+            try:
+                data = case.accept_model(body)
+            except tools_provider.Reserved as error:
+                # The live backend's refusal, before any model output.
+                emit({'reserved': error.name, 'model': body['model']})
+                self.respond(400, json.dumps({'error': {'message': str(error)}}).encode())
+                return
             held = isinstance(case, tools_provider.EndCall) and len(case.models) == 2
             if case.release is not None:
                 assert case.release.wait(timeout=20), 'interrupted model release deadline'

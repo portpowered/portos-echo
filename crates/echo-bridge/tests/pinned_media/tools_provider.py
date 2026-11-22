@@ -42,7 +42,15 @@ class Reserved(AssertionError):
     """The backend's refusal of a client declaration that shadows a model-reserved tool."""
 
     def __init__(self, name):
-        super().__init__(f"Invalid Value: 'tools'. Function '{name}' is reserved for use by this model.")
+        super().__init__(f"Function '{name}' is reserved for use by this model and must match the configured schema.")
+        self.name = name
+
+
+def reserves_web_run(model):
+    """gpt-6.2-* reserve web.run and the live backend refuses a direct
+    declaration of it (HTTP 400, measured with Codex 0.171.0, 2026-11-21).
+    gpt-6.1-sol, the bridge's default delegated model, accepts it and searches."""
+    return model.startswith('gpt-6.2-')
 
 
 class Delegation:
@@ -145,11 +153,10 @@ class Delegation:
         blocks = [item['tools'] for item in body['input'] if 'tools' in item]
         assert len(blocks) == 1, 'missing or repeated native tool block'
         namespaces = blocks[0]
-        # The bridge's catalog is declared directly; the app server's web.run
-        # extension never is. A code-mode-only Responses Lite model reserves
-        # web.run, and the live backend refuses a direct declaration of it
-        # (HTTP 400, measured on the Echo with Codex 0.171.0), so every
-        # delegated turn there failed before the model ran.
+        # The bridge's catalog and, while search is on, the app server's
+        # web.run extension are declared directly: web.run is the only search
+        # path for a code-mode-only model on the Echo, which has no code-mode
+        # host for `exec`. A model that reserves web.run refuses the turn.
         names = [namespace['name'] + '.' + tool['name']
                  for namespace in namespaces for tool in namespace['tools']]
         description = namespaces[0]['tools'][0]['description']
@@ -164,16 +171,18 @@ class Delegation:
                      for tool in namespace['tools']]
         direct = [tool for tool in functions if 'functions.' + tool['name'] in declared]
         assert direct == expected, 'native direct catalog mismatch: ' + json.dumps(direct)
-        if 'web.run' in names:
+        if 'web.run' in names and reserves_web_run(self.model):
             raise Reserved('web.run')
+        # Search follows the bridge's own setting in both directions.
+        assert ('web.run' in names) == (self.web_search != 'disabled'), 'direct search mismatch: ' + json.dumps(names)
         # What the bridge switches off stays off, whatever else a release adds.
         refused = sorted(set(names) & {'functions.' + name for name in SWITCHED_OFF})
         assert not refused, 'a tool the bridge switches off reached the model: ' + json.dumps(refused)
         self.native_catalog = {'tools': names, 'nested': nested,
-                               'extras': [name for name in names if name not in declared]}
+                               'extras': [name for name in names if name not in declared + ['web.run']]}
         self.native_declarations = {namespace['name'] + '.' + tool['name']: tool
                                     for namespace in namespaces for tool in namespace['tools']}
-        return declared
+        return declared + (['web.run'] if self.web_search != 'disabled' else [])
 
     def check_output(self, output):
         if self.native:

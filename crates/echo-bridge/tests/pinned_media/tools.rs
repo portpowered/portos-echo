@@ -9,6 +9,7 @@ use echo_mcp_client::{McpClient, TokenError, TokenProvider};
 use echo_spoof_mcp::{Fault, Spoof};
 use std::io::Write as _;
 mod native_extras;
+mod reserved_search;
 
 struct NoToken;
 impl TokenProvider for NoToken {
@@ -148,6 +149,9 @@ fn t3_pinned_tools_web_search_concurrent_homes_keep_distinct_modes() {
     }
 }
 
+/// The fake backend's line once an exhausted turn's model request arrived.
+static MODEL_STARTED: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| json!({"model_started":true}));
+
 async fn exercise(negative: bool) {
     Box::pin(exercise_mode(negative, false, ToolBudget::new(1, || Ok(7)), "gpt-5.4")).await;
 }
@@ -218,11 +222,11 @@ async fn exercise_engine(
             commands,
             (negative, exhausted, model_started, budget, model)
         ),
-        remote(&mut input, &mut output, receive, started)
+        remote(&mut input, &mut output, receive, started, &MODEL_STARTED)
     );
     remote.close();
     assert!((4..=8).contains(&echoed), "remote echoed {echoed} packets");
-    snapshot(&mut input, &mut output, exhausted, model).await;
+    snapshot(&mut input, &mut output, exhausted, model, web_search).await;
     append_receipts(&mut input, &mut output, negative, exhausted).await;
     check_mcp(&spoof, exhausted);
     drop(input);
@@ -332,6 +336,7 @@ async fn remote(
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     mut commands: mpsc::Receiver<bool>,
     started: tokio::sync::oneshot::Sender<()>,
+    observation: &Value,
 ) -> (LivePeer, usize) {
     let request: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     let mut peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
@@ -350,7 +355,7 @@ async fn remote(
             () = step(&mut peer) => (),
             observation = output.next_line() => {
                 let value: Value = serde_json::from_str(&observation.unwrap().unwrap()).unwrap();
-                assert_eq!(value, json!({"model_started":true}));
+                assert_eq!(&value, observation);
                 started.take().expect("pinned daily cap: extra model request after admission refusal").send(()).unwrap();
             },
             command = commands.recv() => match command {
@@ -413,11 +418,11 @@ async fn snapshot(
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     exhausted: bool,
     model: &str,
+    web_search: echo_config::WebSearch,
 ) {
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();
     let value: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-    // web.run is never a direct declaration: the backend refuses one.
-    let names = if model == "gpt-5.4" {
+    let mut names = if model == "gpt-5.4" {
         json!(["test_echo", "test_wait", "test_requires_approval", "ui_show_emotion"])
     } else {
         json!([
@@ -427,6 +432,10 @@ async fn snapshot(
             "functions.ui_show_emotion"
         ])
     };
+    // A code-mode-only model searches through a direct web.run while search is on.
+    if model != "gpt-5.4" && web_search != echo_config::WebSearch::Disabled {
+        names.as_array_mut().unwrap().push(json!("web.run"));
+    }
     if exhausted {
         // The app server releases exactly one request before bridge polling.
         // This is the pre-notification window, not a universal zero-work claim.
