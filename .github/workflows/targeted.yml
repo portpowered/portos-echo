@@ -37,6 +37,7 @@ jobs:
           grep -F 'std::time::SystemTime::now' "$log"
           echo "Q-CLOCK seeded exit=$code"
   components:
+    if: ${{ inputs.nextest_filter != 'lint' }}
     runs-on: ubuntu-latest
     timeout-minutes: 24
     steps:
