@@ -121,6 +121,11 @@ path = "crates/echo-muse-bridge"
 kind = "lib"
 
 [[crate]]
+name = "echo-svc-muse"
+path = "crates/echo-svc-muse"
+kind = "lib"
+
+[[crate]]
 name = "echo-link"
 path = "crates/echo-link"
 kind = "lib"
