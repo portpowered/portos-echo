@@ -114,9 +114,12 @@ if it does not answer; without `remote_mic` it returns `NOT_SUPPORTED`. A text s
 requests follow-up tries capture after its first reply has played. An explicit remote end cancels
 delegated work and closes playback and capture.
 
-The bridge reports full state after it finds its route and on every gateway connection. A state
-report that Port OS answers `NOT_FOUND`, before the route exists, is sent again once the route is
-found.
+The bridge reports full state on every gateway connection, after it finds its route, and at least
+every ten minutes while connected. A state report that Port OS answers `NOT_FOUND`, before the
+route exists, is sent again once the route is found. Each route read-back is traced as
+`endpoint.route_attempt` with `outcome` (`none`, `found` or `error`), the failure `reason` and
+`http_status`, and counts of `pages`, `results` and `routed` records (those that carry an
+`associatedPluginRouteId`). It never records ids.
 
 Port OS speaker commands request absolute volume, a relative change from the last reported volume,
 or output mute. They get no reply. A command that reaches no device is traced as
@@ -128,7 +131,7 @@ Snapshot requests use the camera source's own shutter state. A closed shutter re
 including if it closes during capture. A supported source returns one in-memory JPEG with its
 dimensions and sample time. The entire encoded reply is capped at 8 MiB. Without a camera source
 the bridge returns `NOT_SUPPORTED`. While the screen app has not attached its camera stream, it
-returns `NOT_READY`. The settings trace records each stream change as `endpoint.camera` with
+returns `CAMERA_BUSY`. The settings trace records each stream change as `endpoint.camera` with
 `session` (`attached` or `detached`) and the fixed reason of the latest refused attach in
 `refused` (`forbidden`, `unauthorized` or `conflict`).
 

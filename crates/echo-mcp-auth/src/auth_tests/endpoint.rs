@@ -349,8 +349,17 @@ async fn t3_route_read_back_follows_next_token_unchanged() {
     }
     let found = drive(exchange.endpoint_id(&tokens, "synthetic-echo-device")).await;
     assert_eq!(found.unwrap().as_deref(), Some(mock::ECHO_ENDPOINT_ID));
-    let absent = drive(exchange.endpoint_id(&tokens, "synthetic-absent-device")).await;
+    let mut scan = crate::RouteScan::default();
+    let absent = drive(exchange.read_routes(&tokens, "synthetic-absent-device", &mut scan)).await;
     assert_eq!(absent.unwrap(), None);
+    assert_eq!(
+        scan,
+        crate::RouteScan {
+            pages: 2,
+            results: 152,
+            routed: 152
+        }
+    );
     let state = mock.state.lock().unwrap();
     let reads: Vec<_> = state.requests.iter().filter(|r| r.path == "/routes").collect();
     assert_eq!(reads.len(), 4, "two pages per read-back");

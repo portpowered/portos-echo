@@ -30,6 +30,8 @@ use tokio_tungstenite::{
 
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const REPLY_WINDOW: Duration = Duration::from_secs(10);
+/// A connected bridge resends its full state at least this often.
+pub(super) const REPORT_REFRESH: Duration = Duration::from_secs(600);
 const MAX_COMMAND: usize = 64 * 1024;
 const QUEUED_COMMANDS: usize = 32;
 const IN_FLIGHT_REPLIES: usize = 16;
@@ -253,6 +255,7 @@ impl Transport {
         let mut states = voice.subscribe();
         let mut routes = self.routes.subscribe();
         let mut sent: Option<Report> = None;
+        let mut reported = Instant::now();
         loop {
             let report = states.borrow_and_update().report();
             if sent.as_ref() != Some(&report) {
@@ -261,10 +264,14 @@ impl Transport {
                 let body = serde_json::to_vec(&Uplink::report(device_id, stamped)).ok();
                 let delivery = self.deliver(tokens, body, Instant::now() + REPLY_WINDOW).await;
                 sent = (delivery != Delivery::Unrouted).then_some(report);
+                reported = Instant::now();
             }
+            // Reports address the deviceId, so a quiet connection still
+            // refreshes its full state even if the route read-back never succeeds.
             tokio::select! {
                 changed = states.changed() => if changed.is_err() { return },
                 Ok(()) = routes.changed() => sent = None,
+                () = tokio::time::sleep_until(reported + REPORT_REFRESH) => sent = None,
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }

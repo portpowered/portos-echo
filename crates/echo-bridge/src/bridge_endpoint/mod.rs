@@ -324,24 +324,31 @@ impl Runtime {
         device_id: &str,
         tokens: &dyn EndpointTokenSource,
     ) {
-        for delay in DISCOVERY_DELAYS {
+        let mut result = "unknown";
+        for (attempt, delay) in (1_u32..).zip(DISCOVERY_DELAYS) {
             sleep(Duration::from_secs(delay)).await;
-            match self.exchange.endpoint_id(tokens, device_id).await {
+            let mut scan = echo_mcp_auth::RouteScan::default();
+            let read = self.exchange.read_routes(tokens, device_id, &mut scan).await;
+            let (outcome, error) = match &read {
+                Ok(found) => (if found.is_some() { "found" } else { "none" }, None),
+                Err(error) => ("error", Some(*error)),
+            };
+            let fields = serde_json::json!({"attempt": attempt, "outcome": outcome,
+                "reason": error.map(ExchangeError::reason), "http_status": error.and_then(ExchangeError::http_status),
+                "pages": scan.pages, "results": scan.results, "routed": scan.routed});
+            note(self.transport.trace.as_ref(), "endpoint.route_attempt", fields);
+            match read {
                 Ok(Some(endpoint_id)) => {
                     self.transport.route_found();
                     let stored = store.remember_endpoint(auth_link_id, endpoint_id).await.is_ok();
-                    self.discovered(if stored { "found" } else { "unsaved" });
-                    return;
+                    result = if stored { "found" } else { "unsaved" };
+                    break;
                 }
                 Ok(None) => {}
                 Err(error) if error.retryable() => {}
                 Err(_) => break,
             }
         }
-        self.discovered("unknown");
-    }
-
-    fn discovered(&self, result: &'static str) {
         note(
             self.transport.trace.as_ref(),
             "endpoint.route",

@@ -98,15 +98,73 @@ async fn t3_endpoint_reports_full_state_once_the_route_is_found() {
             advance(Duration::from_millis(10)).await;
         }
         assert_eq!(state_reports(&mock, 2).await, [Some(404), Some(202)]);
+        let attempts: Vec<_> = wait_event(home.path(), "endpoint.route")
+            .await
+            .into_iter()
+            .filter(|row| row["event"] == "endpoint.route_attempt")
+            .collect();
+        // Before the route exists a read-back lists only another device's route.
+        let none = |n| attempt(n, "none", None, 1);
+        assert_eq!(attempts, [none(1), none(2), attempt(3, "found", None, 2)]);
         gateway.cycle().await;
         gateway.assert_disconnect().await;
         gateway.assert_upgrade(CLAIMED).await;
         assert_eq!(state_reports(&mock, 3).await, [Some(404), Some(202), Some(202)]);
+        // A quiet connection refreshes its full state every ten minutes.
+        for _ in 0..crate::bridge_endpoint::transport::REPORT_REFRESH.as_secs() {
+            advance(Duration::from_secs(1)).await;
+        }
+        assert_eq!(state_reports(&mock, 4).await[3..], [Some(202)]);
         assert_no_refusals(&mock);
         settings.close().await;
         grant.close().await;
     })
     .await;
+}
+
+/// T3: a read-back Port OS refuses is traced with its status and no ids, and
+/// ends discovery without stopping the served endpoint.
+#[tokio::test(start_paused = true)]
+async fn t3_endpoint_traces_a_refused_route_read_back() {
+    bridge_mcp::bridge_component::drive(async {
+        let home = tempfile::tempdir().unwrap();
+        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
+        mock.enable_endpoint_audience().unwrap();
+        let mut grant = registered(&mock, home.path()).await;
+        mock.state.lock().unwrap().fault = Some(("/routes".into(), 403, json!({})));
+        let mut gateway = Gateway::open(&mock).await;
+        let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
+        settings.save(true, "Hall Echo").await;
+        gateway.assert_upgrade(CLAIMED).await;
+        let rows = wait_event(home.path(), "endpoint.route").await;
+        let route: Vec<_> = rows
+            .into_iter()
+            .filter(|row| {
+                row["event"]
+                    .as_str()
+                    .is_some_and(|event| event.starts_with("endpoint.route"))
+            })
+            .collect();
+        assert_eq!(
+            route,
+            [
+                attempt(1, "error", Some(("rejected", 403)), 0),
+                json!({"event":"endpoint.route","result":"unknown"}),
+            ]
+        );
+        assert_eq!(route_reads(&mock), 1);
+        assert_eq!(state_reports(&mock, 1).await, [Some(202)]);
+        settings.close().await;
+        grant.close().await;
+    })
+    .await;
+}
+
+/// One traced route read-back: fixed outcome, failure and counts, never ids.
+fn attempt(attempt: u32, outcome: &str, error: Option<(&str, u16)>, results: usize) -> Value {
+    json!({"event":"endpoint.route_attempt","attempt":attempt,"outcome":outcome,
+        "reason":error.map(|(reason, _)| reason),"http_status":error.map(|(_, status)| status),
+        "pages":usize::from(error.is_none()),"results":results,"routed":results})
 }
 
 /// The status of each plain state report once `count` were sent; each is the full idle state.
@@ -418,6 +476,7 @@ async fn t3_endpoint_pair_retries_server_errors_and_traces_each_transition() {
                 json!({"event":"endpoint.exchanged","attempts":2}),
                 json!({"event":"endpoint.gateway_connecting","fresh_token":false}),
                 json!({"event":"endpoint.gateway_connected"}),
+                attempt(1, "found", None, 2),
                 json!({"event":"endpoint.route","result":"found"}),
             ]
         );

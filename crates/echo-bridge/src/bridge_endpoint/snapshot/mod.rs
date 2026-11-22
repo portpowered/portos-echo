@@ -74,17 +74,17 @@ impl Camera {
         if !body.is_object() || serde_json::from_value::<GetSnapshot>(body).is_err() {
             return Err(invalid());
         }
-        // No camera path is permanent; a present stream the app has not
-        // attached yet is not.
+        // No camera path is permanent; a stream the app has not attached
+        // yet is the snapshot group's retryable refusal.
         let source = self.source.as_ref().ok_or_else(unsupported)?;
         if !source.available() {
-            return Err(not_ready());
+            return Err(camera_busy());
         }
         let deadline = received + CAPTURE_WINDOW;
         if Instant::now() >= deadline {
             return Err(timed_out());
         }
-        let _capture = self.capture.try_lock().map_err(|_| refusal("CAMERA_BUSY"))?;
+        let _capture = self.capture.try_lock().map_err(|_| camera_busy())?;
         let (sample, shutter) = capture(source.as_ref(), deadline, trace).await?;
         let (snapshot, sampled_at_ms) = sample.encode()?;
         let reply = prepare(snapshot, sampled_at_ms);
@@ -138,8 +138,8 @@ fn shutter_open(state: Shutter) -> Result<(), Reply> {
 
 fn capture_failure(error: CaptureError, trace: Option<&Trace>) -> Reply {
     match error {
-        CaptureError::Unavailable => not_ready(),
-        CaptureError::Busy => refusal("CAMERA_BUSY"),
+        // A stream that detached mid-capture is retryable like contention.
+        CaptureError::Unavailable | CaptureError::Busy => camera_busy(),
         CaptureError::PermissionDenied => {
             if let Some(trace) = trace {
                 let _ = trace.clone().record(
@@ -203,8 +203,8 @@ fn unsupported() -> Reply {
     refusal("NOT_SUPPORTED")
 }
 
-fn not_ready() -> Reply {
-    refusal("NOT_READY")
+fn camera_busy() -> Reply {
+    refusal("CAMERA_BUSY")
 }
 
 /// Trace the native camera stream from its first state: attach, detach and the

@@ -174,7 +174,7 @@ async fn t3_endpoint_snapshot_native_peer_proof_cancellation_and_recovery() {
         .await;
 }
 
-/// A camera path whose app has not attached is not ready, not unsupported. The
+/// A camera path whose app has not attached is busy, not unsupported. The
 /// trace follows the stream with fixed fields only.
 async fn observe_attach(
     gateway: &Gateway,
@@ -192,7 +192,7 @@ async fn observe_attach(
     ];
     assert_eq!(camera_links(home, &order[0]).await, [order[0].clone()]);
     send(gateway, &snapshot_request("unattached", "BASE64")).await;
-    assert_reply(mock, "unattached", "NOT_READY").await;
+    assert_reply(mock, "unattached", "CAMERA_BUSY").await;
     let app = Peer::attach(listener).await;
     // The observer may coalesce quick transitions, never reorder them.
     let links = camera_links(home, &order[4]).await;
