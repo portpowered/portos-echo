@@ -63,6 +63,7 @@ test-unit-python:
 	python -m unittest discover -s crates/echo-lab/src/lab_run/device/clip_tests
 	python -B tests/test_companion_screen_pack.py CompanionMasks
 	python -B tests/test_companion_holds.py
+	python -B tests/test_screen_pack_css.py
 	python -B -m unittest discover -v -s scripts -p test_codex_release.py
 
 test-unit-screen:

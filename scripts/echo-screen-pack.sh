@@ -171,47 +171,115 @@ def character(value, files):
             reference(files, still, ('png', 'webp'))
 
 
+# Mirrors the bridge's crates/echo-screen-server/src/packs/css.rs, which is the
+# rule source; tests/test_screen_pack_assets.py fails when the two drift apart.
+CSS = 'unsafe or unsupported pack CSS'
+CSS_PROPERTIES = ('color', 'background-color', 'border-color', 'background-image',
+                  'font-weight', 'text-align', 'opacity', 'font-size', 'border-radius',
+                  'border-width', 'padding', 'gap', 'text-shadow')
+
+
+def trim(value):
+    # Rust's str::trim on ASCII text; Python's strip also drops \x1c-\x1f.
+    return value.strip(' \t\n\x0b\x0c\r')
+
+
+def css_number(value, low, high):
+    # Rust's f64 grammar: no underscores, whitespace or hex, unlike float().
+    check(re.fullmatch(r'[+-]?(?:[iI][nN][fF](?:[iI][nN][iI][tT][yY])?|[nN][aA][nN]'
+                       r'|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)', value), CSS)
+    parsed = float(value)
+    check(math.isfinite(parsed) and low <= parsed <= high, CSS)
+
+
+def hex_color(value):
+    check(re.fullmatch(r'#[0-9a-fA-F]{6}', value), CSS)
+
+
+def shadows(value):
+    # One or two `<x>px <y>px [<blur>px] <colour>`; the only commas outside a
+    # colour separate the shadows.
+    parts, start, inside = [], 0, False
+    for index, char in enumerate(value):
+        if char == '(' and not inside:
+            inside = True
+        elif char == ')' and inside:
+            inside = False
+        elif char in '()':
+            raise Refused(CSS)
+        elif char == ',' and not inside:
+            parts.append(value[start:index])
+            start = index + 1
+    parts.append(value[start:])
+    check(not inside and len(parts) <= 2, CSS)
+    for part in parts:
+        part = trim(part)
+        index = part.find('rgba(')
+        if index >= 0:
+            lengths, colour = part[:index], part[index:]
+        else:
+            lengths, space, colour = part.rpartition(' ')
+            check(space, CSS)
+        shadow_colour(trim(colour))
+        lengths = [length for length in re.split(r'[ \t\n\x0c\r]', lengths) if length]
+        check(2 <= len(lengths) <= 3, CSS)
+        for index, length in enumerate(lengths):
+            check(length.endswith('px'), CSS)
+            css_number(length[:-2], -16 if index < 2 else 0, 16)
+
+
+def shadow_colour(value):
+    if value.startswith('rgba(') and value.endswith(')'):
+        channels = [trim(channel) for channel in value[5:-1].split(',')]
+        check(len(channels) == 4, CSS)
+        for channel in channels[:3]:
+            check(re.fullmatch(r'[0-9]+', channel) and int(channel) <= 255, CSS)
+        css_number(channels[3], 0, 1)
+    else:
+        hex_color(value)
+
+
 def css_declaration(key, value, files):
-    check(bool(value), 'unsafe or unsupported pack CSS')
+    check(bool(value) and key in CSS_PROPERTIES, CSS)
     if key in ('color', 'background-color', 'border-color'):
-        color(value)
+        hex_color(value)
     elif key == 'background-image':
-        check(value.startswith('url(') and value.endswith(')'), 'unsafe or unsupported pack CSS')
-        path = value[4:-1].strip()
+        check(value.startswith('url(') and value.endswith(')'), CSS)
+        path = trim(value[4:-1])
         if path.startswith(('"', "'")):
-            check(len(path) >= 2 and path[-1] == path[0], 'unsafe or unsupported pack CSS')
+            check(len(path) >= 2 and path[-1] == path[0], CSS)
             path = path[1:-1]
         reference(files, path, ('png', 'webp'))
     elif key in ('font-weight', 'text-align'):
         allowed = ('normal', 'bold', '400', '500', '600', '700') if key == 'font-weight' else ('left', 'center', 'right')
-        check(value in allowed, 'unsafe or unsupported pack CSS')
+        check(value in allowed, CSS)
     elif key == 'opacity':
-        number(float(value), 0, 1)
+        css_number(value, 0, 1)
     elif key in ('font-size', 'border-radius', 'border-width', 'padding', 'gap'):
         match = re.fullmatch(r'(.+?)(px|rem|em|%)', value)
-        check(match is not None, 'unsafe or unsupported pack CSS')
-        number(float(match[1]), 0, 100)
+        check(match is not None, CSS)
+        css_number(match[1], 0, 100)
+    elif key == 'text-shadow':
+        shadows(value)
     else:
-        raise Refused('unsafe or unsupported pack CSS')
+        raise Refused(CSS)
 
 
 def stylesheet(data, files):
-    text = data.decode('ascii').strip()
-    check(not any(token in text for token in ('\\', '@', '<', '>', '/*', '*/')),
-          'unsafe or unsupported pack CSS')
+    text = trim(data.decode('ascii'))
+    check(not any(token in text for token in ('\\', '@', '<', '>', '/*', '*/')), CSS)
     while text:
         selectors, opening, rest = text.partition('{')
         body, closing, text = rest.partition('}')
-        check(opening and closing, 'unsafe or unsupported pack CSS')
+        check(opening and closing, CSS)
         allowed = {'.pack-' + name for name in ('clock', 'date', 'status', 'link-code', 'approval', 'error', 'stage')}
-        check(all(selector.strip() in allowed for selector in selectors.split(',')),
-              'unsafe or unsupported pack CSS')
+        check(all(trim(selector) in allowed for selector in selectors.split(',')), CSS)
         for item in body.split(';'):
-            if item.strip():
+            if trim(item):
                 key, colon, value = item.partition(':')
-                check(colon, 'unsafe or unsupported pack CSS')
-                css_declaration(key.strip(), value.strip(), files)
-        text = text.strip()
+                check(colon, CSS)
+                css_declaration(trim(key), trim(value), files)
+        text = trim(text)
 
 
 def validate(files):

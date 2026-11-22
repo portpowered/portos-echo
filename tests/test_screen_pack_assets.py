@@ -455,6 +455,8 @@ def invalid_push_cases():
         (box.pack / 'style.css').write_text('.pack-stage { background-image: url("nested/rest.png"); opacity: 0.5; }')
         box.run()
         box.settled(['template@0.1.0'])
+    from test_screen_pack_css import css_parity_cases
+    css_parity_cases()
     print('F24 preflight: identity=PASS schema=PASS references=PASS limits=PASS inert_CSS=PASS invalid_adb_calls=0')
 
 
