@@ -360,7 +360,7 @@ fn refuses_collision(name: &str) {
                 .args([
                     "shell",
                     concat!(
-                        "/data/local/hassmic/runas nobody 3990,inet ",
+                        "/data/local/hassmic/runas nobody 3990,inet,input ",
                         "mkfifo /data/local/echo-bridge/private/lab-stdin"
                     ),
                 ])

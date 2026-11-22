@@ -20,7 +20,10 @@ use std::{
 pub(super) use budget::admit;
 
 const INVALID: &str = "device: invalid on-device launcher";
-const IDENTITY: &str = "/data/local/hassmic/runas nobody 3990,inet";
+// Group input (AID_INPUT 1004) lets the bridge read the camera shutter evdev node
+// (docs/adr/0033-native-camera-shutter.md). The older `3990,inet` spelling is still
+// accepted from a lab config and normalizes to this identity.
+const IDENTITY: &str = "/data/local/hassmic/runas nobody 3990,inet,input";
 const ROOT_REFUSAL: &str = "device: on-device launcher must run as nobody, not root";
 const POLL: Duration = Duration::from_millis(200);
 const SETTLE: Duration = Duration::from_secs(10);
@@ -139,7 +142,11 @@ impl Launcher {
         let identity = identity.is_empty()
             || matches!(
                 identity.as_slice(),
-                ["runas" | "/data/local/hassmic/runas", "nobody", "3990,inet"]
+                [
+                    "runas" | "/data/local/hassmic/runas",
+                    "nobody",
+                    "3990,inet,input" | "3990,inet"
+                ]
             );
         if device_path(&self.private_dir)
             && inside(&self.config)

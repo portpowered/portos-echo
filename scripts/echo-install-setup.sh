@@ -138,7 +138,7 @@ setup_doctor() {
   run_adb shell "
 if test -x /data/local/hassmic/runas; then
   printf 'hassmic=ok\\n'
-  if /data/local/hassmic/runas nobody 3990,inet nc -z -w 5 chatgpt.com 443 >/dev/null 2>&1; then
+  if /data/local/hassmic/runas \"${run_user:?}\" \"${run_groups:?}\" nc -z -w 5 chatgpt.com 443 >/dev/null 2>&1; then
     printf 'egress=ok\\n'
   else printf 'egress=failed\\n'; fi
 else printf 'hassmic=failed\\negress=failed\\n'; fi

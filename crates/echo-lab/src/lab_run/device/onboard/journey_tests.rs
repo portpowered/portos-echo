@@ -74,12 +74,14 @@ async fn t3_on_device_launch_pushes_the_derived_config_and_starts_in_its_own_ses
     }
     for expected in [
         format!("shell chown 9999:9999 {PRIVATE}/bridge.toml.lab-owner/config"), // lint-rules: allow-literal synthetic uid:gid ownership metadata, no connection
-        format!("/data/local/hassmic/runas nobody 3990,inet chmod 600 {PRIVATE}/bridge.toml.lab-owner/config"),
-        format!("/data/local/hassmic/runas nobody 3990,inet stat -c %u:%g:%a {PRIVATE}/bridge.toml.lab-owner/config"),
-        format!("/data/local/hassmic/runas nobody 3990,inet sh -c 'umask 077; cd {PRIVATE} || exit 1;"),
+        format!("/data/local/hassmic/runas nobody 3990,inet,input chmod 600 {PRIVATE}/bridge.toml.lab-owner/config"),
+        format!(
+            "/data/local/hassmic/runas nobody 3990,inet,input stat -c %u:%g:%a {PRIVATE}/bridge.toml.lab-owner/config"
+        ),
+        format!("/data/local/hassmic/runas nobody 3990,inet,input sh -c 'umask 077; cd {PRIVATE} || exit 1;"),
         "setsid sh -c".into(),
         format!("--config {PRIVATE}/bridge.toml --trace {PRIVATE}/trace.jsonl <lab-stdin"),
-        format!("exec-out /data/local/hassmic/runas nobody 3990,inet cat {PRIVATE}/trace.jsonl"),
+        format!("exec-out /data/local/hassmic/runas nobody 3990,inet,input cat {PRIVATE}/trace.jsonl"),
         "tail -c +1 /data/local/hassmic/boot.log".into(),
         "forward tcp:0 tcp:16900".into(), // lint-rules: allow-literal synthetic adb argument comparison, no connection
     ] {

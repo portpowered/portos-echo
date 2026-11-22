@@ -159,8 +159,8 @@ class World:
         elif command.startswith("chown "):
             if self.mode == "chown":
                 raise ValueError("chown failed")
-        elif command.startswith("/data/local/hassmic/runas nobody 3990,inet "):
-            fragment = command.removeprefix("/data/local/hassmic/runas nobody 3990,inet ")
+        elif command.startswith("/data/local/hassmic/runas nobody 3990,inet,input "):
+            fragment = command.removeprefix("/data/local/hassmic/runas nobody 3990,inet,input ")
             assert fragment.startswith(("mkdir ", "chmod ", "mkfifo ", "ln -T ", "sh -c ")), fragment
             fragment = fragment.replace("/data/local/echo-bridge/private", '"${ECHO_FAKE_REMOTE}"')
             if self.mode == "chmod" and fragment.startswith("chmod "):

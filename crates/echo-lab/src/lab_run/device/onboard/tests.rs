@@ -152,7 +152,7 @@ pub(super) fn world() -> Rc<RefCell<World>> {
 fn launcher_json() -> serde_json::Value {
     json!({"private_dir":PRIVATE,"config":format!("{PRIVATE}/bridge.toml"),
         "trace":format!("{PRIVATE}/trace.jsonl"),"hassmic_log":"/data/local/hassmic/boot.log",
-        "binary":"/data/local/echo-bridge/bin/echo-bridge","run_as":"runas nobody 3990,inet"})
+        "binary":"/data/local/echo-bridge/bin/echo-bridge","run_as":"runas nobody 3990,inet,input"})
 }
 
 fn select(root: &std::path::Path, value: &serde_json::Value) -> Result<Option<Launcher>, String> {
@@ -336,7 +336,14 @@ fn t2_m4_budget_passes_in_budget_and_fails_with_the_measured_number() {
 fn t2_identity_defaults_normalize_and_root_is_refused_before_effects() {
     let root = tempfile::tempdir().unwrap();
     let world = world();
-    for spelling in [None, Some(""), Some("runas nobody 3990,inet"), Some(IDENTITY)] {
+    for spelling in [
+        None,
+        Some(""),
+        Some("runas nobody 3990,inet,input"),
+        Some("runas nobody 3990,inet"),
+        Some("/data/local/hassmic/runas nobody 3990,inet"),
+        Some(IDENTITY),
+    ] {
         let mut value = launcher_json();
         value.as_object_mut().unwrap().remove("run_as");
         if let Some(spelling) = spelling {
@@ -348,8 +355,10 @@ fn t2_identity_defaults_normalize_and_root_is_refused_before_effects() {
     for helper in ["runas", "/data/local/hassmic/runas"] {
         for user in ["root", "0"] {
             let mut value = launcher_json();
-            value["run_as"] = json!(format!("{helper} {user} 3990,inet"));
-            assert_eq!(select(root.path(), &value).unwrap_err(), ROOT_REFUSAL);
+            for groups in ["3990,inet,input", "3990,inet"] {
+                value["run_as"] = json!(format!("{helper} {user} {groups}"));
+                assert_eq!(select(root.path(), &value).unwrap_err(), ROOT_REFUSAL);
+            }
         }
     }
     assert_eq!(world.borrow().calls, Vec::<Vec<String>>::new());

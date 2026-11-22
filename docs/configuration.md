@@ -15,7 +15,7 @@ Paths are literal: no tilde or environment expansion and no automatic credential
 ## Files, ownership and precedence
 
 The installer root is `/data/local/echo-bridge`. Root owns `bin/` (0755); its executables are 0755 and
-`bin/cacert.pem` is 0644. The bridge runs as `nobody` (9999:9999), groups `3990,inet`.
+`bin/cacert.pem` is 0644. The bridge runs as `nobody` (9999:9999), groups `3990,inet,input`.
 It and the child share that identity. Other processes using `nobody` share its filesystem privileges;
 this is not a dedicated per-agent sandbox. The screen app receives public state and pairing access, not raw tokens.
 

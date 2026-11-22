@@ -12,7 +12,7 @@ const CHECKS: [(&str, &str); 7] = [
     ("hassmic", "Install hassmic separately and check its runas helper."),
     (
         "egress",
-        "Check device DNS, TCP port 443 and the hassmic 3990,inet egress groups; nc is required.",
+        "Check device DNS, TCP port 443 and egress as the bridge identity (nobody 3990,inet,input); nc is required.",
     ),
     ("clock", "Set the device clock within five minutes of the host clock."),
     ("disk_free", "Free at least 256 MiB on the device data partition."),

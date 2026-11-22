@@ -77,7 +77,7 @@ fn check(path: &str, source: &str) -> Vec<String> {
         }
         if forbidden(&logical) && !refusal_fixture(path, source, offset, &logical) {
             errors.push(format!(
-                "{path}:{first}: root launch of echo-bridge or codex-app-server is forbidden; use nobody 3990,inet"
+                "{path}:{first}: root launch of echo-bridge or codex-app-server is forbidden; use nobody 3990,inet,input"
             ));
         }
         offset += logical.len() + 1;
@@ -142,7 +142,7 @@ mod tests {
         let errors = check("selected.sh", &format!("# header\n{launch}"));
         assert_eq!(
             errors,
-            ["selected.sh:2: root launch of echo-bridge or codex-app-server is forbidden; use nobody 3990,inet"]
+            ["selected.sh:2: root launch of echo-bridge or codex-app-server is forbidden; use nobody 3990,inet,input"]
         );
     }
 }
