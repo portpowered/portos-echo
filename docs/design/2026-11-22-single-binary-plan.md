@@ -205,8 +205,8 @@ sandbox and tell Codex it is `External`:
   hassmic's `allow hassmic * * *` (fork `scripts/system/sepolicy-hassmic.rules`).
 - **Limits.** `setrlimit` on CPU, address space, processes and file size. Optionally a seccomp-bpf filter via
   `seccompiler`, which Android 9 kernels support; Landlock is not assumed.
-- **Approval.** `approvalPolicy` becomes `on-request`. Requests outside the workspace go to the screen's approval
-  prompt and a spoken yes or no.
+- **Approval.** None for now (owner, 2026-11-22: "don't include confirmations for now"). `approvalPolicy` stays
+  `never`, and the sandbox above is the only boundary. The screen's approval prompt stays in the code for later.
 
 ## 5. Screen
 
@@ -266,7 +266,7 @@ Each phase ships on its own and ends with a T5 run by the coordinator. Workers s
 | --- | --- | --- | --- |
 | **P0** Measure and decide | `echo-codex-embed` builds for armv7 in CI with `codex-app-server` linked in-process; `echo-bridge codex tools --json`; size and RSS recorded in baselines; owner answers in section 9 | CI artifact is one stripped `echo-bridge`, size recorded; the tool list on host equals upstream's minus `exec` and `wait`; the T5 RSS of the bridge while idle and during a call is recorded | Nothing |
 | **P1** Codex in-process | The bridge stops spawning the app server | T5: wake, a reply and a delegated web-search answer; `ps` on the Echo shows no `codex-app-server`; M2 and M4 pass with `--driver sim` | `bin/codex-app-server`, `codex.launch`, `codex.binary`, the stdio supervisor in `echo-codex`, the standalone path of `build-codex-armv7.sh` |
-| **P2** Tool parity | Codex's tools on, the exec role, the `External` profile, approval routing, `m8-tool-parity` | Every row of 4.1 passes on T3, then on T5 through the Ring bench; the `tools --json` diff is empty; the sandbox negative checks pass | `features.shell_tool=false` and the other off-switches; the "list must not widen" T3 assertion of 2026-11-17, replaced by the parity assertion |
+| **P2** Tool parity | Codex's tools on, the exec role, the `External` profile, `m8-tool-parity` | Every row of 4.1 passes on T3, then on T5 through the Ring bench; the `tools --json` diff is empty; the sandbox negative checks pass | `features.shell_tool=false` and the other off-switches; the "list must not widen" T3 assertion of 2026-11-17, replaced by the parity assertion |
 | **P3** Device role | `echo-device-sys` and `echo-device`; the fork's `main.sh` still boots, but starts `echo-bridge device` instead of hassmic | T5: wake on "Computer"; reply echo stays low (`reply.quality` echo_max in the same range as on 2026-11-20); barge-in; zero microphone frames while muted; `set-volume` acked with the reported state; ten restarts of each role recover; no hassmic process | The hassmic binary at runtime; TCP 16700 (Unix socket instead) |
 | **P4** Boot and supervision | `echo-bridge install` and `boot`; the APK as HOME; light band in the page; **Settings > Wi-Fi** and the offline Wi-Fi prompt (5.1) | On a new network with no saved one, the screen offers Wi-Fi setup within 30 s and a join from the screen brings the agent back; On an Echo rooted but without the fork's install: one `echo-setup install`, a reboot, a wake works; `iptables -S` shows the egress lock; Alexa packages disabled; a forced bad binary rolls back after three tries | Dependence on fork `install-system.sh`, `boot.sh`, `main.sh`, `bridge.sh`, `hassmic.rc`, `screen_home`, `org.hassmic.home` |
 | **P5** One-command install | The APK embedded; device scripts folded into `echo-bridge install`; `screenpacks.json` and the pack gallery (5.1); the README becomes the target quick start | A pack found by search in the gallery installs and shows in one tap, with a wrong digest refused; Someone follows only the quick start on a freshly rooted Echo and reaches step 5, time recorded; `doctor` prints `tools: parity ok` | `apk/echo-screen.apk` and `scripts/echo-install*.sh` as release assets, README step 1.4 |
@@ -287,7 +287,7 @@ P1 and P3 are independent, and P2 needs P1. P4 needs P3, and P5 needs P4.
 | Dependency rule | A new `Cargo.lock` package needs an ADR (el-f6); the closure adds about 1,000 | One ADR covering the Codex closure, with `cargo-deny` licence checks |
 | Licences | Codex Apache-2.0 with NOTICE; hassmic MIT; Pryon, libasp and OpenSL ES are firmware loaded from `/system`, never shipped; the CA bundle MPL-2.0 | Notices embedded and printed by `echo-bridge licenses`; no firmware file in the binary |
 | Code-mode-only models | A namespace missing from the direct list makes a tool unreachable | The T3 parity test fails on any `exec`-only tool |
-| Wider agent power | Shell and file writes on a device with a camera and a home grant | Separate uid, no egress, confined domain, approval on the screen (4.2) |
+| Wider agent power | Shell and file writes on a device with a camera and a home grant | Separate uid, no egress, confined domain, resource limits (4.2); no confirmations for now (owner) |
 
 ## 9. Open questions for the owner
 
@@ -303,8 +303,7 @@ P1 and P3 are independent, and P2 needs P1. P4 needs P3, and P5 needs P4.
    recommendation keeps Port OS bridge-owned (policy, ledger, consent) and uses Codex's client for other servers.
 6. **Network for tools.** Do shell tools get internet (for `curl`, `git`), or does search and fetch stay on the
    provider's side?
-7. **Approvals.** With full tools, do approvals switch on: for exec outside the workspace, for purchases and for the
-   camera? The 2026-11-18 decision chose no approval UI for notes.
+7. **Approvals.** Answered 2026-11-22: no confirmations for now (10.3, answer 4).
 8. **Bridge notes tools.** Retire them once file tools work, or keep them as the safe default?
 9. **On-device updates.** Should the Echo fetch signed releases itself, or does `echo-setup update` stay the only path?
 
@@ -332,8 +331,8 @@ Ratings: **good**, **fair**, **weak**.
 | Audio capture and AEC | hassmic, source 7 call pipeline, ASP index — **good** | Device-side AEC and beamforming — **good** | Same pipeline inside the device role — **good** |
 | Playback and barge-in | Bridge paces, hassmic plays; one cut per user turn; backchannels pass — **good** | Clear speaker queue, mic stays on; backchannel as a session state — **good** | Unchanged; adopt the draft's names in traces — **good** |
 | Wake | Pryon "Computer" in hassmic — **good** | Wake pipeline in the device layer; gaze wake later — **good** | Pryon in the device role; gaze as a second event source later — **good** |
-| Core loop model | Tokio tasks with bounded queues; one voice owner polls capture, control and PCM ([bridge_voice.rs](../../crates/echo-bridge/src/bridge_voice/bridge_voice.rs)) — **good**, undocumented as a loop | One loop, event plus tick, buffers, subsystems — **fair**, the tick is unspecified | Event-driven session owner with deadline timers; a fixed tick only in the renderer — **good** |
-| Session lifecycle | Run with a 15 s listen window, `extend_session` ceiling, `end_session`; Live call kept warm across wakes ([plan 3](../program/plan.md#3-the-bridge-runs-the-conversation-and-the-tools)) — **good** | Dormant, creating, active, held, ending; the connection closes with the session — **fair** | Draft states as the vocabulary, plus a warm-call substate of dormant — **good** |
+| Core loop model | Tokio tasks with bounded queues; one voice owner polls capture, control and PCM ([bridge_voice.rs](../../crates/echo-bridge/src/bridge_voice/bridge_voice.rs)) — **good**, undocumented as a loop | One loop, event plus tick, buffers, subsystems — **good** once the owner's answers are in (10.3) | Event-first loop that owns every buffer, plus a low-rate tick that flushes buffers and fires timers with no event of their own; the renderer ticks at display rate — **good** |
+| Session lifecycle | Run with a 15 s listen window, `extend_session` ceiling, `end_session`; Live call kept warm across wakes ([plan 3](../program/plan.md#3-the-bridge-runs-the-conversation-and-the-tools)) — **good** | Dormant, creating, active, held, ending; the connection kept when appropriate, closed when needed (owner, 10.3) — **good** | Draft states as the vocabulary; a warm-call substate of dormant with explicit close rules (10.3, answer 3) — **good** |
 | Realtime and agent loop | Live through the app-server child; delegation into Codex turns — **good** | Voice model plus parallel secondary inferencer — **good** | The same, in-process (2.3) — **good** |
 | Tool surface | Bridge tools plus search — **weak** against the owner's intent | Tools through a dispatcher and gateway; device actions — **good** | Full Codex surface minus code mode, plus bridge tools (4) — **good** |
 | Auth and login | Device code in the app server; Port OS DPoP grant in the bridge — **good** | Hard-coded auth and MCP registration — **fair** | Unchanged mechanisms; Codex's MCP client for extra servers — **good** |
@@ -342,36 +341,43 @@ Ratings: **good**, **fair**, **weak**.
 | OTA and update | Fork OTA for hassmic, `echo-setup update` for us — **fair** | Not covered | One `next`/`current`/`previous` set with three-tries rollback — **good** |
 | Boot persistence | Fork `.rc` and `bridge.sh` — **fair** | Not covered | Our `.rc` plus a HOME APK — **good**, needs root role (9.1) |
 | Observability | Bridge trace, hassmic `boot.log`, adb — **fair** | Not covered | One trace for all roles with draft state names; `doctor` parity line — **good** |
-| Security and sandbox | No shell tools; credentials private to `nobody` — **good** for today's surface | Confirmation off — **weak** for full tools | Separate exec uid, no egress, confined domain, approvals (4.2) — **good** |
+| Security and sandbox | No shell tools; credentials private to `nobody` — **good** for today's surface | Confirmation off, kept off for now (owner) — **fair** for full tools | Separate exec uid, no egress, confined domain, limits (4.2); no confirmations for now — **fair**, the sandbox carries it all |
 | Size and memory on armv7 | Bridge plus a separate app server plus WebView — **fair** | Not covered | One binary, size unknown until P0 — **fair**, the main unknown |
 | Testability T0–T4 | Simulator against `hassmic-host` over Wyoming — **good** | Not covered | Wyoming subset kept as the device seam; parity scenario added — **good** |
 | Upstream Codex churn | Wire-level coupling to a child binary — **good** | Not covered | Compile-time coupling through one adapter crate, weekly upstream build — **fair** |
 | Failure modes | A hassmic crash and a bridge crash are separate; app-server generations restart — **good** | One loop: a device crash ends the session — **fair** | Device and exec roles crash alone; core restarts the in-process app server generation — **good** |
 | Port OS | Bridge-owned grant, tools, endpoint — **good** | Hard-coded registration; dynamic MCP later — **fair** | Unchanged, plus dynamic servers through Codex's MCP client — **good** |
-| Future items | Timers and background work absent; gaze models chosen (on-device) — **fair** | Gaze, timers, background agent, generative UI, cloud agents — **good** as intent | In-process Codex makes background threads and a timer store cheap; they follow P5 — **good** |
+| Future items | Timers and background work absent; gaze models chosen (on-device) — **fair** | Gaze, timers, background agent on the device, generative UI in the WebView, cloud agents — **good** | Timers and a background thread in the core on the Echo; generative UI as WebView content; gaze wake as a second wake source gated by the shutter GPIO; all follow P5 — **good** |
 
 ### 10.2 Where the recommendation differs from the draft, and why
 
 - **Processes.** The draft's single app is the right logical model. One process is not. The firmware recorder needs
   uid `system`, credentials must not be readable by it, and a crash in a firmware library must not drop a call. So
   the binary is one, with separate roles that keep the draft's boundary: device events in, commands out.
-- **Core loop.** A fixed tick in the core wastes CPU on armv7 and adds a tick's latency to every barge-in. Event
-  dispatch with deadline timers does the same work and runs under the paused test clock. The renderer is where a
-  tick belongs: it ticks at display rate, as the draft's renderer diagram shows.
+- **Core loop.** The owner wants it ticked and event-driven where possible (10.3, answer 1), and the recommendation
+  now agrees. Latency-sensitive work (barge-in, wake, a model event) is dispatched the moment its event arrives, so
+  no event waits for a tick. A low-rate core tick (start at 10 Hz, measured on the Echo in P3) covers what has no
+  event of its own: buffer flushes, stale-data checks and timers. The tick runs under the paused test clock, as the
+  deadline timers do. The renderer ticks at display rate.
 - **Session lifecycle.** Closing the Live call with each session costs a call setup on every wake. The current warm
   call keeps the conversation across wakes, and changing a prompt still ends it. Keep it as a substate.
-- **Security.** "Confirmation off" was safe for a bridge with no shell. With full Codex tools it is not, so approvals
-  return for effects outside the workspace (question 9.7).
+- **Security.** The owner keeps confirmations off for now (10.3, answer 4). With full Codex tools the sandbox
+  (separate uid, no egress, confined domain, limits) carries the whole boundary, so P2's negative checks are a gate,
+  not a nicety.
 - **Install, supervision, OTA, boot, size, churn.** The draft does not cover them. The recommendation fills them in
   (sections 2, 6, 7).
 
-### 10.3 Gaps in the draft, as owner questions
+### 10.3 Gaps in the draft, answered by the owner (2026-11-22)
 
-1. Is the core loop event-driven, ticked or both, and at what rate? The draft's own notes ask this.
-2. Who owns each buffer, and which listeners stay up while the session is dormant (wake, Port OS endpoint, timers)?
-3. Should the Live connection close with every session, or stay warm across wakes as it does today?
-4. Which actions need confirmation once shell and file tools exist: purchases, the camera, writes outside the
-   workspace?
-5. Do timers and background agents run in the same binary on the Echo, or as cloud agents?
-6. Is generative UI a WebView component (the page can host one), or part of a native renderer?
-7. Gaze wake: does it start a session like the wake word, and how does it respect the camera shutter?
+| # | Question | Owner's answer | What the plan does |
+| --- | --- | --- | --- |
+| 1 | Event-driven, ticked or both? | Ticked and event-driven when possible; worried about data flushes with no matching event, and timers with no event | Event-first dispatch, plus a low-rate core tick that flushes buffers and fires event-less timers (10.2). Every flush and timer is either an event or on the tick, never neither; P3 adds a T3 test that a buffer with no event behind it is still flushed within one tick |
+| 2 | Who owns each buffer? | The game loop owns the buffers | The core loop owns capture, playback, transcript and presentation buffers. Subsystems (device role, Codex, renderer) send into and read from it through bounded channels and never hold a buffer past one call |
+| 3 | Keep the Live connection warm? | Keep it when appropriate, close it when needed | Warm across wakes by default. Close it on an explicit end, a prompt or voice change, a sign-in change, an idle limit, memory pressure, or a transport error |
+| 4 | Which actions need confirmation? | None for now | No confirmations (4.2). The sandbox is the boundary |
+| 5 | Timers and background agents: device or cloud? | On the device | A persistent timer store and a background (non-voice) Codex thread in the core on the Echo |
+| 6 | Generative UI: WebView or native? | A WebView | Generative UI is WebView content, which settles P6 as purely a memory question |
+| 7 | Gaze wake | It wakes a session like the wake word, and it checks the camera shutter's GPIO state | Gaze is a second wake source in the device role. It reads the shutter state from GPIO first, and when the shutter is closed the camera is not used and gaze cannot wake (the coordinator's reading of the owner's last, unfinished sentence) |
+
+Still open in the draft: its terminology notes, and which listeners stay up while dormant (wake, Port OS endpoint,
+timers). The plan's answer is all three, in the core.
