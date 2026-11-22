@@ -170,6 +170,19 @@ fn wake_earcon_rejects_types_without_echoing_values() {
 }
 
 #[test]
+fn delegate_model_defaults_to_gpt_6_1_sol_and_keeps_every_configured_key() {
+    // gpt-6.2-* refuse the direct web.run that search needs (decision 2026-11-21).
+    let unset = BridgeConfig::from_toml_str(MINIMAL).unwrap();
+    assert_eq!(unset.codex_model(), None);
+    assert_eq!(unset.delegate_model(), "gpt-6.1-sol");
+    assert_eq!(echo_config::DEFAULT_DELEGATE_MODEL, "gpt-6.1-sol");
+    let legacy = BridgeConfig::from_toml_str(&MINIMAL.replace("[agent]", "[agent]\nmodel='legacy-model'")).unwrap();
+    assert_eq!(legacy.delegate_model(), "legacy-model");
+    let configured = BridgeConfig::from_toml_str(&format!("{MINIMAL}\n[codex]\ndelegate_model='gpt-6.2-sol'")).unwrap();
+    assert_eq!(configured.delegate_model(), "gpt-6.2-sol");
+}
+
+#[test]
 fn codex_defaults_and_override_precedence_are_offline() {
     let directory = Directory::new().unwrap();
     let home = directory.0.join("uncreated-home");
@@ -178,14 +191,12 @@ fn codex_defaults_and_override_precedence_are_offline() {
     assert_eq!(original.codex, echo_config::CodexConfig::default());
     assert_eq!(original.codex_voice(), None);
     assert_eq!(original.codex_model(), None);
-    assert_eq!(original.delegate_model(), "gpt-6.1-sol");
     let input = MINIMAL
         .replace("[live]", "[live]\nvoice='cedar'")
         .replace("[agent]", "[agent]\nmodel='legacy-model'");
     let legacy = BridgeConfig::from_toml_str(&input).unwrap();
     assert_eq!(legacy.codex_voice(), Some("cedar"));
     assert_eq!(legacy.codex_model(), Some("legacy-model"));
-    assert_eq!(legacy.delegate_model(), "legacy-model");
     let input = format!(
         "{input}\n[home]\ndir='{}'\n[codex]\nhome='{}'\nbinary='{}'\nvoice='marin'\nmodel='thread-model'\n",
         home.display(),
