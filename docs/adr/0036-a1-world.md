@@ -12,7 +12,8 @@ into Wyoming. The World contains the concrete subsystem state, clock and RNG.
 Each device event steps the reducer synchronously and can publish one view.
 Clocks report monotonic duration and wall time. The bridge uses Tokio monotonic
 time and its corrected model clock. DPoP and the other three A1 wall sites use
-the host clock so their existing units and time source are preserved.
+the host clock in their existing units. The Codex nonce named in the plan
+belongs to the supervisor's home-lease regression test.
 
 Wyoming converts wire observations into device events and applies the published
 view before admitting audio. Sockets, bounded PCM queues, registration replay
