@@ -4,7 +4,10 @@ use echo_link::{EchoLink, SpeakerRequest, SpeakerState};
 use serde_json::Value;
 use std::{future::Future, time::Duration};
 use tokio::{
-    sync::{mpsc, oneshot, watch},
+    sync::{
+        mpsc::{self, error::TrySendError},
+        oneshot, watch,
+    },
     time::{Instant, timeout_at},
 };
 
@@ -16,9 +19,23 @@ enum Change {
     Relative(i64),
 }
 
+/// Fixed reasons a control reached no device.
+const NO_SPEAKER_LINK: &str = "no_speaker_link";
+const VOLUME_UNKNOWN: &str = "volume_unknown";
+const BUSY: &str = "busy";
+
+/// What became of one speaker command. Port OS keeps no pending request for
+/// these, so a drop is traced on the bridge rather than answered.
+pub(super) enum Outcome {
+    /// Sent to the device link, which gives no applied acknowledgement.
+    Sent,
+    Invalid,
+    Dropped(&'static str),
+}
+
 struct Request {
     change: Change,
-    sent: oneshot::Sender<()>,
+    sent: oneshot::Sender<Result<(), &'static str>>,
 }
 
 struct Attachment<'a>(&'a Control, &'a watch::Sender<View>);
@@ -48,11 +65,20 @@ impl Control {
         }
     }
 
-    async fn send(&self, change: Change, deadline: Instant) {
+    async fn send(&self, change: Change, deadline: Instant) -> Result<(), &'static str> {
         let (sent, wait) = oneshot::channel();
-        let Some(sender) = self.0.borrow().clone() else { return };
-        if Instant::now() < deadline && sender.try_send(Request { change, sent }).is_ok() {
-            let _ = timeout_at(deadline, wait).await;
+        let sender = self.0.borrow().clone().ok_or(NO_SPEAKER_LINK)?;
+        if Instant::now() >= deadline {
+            return Err(BUSY);
+        }
+        sender.try_send(Request { change, sent }).map_err(|error| match error {
+            TrySendError::Full(_) => BUSY,
+            TrySendError::Closed(_) => NO_SPEAKER_LINK,
+        })?;
+        match timeout_at(deadline, wait).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(NO_SPEAKER_LINK),
+            Err(_) => Err(BUSY),
         }
     }
 }
@@ -71,33 +97,43 @@ async fn reports(client: &impl EchoLink, view: &watch::Sender<View>) {
 
 async fn send_requests(client: &impl EchoLink, view: &watch::Sender<View>, mut requests: mpsc::Receiver<Request>) {
     while let Some(Request { change, mut sent }) = requests.recv().await {
+        // A relative change needs the device's reported volume as its base.
         let request = match change {
-            Change::Absolute(request) => Some(request),
-            Change::Relative(delta) => view.borrow().speaker.volume.and_then(|base| {
-                let volume = i64::from(base).saturating_add(delta).clamp(0, 100);
-                u8::try_from(volume).ok().map(SpeakerRequest::Volume)
-            }),
+            Change::Absolute(request) => Ok(request),
+            Change::Relative(delta) => view
+                .borrow()
+                .speaker
+                .volume
+                .and_then(|base| {
+                    let volume = i64::from(base).saturating_add(delta).clamp(0, 100);
+                    u8::try_from(volume).ok().map(SpeakerRequest::Volume)
+                })
+                .ok_or(VOLUME_UNKNOWN),
         };
-        if let Some(request) = request {
-            tokio::select! {
+        let result = match request {
+            Ok(request) => tokio::select! {
                 biased;
-                () = sent.closed() => {},
-                _ = client.request_speaker(request) => {},
-            }
-        }
-        let _ = sent.send(());
+                () = sent.closed() => continue,
+                result = client.request_speaker(request) => result.map_err(|_| NO_SPEAKER_LINK),
+            },
+            Err(reason) => Err(reason),
+        };
+        let _ = sent.send(result);
     }
 }
 
-/// Deliver one fire-and-forget speaker command. False when its body is invalid.
-pub(super) async fn command(name: &str, body: Value, received: Instant) -> bool {
+/// Deliver one fire-and-forget speaker command.
+pub(super) async fn command(name: &str, body: Value, received: Instant) -> Outcome {
     let Some(change) = change(name, body) else {
-        return false;
+        return Outcome::Invalid;
     };
-    if let Some(voice) = Voice::current() {
-        voice.speaker.send(change, received + Duration::from_secs(1)).await;
+    let Some(voice) = Voice::current() else {
+        return Outcome::Dropped(NO_SPEAKER_LINK);
+    };
+    match voice.speaker.send(change, received + Duration::from_secs(1)).await {
+        Ok(()) => Outcome::Sent,
+        Err(reason) => Outcome::Dropped(reason),
     }
-    true
 }
 
 fn change(name: &str, body: Value) -> Option<Change> {

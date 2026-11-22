@@ -152,13 +152,13 @@ async fn t3_endpoint_snapshot_native_peer_proof_cancellation_and_recovery() {
             )
             .await
             .unwrap();
-            let mut app = Peer::attach(&listener).await;
             let mut camera = CameraPeer::open();
             Arc::get_mut(&mut camera).unwrap().exchange = listener.camera();
             let fixture =
                 fixture_with_camera(home.path(), &mock, &gateway, grant.grant.clone(), Some(camera.clone())).await;
             fixture.settings.save(true, "Hall Echo").await;
             gateway.assert_upgrade(CLAIMED).await;
+            let mut app = observe_attach(&gateway, &mock, &listener, home.path()).await;
             let stale = observe_timeout(&gateway, &mock, &mut app).await;
             observe_fresh_capture(&gateway, &mock, &mut app, "native-retry", Some("BASE64"), &stale).await;
             observe_fresh_capture(&gateway, &mock, &mut app, "native-url", Some("URL"), &stale).await;
@@ -172,6 +172,53 @@ async fn t3_endpoint_snapshot_native_peer_proof_cancellation_and_recovery() {
             listener.shutdown().await.unwrap();
         })))
         .await;
+}
+
+/// A camera path whose app has not attached is busy, not unsupported. The
+/// trace follows the stream with fixed fields only.
+async fn observe_attach(
+    gateway: &Gateway,
+    mock: &Mock,
+    listener: &echo_screen_server::ScreenServer,
+    home: &Path,
+) -> Peer {
+    let link = |session, refused| json!({"session":session,"refused":refused});
+    let order = [
+        link("detached", Value::Null),
+        link("detached", json!("forbidden")),
+        link("detached", json!("unauthorized")),
+        link("attached", Value::Null),
+        link("attached", json!("conflict")),
+    ];
+    assert_eq!(camera_links(home, &order[0]).await, [order[0].clone()]);
+    send(gateway, &snapshot_request("unattached", "BASE64")).await;
+    assert_reply(mock, "unattached", "CAMERA_BUSY").await;
+    let app = Peer::attach(listener).await;
+    // The observer may coalesce quick transitions, never reorder them.
+    let links = camera_links(home, &order[4]).await;
+    let mut expected = order.iter();
+    assert_eq!(links.first(), Some(&order[0]));
+    assert!(links.iter().all(|row| expected.any(|state| state == row)), "{links:?}");
+    app
+}
+
+async fn camera_links(home: &Path, last: &Value) -> Vec<Value> {
+    let read = || -> Vec<Value> {
+        setup_tests::lifecycle(home)
+            .into_iter()
+            .filter(|row| row["event"] == "endpoint.camera")
+            .map(|row| json!({"session":row["session"],"refused":row["refused"]}))
+            .collect()
+    };
+    for _ in 0..300 {
+        if read().last() == Some(last) {
+            break;
+        }
+        advance(Duration::from_millis(10)).await;
+    }
+    let links = read();
+    assert_eq!(links.last(), Some(last), "{links:?}");
+    links
 }
 
 async fn observe_cancelled_upload(gateway: &Gateway, mock: &Mock, app: &mut Peer, camera: &CameraPeer) {

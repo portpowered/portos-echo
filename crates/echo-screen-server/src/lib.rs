@@ -9,7 +9,7 @@ mod screen_mouth;
 mod screen_settings;
 mod screen_url;
 
-pub use camera::{Camera, CaptureError, Sample as CameraSample};
+pub use camera::{Camera, CaptureError, Link as CameraLink, Refused as CameraRefused, Sample as CameraSample};
 pub use packs::PackSettings;
 pub use packs::view::{DEFAULT as DEFAULT_PACK, PackCatalog};
 pub use screen_mouth::MouthSender;

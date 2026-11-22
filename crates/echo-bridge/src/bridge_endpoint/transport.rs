@@ -1,6 +1,8 @@
 mod tls;
 mod uplink;
 
+use uplink::Delivery;
+
 use super::{Attempts, Status, commands::Receipts, note, snapshot::Camera, voice::Voice};
 use echo_contracts::endpoint::{Report, Uplink};
 use echo_mcp_auth::{EndpointTokenSource, new_request_id};
@@ -13,7 +15,7 @@ use std::{
 };
 use tokio::{
     net::TcpStream,
-    sync::mpsc,
+    sync::{mpsc, watch},
     time::{Instant, MissedTickBehavior, interval_at, timeout},
 };
 use tokio_tungstenite::{
@@ -28,6 +30,8 @@ use tokio_tungstenite::{
 
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const REPLY_WINDOW: Duration = Duration::from_secs(10);
+/// A connected bridge resends its full state at least this often.
+pub(super) const REPORT_REFRESH: Duration = Duration::from_secs(600);
 const MAX_COMMAND: usize = 64 * 1024;
 const QUEUED_COMMANDS: usize = 32;
 const IN_FLIGHT_REPLIES: usize = 16;
@@ -54,6 +58,8 @@ pub(super) struct Transport {
     connector: Option<Connector>,
     pub(super) camera: Camera,
     pub(super) trace: Option<crate::bridge_trace::Trace>,
+    /// Bumped when route discovery finds this device's route.
+    routes: watch::Sender<()>,
 }
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -104,6 +110,7 @@ impl Transport {
             connector: trust.gateway,
             camera: Camera::default(),
             trace: None,
+            routes: watch::channel(()).0,
         })
     }
 
@@ -235,22 +242,36 @@ impl Transport {
         }
     }
 
-    /// Report state whenever it changes; each report is stamped when it is sent.
+    /// Port OS now routes this device: every live connection reports its full state again.
+    pub(super) fn route_found(&self) {
+        self.routes.send_replace(());
+    }
+
+    /// Report the full state on connect, whenever it changes and once the
+    /// route is found; each report is stamped when it is sent. A report Port
+    /// OS could not route yet is sent again with the next change or route.
     async fn report(&self, device_id: &str, tokens: &dyn EndpointTokenSource) {
         let voice = Voice::current().unwrap_or_default();
         let mut states = voice.subscribe();
+        let mut routes = self.routes.subscribe();
         let mut sent: Option<Report> = None;
+        let mut reported = Instant::now();
         loop {
             let report = states.borrow_and_update().report();
             if sent.as_ref() != Some(&report) {
                 let mut stamped = report.clone();
                 stamped.sampled_at_ms = wall_ms();
-                sent = Some(report);
                 let body = serde_json::to_vec(&Uplink::report(device_id, stamped)).ok();
-                self.send(tokens, body, Instant::now() + REPLY_WINDOW).await;
+                let delivery = self.deliver(tokens, body, Instant::now() + REPLY_WINDOW).await;
+                sent = (delivery != Delivery::Unrouted).then_some(report);
+                reported = Instant::now();
             }
-            if states.changed().await.is_err() {
-                return;
+            // Reports address the deviceId, so a quiet connection still
+            // refreshes its full state even if the route read-back never succeeds.
+            tokio::select! {
+                changed = states.changed() => if changed.is_err() { return },
+                Ok(()) = routes.changed() => sent = None,
+                () = tokio::time::sleep_until(reported + REPORT_REFRESH) => sent = None,
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }

@@ -28,6 +28,17 @@ pub trait EndpointTokenSource: Send + Sync {
     }
 }
 
+/// What one route read-back saw, as counts only: never ids.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RouteScan {
+    /// Pages Port OS answered.
+    pub pages: usize,
+    /// Route records across those pages.
+    pub results: usize,
+    /// Records that carry an `associatedPluginRouteId` at all.
+    pub routed: usize,
+}
+
 pub struct EndpointExchange {
     url: Url,
     routes: Url,
@@ -278,6 +289,20 @@ impl EndpointExchange {
         tokens: &dyn EndpointTokenSource,
         device_id: &str,
     ) -> Result<Option<String>, ExchangeError> {
+        self.read_routes(tokens, device_id, &mut RouteScan::default()).await
+    }
+
+    /// As [`Self::endpoint_id`], counting what the read-back saw into `scan`
+    /// so a failed or empty attempt can be traced without its contents.
+    ///
+    /// # Errors
+    /// Returns a safe diagnostic without including request or response data.
+    pub async fn read_routes(
+        &self,
+        tokens: &dyn EndpointTokenSource,
+        device_id: &str,
+        scan: &mut RouteScan,
+    ) -> Result<Option<String>, ExchangeError> {
         let token = tokens.access_token().await.map_err(|_| ExchangeError::Grant)?;
         let mut next: Option<String> = None;
         for _ in 0..MAX_ROUTE_PAGES {
@@ -286,6 +311,13 @@ impl EndpointExchange {
                 url.query_pairs_mut().append_pair("nextToken", next);
             }
             let page = self.route_page(url, token.expose()).await?;
+            scan.pages += 1;
+            scan.results += page.results.len();
+            scan.routed += page
+                .results
+                .iter()
+                .filter(|route| route.associated_plugin_route_id.is_some())
+                .count();
             if let Some(endpoint) = page.endpoint_for(device_id) {
                 return Ok(Some(endpoint.to_owned()));
             }

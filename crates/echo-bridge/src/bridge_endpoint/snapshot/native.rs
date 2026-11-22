@@ -27,6 +27,10 @@ impl CameraSource for NativeCamera {
         self.exchange.connected()
     }
 
+    fn link(&self) -> Option<watch::Receiver<echo_screen_server::CameraLink>> {
+        Some(self.exchange.link())
+    }
+
     fn shutter(&self) -> watch::Receiver<Shutter> {
         let Some(evdev) = Observation::open() else {
             return watch::channel(Shutter::Unknown).1;

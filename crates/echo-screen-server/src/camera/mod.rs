@@ -65,13 +65,60 @@ pub(super) enum Event {
     Cancel(String),
 }
 
+/// Whether the native app holds the event stream, and the fixed reason its
+/// latest attach was refused. Carries no nonce, key, address or capture ID.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Link {
+    pub attached: bool,
+    pub refused: Option<Refused>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Refused {
+    /// A browser-shaped or wrong-host request.
+    Forbidden,
+    /// A missing nonce or proof, a revoked pairing or a proof that does not verify.
+    Unauthorized,
+    /// Another stream already holds the camera.
+    Conflict,
+}
+
 /// One native connection and at most one capture under its ownership.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Camera {
     session: Arc<Mutex<Option<Session>>>,
+    link: Arc<watch::Sender<Link>>,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Self {
+            session: Arc::default(),
+            link: Arc::new(watch::channel(Link::default()).0),
+        }
+    }
 }
 
 impl Camera {
+    /// Observe attach, detach and refused attach attempts.
+    #[must_use]
+    pub fn link(&self) -> watch::Receiver<Link> {
+        self.link.subscribe()
+    }
+
+    fn linked(&self, attached: bool) {
+        let next = Link {
+            attached,
+            refused: None,
+        };
+        self.link.send_if_modified(|link| std::mem::replace(link, next) != next);
+    }
+
+    pub(crate) fn refused(&self, reason: Refused) {
+        self.link
+            .send_if_modified(|link| link.refused.replace(reason) != Some(reason));
+    }
+
     #[must_use]
     pub fn connected(&self) -> bool {
         self.session
@@ -149,6 +196,7 @@ impl Camera {
             retired: watch::channel(()).0,
             stale_upload: Arc::default(),
         });
+        self.linked(true);
         Some((
             Connection {
                 owner: self.clone(),
@@ -248,6 +296,7 @@ impl Drop for Connection {
             && lock.as_ref().is_some_and(|session| self.owns(session))
         {
             *lock = None;
+            self.owner.linked(false);
         }
     }
 }
@@ -266,7 +315,47 @@ impl Drop for Capture {
             session.pending = None;
             if session.events.try_send(Event::Cancel(self.id.clone())).is_err() {
                 *lock = None;
+                self.owner.linked(false);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Camera, Link, Refused};
+
+    #[test]
+    fn link_follows_attach_refusal_and_detach() {
+        let camera = Camera::default();
+        let mut link = camera.link();
+        assert_eq!(*link.borrow_and_update(), Link::default());
+        camera.refused(Refused::Unauthorized);
+        let unauthorized = Link {
+            attached: false,
+            refused: Some(Refused::Unauthorized),
+        };
+        assert_eq!(*link.borrow_and_update(), unauthorized);
+        camera.refused(Refused::Unauthorized);
+        assert!(!link.has_changed().unwrap(), "a repeated refusal is one state");
+
+        let (connection, events) = camera.attach("first".into()).unwrap();
+        let attached = Link {
+            attached: true,
+            refused: None,
+        };
+        assert_eq!(*link.borrow_and_update(), attached);
+        assert!(camera.attach("second".into()).is_none());
+        camera.refused(Refused::Conflict);
+        let contended = Link {
+            attached: true,
+            refused: Some(Refused::Conflict),
+        };
+        assert_eq!(*link.borrow_and_update(), contended);
+
+        drop(events);
+        drop(connection);
+        assert_eq!(*link.borrow_and_update(), Link::default());
+        assert!(!camera.connected());
     }
 }

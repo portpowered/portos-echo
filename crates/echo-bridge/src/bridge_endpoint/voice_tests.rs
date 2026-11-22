@@ -65,7 +65,8 @@ pub(super) async fn fixture_with_camera(
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let connector =
         echo_wyoming::adapter::connector(listener.local_addr().unwrap(), echo_wyoming::ClientOptions::default());
-    let (settings, app, ready, stale) = fixture_with_link(home, mock, gateway, shared_grant, connector, camera).await;
+    let (settings, app, ready, stale) =
+        fixture_with_link(home, mock, gateway, shared_grant, connector, camera, true).await;
     let (device, _) = listener.accept().await.unwrap();
     let mut device = Device::new(device);
     device.receive("run-satellite").await;
@@ -86,6 +87,7 @@ pub(super) async fn fixture_with_link(
     shared_grant: Arc<Grant>,
     connector: impl echo_link::LinkConnector + 'static,
     camera: Option<Arc<dyn snapshot::CameraSource>>,
+    remote_mic: bool,
 ) -> (Settings, BufReader<DuplexStream>, Arc<Notify>, Arc<Notify>) {
     let (service, send_settings) = Settings::with_camera(home, mock, gateway, false, camera);
     let (app, server) = tokio::io::duplex(16384);
@@ -104,7 +106,7 @@ pub(super) async fn fixture_with_link(
                         let _ = stop.await;
                     },
                     (&signal, &ordered),
-                    &fixture_home,
+                    (&fixture_home, remote_mic),
                 )
                 .await;
                 assert_eq!(result, Err(crate::Error::Control));

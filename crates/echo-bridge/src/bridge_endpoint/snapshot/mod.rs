@@ -5,6 +5,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 pub(super) use echo_camera::Shutter;
 use echo_contracts::endpoint::{GetSnapshot, MAX_SNAPSHOT_BYTES, Reply, SnapshotReply};
 pub(super) use echo_screen_server::CaptureError;
+use echo_screen_server::{CameraLink, CameraRefused};
 use serde_json::Value;
 use std::{
     future::Future,
@@ -40,6 +41,11 @@ pub(super) trait CameraSource: Send + Sync {
         true
     }
 
+    /// The native app's camera stream, when this source captures through one.
+    fn link(&self) -> Option<watch::Receiver<CameraLink>> {
+        None
+    }
+
     /// Start a fresh observation and publish its first unsafe transition.
     fn shutter(&self) -> watch::Receiver<Shutter>;
 
@@ -68,16 +74,17 @@ impl Camera {
         if !body.is_object() || serde_json::from_value::<GetSnapshot>(body).is_err() {
             return Err(invalid());
         }
-        let source = self
-            .source
-            .as_ref()
-            .filter(|source| source.available())
-            .ok_or_else(unavailable)?;
+        // No camera path is permanent; a stream the app has not attached
+        // yet is the snapshot group's retryable refusal.
+        let source = self.source.as_ref().ok_or_else(unsupported)?;
+        if !source.available() {
+            return Err(camera_busy());
+        }
         let deadline = received + CAPTURE_WINDOW;
         if Instant::now() >= deadline {
             return Err(timed_out());
         }
-        let _capture = self.capture.try_lock().map_err(|_| refusal("CAMERA_BUSY"))?;
+        let _capture = self.capture.try_lock().map_err(|_| camera_busy())?;
         let (sample, shutter) = capture(source.as_ref(), deadline, trace).await?;
         let (snapshot, sampled_at_ms) = sample.encode()?;
         let reply = prepare(snapshot, sampled_at_ms);
@@ -131,8 +138,8 @@ fn shutter_open(state: Shutter) -> Result<(), Reply> {
 
 fn capture_failure(error: CaptureError, trace: Option<&Trace>) -> Reply {
     match error {
-        CaptureError::Unavailable => unavailable(),
-        CaptureError::Busy => refusal("CAMERA_BUSY"),
+        // A stream that detached mid-capture is retryable like contention.
+        CaptureError::Unavailable | CaptureError::Busy => camera_busy(),
         CaptureError::PermissionDenied => {
             if let Some(trace) = trace {
                 let _ = trace.clone().record(
@@ -192,6 +199,32 @@ fn camera_error() -> Reply {
     refusal("CAMERA_ERROR")
 }
 
-fn unavailable() -> Reply {
+fn unsupported() -> Reply {
     refusal("NOT_SUPPORTED")
+}
+
+fn camera_busy() -> Reply {
+    refusal("CAMERA_BUSY")
+}
+
+/// Trace the native camera stream from its first state: attach, detach and the
+/// fixed reason of the latest refused attach. Never a nonce, key or address.
+pub(super) async fn observe(source: Option<Arc<dyn CameraSource>>, trace: Option<Trace>) {
+    if let Some(mut link) = source.and_then(|source| source.link()) {
+        loop {
+            let now = *link.borrow_and_update();
+            let refused = now.refused.map(|reason| match reason {
+                CameraRefused::Forbidden => "forbidden",
+                CameraRefused::Unauthorized => "unauthorized",
+                CameraRefused::Conflict => "conflict",
+            });
+            let session = if now.attached { "attached" } else { "detached" };
+            let fields = serde_json::json!({ "session": session, "refused": refused });
+            super::note(trace.as_ref(), "endpoint.camera", fields);
+            if link.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+    std::future::pending::<()>().await;
 }

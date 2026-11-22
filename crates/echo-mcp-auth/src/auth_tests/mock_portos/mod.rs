@@ -286,6 +286,10 @@ fn messages(request: &Request, state: &mut State) -> (u16, Value) {
         state.endpoint.refusals.push("requestId answers no open command".into());
         return (404, json!({"code":"NOT_FOUND"}));
     }
+    // Port OS has no route for the device until discovery lists it.
+    if request_id(request).is_none() && state.endpoint.route_delay > 0 {
+        return (404, json!({"code":"NOT_FOUND"}));
+    }
     let now_ms = wall_now(state)
         .ok()
         .and_then(|now| i64::try_from(now).ok())

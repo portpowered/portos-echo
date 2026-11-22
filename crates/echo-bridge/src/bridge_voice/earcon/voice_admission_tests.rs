@@ -378,7 +378,7 @@ pub(crate) async fn endpoint_fixture(
     stream: tokio::io::DuplexStream,
     cancelled: impl Future<Output = ()>,
     (ready, stale): (&tokio::sync::Notify, &tokio::sync::Notify),
-    home: &std::path::Path,
+    (home, remote_mic): (&std::path::Path, bool),
 ) -> Result<(), Error> {
     use echo_link::LinkConnector as _;
     let mut config = echo_config::BridgeConfig::from_toml_str(include_str!(concat!(
@@ -400,7 +400,7 @@ pub(crate) async fn endpoint_fixture(
     let retained = super::super::retained_link::Retained::new(connector);
     let mut link = retained.connect().await.unwrap();
     link.enable_capture(30).await.unwrap();
-    let remote = remote_admission::Options::retained(true);
+    let remote = remote_admission::Options::retained(remote_mic);
     let kill = home.join("voice-disabled");
     let mut configured = options();
     configured.kill_path = Some(&kill);
