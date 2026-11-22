@@ -4,6 +4,8 @@ Port OS Echo turns a rooted Amazon Echo Show 8 (2nd gen, 2021, codename `athena`
 Say **"Computer"** and talk: ChatGPT Live answers out loud, a delegated Codex agent handles requests that need tools
 or live data, Port OS controls your home, and an animated character shows what the assistant is doing.
 
+**See it working:** [demo video on YouTube](https://youtube.com/shorts/Dgh7j3M_-kc).
+
 > [!CAUTION]
 > **Early software.** v0.1.0 has been tested on one Echo Show 8. Rooting wipes the Echo, unlocks its bootloader and
 > can brick it. Read what you run; there is no warranty. See [Known limits](#known-limits).
