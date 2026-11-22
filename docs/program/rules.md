@@ -34,6 +34,14 @@ check exists, the coordinator checks it by hand.
   async-runtime dependencies. `echo-wyoming`, `echo-audio` and `echo-live` never depend on `agent-*` or `mcp-*`.
   Port OS OAuth types live only in `echo-mcp-auth`; the ChatGPT sign-in lives only in `echo-chatgpt-auth`.
   Only `echo-mcp-auth` may depend on OAuth packages (`oauth2`, `openidconnect`).
+  [Single-binary plan section 2.4](../design/2026-11-22-single-binary-plan.md#24-world-state-and-subsystems)
+  adds three rules to `lint-deps`. R5 bars `echo-sub-*` from depending on other subsystems or any service.
+  R6 bars `echo-svc-*` from depending on any subsystem or another service. Both rules compare canonical package
+  names and skip equal-name edges. R7 bars `echo-core-api` from depending on either family, the named external
+  I/O packages, and the known workspace I/O implementations listed in `lint_deps.rs`. Review checks the purity
+  of new API dependencies and that only the session controller composes the implementations through the API.
+  R5–R7 check direct normal, dev and build declarations. Build dependencies are direct edges too.
+  R1–R4 still check direct normal and build declarations.
 - **No C of ours.** The Echo runs echo-dot-assist's `hassmic` at a pinned commit. A change it needs goes upstream
   as a pull request, never as a patch carried here.
 - **Scripts and the screen page:** `shellcheck` and `shfmt` for `scripts/`; `prettier`, `eslint` and
