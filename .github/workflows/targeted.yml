@@ -6,6 +6,10 @@ on:
         description: Exact implementation commit to verify
         required: true
         type: string
+      selection:
+        description: Witness selection (all or a job name)
+        default: all
+        type: string
 permissions:
   contents: read
 defaults:
@@ -13,6 +17,7 @@ defaults:
     shell: sh
 jobs:
   socket:
+    if: ${{ inputs.selection == 'all' || inputs.selection == 'socket' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -30,9 +35,11 @@ jobs:
           git rev-parse HEAD
           cargo test --locked -p echo-device -p echo-wyoming -p echo-bridge --lib socket_policy_ -- --nocapture
           cargo test --locked -p echo-wyoming --lib refused_attempts_follow_capped_backoff_and_timeout
+          cargo test --locked -p echo-wyoming --lib eof_partial_and_malformed_generations_reconnect_without_replay
           cargo build --locked -p echo-bridge --bin echo-bridge
           cargo nextest run -p echo-bridge --test bridge_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate -E 'test(t3_a1_socket_)'
   scenarios:
+    if: ${{ inputs.selection == 'all' || inputs.selection == 'scenarios' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -57,6 +64,7 @@ jobs:
           path: /tmp/echo-lab*/**/report.json
           if-no-files-found: warn
   host:
+    if: ${{ inputs.selection == 'all' || inputs.selection == 'host' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -82,6 +90,7 @@ jobs:
           path: ${{ runner.temp }}/fork-w1/report.json
           if-no-files-found: warn
   android:
+    if: ${{ inputs.selection == 'all' || inputs.selection == 'android' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -107,7 +116,7 @@ jobs:
           tools=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin
           entry=$(find "$target/build" -path '*/echo-device-sys-*/out/hassmic_main.c' -print -quit)
           test -n "$entry"
-          "$tools/armv7a-linux-androideabi24-clang" -E -Ithird_party/hassmic/src/include -Ithird_party/hassmic/src/hassmic -DVERSION='\"check\"' -DBUILD='\"check\"' "$entry" > "$RUNNER_TEMP/hassmic.i"
+          "$tools/armv7a-linux-androideabi24-clang" -E -Ithird_party/hassmic/src/include -Ithird_party/hassmic/src/hassmic -DVERSION='"check"' -DBUILD='"check"' "$entry" > "$RUNNER_TEMP/hassmic.i"
           grep -F 'int unix_listener = echo_hassmic_prepare_listener();' "$RUNNER_TEMP/hassmic.i"
           grep -F 'int ls = unix_listener;' "$RUNNER_TEMP/hassmic.i"
           grep -F "case 'p': port = atoi(optarg); break;" "$RUNNER_TEMP/hassmic.i"
@@ -115,6 +124,7 @@ jobs:
           "$tools/llvm-strings" "$target/echo-bridge" | grep -oF '/data/misc/portos-echo-device/wyoming.sock' | sort -u
           printf '%s\n' 'armv7-linux-androideabi: Android generated entry has no TCP Wyoming bind, including with legacy -p 16700'
   lint:
+    if: ${{ inputs.selection == 'all' || inputs.selection == 'lint' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -135,6 +145,8 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           target: lint-rules
+      - name: Provision locked screen npm cache
+        run: npm --prefix web/screen ci --offline=false
       - name: Run the repository lint gate
         run: |
           git rev-parse HEAD
