@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 21
+last modified: 2026, november, 22
 status: active; Windows/Linux installer and Linux source guide
 ---
 
@@ -16,7 +16,8 @@ Start with the [configuration guide](configuration.md), especially voice access 
 
 You need a probed, rooted Echo with the project's [hassmic fork](https://github.com/portpowered/echo-dot-assist)
 already installed, Wyoming mode with `-D`, and working root adb access. This guide does not unlock the device,
-change firmware or install hassmic. Follow the fork's installation procedure separately with the owner's approval.
+change firmware or install hassmic. Follow the fork's own installation procedure first, as summarized in
+[step 1 of the README](../README.md#1-root-your-echo-and-install-hassmic), including its `hassmic.conf` lines.
 The configured wake word is **Computer**; the [baselines](program/baselines.md) record the supported device facts.
 Keep Wyoming restricted to loopback for this placement.
 
@@ -37,7 +38,9 @@ All device and account commands below are operator actions. Factory workers only
 
 ### Install a release with echo-setup
 
-Prepare a local `bridge.toml` using [Prepare and install configuration](#prepare-and-install-configuration).
+Without `--config`, the installer uses the release's example configuration: the public Port OS endpoints and the
+release's default screen pack. To customize it, for example to set `codex.time_zone`, prepare a local `bridge.toml`
+using [Prepare and install configuration](#prepare-and-install-configuration) and pass `--config`.
 Choose a published version from [GitHub Releases](https://github.com/portpowered/portos-echo/releases).
 Replace `VERSION` with that version number throughout. Download the installer and its paired
 `SHA256SUMS`, then compare the hash before running the installer.
