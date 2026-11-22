@@ -203,7 +203,9 @@ impl Satellite {
         let dir = TempDir::new();
         let root = &dir.0;
         let alias = root.join("hassmic");
-        fs::copy(&bridge, &alias).unwrap_or_else(|error| panic!("prebuilt {}: {error}", bridge.display()));
+        fs::copy(&bridge, &alias)
+            .map_err(|error| format!("prebuilt {}: {error}", bridge.display()))
+            .expect("copy the prebuilt bridge ELF");
         fs::write(root.join("capture"), [0x0a, 0x02, 0xf6, 0xfd].repeat(400)).unwrap();
         fs::write(root.join("addrs"), "127.0.0.1\n").unwrap();
         fs::create_dir(root.join("state")).unwrap();
