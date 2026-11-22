@@ -1,6 +1,9 @@
-# Port OS Echo
+# Port OS Echo: ChatGPT on Amazon Echo Show
 
-Port OS Echo turns a rooted Amazon Echo Show 8 (2nd gen, 2021, codename `athena`) into a voice assistant.
+Port OS Echo puts ChatGPT on an Amazon Echo Show 8 (2nd gen, 2021, codename `athena`) in place of Alexa.
+Read [why and how it works](https://portoperatingsystem.com/blog/chatgpt-on-alexa/) or follow the
+[step-by-step guide](https://portoperatingsystem.com/blog/how-to-put-chatgpt-on-an-echo-show/).
+
 Say **"Computer"** and talk: ChatGPT Live answers out loud, a delegated Codex agent handles requests that need tools
 or live data, Port OS controls your home, and an animated character shows what the assistant is doing.
 
