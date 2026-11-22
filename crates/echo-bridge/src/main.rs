@@ -3,7 +3,7 @@ use std::{ffi::OsString, io::Write, process::ExitCode};
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os();
-    if args.next().is_some_and(|program| echo_device::staged_host(&program)) {
+    if args.next().is_some_and(|program| echo_device::satellite_name(&program)) {
         return device(args);
     }
     let mut args = args.peekable();
