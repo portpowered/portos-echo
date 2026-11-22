@@ -26,6 +26,16 @@ path = "crates/echo-camera"
 kind = "ffi"
 
 [[crate]]
+name = "echo-device-sys"
+path = "crates/echo-device-sys"
+kind = "ffi"
+
+[[crate]]
+name = "echo-device"
+path = "crates/echo-device"
+kind = "lib"
+
+[[crate]]
 name = "xtask"
 path = "xtask"
 kind = "tool"

@@ -798,6 +798,7 @@ dependencies = [
  "echo-config",
  "echo-contracts",
  "echo-delegation",
+ "echo-device",
  "echo-lab",
  "echo-link",
  "echo-live",
@@ -898,6 +899,20 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "echo-device"
+version = "0.1.0"
+dependencies = [
+ "echo-device-sys",
+]
+
+[[package]]
+name = "echo-device-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
