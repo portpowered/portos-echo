@@ -2,6 +2,7 @@
 #![cfg(target_os = "linux")]
 
 mod api;
+mod clock;
 mod control;
 mod link;
 mod noise;
@@ -78,27 +79,29 @@ impl MuseLink {
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| ServiceError::NotReady)?;
         let pairing = pairing::Pairing::open(pairing_path)?;
         let connector = api::Network::new(trust::client_config(ca_pem)?)?;
-        Ok(Self::spawn(&runtime, pairing, connector, link::OsRandom::new()))
+        Ok(Self::spawn(
+            &runtime,
+            pairing,
+            connector,
+            link::OsRandom::new(),
+            clock::EpochClock,
+        ))
     }
 
     fn spawn(
         runtime: &tokio::runtime::Handle,
-        pairing: pairing::Pairing,
+        mut pairing: pairing::Pairing,
         connector: impl api::Connector,
         random: impl link::Random,
+        clock: impl clock::Clock,
     ) -> Self {
         let (state_sink, state) = watch::channel((ServiceState::Connecting, None));
-        let (stop, mut stop_requested) = watch::channel(false);
+        let (stop, stop_requested) = watch::channel(false);
         let worker = runtime.spawn(async move {
-            // The connection future only borrows the pairing. Release the lease before publishing exit.
-            let result = tokio::select! {
-                biased;
-                _ = stop_requested.changed() => Ok(()),
-                result = link::run(&pairing, &connector, &random, &state_sink) => result,
-            };
+            let result = link::run(&mut pairing, &connector, &random, &clock, &state_sink, stop_requested).await;
             drop(pairing);
             let status = match result {
-                Ok(()) => (ServiceState::Stopped, None),
+                Ok(status) => (status, None),
                 Err(error) => (ServiceState::Disconnected, Some(error)),
             };
             state_sink.send_replace(status);
@@ -130,11 +133,7 @@ impl MuseLink {
 
 impl MuseService for MuseLink {
     fn state(&self) -> ServiceState {
-        if *self.stop.borrow() {
-            ServiceState::Stopped
-        } else {
-            self.state.borrow().0
-        }
+        self.state.borrow().0
     }
 
     async fn submit(&self, _task: Task) -> Result<TaskId, ServiceError> {

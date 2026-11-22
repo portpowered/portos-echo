@@ -1,3 +1,4 @@
+mod auth;
 mod fake;
 
 use std::{os::unix::fs::PermissionsExt, path::Path};

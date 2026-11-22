@@ -2,7 +2,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use echo_contracts::secret::Secret;
 use futures_util::{Sink, Stream};
-use reqwest::{Client, Url, header};
+use reqwest::{Client, Response, StatusCode, Url, header};
 use rustls::ClientConfig;
 use serde::Deserialize;
 use serde_json::Value;
@@ -14,15 +14,26 @@ use tokio_tungstenite::{
 
 use crate::{
     ServiceError,
-    pairing::{Pairing, parse_url, valid_token},
+    pairing::{Pairing, Tokens, parse_url, refresh_value, valid_token},
 };
 
-const MAX_LEASE_JSON: usize = 256 * 1024;
+const MAX_API_JSON: usize = 256 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(super) struct Lease {
     pub(super) vm_id: String,
     pub(super) token: Secret<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UpgradeError {
+    LeaseRejected,
+    Unavailable,
+}
+
+pub(super) enum RefreshError {
+    Revoked,
+    Unavailable,
 }
 
 pub(super) trait Connector: Send + Sync + 'static {
@@ -33,7 +44,8 @@ pub(super) trait Connector: Send + Sync + 'static {
         &self,
         pairing: &Pairing,
         lease: &Lease,
-    ) -> impl Future<Output = Result<Self::Socket, ServiceError>> + Send;
+    ) -> impl Future<Output = Result<Self::Socket, UpgradeError>> + Send;
+    fn refresh(&self, pairing: &Pairing) -> impl Future<Output = Result<Tokens, RefreshError>> + Send;
 }
 
 pub(super) struct Network {
@@ -54,6 +66,7 @@ impl Network {
             .https_only(true)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|_| ServiceError::TrustUnavailable)?;
@@ -68,41 +81,26 @@ impl Connector for Network {
     type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
     async fn lookup(&self, pairing: &Pairing) -> Result<Lease, ServiceError> {
-        let mut url = pairing.api_url.clone();
-        url.path_segments_mut()
-            .map_err(|()| ServiceError::UnsafePairing)?
-            .pop_if_empty()
-            .push("fetch_vms");
-        let mut response = self
+        let url = api_endpoint(pairing, &["fetch_vms"])?;
+        let response = self
             .api
             .get(url)
-            .bearer_auth(pairing.access_token.expose())
+            .bearer_auth(pairing.access_token())
             .header("X-API-Version", "1.0.0")
             .send()
             .await
             .map_err(|_| ServiceError::PeerUnavailable)?;
-        if !response.status().is_success() {
-            return Err(ServiceError::PeerUnavailable);
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| ServiceError::PeerUnavailable)? {
-            if chunk.len() > MAX_LEASE_JSON - body.len() {
-                return Err(ServiceError::PeerUnavailable);
-            }
-            body.extend_from_slice(&chunk);
-        }
-        let document = serde_json::from_slice(&body).map_err(|_| ServiceError::PeerUnavailable)?;
-        select_lease(document).ok_or(ServiceError::PeerUnavailable)
+        select_lease(read_json(response).await?).ok_or(ServiceError::PeerUnavailable)
     }
 
-    async fn upgrade(&self, pairing: &Pairing, lease: &Lease) -> Result<Self::Socket, ServiceError> {
+    async fn upgrade(&self, pairing: &Pairing, lease: &Lease) -> Result<Self::Socket, UpgradeError> {
         let url = vm_url(pairing.noise_url.clone(), &lease.vm_id);
         let mut request = url
             .as_str()
             .into_client_request()
-            .map_err(|_| ServiceError::PeerUnavailable)?;
+            .map_err(|_| UpgradeError::Unavailable)?;
         let mut authorization = header::HeaderValue::from_str(&format!("Bearer {}", lease.token.expose()))
-            .map_err(|_| ServiceError::PeerUnavailable)?;
+            .map_err(|_| UpgradeError::Unavailable)?;
         authorization.set_sensitive(true);
         request.headers_mut().insert(header::AUTHORIZATION, authorization);
         let config = WebSocketConfig::default()
@@ -116,8 +114,69 @@ impl Connector for Network {
             Some(tokio_tungstenite::Connector::Rustls(self.tls.clone())),
         )
         .await
-        .map_err(|_| ServiceError::PeerUnavailable)?;
+        .map_err(upgrade_error)?;
         Ok(socket)
+    }
+
+    async fn refresh(&self, pairing: &Pairing) -> Result<Tokens, RefreshError> {
+        let url = api_endpoint(pairing, &["device_token", "refresh"]).map_err(|_| RefreshError::Unavailable)?;
+        let token = refresh_value(pairing.refresh_token()).ok_or(RefreshError::Unavailable)?;
+        let response = self
+            .api
+            .post(url)
+            .bearer_auth(format!("hatch_refresh:{token}"))
+            .json(&serde_json::json!({"device_id": pairing.node_id().expose()}))
+            .send()
+            .await
+            .map_err(|_| RefreshError::Unavailable)?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(RefreshError::Revoked);
+        }
+        let body: RefreshResponse = read_json(response).await.map_err(|_| RefreshError::Unavailable)?;
+        let tokens = match body {
+            RefreshResponse::Wrapped { payload } => payload,
+            RefreshResponse::Direct(tokens) => tokens,
+        };
+        tokens.valid().then_some(tokens).ok_or(RefreshError::Unavailable)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RefreshResponse {
+    Wrapped { payload: Tokens },
+    Direct(Tokens),
+}
+
+fn api_endpoint(pairing: &Pairing, path: &[&str]) -> Result<Url, ServiceError> {
+    let mut url = pairing.api_url.clone();
+    url.path_segments_mut()
+        .map_err(|()| ServiceError::UnsafePairing)?
+        .pop_if_empty()
+        .extend(path.iter().copied());
+    Ok(url)
+}
+
+async fn read_json<T: for<'de> Deserialize<'de>>(mut response: Response) -> Result<T, ServiceError> {
+    if !response.status().is_success() {
+        return Err(ServiceError::PeerUnavailable);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| ServiceError::PeerUnavailable)? {
+        if chunk.len() > MAX_API_JSON - body.len() {
+            return Err(ServiceError::PeerUnavailable);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|_| ServiceError::PeerUnavailable)
+}
+
+fn upgrade_error(error: Error) -> UpgradeError {
+    match error {
+        Error::Http(response) if matches!(response.status(), StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => {
+            UpgradeError::LeaseRejected
+        }
+        _ => UpgradeError::Unavailable,
     }
 }
 

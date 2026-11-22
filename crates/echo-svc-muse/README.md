@@ -14,6 +14,17 @@ The file must be a regular, singly linked file owned by the process user, with
 mode 0600 in an owner-controlled directory. A sibling lock holds exclusive
 ownership for the lifetime of the service.
 
+The service selects the first usable default VM or falls back to the first
+usable lease. A WebSocket upgrade rejected with HTTP 401 or 403 gets one fresh
+lease lookup and one replacement upgrade within that attempt. Failed attempts
+back off before starting a new lookup.
+
+At a persisted access-token age of three hours, the service releases the old
+link, atomically saves both replacement tokens and their timestamp, and
+registers again. An incomplete or uncertain refresh ends that instance and
+preserves the previously committed pairing. A refresh rejected with HTTP 401
+removes the pairing and leaves the service in `PairingRemoved`.
+
 The crate is exercised through its local Rust boundary and real loopback HTTPS,
 WebSocket and encrypted daemon framing. Use the component suite on Linux:
 

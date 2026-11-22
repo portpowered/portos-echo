@@ -6,7 +6,7 @@ use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use rustls::{ServerConfig, pki_types::PrivatePkcs8KeyDer};
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader},
+    io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader},
     net::{TcpListener, TcpStream},
     time::Instant,
 };
@@ -14,13 +14,15 @@ use tokio_rustls::{TlsAcceptor, server::TlsStream};
 use tokio_tungstenite::{
     WebSocketStream, accept_hdr_async,
     tungstenite::{
-        Message,
+        Error, Message,
         handshake::server::{Request as WsRequest, Response as WsResponse},
+        http::StatusCode,
     },
 };
 use x25519_dalek::StaticSecret;
 
 use crate::{
+    clock::{Clock as _, EpochClock},
     control,
     noise::{Session, responder::Responder},
     wire::{Assembler, Body, Frame, Packetizer, Request, Response, decode_request, encode_response},
@@ -93,6 +95,7 @@ impl Fake {
         let directory = tempfile::tempdir().unwrap();
         let pairing = directory.path().join("pairing.json");
         let mut record = pairing_record();
+        record["access_token_saved_at"] = json!(EpochClock.now());
         record["noise_host"] = json!(vm_listener.local_addr().unwrap().to_string());
         let mut api_url = reqwest::Url::parse("https://127.0.0.1").unwrap();
         api_url.set_port(Some(api.local_addr().unwrap().port())).unwrap();
@@ -117,48 +120,111 @@ impl Fake {
     }
 
     pub(super) async fn lookup(&self) {
+        self.leases(
+            "synthetic-access",
+            json!([
+                {"vm_ws_url": "wss://127.0.0.1:1", "vm_auth_token": "synthetic-other", "vm_id": "other"},
+                {"vm_url": "wss://127.0.0.1:1", "vm_auth_token": "synthetic-default", "vm_id": "vm 1&x", "default": true}
+            ]),
+        )
+        .await;
+    }
+
+    pub(super) async fn leases(&self, token: &str, leases: Value) {
+        let (socket, headers) = self.api_request("GET /fetch_vms", token).await;
+        assert!(
+            headers
+                .lines()
+                .any(|line| line.eq_ignore_ascii_case("x-api-version: 1.0.0"))
+        );
+        api_reply(socket, 200, json!({"vm_list": leases})).await;
+    }
+
+    pub(super) async fn refresh(&self, status: u16, body: Value) {
+        let socket = self.read_refresh().await;
+        api_reply(socket, status, body).await;
+    }
+
+    async fn read_refresh(&self) -> BufReader<TlsStream<TcpStream>> {
+        let (mut socket, headers) = self
+            .api_request("POST /device_token/refresh", "hatch_refresh:synthetic-refresh")
+            .await;
+        let length = header(&headers, "content-length").parse::<usize>().unwrap();
+        assert!((1..=4096).contains(&length));
+        let mut data = vec![0; length];
+        socket.read_exact(&mut data).await.unwrap();
+        assert_eq!(header(&headers, "content-type"), "application/json");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&data).unwrap(),
+            json!({"device_id": "gadget-fixture"})
+        );
+        socket
+    }
+
+    async fn api_request(&self, target: &str, token: &str) -> (BufReader<TlsStream<TcpStream>>, String) {
         let mut socket = BufReader::new(self.accept_api().await.unwrap());
-        let mut request = String::new();
+        let mut headers = String::new();
         loop {
-            let previous = request.len();
-            assert!(socket.read_line(&mut request).await.unwrap() > 0);
-            assert!(request.len() <= 4096);
-            if &request[previous..] == "\r\n" {
+            let previous = headers.len();
+            assert!(socket.read_line(&mut headers).await.unwrap() > 0);
+            assert!(headers.len() <= 4096);
+            if &headers[previous..] == "\r\n" {
                 break;
             }
         }
-        assert!(request.starts_with("GET /fetch_vms HTTP/1.1\r\n"));
-        let request = request.to_ascii_lowercase();
-        assert!(request.contains("\r\nauthorization: bearer synthetic-access\r\n"));
-        assert!(request.contains("\r\nx-api-version: 1.0.0\r\n"));
-        assert!(request.contains("\r\nuser-agent: musegadget/"));
-        let body = json!({"vm_list": [
-            {"vm_ws_url": "wss://127.0.0.1:1", "vm_auth_token": "synthetic-other", "vm_id": "other"},
-            {"vm_url": "wss://127.0.0.1:1", "vm_auth_token": "synthetic-default", "vm_id": "vm 1&x", "default": true}
-        ]})
-        .to_string();
-        let reply = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        socket.get_mut().write_all(reply.as_bytes()).await.unwrap();
-        socket.get_mut().shutdown().await.unwrap();
+        assert_eq!(headers.lines().next(), Some(format!("{target} HTTP/1.1").as_str()));
+        assert_eq!(header(&headers, "authorization"), format!("Bearer {token}"));
+        assert!(header(&headers, "user-agent").starts_with("musegadget/"));
+        (socket, headers)
     }
 
     pub(super) async fn vm(&self) -> Vm {
+        self.upgrade("vm%201%26x", "synthetic-default", None).await.unwrap()
+    }
+
+    pub(super) async fn upgrade(&self, id: &str, token: &str, reject: Option<StatusCode>) -> Option<Vm> {
         let socket = self.accept_vm().await.unwrap();
         let ws = accept_hdr_async(socket, |request: &WsRequest, response: WsResponse| {
             assert_eq!(
                 request.uri().path_and_query().unwrap().as_str(),
-                "/v1/noise?vm_id=vm%201%26x"
+                format!("/v1/noise?vm_id={id}")
             );
-            assert_eq!(request.headers()["authorization"], "Bearer synthetic-default");
+            assert_eq!(request.headers()["authorization"], format!("Bearer {token}"));
+            if let Some(status) = reject {
+                let mut response = tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(None);
+                *response.status_mut() = status;
+                return Err(response);
+            }
             Ok(response)
         })
-        .await
-        .unwrap();
-        Vm::handshake(ws).await
+        .await;
+        match reject {
+            Some(status) => {
+                assert!(matches!(ws, Err(Error::Http(response)) if response.status() == status));
+                None
+            }
+            None => Some(Vm::handshake(ws.unwrap()).await),
+        }
     }
+}
+
+fn header<'a>(headers: &'a str, name: &str) -> &'a str {
+    headers
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find_map(|(key, value)| key.eq_ignore_ascii_case(name).then_some(value.trim()))
+        .unwrap()
+}
+
+async fn api_reply(mut socket: BufReader<TlsStream<TcpStream>>, status: u16, body: Value) {
+    let body = body.to_string();
+    let reply = format!(
+        "HTTP/1.1 {status} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let socket = socket.get_mut();
+    socket.write_all(reply.as_bytes()).await.unwrap();
+    socket.shutdown().await.unwrap();
 }
 
 type Socket = WebSocketStream<TlsStream<TcpStream>>;

@@ -4,14 +4,15 @@ use futures_util::{SinkExt, StreamExt};
 use ring::rand::{SecureRandom, SystemRandom};
 use tokio::{
     sync::watch,
-    time::{Instant, timeout},
+    time::{Instant, sleep, timeout},
 };
 use tokio_tungstenite::tungstenite::Message;
 use x25519_dalek::StaticSecret;
 
 use crate::{
     ServiceError, ServiceState,
-    api::Connector,
+    api::{Connector, RefreshError, UpgradeError},
+    clock::Clock,
     control,
     noise::{Initiator, Session},
     pairing::Pairing,
@@ -19,6 +20,9 @@ use crate::{
 };
 
 const START_TIMEOUT: Duration = Duration::from_secs(15);
+const FIRST_RETRY: Duration = Duration::from_secs(2);
+const MAX_RETRY: Duration = Duration::from_secs(60);
+const ROTATE_AFTER: u64 = 3 * 60 * 60;
 type State = watch::Sender<(ServiceState, Option<ServiceError>)>;
 
 pub(super) trait Random: Send + Sync + 'static {
@@ -40,17 +44,105 @@ impl Random for OsRandom {
 }
 
 pub(super) async fn run<C: Connector>(
+    pairing: &mut Pairing,
+    connector: &C,
+    random: &impl Random,
+    clock: &impl Clock,
+    state: &State,
+    mut stop: watch::Receiver<bool>,
+) -> Result<ServiceState, ServiceError> {
+    let mut delay = FIRST_RETRY;
+    loop {
+        if *stop.borrow() || stop.has_changed().is_err() {
+            return Ok(ServiceState::Stopped);
+        }
+        state.send_replace((ServiceState::Connecting, None));
+        let mut rotates_at = pairing.saved_at().saturating_add(ROTATE_AFTER);
+        if clock.now() >= rotates_at {
+            if rotate(pairing, connector, clock).await? == Rotation::Removed {
+                return Ok(ServiceState::PairingRemoved);
+            }
+            if *stop.borrow() || stop.has_changed().is_err() {
+                return Ok(ServiceState::Stopped);
+            }
+            rotates_at = pairing.saved_at().saturating_add(ROTATE_AFTER);
+        }
+        let error = tokio::select! {
+            biased;
+            _ = stop.changed() => return Ok(ServiceState::Stopped),
+            () = clock.wait_until(rotates_at) => continue,
+            error = run_attempt(pairing, connector, random, state) => error,
+        };
+        if state.borrow().0 == ServiceState::Registered {
+            delay = FIRST_RETRY;
+        }
+        state.send_replace((ServiceState::Disconnected, Some(error)));
+        tokio::select! {
+            biased;
+            _ = stop.changed() => return Ok(ServiceState::Stopped),
+            () = clock.wait_until(rotates_at) => {}
+            () = sleep(delay) => delay = (delay * 2).min(MAX_RETRY),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum Rotation {
+    Replaced,
+    Removed,
+}
+
+async fn rotate(
+    pairing: &mut Pairing,
+    connector: &impl Connector,
+    clock: &impl Clock,
+) -> Result<Rotation, ServiceError> {
+    // Once the request is sent, finish handling its response before honoring stop.
+    match connector.refresh(pairing).await {
+        Ok(tokens) => {
+            pairing.replace_tokens(tokens, clock.now())?;
+            Ok(Rotation::Replaced)
+        }
+        Err(RefreshError::Revoked) => {
+            pairing.remove()?;
+            Ok(Rotation::Removed)
+        }
+        Err(RefreshError::Unavailable) => Err(ServiceError::PeerUnavailable),
+    }
+}
+
+async fn run_attempt<C: Connector>(
     pairing: &Pairing,
     connector: &C,
     random: &impl Random,
     state: &State,
-) -> Result<(), ServiceError> {
-    let mut link = timeout(START_TIMEOUT, establish(pairing, connector, random))
-        .await
-        .map_err(|_| ServiceError::PeerUnavailable)??;
+) -> ServiceError {
+    let result = timeout(START_TIMEOUT, establish(pairing, connector, random)).await;
+    let mut link = match result {
+        Ok(Ok(link)) => link,
+        Ok(Err(error)) => return error,
+        Err(_) => return ServiceError::PeerUnavailable,
+    };
     state.send_replace((ServiceState::Registered, None));
     loop {
-        link.receive_control().await?;
+        if let Err(error) = link.receive_control().await {
+            return error;
+        }
+    }
+}
+
+async fn connect<C: Connector>(pairing: &Pairing, connector: &C) -> Result<C::Socket, ServiceError> {
+    let lease = connector.lookup(pairing).await?;
+    match connector.upgrade(pairing, &lease).await {
+        Ok(socket) => Ok(socket),
+        Err(UpgradeError::Unavailable) => Err(ServiceError::PeerUnavailable),
+        Err(UpgradeError::LeaseRejected) => {
+            let fresh = connector.lookup(pairing).await?;
+            connector
+                .upgrade(pairing, &fresh)
+                .await
+                .map_err(|_| ServiceError::PeerUnavailable)
+        }
     }
 }
 
@@ -59,8 +151,7 @@ async fn establish<C: Connector>(
     connector: &C,
     random: &impl Random,
 ) -> Result<ControlLink<C::Socket>, ServiceError> {
-    let lease = connector.lookup(pairing).await?;
-    let mut socket = connector.upgrade(pairing, &lease).await?;
+    let mut socket = connect(pairing, connector).await?;
     let mut bytes = [0; 32];
     random.fill(&mut bytes)?;
     let (handshake, first) = Initiator::start(pairing.static_key.expose(), StaticSecret::from(bytes), &[], &[])
@@ -80,7 +171,7 @@ async fn establish<C: Connector>(
         .send(Message::binary(third))
         .await
         .map_err(|_| ServiceError::PeerUnavailable)?;
-    let mut link = ControlLink::open(socket, noise, pairing.node_id.expose()).await?;
+    let mut link = ControlLink::open(socket, noise, pairing.node_id().expose()).await?;
     loop {
         match link.receive_control().await? {
             Some(true) => return Ok(link),
