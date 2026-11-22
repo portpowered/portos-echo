@@ -1,8 +1,12 @@
 use std::{fs, path::Path};
 
 pub(super) fn run() -> Result<(), String> {
+    let root = Path::new("third_party");
+    if !root.try_exists().map_err(|error| format!("vendor licences: {error}"))? {
+        return Ok(());
+    }
     let mut violations = Vec::new();
-    scan(Path::new("third_party"), &mut violations).map_err(|error| format!("vendor licences: {error}"))?;
+    scan(root, &mut violations).map_err(|error| format!("vendor licences: {error}"))?;
     violations.sort();
     if violations.is_empty() {
         Ok(())

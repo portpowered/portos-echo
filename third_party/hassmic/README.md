@@ -26,14 +26,28 @@ firmware and never runs in the build or CI. The build consumes the pinned
 | `LICENSE`, `src/hassmic/*`, `src/include/*`, `devices/athena/board.c`, `devices/athena/stubs/*.syms`, `tools/mkstubs.sh.txt` | Upstream MIT. The headers also include declarations required by common satellite code whose optional implementations are absent. |
 | `src/third_party/monocypher.c`, `src/third_party/monocypher.h` | BSD-2-Clause or CC0-1.0 as declared in both files. The shared dispatcher links the arbitration helpers, which reference Monocypher even though Wyoming has no arbitration callback. |
 | `src/third_party/minimp3.h` | CC0-1.0. `sounds.c` uses it to decode the satellite's sounds. A local translation unit provides the implementation that the fork builds in its ESPHome source. |
-| Every `src/third_party/rnnoise/*` file in `sources.sha256` | Permissive BSD terms in `rnnoise/COPYING` and file-local notices. `micdenoise.c` uses the implementation, model data and FFT helpers. |
+
+`micdenoise.c` uses the following RNNoise files. `rnnoise/COPYING` carries
+the permissive BSD terms for the directory, and source files retain their
+file-local notices where present.
+
+| Files under `src/third_party/rnnoise/` | Role |
+| --- | --- |
+| `denoise.c`, `rnnoise.h` | Denoising implementation and public declarations. |
+| `rnn.c`, `rnn.h`, `rnn_data.c`, `rnn_data.h`, `tansig_table.h` | Inference, model data and activation table. |
+| `pitch.c`, `pitch.h`, `celt_lpc.c`, `celt_lpc.h` | Pitch and linear prediction. |
+| `kiss_fft.c`, `kiss_fft.h`, `_kiss_fft_guts.h` | FFT implementation and declarations. |
+| `arch.h`, `common.h`, `opus_types.h` | Internal types and platform helpers. |
 
 The common dispatcher, settings and athena band code retain their upstream
 interfaces to disabled services. The local `hassmic-stubs` provide inactive
 callbacks for ESPHome-adjacent services, Sendspin and Music Assistant, BLE
 and Improv, A2DP, Drop In, mDNS reannouncement, settings HTTP, Wi-Fi motion and
-updates. The actual service implementations, web assets, kernel code, SBC and
-aptX codecs are absent. The Wyoming module retains its `-S` XML output.
+updates. The retained headers for these interfaces are included by
+`main.c`, `settings.c`, `screen.c` or `audio_android.c`. The retained
+`ws.h` declaration lets the arbitration object use the local random helper.
+The service implementations, web assets, kernel code, SBC and aptX codecs
+are absent. The Wyoming module retains its `-S` XML output.
 
 The build selects Wyoming and disables the excluded service defaults in an
 `OUT_DIR` copy of the shared dispatcher. An explicit non-Wyoming `-P` or a
