@@ -374,11 +374,11 @@ including `gpt-6.1-sol`, receive the pin's standalone `web.run` extension instea
 provider search API. Neither form adds local fetch, process, browser or file authority.
 The complete bridge dynamic catalog remains unchanged; native direct tools are exactly that catalog.
 Every other built-in effect stays disabled and `mcp_servers` stays `{}`.
-Thread settings and local overrides set `features.code_mode.direct_only_tool_namespaces=["functions"]`
-so the bridge's own tools are direct declarations. `web.run` is not: for a code-mode-only Responses Lite
-model the live backend reserves it and refuses a client declaration with HTTP 400, which failed every
-delegated turn on the Echo with `rust-v0.171.0` (decision 2026-11-21). Search then needs `exec`, so it is
-unavailable on the Echo until `codex-code-mode-host` is built for it. Every catalog model is code-mode-only, and
+Thread settings and local overrides set `features.code_mode.direct_only_tool_namespaces=["web","functions"]`
+while search is on and `["functions"]` when it is disabled, so the bridge's own tools and `web.run` are direct
+declarations. gpt-6.2-* models reserve `web.run` and refuse a direct declaration with HTTP 400, which failed
+every delegated turn on the Echo with `rust-v0.171.0`; the bridge's default delegated model is therefore
+`gpt-6.1-sol`, which accepts it and searches (decision 2026-11-21). Every catalog model is code-mode-only, and
 `exec` needs `codex-code-mode-host`, which the Echo does not have: a tool that is only an `exec` callable
 cannot be called there. The local-fake provider opts into `supports_standalone_web_search` to reproduce
 production support.

@@ -27,9 +27,9 @@ session_idle_seconds = 120
 # Sets the operator's IANA time zone for time answers. Run `adb shell getprop persist.sys.timezone` to see the device zone.
 # time_zone = "America/Los_Angeles"
 # delegate_model selects the Codex thread model used by delegated turns.
-# Precedence: delegate_model, codex.model, agent.model, then the pin's default.
-# It does not select the realtime audio model. Unset keeps the pin's default, the measured choice
-# (decisions 2026-11-17); delegate_effort = "low" is the recommended setting.
+# Precedence: delegate_model, codex.model, agent.model, then the bridge's default, gpt-6.1-sol.
+# It does not select the realtime audio model. gpt-6.2-* models currently refuse the direct web.run
+# that search needs (HTTP 400; decisions 2026-11-21); delegate_effort = "low" is the recommended setting.
 # delegate_effort sets thread/start config.model_reasoning_effort.
 # The pin recognises none/minimal/low/medium/high/xhigh/max/ultra/persistent.
 # It also accepts custom nonempty strings; model support is checked at runtime.
