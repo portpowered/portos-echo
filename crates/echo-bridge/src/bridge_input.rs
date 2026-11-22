@@ -367,7 +367,7 @@ mod tests {
     #[test]
     fn socket_policy_selects_only_the_android_loopback_profile() {
         let local: SocketAddr = "127.0.0.1:16700".parse().unwrap();
-        let remote: SocketAddr = "192.0.2.1:16700".parse().unwrap();
+        let remote = SocketAddr::from(([192, 0, 2, 1], 16700));
         let alternate: SocketAddr = "127.0.0.1:16701".parse().unwrap();
         let ipv6: SocketAddr = "[::1]:16700".parse().unwrap();
         assert_eq!(

@@ -45,7 +45,7 @@ async fn t3_a1_socket_unix_audio_and_precedence() {
         bridge.finish(0).await;
         satellite.wait_for_log("client disconnected").await;
         observe_wire(&mut setup, &satellite).await;
-        writeln!(io::stdout(), "Unix bridge pid={pid} captured synthetic microphone audio, listeners before TCP fixture: Unix=1 TCP:16700=0, TCP accepted=0").unwrap();
+        writeln!(io::stdout(), "Unix bridge pid={pid} captured synthetic microphone audio, listeners before TCP fixture: Unix=1, TCP port 16700 count=0, TCP accepted=0").unwrap();
     }).await;
 }
 
