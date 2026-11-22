@@ -36,6 +36,9 @@ fn since_epoch() -> Duration {
 }
 
 #[cfg(test)]
+pub(super) use manual::ManualClock;
+
+#[cfg(test)]
 mod manual {
     use tokio::sync::watch;
 
@@ -66,6 +69,3 @@ mod manual {
         }
     }
 }
-
-#[cfg(test)]
-pub(super) use manual::ManualClock;

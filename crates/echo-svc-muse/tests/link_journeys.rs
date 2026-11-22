@@ -5,7 +5,9 @@
 mod auth;
 #[path = "../src/noise/mod.rs"]
 mod noise;
+#[cfg(test)]
 mod support;
+#[cfg(test)]
 #[path = "journeys/task.rs"]
 mod task;
 #[path = "../src/wire/mod.rs"]
