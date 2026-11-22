@@ -3,37 +3,83 @@ on:
   workflow_dispatch:
     inputs:
       nextest_filter:
-        description: Optional nextest -E expression
         type: string
-        required: false
-        default: ''
       scenarios:
-        description: Optional space-separated scenario stems or .yaml filenames
         type: string
-        required: false
-        default: ''
-      repeat:
-        description: Number of executions, integer 1-10
-        type: number
-        required: false
-        default: 1
-      ignored:
-        description: Include ignored tests in the filter selection
-        type: boolean
-        required: false
-        default: true
-      release_bundle:
-        description: Build and verify the distributable release bundle
-        type: boolean
-        required: false
-        default: false
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
-  targeted:
-    if: ${{ !inputs.release_bundle || inputs.nextest_filter != '' || inputs.scenarios != '' }}
+  cli:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: build-host
+      - name: Compare Help and Exercise the Vendored TCP Role
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y libopus-dev zlib1g-dev
+          cargo build --locked -p echo-bridge
+          HASSMIC_HOST_FROM_FORK=1 sh scripts/hassmic-host.sh build
+          export FORK_BINARY
+          FORK_BINARY=$(HASSMIC_HOST_FROM_FORK=1 sh scripts/hassmic-host.sh path)
+          cargo test --locked -p echo-bridge --test device_cli
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import runpy
+          from subprocess import run
+          import sys
+          from tempfile import TemporaryDirectory
+          bridge = Path("target/debug/echo-bridge").resolve()
+          fork = Path(os.environ["FORK_BINARY"])
+          for exe, args in ((fork, ["hassmic", "--help"]), (bridge, [str(bridge), "device", "--help"])):
+              result = run(args, executable=exe, capture_output=True, text=True)
+              print(f"{exe.name}: status={result.returncode} stdout={result.stdout!r}\n{result.stderr}")
+              assert result.returncode == 2 and not result.stdout
+              if exe == fork:
+                  expected = result.stderr
+              else:
+                  assert result.stderr == expected
+          notices = run([bridge, "notices"], capture_output=True, text=True, check=True).stdout
+          for label in ["hassmic", "Port OS hassmic shims", "minimp3 (CC0-1.0)", "monocypher.c", "monocypher.h", "RNNoise"]:
+              assert f"{label}\n" in notices
+              print(f"notices: {label}")
+          sys.path.insert(0, str(Path("tests").resolve()))
+          from wyoming_host import describe
+          capture = runpy.run_path("scripts/capture-wyoming.py")
+          Session = capture["Session"]
+          original = Session.__enter__.__globals__["subprocess"].Popen
+          def launch(args, **kwargs):
+              return original([str(bridge), "device", *args[1:]], **kwargs)
+          from unittest.mock import patch
+          class Device(Session):
+              def stage(self):
+                  return bridge
+          with TemporaryDirectory() as folder, patch.object(capture["subprocess"], "Popen", side_effect=launch):
+              with Device(folder) as session:
+                  info = describe(session.sock)
+                  assert info["satellite"]["name"] == "Capture Echo", info
+                  print("info satellite=Capture Echo")
+                  session.wake()
+                  assert [row["header"]["type"] for row in session.rows][-2:] == ["run-pipeline", "audio-chunk"]
+                  audio = session.rows[-1]["header"]
+                  pcm = {name: audio["data"][name] for name in ("rate", "width", "channels")}
+                  assert pcm == {"rate": 16000, "width": 2, "channels": 1}
+                  print(f"run-pipeline -> audio-chunk: {pcm}, {audio['payload_length']} bytes")
+              assert session.proc.poll() is not None
+          PY
+          echo 'TARGETED_RESULT P-CLI exit=0'
+  licence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -41,128 +87,88 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
-          target: test-sim
-          sim: 'true'
-      - name: Execute requested selections
-        id: selections
-        shell: sh
-        env:
-          TARGETED_FILTER: ${{ inputs.nextest_filter }}
-          TARGETED_SCENARIOS: ${{ inputs.scenarios }}
-          TARGETED_REPEAT: ${{ inputs.repeat }}
-          TARGETED_IGNORED: ${{ inputs.ignored }}
-        run: |
-          python - <<'PY'
-          import os
-          import re
-          import subprocess
-          import tempfile
-          from pathlib import Path
-          selection = os.environ["TARGETED_FILTER"].strip()
-          names = os.environ["TARGETED_SCENARIOS"].split()
-          count = os.environ["TARGETED_REPEAT"]
-          ignored = os.environ["TARGETED_IGNORED"]
-          if not re.fullmatch(r"(?:[1-9]|10)", count) or ignored not in ("true", "false"):
-              raise SystemExit("targeted: repeat must be 1-10 and ignored must be boolean")
-          if not selection and not names:
-              raise SystemExit("targeted: provide nextest_filter or scenarios")
-          paths = []
-          for name in names:
-              if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\.yaml)?", name):
-                  raise SystemExit("targeted: use scenario names within tests/scenarios")
-              path = Path("tests/scenarios") / (name if name.endswith(".yaml") else name + ".yaml")
-              if not path.is_file() or path.resolve().parent != Path("tests/scenarios").resolve():
-                  raise SystemExit("targeted: missing or unsafe scenario")
-              paths.append(path)
-          subprocess.run(["cargo", "build", "--locked", "-p", "echo-lab", "-p", "echo-bridge",
-                          "-p", "echo-muse-bridge", "--bins"], check=True)
-          report_root = Path(tempfile.mkdtemp(prefix="targeted-reports-", dir=os.environ["RUNNER_TEMP"])).resolve()
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              print(f"report_root={report_root}", file=output)
-          failed = False
-          for number in range(1, int(count) + 1):
-              code = 0
-              if selection:
-                  command = ["cargo", "nextest", "run", "--locked", "--workspace", "--all-targets",
-                             "--config-file", ".github/nextest.toml", "--profile", "ci",
-                             "--no-tests", "fail", "-E", selection]
-                  if ignored == "true":
-                      command += ["--run-ignored", "all"]
-                  code = subprocess.run(command).returncode
-              for index, path in enumerate(paths):
-                  parent = report_root / ("repeat-" + str(number))
-                  parent.mkdir(parents=True, exist_ok=True)
-                  destination = parent / (str(index) + "-" + path.stem)
-                  result = subprocess.run(["target/debug/echo-lab", "run", str(path),
-                                           "--driver", "sim", "--out", str(destination)]).returncode
-                  if result and not code:
-                      code = result
-              print(f"TARGETED_RESULT repeat={number} exit={code}", flush=True)
-              failed = failed or code != 0
-          raise SystemExit(1 if failed else 0)
-          PY
-      - name: Upload echo-lab reports
-        if: always() && steps.selections.outputs.report_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+          target: lint-rules
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
         with:
-          name: targeted-reports-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.selections.outputs.report_root }}
-          if-no-files-found: ignore
-          retention-days: 3
-  release-bundle:
-    if: ${{ inputs.release_bundle }}
-    runs-on: ubuntu-24.04
-    # Existing standalone Codex job allows 180 minutes for a cold build.
-    timeout-minutes: 240
+          tool: shfmt@3.14.0,shellcheck@0.11.0,cargo-deny@0.20.2
+          fallback: none
+      - name: Reproduce the Vendor Closure and Seed the Licence Gate
+        run: |
+          pin=$(sed -n 's/^commit=//p' hassmic.pin)
+          fork=$(mktemp -d)
+          git init -q "$fork"
+          git -C "$fork" fetch -q --depth 1 https://github.com/portpowered/echo-dot-assist "$pin"
+          git -C "$fork" checkout -q --detach FETCH_HEAD
+          HASSMIC_SRC="$fork" sh third_party/hassmic/sync.sh "$pin"
+          git diff --exit-code -- third_party/hassmic
+          test -z "$(git ls-files --others --exclude-standard -- third_party/hassmic)"
+          shellcheck --severity=style -- third_party/hassmic/sync.sh
+          shfmt -d -i 2 -ci third_party/hassmic/sync.sh
+          cargo fmt --all --check
+          cargo metadata --locked --offline --no-deps --format-version 1 >/dev/null
+          cargo deny fetch
+          cargo deny --offline check 2>"$RUNNER_TEMP/deny.log" || { cat "$RUNNER_TEMP/deny.log"; exit 1; }
+          tail -n 1 "$RUNNER_TEMP/deny.log"
+          make lint-rules
+          make lint-shape
+          seed=third_party/a1a-licence-witness.c
+          verify_rejected() {
+            status=0
+            make lint-rules >"$RUNNER_TEMP/licence.log" 2>&1 || status=$?
+            test "$status" -eq 2
+            grep -F "$seed: vendor licence: GNU GPL family is prohibited" "$RUNNER_TEMP/licence.log"
+          }
+          printf '// SPDX-License-Identifier: LGPL-2.1-or-later\n' >"$seed"
+          verify_rejected
+          printf 'GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n' >"$seed"
+          verify_rejected
+          rm "$seed"
+          make lint-rules
+          echo 'TARGETED_RESULT P-LIC exit=0'
+  arm:
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [candidate, baseline]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
     env:
-      CARGO_BUILD_JOBS: '4'
       ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
+      CARGO_BUILD_JOBS: '4'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Focused wrapper and packaging tests
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          python3 tests/test_release_kit.py
-          python3 tests/test_release_redirects.py
+      - name: Select clean baseline
+        if: matrix.source == 'baseline'
+        run: git checkout --detach dd07ed4d1a3fd5db36e12b8d208c0467d6738787
       - uses: ./.github/actions/setup
         with:
           target: build-echo
-      - name: Provision release tools
-        shell: sh
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3 gcc-mingw-w64-x86-64-posix
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "platforms;android-34" "build-tools;35.0.0"
-          rustup target add --toolchain 1.100.0 armv7-linux-androideabi x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: Cheap release checks
+      - name: Build and Measure the Release ELF
         env:
-          GH_TOKEN: ${{ github.token }}
+          WITNESS_SOURCE: ${{ matrix.source }}
         run: |
-          actionlint .github/workflows/release.yml .github/workflows/targeted.yml
-          python3 tests/test_release_kit.py --configure-native
-      - name: Build and verify release bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          make dist
-          python3 tests/test_release_kit.py --assets dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-release-${{ github.sha }}
-          path: |
-            dist/echo-*-armv7.tar.gz
-            dist/default-*.screenpack.tar.gz
-            dist/companion-0.2.2.screenpack.tar.gz
-            dist/echo-setup-*-linux-x86_64
-            dist/echo-setup-*-windows-x86_64.exe
-            dist/install.sh
-            dist/install.ps1
-            dist/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 7
+          test -f "$ANDROID_NDK_HOME/source.properties" || "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'ndk;27.3.13750724'
+          grep -F '27.3.13750724' "$ANDROID_NDK_HOME/source.properties"
+          rustup target add armv7-linux-androideabi
+          make build-echo
+          tools="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          binary=target/armv7-linux-androideabi/release/echo-bridge
+          git rev-parse HEAD
+          if [[ "$WITNESS_SOURCE" == candidate ]]; then
+            "$tools/llvm-nm" "$binary" >"$RUNNER_TEMP/nm.txt"
+            grep -E '[[:space:]][Tt][[:space:]]+echo_hassmic_main$' "$RUNNER_TEMP/nm.txt"
+            "$tools/llvm-readelf" -h -l -d "$binary" >"$RUNNER_TEMP/elf.txt"
+            for library in libpryon.so libz.so libOpenSLES.so; do
+              grep -F "[$library]" "$RUNNER_TEMP/elf.txt"
+            done
+            find target/armv7-linux-androideabi/release -name libpryon.so -o -name libz.so
+          fi
+          cp "$binary" "$RUNNER_TEMP/echo-bridge"
+          "$tools/llvm-strip" "$RUNNER_TEMP/echo-bridge"
+          file "$RUNNER_TEMP/echo-bridge"
+          wc -c "$RUNNER_TEMP/echo-bridge"
+          echo "TARGETED_RESULT P-ARM $WITNESS_SOURCE exit=0"
+
