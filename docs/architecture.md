@@ -1327,7 +1327,7 @@ in a crate do not imply the configured voice owner calls them.
 | echo-mcp-client | [Stateless MCP ToolHost](../crates/echo-mcp-client/src/lib.rs), [0014](adr/0014-mcp-http.md) | Bridge host | agent-api, config, contracts |
 | echo-media | [Frame-based WebRTC/Opus peer](../crates/echo-media/src/lib.rs), [0027](adr/0027-echo-media.md) | Bridge host | None |
 | echo-muse-bridge | [Optional task core, Unix daemon/report binaries](../crates/echo-muse-bridge/src/lib.rs), [0020](adr/0020-muse-core.md), [0022](adr/0022-muse-service.md) | Separate Linux gadget host; optional | agent-api, contracts |
-| echo-svc-muse | [Direct Muse gadget protocol](../crates/echo-svc-muse/src/lib.rs), [0034](adr/0034-muse-direct-protocol.md) | Linux component library | agent-api, contracts |
+| echo-svc-muse | [Direct Muse gadget protocol](../crates/echo-svc-muse/src/lib.rs), [0035](adr/0035-muse-direct-protocol.md) | Linux component library | agent-api, contracts |
 | echo-screen-contract | [UiState, ScreenFrame and UiAction](../crates/echo-screen-contract/src/lib.rs), [0004](adr/0004-screen-contract.md) | Bridge data boundary; schema consumed by page | None |
 | echo-screen-server | [Loopback HTTP/SSE and actions](../crates/echo-screen-server/src/lib.rs), [0016](adr/0016-screen-server.md) | Within bridge process | contracts, screen-contract |
 | echo-signin | [Writer-based commands and Codex account adapter](../crates/echo-signin/src/lib.rs), [0018](adr/0018-signin.md), [0026](adr/0026-codex-client.md) | Bridge/operator command process | codex, live, agent-loop, contracts, config, chatgpt-auth |
