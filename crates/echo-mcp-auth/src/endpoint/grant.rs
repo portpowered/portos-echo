@@ -45,11 +45,21 @@ impl AuthClient {
     /// DCR sign-in approved that REST audience with the endpoint scopes. A grant
     /// from before the two-audience sign-in is never refreshed for it; it needs a relink.
     pub async fn endpoint_ready(&self, api_base: &str) -> bool {
+        self.endpoint_unready(api_base).await.is_none()
+    }
+
+    /// Why the committed grant cannot serve the endpoint at `api_base`, as a
+    /// fixed reason for traces: `endpoint_api`, `unlinked`, `refresh_uncertain`,
+    /// `not_registered`, `audience_missing` or `scopes_missing`. `None` when it can.
+    pub async fn endpoint_unready(&self, api_base: &str) -> Option<&'static str> {
         let Ok(endpoint) = self.endpoint_grant(api_base) else {
-            return false;
+            return Some("endpoint_api");
         };
         let state = self.state.lock().await;
-        self.has_grant() && endpoint.require_registered(&state).is_ok()
+        if !self.has_grant() {
+            return Some("unlinked");
+        }
+        endpoint.unregistered(&state)
     }
 
     pub(super) async fn redeem_refresh(&self, state: &mut State, resource: &str) -> Result<Secret<Grant>, AuthError> {
@@ -114,15 +124,28 @@ impl EndpointGrant<'_> {
     }
 
     fn require_registered(&self, state: &State) -> Result<(), AuthError> {
-        if state.uncertain || state.record.registration.is_none() {
-            return Err(AuthError::RelinkRequired);
+        self.unregistered(state)
+            .map_or(Ok(()), |_| Err(AuthError::RelinkRequired))
+    }
+
+    fn unregistered(&self, state: &State) -> Option<&'static str> {
+        if state.uncertain {
+            return Some("refresh_uncertain");
         }
-        let grant = state.record.grant.as_ref().ok_or(AuthError::RelinkRequired)?.expose();
+        if state.record.registration.is_none() {
+            return Some("not_registered");
+        }
+        let Some(grant) = state.record.grant.as_ref().map(Secret::expose) else {
+            return Some("unlinked");
+        };
+        if !grant.resources.contains(&self.resource) {
+            return Some("audience_missing");
+        }
         let scopes: Vec<_> = grant.scope.split_ascii_whitespace().collect();
-        if !grant.resources.contains(&self.resource) || ENDPOINT_SCOPES.iter().any(|scope| !scopes.contains(scope)) {
-            return Err(AuthError::RelinkRequired);
-        }
-        Ok(())
+        ENDPOINT_SCOPES
+            .iter()
+            .any(|scope| !scopes.contains(scope))
+            .then_some("scopes_missing")
     }
 
     fn cached<'a>(&self, state: &'a State) -> Option<&'a Access> {

@@ -243,7 +243,7 @@ impl TlsPeer {
     }
 }
 
-fn certificate(root: &std::path::Path, wrong_hostname: bool) {
+pub(crate) fn certificate(root: &std::path::Path, wrong_hostname: bool) {
     let san = if wrong_hostname {
         "DNS:unrelated.invalid"
     } else {

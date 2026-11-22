@@ -53,9 +53,10 @@ impl Grant {
         self.client.endpoint_grant(api_base)
     }
 
-    /// Whether this grant's sign-in covers the endpoint audience and scopes.
-    pub(crate) async fn endpoint_ready(&self, api_base: &str) -> bool {
-        self.client.endpoint_ready(api_base).await
+    /// Why this grant's sign-in does not cover the endpoint audience and
+    /// scopes, as a fixed reason; `None` when it does.
+    pub(crate) async fn endpoint_unready(&self, api_base: &str) -> Option<&'static str> {
+        self.client.endpoint_unready(api_base).await
     }
 
     fn now(&self) -> u64 {

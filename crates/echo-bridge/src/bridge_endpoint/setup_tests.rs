@@ -22,11 +22,20 @@ fn endpoint_api_uses_the_configured_grant_origin_when_omitted() {
 fn production_runtime_defaults_the_port_os_gateway() {
     let mut config = BridgeConfig::from_toml_str(include_str!("../../../../examples/bridge.echo.toml")).unwrap();
     assert_eq!(endpoint_api(&config).as_deref(), Some(echo_config::PORTOS_API_BASE));
-    assert!(Runtime::configured(&config).is_some());
+    // The Echo's bundle is absent off the device: the endpoint never runs without its roots.
+    assert_eq!(Runtime::configured(&config).err(), Some("ca_unavailable"));
+    let directory = tempfile::tempdir().unwrap();
+    crate::bridge_mcp::bridge_component::certificate(directory.path(), false);
+    config.codex.ca_file = Some(directory.path().join("ca.pem"));
+    assert!(Runtime::configured(&config).is_ok());
+    std::fs::write(directory.path().join("ca.pem"), "not PEM").unwrap();
+    assert_eq!(Runtime::configured(&config).err(), Some("endpoint_api_refused"));
+    config.codex.ca_file = None;
+    assert!(Runtime::configured(&config).is_ok());
     config.portos_endpoint.api_base = Some("https://endpoint.example.invalid".into()); // lint-rules: allow-literal offline origin override fixture
-    assert!(Runtime::configured(&config).is_none());
+    assert_eq!(Runtime::configured(&config).err(), Some("no_gateway"));
     config.portos_endpoint.gateway_url = Some("wss://gateway.example.invalid/devices/{authLinkId}".into()); // lint-rules: allow-literal offline gateway override fixture
-    assert!(Runtime::configured(&config).is_some());
+    assert!(Runtime::configured(&config).is_ok());
 }
 
 #[tokio::test(start_paused = true)]
@@ -173,6 +182,17 @@ async fn t3_endpoint_pair_requires_the_existing_port_os_link() {
         assert_eq!(state["portos"]["challenge"], Value::Null);
         assert_eq!(state["portos"]["link_status"], "link_required");
         assert!(gateway.received.try_recv().is_err());
+        let rows = wait_event(home.path(), "endpoint.relink_waiting").await;
+        assert_eq!(
+            steps(&rows),
+            [json!({"event":"endpoint.relink_waiting","reason":"unlinked"})]
+        );
+        advance(Duration::from_secs(5)).await;
+        assert_eq!(
+            steps(&lifecycle(home.path())).len(),
+            1,
+            "waiting is traced once per reason"
+        );
         assert!(!mock.state.lock().unwrap().requests.iter().any(|request| {
             matches!(
                 request.path.as_str(),
@@ -251,4 +271,109 @@ pub(super) async fn assert_unclaimed_gateway_token(gateway: &mut Gateway) {
             "Bearer endpoint-access-2".into()
         ))
     );
+}
+
+/// The endpoint lifecycle rows of the settings trace, without the envelope.
+pub(super) fn lifecycle(home: &Path) -> Vec<Value> {
+    let trace = fs::read_to_string(home.join("settings-trace")).unwrap();
+    for secret in [
+        DEVICE,
+        "loopback link",
+        "endpoint-access-",
+        "Bearer",
+        "refresh-",
+        "Hall Echo",
+    ] {
+        assert_eq!(
+            trace.matches(secret).count(),
+            0,
+            "the trace names no ids, tokens or names"
+        );
+    }
+    trace
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|row| {
+            row["event"]
+                .as_str()
+                .is_some_and(|event| event.starts_with("endpoint."))
+        })
+        .map(|mut row| {
+            let object = row.as_object_mut().unwrap();
+            for envelope in ["elapsed_ms", "provider_auth_mode"] {
+                object.remove(envelope);
+            }
+            row
+        })
+        .collect()
+}
+
+async fn wait_event(home: &Path, event: &str) -> Vec<Value> {
+    for _ in 0..3_000 {
+        let rows = lifecycle(home);
+        if rows.iter().any(|row| row["event"] == event) {
+            return rows;
+        }
+        advance(Duration::from_millis(10)).await;
+    }
+    let rows = lifecycle(home);
+    assert!(rows.iter().any(|row| row["event"] == event), "no {event} in {rows:?}");
+    rows
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_endpoint_pair_retries_server_errors_and_traces_each_transition() {
+    bridge_mcp::bridge_component::drive(async {
+        let home = tempfile::tempdir().unwrap();
+        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
+        mock.enable_endpoint_audience().unwrap();
+        let mut grant = registered(&mock, home.path()).await;
+        let mut gateway = Gateway::open(&mock).await;
+        let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
+        mock.state.lock().unwrap().fault =
+            Some(("/plugin-auth-code-exchanges".into(), 503, json!({"error":"synthetic"})));
+        settings.save(true, "Hall Echo").await;
+        let rows = wait_event(home.path(), "endpoint.exchange_failed").await;
+        assert_eq!(
+            steps(&rows),
+            [
+                json!({"event":"endpoint.linked","waited":false}),
+                json!({"event":"endpoint.exchanging","rename":false}),
+                json!({"event":"endpoint.exchange_failed","reason":"server_error","http_class":"5xx",
+                    "http_status":503,"attempt":1,"retry":true}),
+            ]
+        );
+        wait_warning(&settings, UNAVAILABLE).await;
+        assert!(gateway.received.try_recv().is_err());
+        mock.state.lock().unwrap().fault = None;
+        // The retry waits out its 1 s backoff on the paused clock.
+        advance(Duration::from_secs(2)).await;
+        gateway.assert_upgrade(CLAIMED).await;
+        assert_installed(home.path(), &mock).await;
+        wait_warning(&settings, "This Echo is connected to Port OS.").await;
+        let rows = wait_event(home.path(), "endpoint.route").await;
+        assert_eq!(
+            steps(&rows)[3..],
+            [
+                json!({"event":"endpoint.exchanged","attempts":2}),
+                json!({"event":"endpoint.gateway_connecting","fresh_token":false}),
+                json!({"event":"endpoint.gateway_connected"}),
+                json!({"event":"endpoint.route","result":"found"}),
+            ]
+        );
+        let statuses: Vec<_> = rows.iter().filter_map(|row| row["status"].as_str()).collect();
+        assert_eq!(statuses[..2], ["connecting", "unavailable"]);
+        assert_eq!(statuses.last(), Some(&"connected"));
+        settings.close().await;
+        grant.close().await;
+    })
+    .await;
+}
+
+/// The lifecycle steps other than the observed Settings status.
+fn steps(rows: &[Value]) -> Vec<Value> {
+    rows.iter()
+        .filter(|row| row["event"] != "endpoint.status")
+        .cloned()
+        .collect()
 }

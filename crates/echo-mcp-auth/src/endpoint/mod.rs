@@ -34,28 +34,143 @@ pub struct EndpointExchange {
     client: Client,
 }
 
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ExchangeError {
     #[error("Endpoint API is unavailable")]
     Unavailable,
     #[error("Endpoint grant is unavailable")]
     Grant,
+    /// No HTTP answer arrived. The caller retries.
     #[error("Endpoint exchange did not complete")]
-    Transport,
+    Transport(Unanswered),
+    /// Port OS answered with this server error status. The caller retries.
+    #[error("Port OS could not serve the endpoint exchange")]
+    Server(u16),
     #[error("Port OS refused to create an already paired endpoint")]
     Conflict,
+    /// Port OS answered with this other non-success status.
     #[error("Port OS refused the endpoint exchange")]
-    Rejected,
+    Rejected(u16),
     #[error("Port OS returned an invalid endpoint exchange response")]
     Protocol,
 }
 
+/// Why no HTTP answer arrived, as a fixed category; never the error text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unanswered {
+    Timeout,
+    /// The TLS handshake failed, for example on an untrusted server certificate.
+    Tls,
+    Connect,
+    /// The answer's body was interrupted.
+    Body,
+    Request,
+}
+
+impl ExchangeError {
+    /// Whether the same committed request may be sent again unchanged.
+    #[must_use]
+    pub fn retryable(self) -> bool {
+        matches!(self, Self::Transport(_) | Self::Server(_))
+    }
+
+    /// A fixed reason code for traces.
+    #[must_use]
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Grant => "grant",
+            Self::Transport(cause) => cause.reason(),
+            Self::Server(_) => "server_error",
+            Self::Conflict => "conflict",
+            Self::Rejected(_) => "rejected",
+            Self::Protocol => "protocol",
+        }
+    }
+
+    /// The HTTP status Port OS answered with, when it answered with a failure.
+    #[must_use]
+    pub fn http_status(self) -> Option<u16> {
+        match self {
+            Self::Server(status) | Self::Rejected(status) => Some(status),
+            Self::Conflict => Some(StatusCode::CONFLICT.as_u16()),
+            _ => None,
+        }
+    }
+}
+
+impl Unanswered {
+    /// A fixed reason code for traces.
+    #[must_use]
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::Tls => "tls",
+            Self::Connect => "connect",
+            Self::Body => "body",
+            Self::Request => "request",
+        }
+    }
+
+    /// Classify an HTTP client failure without keeping its text, which names the URL.
+    #[must_use]
+    pub fn of(error: &reqwest::Error) -> Self {
+        if error.is_timeout() {
+            Self::Timeout
+        } else if error.is_body() || error.is_decode() {
+            Self::Body
+        } else if tls_failure(error) {
+            Self::Tls
+        } else if error.is_connect() {
+            Self::Connect
+        } else {
+            Self::Request
+        }
+    }
+}
+
+/// rustls reports a failed handshake as `InvalidData` I/O beneath the connect
+/// error, possibly wrapped in further I/O errors, whose `source` skips the
+/// wrapped error itself.
+fn tls_failure(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut source = error.source();
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if io.kind() == std::io::ErrorKind::InvalidData {
+                return true;
+            }
+            source = io.get_ref().map(|inner| inner as &(dyn std::error::Error + 'static));
+        } else {
+            source = cause.source();
+        }
+    }
+    false
+}
+
+fn unanswered(error: &reqwest::Error) -> ExchangeError {
+    ExchangeError::Transport(Unanswered::of(error))
+}
+
+fn refused(status: StatusCode) -> Option<ExchangeError> {
+    if status == StatusCode::CONFLICT {
+        Some(ExchangeError::Conflict)
+    } else if status.is_server_error() {
+        Some(ExchangeError::Server(status.as_u16()))
+    } else if status.is_success() {
+        None
+    } else {
+        Some(ExchangeError::Rejected(status.as_u16()))
+    }
+}
+
 impl EndpointExchange {
-    /// Prepare the fixed HTTPS endpoint API path without contacting it.
+    /// Prepare the fixed HTTPS endpoint API path without contacting it. Native
+    /// trust is kept; `ca_pem` adds the bridge's configured roots, the bundle
+    /// the Port OS grant and the MCP client trust (`codex.ca_file`).
     ///
     /// # Errors
-    /// Refuses unsafe URLs and invalid HTTP client configuration.
-    pub fn open(api_base: &str, timeout: Duration) -> Result<Self, ExchangeError> {
+    /// Refuses unsafe URLs, malformed or empty roots and invalid HTTP client configuration.
+    pub fn open(api_base: &str, timeout: Duration, ca_pem: Option<&[u8]>) -> Result<Self, ExchangeError> {
         let authority = api_base
             .strip_prefix("https://")
             .and_then(|rest| rest.split('/').next())
@@ -70,7 +185,7 @@ impl EndpointExchange {
         if api.scheme() != "https" || authority.is_empty() {
             return Err(ExchangeError::Unavailable);
         }
-        Self::new(api, timeout)
+        Self::new(api, timeout, ca_pem)
     }
 
     /// Construct the exchange adapter against a synthetic loopback issuer.
@@ -83,10 +198,10 @@ impl EndpointExchange {
         if url.scheme() != "http" || url.host_str() != Some("127.0.0.1") {
             return Err(ExchangeError::Unavailable);
         }
-        Self::new(url, timeout)
+        Self::new(url, timeout, None)
     }
 
-    fn new(mut url: Url, timeout: Duration) -> Result<Self, ExchangeError> {
+    fn new(mut url: Url, timeout: Duration, ca_pem: Option<&[u8]>) -> Result<Self, ExchangeError> {
         if timeout.is_zero() {
             return Err(ExchangeError::Unavailable);
         }
@@ -97,13 +212,21 @@ impl EndpointExchange {
             .query_pairs_mut()
             .append_pair("owner", "~caller")
             .append_pair("maxResults", "100");
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .redirect(Policy::none())
             .retry(reqwest::retry::never())
             .no_proxy()
-            .timeout(timeout)
-            .build()
-            .map_err(|_| ExchangeError::Unavailable)?;
+            .timeout(timeout);
+        if let Some(pem) = ca_pem {
+            let roots = reqwest::Certificate::from_pem_bundle(pem).map_err(|_| ExchangeError::Unavailable)?;
+            if roots.is_empty() {
+                return Err(ExchangeError::Unavailable);
+            }
+            for root in roots {
+                builder = builder.add_root_certificate(root);
+            }
+        }
+        let client = builder.build().map_err(|_| ExchangeError::Unavailable)?;
         Ok(Self { url, routes, client })
     }
 
@@ -126,16 +249,9 @@ impl EndpointExchange {
             .json(request)
             .send()
             .await
-            .map_err(|_| ExchangeError::Transport)?;
-        let status = response.status();
-        if status == StatusCode::CONFLICT {
-            return Err(ExchangeError::Conflict);
-        }
-        if status.is_server_error() {
-            return Err(ExchangeError::Transport);
-        }
-        if !status.is_success() {
-            return Err(ExchangeError::Rejected);
+            .map_err(|error| unanswered(&error))?;
+        if let Some(error) = refused(response.status()) {
+            return Err(error);
         }
         let result = read_result(response).await?;
         if request.auth_link_id().is_some_and(|link| link != result.auth_link_id)
@@ -189,13 +305,9 @@ impl EndpointExchange {
             .bearer_auth(token)
             .send()
             .await
-            .map_err(|_| ExchangeError::Transport)?;
-        let status = response.status();
-        if status.is_server_error() {
-            return Err(ExchangeError::Transport);
-        }
-        if !status.is_success() {
-            return Err(ExchangeError::Rejected);
+            .map_err(|error| unanswered(&error))?;
+        if let Some(error) = refused(response.status()) {
+            return Err(error);
         }
         read_json(response, MAX_ROUTES_RESPONSE).await
     }
@@ -210,7 +322,7 @@ async fn read_json<T: serde::de::DeserializeOwned>(
     limit: usize,
 ) -> Result<T, ExchangeError> {
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| ExchangeError::Transport)? {
+    while let Some(chunk) = response.chunk().await.map_err(|error| unanswered(&error))? {
         if chunk.len() > limit - body.len() {
             return Err(ExchangeError::Protocol);
         }

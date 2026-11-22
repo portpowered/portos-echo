@@ -85,7 +85,7 @@ async fn t3_endpoint_sign_in_names_both_audiences_once_and_keeps_them_with_the_g
     let record: Value = serde_json::from_slice(&std::fs::read(home.path().join("grant.json")).unwrap()).unwrap();
     assert_eq!(record["grant"]["resources"], json!([mock.base, mcp]));
     assert_eq!(record["grant"]["scope"], SCOPES.join(" "));
-    assert!(drive(owner.endpoint_ready(&mock.base)).await);
+    assert_eq!(drive(owner.endpoint_unready(&mock.base)).await, None);
 }
 
 #[tokio::test(start_paused = true)]
@@ -103,7 +103,10 @@ async fn t3_endpoint_grant_from_before_two_audience_sign_in_needs_a_relink_and_i
 
     let owner = client(&mock, home.path(), &SCOPES, EPOCH + 5).await;
     assert!(owner.has_grant());
-    assert!(!drive(owner.endpoint_ready(&mock.base)).await);
+    assert_eq!(
+        drive(owner.endpoint_unready(&mock.base)).await,
+        Some("audience_missing")
+    );
     let endpoint = owner.endpoint_grant(&mock.base).unwrap();
     error(drive(endpoint.access_token()).await, AuthError::RelinkRequired);
     error(drive(endpoint.refresh_installation()).await, AuthError::RelinkRequired);
@@ -115,7 +118,7 @@ async fn t3_endpoint_grant_from_before_two_audience_sign_in_needs_a_relink_and_i
     assert_eq!(drive(owner.access_token()).await.unwrap().expose(), "access-1");
 
     approve(&mock, owner.clone(), &path).await;
-    assert!(drive(owner.endpoint_ready(&mock.base)).await);
+    assert_eq!(drive(owner.endpoint_unready(&mock.base)).await, None);
     assert_eq!(
         mock.count(REGISTER),
         1,
@@ -132,7 +135,7 @@ async fn t3_endpoint_scopes_beyond_the_registered_client_register_a_new_one() {
     let path = home.path().join("grant.json");
     // An install registered with a narrower scope set before this change.
     let narrow = linked(&mock, home.path(), &["endpoint:read", "group:read"]).await;
-    assert!(!drive(narrow.endpoint_ready(&mock.base)).await);
+    assert_eq!(drive(narrow.endpoint_unready(&mock.base)).await, Some("scopes_missing"));
     error(
         drive(narrow.endpoint_grant(&mock.base).unwrap().access_token()).await,
         AuthError::RelinkRequired,
