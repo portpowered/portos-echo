@@ -77,7 +77,8 @@ impl Application {
         let day = Arc::new(AtomicU64::new(17));
         let source = day.clone();
         let (stop, shutdown) = oneshot::channel();
-        let connector = echo_wyoming::adapter::connector(settings.wyoming, echo_wyoming::ClientOptions::default());
+        let connector =
+            echo_wyoming::adapter::connector(settings.wyoming.tcp_addr(), echo_wyoming::ClientOptions::default());
         let worker = tokio::spawn(bridge_runtime::execute_controlled(
             settings,
             bridge_runtime::Control {
@@ -193,7 +194,7 @@ fn settings(directory: &Path, live: &str, port: u16) -> bridge_input::Settings {
         kill_path: Some(directory.join("audit/bridge-kill")),
         delegation: Some((config.agent, config.mcp.server.remove(0))),
         screen: Some(config.screen),
-        wyoming: ([127, 0, 0, 1], config.echo.wyoming_port).into(),
+        wyoming: std::net::SocketAddr::from(([127, 0, 0, 1], config.echo.wyoming_port)).into(),
         live_url: live.into(),
         model_url: Some(format!("{origin}:{port}")),
         trace: directory.join("trace"),

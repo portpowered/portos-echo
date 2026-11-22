@@ -1,5 +1,5 @@
 //! Converts the neutral link to the existing Wyoming client without a second queue.
-use crate::{ClientOptions, EventStream, Run, WyomingClient};
+use crate::{ClientOptions, Endpoint, EventStream, Run, WyomingClient};
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
 use echo_link::{
     CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
@@ -11,16 +11,22 @@ use tokio::sync::mpsc;
 /// Configured transport selection; retry ownership remains in `WyomingClient`.
 #[must_use]
 pub fn connector(addr: SocketAddr, options: ClientOptions) -> impl LinkConnector {
-    Connector { addr, options }
+    endpoint_connector(addr.into(), options)
+}
+
+/// Uses the same endpoint selection for the initial connection and reconnects.
+#[must_use]
+pub fn endpoint_connector(endpoint: Endpoint, options: ClientOptions) -> impl LinkConnector {
+    Connector { endpoint, options }
 }
 struct Connector {
-    addr: SocketAddr,
+    endpoint: Endpoint,
     options: ClientOptions,
 }
 impl LinkConnector for Connector {
     type Link = WyomingClient;
     async fn connect(&self) -> Result<Self::Link, Error> {
-        let mut client = WyomingClient::connect(self.addr, self.options.clone())
+        let mut client = WyomingClient::connect_endpoint(self.endpoint.clone(), self.options.clone())
             .await
             .map_err(error)?;
         client.neutral_barrier = true;

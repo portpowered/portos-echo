@@ -1,6 +1,7 @@
 //! Process entry and Wyoming protocol boundary for the pinned C satellite.
 
 mod core;
+mod listener;
 mod wire;
 
 pub use core::{Action, Core, Protocol};
@@ -9,12 +10,15 @@ pub use wire::Event;
 use std::{
     convert::Infallible,
     ffi::{CString, NulError, OsString, c_char, c_int},
+    path::PathBuf,
     ptr,
     sync::atomic::{AtomicBool, Ordering},
 };
 
 pub const NOTICES: &str = include_str!(concat!(env!("OUT_DIR"), "/notices.txt"));
 pub const VERSION: &str = env!("HASSMIC_VERSION");
+/// Filesystem endpoint shared by the device role and the on-Echo bridge.
+pub const WYOMING_SOCKET: &str = "/data/misc/portos-echo-device/wyoming.sock";
 
 static ENTERED: AtomicBool = AtomicBool::new(false);
 
@@ -37,6 +41,7 @@ pub enum Error {
 /// argument count or a second entry in the same process.
 pub fn run(
     arguments: impl IntoIterator<Item = OsString>,
+    socket: Option<PathBuf>,
     protocol: &'static dyn Protocol,
 ) -> Result<Infallible, Error> {
     let mut storage = std::iter::once(OsString::from("hassmic"))
@@ -53,11 +58,13 @@ pub fn run(
     if ENTERED.swap(true, Ordering::AcqRel) {
         return Err(Error::AlreadyEntered);
     }
+    listener::select(socket);
     core::register(protocol);
     #[expect(unsafe_code, reason = "Enter the C satellite once with owned mutable argv")]
     // SAFETY: argc is the checked count before the NULL sentinel. C may reorder
     // the pointer array and read or modify the NUL-terminated buffers. Both stay
     // live until process exit, including if C returns with workers still active.
     let status = unsafe { echo_hassmic_main(count, pointers.as_mut_ptr()) };
+    listener::cleanup();
     std::process::exit(status);
 }

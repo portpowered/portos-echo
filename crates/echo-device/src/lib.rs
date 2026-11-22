@@ -1,6 +1,7 @@
 //! Dedicated Wyoming satellite process and its offline notices.
 
 mod protocol;
+mod transport;
 
 use std::{
     convert::Infallible,
@@ -23,12 +24,15 @@ pub fn satellite_name(program: &OsStr) -> bool {
 /// # Errors
 /// Returns an error if the process entry or argument list is invalid.
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<Infallible, &'static str> {
-    echo_device_sys::run(args, &protocol::Wyoming).map_err(|error| match error {
+    let (args, socket) = transport::select(args, cfg!(target_os = "android"))?;
+    echo_device_sys::run(args, socket, &protocol::Wyoming).map_err(|error| match error {
         echo_device_sys::Error::Nul(_) => "satellite argument contains a NUL byte",
         echo_device_sys::Error::TooManyArgs => "too many satellite arguments",
         echo_device_sys::Error::AlreadyEntered => "satellite already entered",
     })
 }
+
+pub use echo_device_sys::WYOMING_SOCKET;
 
 /// Writes the licence notices for the vendored satellite.
 ///

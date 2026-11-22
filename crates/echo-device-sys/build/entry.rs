@@ -25,6 +25,30 @@ pub fn source(vendor: &Path, out: &Path) -> Result<PathBuf, Box<dyn Error>> {
         ("static int ota_port = 28929;", "static int ota_port = 0;"),
         ("int core_web_port = 28931;", "int core_web_port = 0;"),
         ("core_sendspin_port = 28928;", "core_sendspin_port = 0;"),
+        (
+            "    signal(SIGPIPE, SIG_IGN);",
+            "    int unix_listener = echo_hassmic_prepare_listener();\n    if (unix_listener == -1) return 1;\n    signal(SIGPIPE, SIG_IGN);",
+        ),
+        (
+            "    int ls = net_listen(core_port);",
+            "#ifdef __ANDROID__\n    int ls = unix_listener;\n#else\n    int ls = unix_listener >= 0 ? unix_listener : net_listen(core_port);\n#endif",
+        ),
+        (
+            "    fprintf(stderr, \"hassmic \" VERSION \" (\" BUILD \") %s on %d, wake=%s\\n\", proto->id, core_port, core_local_wake ? \"local\" : \"remote\");",
+            "    if (unix_listener >= 0) echo_hassmic_unix_ready();\n    else fprintf(stderr, \"hassmic \" VERSION \" (\" BUILD \") %s on %d, wake=%s\\n\", proto->id, core_port, core_local_wake ? \"local\" : \"remote\");",
+        ),
+        (
+            "        int c = net_accept(ls);",
+            "#ifdef __ANDROID__\n        int c = echo_hassmic_accept_unix(ls);\n#else\n        int c = unix_listener >= 0 ? echo_hassmic_accept_unix(ls) : net_accept(ls);\n#endif",
+        ),
+        (
+            "          setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);",
+            "          setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);\n          if (unix_listener < 0) { setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);",
+        ),
+        (
+            "setsockopt(c, IPPROTO_TCP, TCP_USER_TIMEOUT, &user_ms, sizeof user_ms); }",
+            "setsockopt(c, IPPROTO_TCP, TCP_USER_TIMEOUT, &user_ms, sizeof user_ms); } }",
+        ),
     ] {
         if source.matches(upstream).count() != 1 {
             return Err(format!("hassmic main no longer contains exactly one `{upstream}`").into());
@@ -38,6 +62,10 @@ pub fn source(vendor: &Path, out: &Path) -> Result<PathBuf, Box<dyn Error>> {
 }
 
 const REGISTRATION: &str = r#"
+extern int echo_hassmic_prepare_listener(void);
+extern void echo_hassmic_unix_ready(void);
+extern int echo_hassmic_accept_unix(int fd);
+
 static struct proto echo_hassmic_wyoming = {
     .id = "wyoming", .port = 16700, .threaded = 0,
 };

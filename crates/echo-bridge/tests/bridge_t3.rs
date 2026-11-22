@@ -12,6 +12,9 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines},
     process::Command,
 };
+#[cfg(target_os = "linux")]
+#[path = "device_support/a1_socket/mod.rs"]
+mod a1_socket;
 #[path = "bridge_observer/bridge_barge.rs"]
 mod bridge_barge;
 #[path = "bridge_observer/bridge_barge_mic.rs"]

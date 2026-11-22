@@ -1,6 +1,6 @@
 use crate::wyoming_events;
 use crate::{
-    ClientOptions, CutStats, Error, EventStream, PlayOutcome,
+    ClientOptions, CutStats, Endpoint, Error, EventStream, PlayOutcome,
     wyoming_session::{self, Command},
 };
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
@@ -30,8 +30,24 @@ impl WyomingClient {
     /// # Errors
     /// Invalid options. Refusal/timeouts retry with capped backoff until cancelled.
     pub async fn connect(addr: SocketAddr, opts: ClientOptions) -> Result<Self, Error> {
+        Self::connect_with(opts, move || tokio::net::TcpStream::connect(addr)).await
+    }
+
+    pub(crate) async fn connect_endpoint(endpoint: Endpoint, opts: ClientOptions) -> Result<Self, Error> {
+        if endpoint.prefers_unix() {
+            Self::connect_with(opts, move || endpoint.clone().dial()).await
+        } else {
+            Self::connect(endpoint.tcp_addr(), opts).await
+        }
+    }
+
+    async fn connect_with<T, F, Fut>(opts: ClientOptions, mut connector: F) -> Result<Self, Error>
+    where
+        T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = std::io::Result<T>> + Send + 'static,
+    {
         opts.validate()?;
-        let mut connector = move || tokio::net::TcpStream::connect(addr);
         let socket = wyoming_session::wyoming_reconnect::connect(&opts, &mut connector, false).await;
         Ok(Self::reconnecting(socket, opts, connector))
     }

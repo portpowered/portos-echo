@@ -13,6 +13,8 @@ extern crate self as echo_wyoming;
 pub mod adapter;
 
 mod wyoming_client;
+#[path = "wyoming_client/endpoint.rs"]
+mod wyoming_endpoint;
 mod wyoming_events;
 mod wyoming_options;
 mod wyoming_queue;
@@ -26,6 +28,7 @@ mod wyoming_test_support;
 mod wyoming_tests;
 
 pub use wyoming_client::WyomingClient;
+pub use wyoming_endpoint::Endpoint;
 pub use wyoming_options::ClientOptions;
 
 use echo_contracts::wyoming::{AudioChunkData, RunPipelineData, WyomingEvent};

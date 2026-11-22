@@ -5,7 +5,8 @@
 # owned by the bridge's user: the script creates it; the bridge creates what is inside it.
 wake_earcon = true
 
-# hassmic listens for Wyoming on loopback on the same device.
+# On the Echo, the bridge tries /data/misc/portos-echo-device/wyoming.sock first.
+# This loopback address is the one-release fallback for the fork's TCP-only hassmic.
 [echo]
 host = "127.0.0.1"
 wyoming_port = 16700

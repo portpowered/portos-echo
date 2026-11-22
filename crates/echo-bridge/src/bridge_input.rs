@@ -2,7 +2,9 @@
 use crate::{Error, bridge_voice::RunnerSkills};
 use echo_contracts::secret::Secret;
 use echo_live::call::{CallError, CredentialProvider, LiveAuthMode, LiveCredential};
+use echo_wyoming::Endpoint;
 use std::{
+    ffi::OsString,
     net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs},
     path::PathBuf,
 };
@@ -18,7 +20,7 @@ pub struct Settings {
     pub kill_path: Option<PathBuf>,
     pub delegation: Option<(echo_config::AgentConfig, echo_config::McpServer)>,
     pub screen: Option<echo_config::ScreenConfig>,
-    pub wyoming: SocketAddr,
+    pub wyoming: Endpoint,
     pub live_url: String,
     pub model_url: Option<String>,
     pub trace: PathBuf,
@@ -118,11 +120,23 @@ pub fn lab_origin(text: &str) -> Result<String, Error> {
 /// # Errors
 /// Invalid argv/configuration is an offline failure, with no credential read.
 pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Settings>, Error> {
-    if args == ["--help"] {
+    parse_with_lab_socket(args, lab, None)
+}
+
+/// Admits a Unix path override in a complete loopback lab environment.
+/// # Errors
+/// Invalid argv, an invalid socket path or a socket override outside lab mode.
+pub fn parse_with_lab_socket(
+    args: &[String],
+    lab: [Option<String>; 3],
+    lab_socket: Option<OsString>,
+) -> Result<Option<Settings>, Error> {
+    if args == ["--help"] && lab_socket.is_none() {
         return Ok(None);
     }
+    let lab_requested = lab_socket.is_some() || lab.iter().any(Option::is_some);
     let sim_clock = args.iter().filter(|arg| *arg == "--sim-clock").count();
-    if sim_clock > 1 || (sim_clock != 0 && lab.iter().any(Option::is_some)) {
+    if sim_clock > 1 || (sim_clock != 0 && lab_requested) {
         return Err(Error::Input);
     }
     let filtered: Vec<_> = args.iter().filter(|arg| *arg != "--sim-clock").cloned().collect();
@@ -151,11 +165,11 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
     if !remainder.is_empty() || live.is_some() != model.is_some() || (sim_clock != 0 && live.is_none()) {
         return Err(Error::Input);
     }
-    if lab.iter().any(Option::is_some) {
+    if lab_requested {
         if config.is_some() || trace.is_some() || live.is_some() {
             return Err(Error::Input);
         }
-        return lab_settings(lab, health.as_deref()).map(Some);
+        return lab_settings(lab, health.as_deref(), lab_socket).map(Some);
     }
     let mut settings = configured(
         config.ok_or(Error::Input)?,
@@ -170,9 +184,14 @@ pub fn parse(args: &[String], lab: [Option<String>; 3]) -> Result<Option<Setting
     Ok(settings)
 }
 
-fn lab_settings(lab: [Option<String>; 3], health: Option<&str>) -> Result<Settings, Error> {
+fn lab_settings(lab: [Option<String>; 3], health: Option<&str>, socket: Option<OsString>) -> Result<Settings, Error> {
     let [Some(wyoming), Some(url), Some(path)] = lab else {
         return Err(Error::Input);
+    };
+    let tcp = loopback(&wyoming, false)?;
+    let wyoming = match socket {
+        Some(path) => Endpoint::unix_first(path.into(), tcp).map_err(|_| Error::Input)?,
+        None => tcp.into(),
     };
     Ok(Settings {
         config: None,
@@ -185,7 +204,7 @@ fn lab_settings(lab: [Option<String>; 3], health: Option<&str>) -> Result<Settin
         kill_path: None,
         delegation: None,
         screen: None,
-        wyoming: loopback(&wyoming, false)?,
+        wyoming,
         live_url: lab_origin(&url)?,
         model_url: None,
         trace: path.into(),
@@ -231,7 +250,10 @@ fn configured(
         kill_path: Some(config.audit.log_dir.join("bridge-kill")),
         delegation: config.mcp.server.first().cloned().map(|server| (config.agent, server)),
         screen: Some(config.screen),
-        wyoming: echo_address(&config.echo.host, config.echo.wyoming_port)?,
+        wyoming: echo_endpoint(
+            echo_address(&config.echo.host, config.echo.wyoming_port)?,
+            cfg!(target_os = "android"),
+        )?,
         live_url,
         model_url,
         trace: trace.into(),
@@ -243,6 +265,14 @@ fn configured(
         reply_lead_ms: config.audio.reply_lead_ms,
         session_idle_seconds: config.live.session_idle_seconds,
     }))
+}
+
+fn echo_endpoint(address: SocketAddr, android: bool) -> Result<Endpoint, Error> {
+    if android && address == SocketAddr::from((Ipv4Addr::LOCALHOST, 16700)) {
+        Endpoint::unix_first(echo_device::WYOMING_SOCKET.into(), address).map_err(|_| Error::Input)
+    } else {
+        Ok(address.into())
+    }
 }
 
 /// The Echo's Wyoming address for a configured run: the bridge on the operator's PC dials the Echo across the LAN
@@ -333,6 +363,51 @@ fn prompt_config_error(error: &echo_config::ConfigError) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn socket_policy_selects_only_the_android_loopback_profile() {
+        let local: SocketAddr = "127.0.0.1:16700".parse().unwrap();
+        let remote = SocketAddr::from(([192, 0, 2, 1], 16700));
+        let alternate: SocketAddr = "127.0.0.1:16701".parse().unwrap();
+        let ipv6: SocketAddr = "[::1]:16700".parse().unwrap();
+        assert_eq!(
+            echo_endpoint(local, true).unwrap(),
+            Endpoint::unix_first(echo_device::WYOMING_SOCKET.into(), local).unwrap()
+        );
+        for (address, android) in [(local, false), (remote, true), (alternate, true), (ipv6, true)] {
+            assert_eq!(echo_endpoint(address, android).unwrap(), address.into());
+        }
+    }
+
+    #[test]
+    fn socket_policy_requires_complete_lab_inputs() {
+        let lab = [
+            Some("127.0.0.1:1".into()),
+            Some("http://127.0.0.1:2".into()),
+            Some("unused".into()),
+        ];
+        let path = "/tmp/satellite.sock";
+        let selected = parse_with_lab_socket(&[], lab.clone(), Some(path.into()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            selected.wyoming,
+            Endpoint::unix_first(path.into(), "127.0.0.1:1".parse().unwrap()).unwrap()
+        );
+        let configured = ["--config".into(), "unused".into(), "--trace".into(), "unused".into()];
+        for (args, env, path) in [
+            (&[][..], lab.clone(), "relative"),
+            (&[][..], lab.clone(), "/tmp/."),
+            (&[][..], lab, "/tmp/.."),
+            (&[][..], [None, None, None], path),
+            (&configured[..], [None, None, None], path),
+        ] {
+            assert_eq!(
+                parse_with_lab_socket(args, env, Some(path.into())).err(),
+                Some(Error::Input)
+            );
+        }
+    }
 
     #[test]
     fn settings_overlay_configured_admission_uses_values_and_preserves_base() {

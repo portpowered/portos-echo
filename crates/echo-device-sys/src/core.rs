@@ -147,6 +147,9 @@ extern "C" fn mute(muted: c_int) {
 }
 
 extern "C" fn print_mdns() {
+    if crate::listener::selected() {
+        return;
+    }
     if let Some(protocol) = PROTOCOL.get() {
         // SAFETY: The startup-only hook runs after name and port are assigned,
         // before workers. The name is a live NUL-terminated argv/static string.
