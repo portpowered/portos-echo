@@ -218,7 +218,7 @@ impl Core {
         if fd >= 0 && kind.to_bytes().len() < 48 && !wire::write(fd, kind, data, payload) {
             // SAFETY: The core lock keeps the borrowed descriptor live. Shutdown
             // wakes the reader; only the C listener closes the descriptor.
-            unsafe { echo_hassmic_shutdown(fd) };
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), b"seed: Wyoming write failed; reader shutdown suppressed\n");
             CLIENT.store(-1, Ordering::Relaxed);
         }
     }
