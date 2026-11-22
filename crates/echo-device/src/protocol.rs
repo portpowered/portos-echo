@@ -108,7 +108,7 @@ impl Satellite for Core {
 }
 
 fn connected(core: &impl Satellite) {
-    core.apply(Action::Connected);
+    // Scratch seed: keep the old connection generation.
     core.apply(Action::Failsafe(30));
     core.apply(Action::Link(true, false));
     if core.muted() {

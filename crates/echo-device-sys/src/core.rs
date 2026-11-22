@@ -218,7 +218,7 @@ impl Core {
         if fd >= 0 && kind.to_bytes().len() < 48 && !wire::write(fd, kind, data, payload) {
             // SAFETY: The core lock keeps the borrowed descriptor live. Shutdown
             // wakes the reader; only the C listener closes the descriptor.
-            unsafe { echo_hassmic_shutdown(fd) };
+            // Scratch seed: leave the blocked reader open.
             CLIENT.store(-1, Ordering::Relaxed);
         }
     }
