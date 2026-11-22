@@ -337,6 +337,9 @@ mod safety;
 #[path = "listen/voice_listen_restart.rs"]
 mod restart;
 
+#[path = "listen/voice_listen_expiry.rs"]
+mod expiry;
+
 #[tokio::test(start_paused = true)]
 async fn voice_listen_empty_reply_requires_receipt_then_waits_without_audible_frames() {
     let observer = Observer::default();

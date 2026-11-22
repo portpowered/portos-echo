@@ -276,6 +276,7 @@ async fn no_answer_unanswered_follow_up_speech_ends_the_run_without_a_failure() 
     let mic = microphone(&mut events).await;
     let (mut port, tx) = port();
     let played = Cell::new(0);
+    let lapsed = std::cell::RefCell::new(Vec::new());
     let mut work = Box::pin(run(
         &client,
         &mut events,
@@ -285,6 +286,9 @@ async fn no_answer_unanswered_follow_up_speech_ends_the_run_without_a_failure() 
         std::future::pending(),
         |notice| {
             played.set(played.get() + usize::from(matches!(notice, Notice::ReplyPlayed)));
+            if let Notice::Mark(mark @ voice_wait::Mark::Lapsed(_)) = notice {
+                lapsed.borrow_mut().push(mark.fields());
+            }
             Ok(())
         },
     ));
@@ -315,6 +319,8 @@ async fn no_answer_unanswered_follow_up_speech_ends_the_run_without_a_failure() 
     assert_eq!(played.get(), 1);
     assert_eq!(count(&observer, &Command::EndRun), 1);
     assert_eq!(cuts(&observer), 0);
+    // A stopped turn owed an answer: the no-answer window, not the listen one.
+    assert_eq!(lapsed.take(), [serde_json::json!({"window": "no_answer"})]);
 }
 
 /// The call seen on the Echo: a story that takes longer to tell than the
