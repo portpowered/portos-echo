@@ -368,8 +368,8 @@ fn shared_sim_provisioning_requires_each_exact_host_step() {
         "        if ! { sudo dpkg -i .cache/apt-archives/*.deb && dpkg -s libopus-dev zlib1g-dev >/dev/null; }; then\n",
         "        sudo apt-get install -f -y -o Dir::Cache::archives=\"$PWD/.cache/apt-archives\" -o APT::Keep-Downloaded-Packages=true libopus-dev zlib1g-dev\n",
         "        path: .cache/hassmic-host\n",
-        "        key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}\n",
-        "    - name: Build pinned hassmic-host\n",
+        "        key: hassmic-host-vendored-${{ runner.os }}-${{ hashFiles('third_party/hassmic/**', 'third_party/hassmic-stubs/**', 'hassmic.pin', 'crates/**', 'scripts/hassmic-host.sh', '.cargo/config.toml', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml') }}\n",
+        "    - name: Build vendored hassmic-host\n",
         "      run: make hassmic-host\n",
         "      run: sh scripts/codex-app-server.sh\n",
         "      run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0\n",
@@ -385,7 +385,7 @@ fn shared_sim_provisioning_requires_each_exact_host_step() {
         ("zlib1g-dev", "zlib1g"),
         ("0057852bfaa89a56745cba8c7296529d2fc39830", "v4"),
         ("path: .cache/hassmic-host", "path: .cache"),
-        ("hashFiles('hassmic.pin')", "hashFiles('Cargo.lock')"),
+        ("'third_party/hassmic/**', ", ""),
         ("run: make hassmic-host\n", "run: make hassmic-host || true\n"),
     ] {
         assert!(shared::check_setup(&sim.replace(from, to), setup).is_err());
