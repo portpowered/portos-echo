@@ -88,7 +88,7 @@ impl Camera {
         let (sample, shutter) = capture(source.as_ref(), deadline, trace).await?;
         let (snapshot, sampled_at_ms) = sample.encode()?;
         let reply = prepare(snapshot, sampled_at_ms);
-        check_commit(source.as_ref(), &shutter, deadline)?;
+        check_commit(source.as_ref(), &shutter, deadline, trace)?;
         Ok(reply)
     }
 }
@@ -99,8 +99,8 @@ async fn capture(
     trace: Option<&Trace>,
 ) -> Result<(Sample, watch::Receiver<Shutter>), Reply> {
     let mut shutter = source.shutter();
-    shutter_open(*shutter.borrow_and_update())?;
-    check_commit(source, &shutter, deadline)?;
+    shutter_open(*shutter.borrow_and_update(), trace)?;
+    check_commit(source, &shutter, deadline, trace)?;
     let sample = tokio::select! {
         biased;
         changed = shutter.changed() => {
@@ -115,8 +115,13 @@ async fn capture(
     Ok((sample, shutter))
 }
 
-fn check_commit(source: &dyn CameraSource, shutter: &watch::Receiver<Shutter>, deadline: Instant) -> Result<(), Reply> {
-    shutter_open(source.shutter_now())?;
+fn check_commit(
+    source: &dyn CameraSource,
+    shutter: &watch::Receiver<Shutter>,
+    deadline: Instant,
+    trace: Option<&Trace>,
+) -> Result<(), Reply> {
+    shutter_open(source.shutter_now(), trace)?;
     match shutter.has_changed() {
         Ok(false) => {}
         Ok(true) if *shutter.borrow() != Shutter::Unknown => return Err(shuttered()),
@@ -128,11 +133,21 @@ fn check_commit(source: &dyn CameraSource, shutter: &watch::Receiver<Shutter>, d
     Ok(())
 }
 
-fn shutter_open(state: Shutter) -> Result<(), Reply> {
+/// An unreadable shutter is `CAMERA_ERROR`, never a capture. On the Echo it
+/// usually means the bridge cannot open the shutter's evdev node (it needs the
+/// `input` group, ADR 0033), so the refusal leaves a fixed-reason trace row.
+fn shutter_open(state: Shutter, trace: Option<&Trace>) -> Result<(), Reply> {
     match state {
         Shutter::Open => Ok(()),
         Shutter::Closed => Err(shuttered()),
-        Shutter::Unknown => Err(camera_error()),
+        Shutter::Unknown => {
+            super::note(
+                trace,
+                "endpoint.camera_error",
+                serde_json::json!({"reason": "shutter input unavailable"}),
+            );
+            Err(camera_error())
+        }
     }
 }
 
@@ -141,13 +156,11 @@ fn capture_failure(error: CaptureError, trace: Option<&Trace>) -> Reply {
         // A stream that detached mid-capture is retryable like contention.
         CaptureError::Unavailable | CaptureError::Busy => camera_busy(),
         CaptureError::PermissionDenied => {
-            if let Some(trace) = trace {
-                let _ = trace.clone().record(
-                    "endpoint.camera_error",
-                    None,
-                    serde_json::json!({"reason": "camera permission denied"}),
-                );
-            }
+            super::note(
+                trace,
+                "endpoint.camera_error",
+                serde_json::json!({"reason": "camera permission denied"}),
+            );
             camera_error()
         }
         CaptureError::Camera => camera_error(),

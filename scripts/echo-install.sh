@@ -74,7 +74,9 @@ if [ "${1:-}" = --device ]; then
   fi
 fi
 # Fixed product identity, never a caller override or evaluated shell fragment.
-ECHO_RUN_AS='nobody 3990,inet'
+# 3990 and inet give egress; input (AID_INPUT 1004) lets the bridge read the camera
+# shutter evdev node (docs/adr/0033-native-camera-shutter.md).
+ECHO_RUN_AS='nobody 3990,inet,input'
 ECHO_RUN_OWNER='9999:9999'
 readonly ECHO_RUN_AS ECHO_RUN_OWNER
 run_user=${ECHO_RUN_AS%% *}
@@ -105,7 +107,7 @@ all secrets and codex.home stay in private/.
 Supply config compatible with the bridge build; TOML is not validated or rewritten.
 Install suggests setting codex.time_zone when the supplied config lacks a time_zone assignment.
 Prompt defaults: seed missing prompts, refresh recognized release seeds, and keep owner edits.
-Launch: setsid, /data/local/hassmic/runas nobody 3990,inet, held stdin; the hassmic fork repeats it at boot.
+Launch: setsid, /data/local/hassmic/runas nobody 3990,inet,input, held stdin; the hassmic fork repeats it at boot.
 start requires exact echo-bridge NAME from ps -A -o PID,NAME and a new
 hassmic boot.log client connected line within 20 seconds.
 stop closes held stdin and verifies absence; never kills an unknown process.

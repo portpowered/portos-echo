@@ -30,6 +30,17 @@ fields. Readiness registration owns a duplicate descriptor that refers to the
 same event queue throughout registration. The boundary uses the already locked
 libc and Tokio versions.
 
+The bridge runs as Android `nobody` with supplementary groups `3990,inet,input`.
+The shutter's evdev node under `/dev/input` is `root:input` mode 0660, so the
+bridge needs group `input` (AID_INPUT, 1004) to open it. Without it every
+snapshot is `CAMERA_ERROR`, and the bridge records `endpoint.camera_error` with
+the fixed reason `shutter input unavailable`.
+
+Trade-off: group `input` can read every input device on the Echo, the touch
+screen and keys included, not only the shutter switch. We accept it. The bridge
+is the trusted on-device process, it reads only the one switch device it
+selects, and Android offers no per-node ACL for this node.
+
 The private screen exchange authenticates each operation with HMAC-SHA256 and
 the existing pairing digest. Its scoped dependencies already appear in the
 workspace lockfile.

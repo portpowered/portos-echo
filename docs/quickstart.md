@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 20
+last modified: 2026, november, 21
 status: active; Windows/Linux installer and Linux source guide
 ---
 
@@ -24,7 +24,7 @@ Install Android platform-tools (`adb`) and connect exactly one ready adb device.
 for adb on PATH and in the platform's default Android SDK locations. Use `--adb PATH` for a custom location
 or `--serial DEVICE` to select a device when multiple are connected.
 Root is used to prepare files; the bridge runs as `nobody` (uid 9999)
-with groups `3990,inet`, through `/data/local/hassmic/runas`. Do not run the bridge as root.
+with groups `3990,inet,input`, through `/data/local/hassmic/runas`. Do not run the bridge as root.
 The shared `nobody` identity is not a separate runner sandbox.
 
 Usable ChatGPT access is required before normal startup. Successful sign-in does not establish Live entitlement;
@@ -163,7 +163,7 @@ Run the sign-in as the same non-root identity, with an interactive adb session:
 
 ```sh
 sh scripts/echo-install.sh stop
-adb shell -t /data/local/hassmic/runas nobody 3990,inet /data/local/echo-bridge/bin/echo-bridge signin --config /data/local/echo-bridge/private/bridge.toml
+adb shell -t /data/local/hassmic/runas nobody 3990,inet,input /data/local/echo-bridge/bin/echo-bridge signin --config /data/local/echo-bridge/private/bridge.toml
 ```
 
 The terminal and screen show a URL and device code. Open that URL on a phone or computer, sign into the intended
@@ -176,7 +176,7 @@ the device-code flow is appropriate on the Echo.
 ```sh
 sh scripts/echo-install.sh start
 sh scripts/echo-install.sh status
-adb shell /data/local/hassmic/runas nobody 3990,inet /data/local/echo-bridge/bin/echo-bridge link --config /data/local/echo-bridge/private/bridge.toml
+adb shell /data/local/hassmic/runas nobody 3990,inet,input /data/local/echo-bridge/bin/echo-bridge link --config /data/local/echo-bridge/private/bridge.toml
 ```
 
 Start requires the exact `echo-bridge` process name and a fresh hassmic `client connected` line within 20 seconds.
@@ -238,7 +238,7 @@ in the same [paired controls](screen-packs.md#paired-controls).
 To unlink Port OS while the bridge is running:
 
 ```sh
-adb shell /data/local/hassmic/runas nobody 3990,inet /data/local/echo-bridge/bin/echo-bridge unlink --config /data/local/echo-bridge/private/bridge.toml
+adb shell /data/local/hassmic/runas nobody 3990,inet,input /data/local/echo-bridge/bin/echo-bridge unlink --config /data/local/echo-bridge/private/bridge.toml
 ```
 
 Unlink is handled by the grant owner and revokes/removes its grant. It does not sign out of ChatGPT.
@@ -262,7 +262,7 @@ Neither bridge uninstall nor screen uninstall removes hassmic.
 | `no Home Assistant link` in hassmic `boot.log` | hassmic has no Wyoming client. This is also the signature when Echo's bridge is absent, not a requirement to install Home Assistant. Check bridge status, configuration and loopback Wyoming port. |
 | Process not found by name | Lifecycle uses `ps -A -o PID,NAME` and exact `echo-bridge`, then checks uid. A renamed process is not a safe lifecycle match. Use installed binary paths and the supplied launcher; do not bypass a failed identity check. |
 | SIGTERM around 17 seconds after an adb-launched start | The recorded attached-shell launch died with its adb session. Use the installer start path: `setsid` detaches and the launcher holds stdin open. Redirecting stdin to EOF also stops the bridge. |
-| Network deadline despite working root networking | The non-root launch needs Android network group 3990 as well as inet. Use `runas nobody 3990,inet`; do not switch to root to hide the error. |
+| Network deadline despite working root networking | The non-root launch needs Android network group 3990 as well as inet. Use `runas nobody 3990,inet,input`; do not switch to root to hide the error. |
 | TLS/certificate failure | The child has a cleared environment and cannot discover the Echo's system CA bundle. Set absolute `codex.ca_file` to the installed PEM bundle; it also supplies bridge OAuth/MCP trust roots. |
 | Echo asks to link Port OS again, or `/healthz` shows `"mcp":"relink_for_scope"` | The current grant lacks a permission required by a called tool. Run the link command above and review the requested permissions. Then ask for the action again. |
 | Native `start_failed` | Installed files remain available. Use the same installer and device options with `doctor` to diagnose startup and `status --json` to check runtime identity and version. After fixing the prerequisite, repeat the original `install` with the same release source and device options and omit `--force`. If the installed base config is invalid, correct your local file and use the [forced reinstall](#change-settings-update-or-remove) to replace it. |

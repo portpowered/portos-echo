@@ -261,9 +261,11 @@ actual bridge/child identity after migration remains coordinator T5 proof.
 [examples/bridge.echo.toml](../examples/bridge.echo.toml) supplies the base configuration; for the installer,
 set `codex.binary` and `codex.ca_file` under `bin/` as its help requires.
 
-1. **Run as existing Android nobody (uid 9999), with groups 3990 and `inet`**:
-   `/data/local/hassmic/runas nobody 3990,inet`. The inherited Codex child uses the same identity.
-   hassmic's firewall admits its egress group, gid 3990; omitting it blocks provider TCP. Root only prepares
+1. **Run as existing Android nobody (uid 9999), with groups 3990, `inet` and `input`**:
+   `/data/local/hassmic/runas nobody 3990,inet,input`. The inherited Codex child uses the same identity.
+   hassmic's firewall admits its egress group, gid 3990; omitting it blocks provider TCP. Group `input`
+   (1004) lets the bridge read the camera shutter's evdev node (ADR 0033); omitting it makes every
+   snapshot `CAMERA_ERROR`. Root only prepares
    fixed paths and drops privilege before any writable launch script executes. No custom uid, SELinux or
    firewall changes. Nobody is shared and is not a separate child sandbox.
 2. **Start the bridge in its own session** (`setsid`). A bridge left in an adb session's process group received
@@ -292,7 +294,8 @@ set `codex.binary` and `codex.ca_file` under `bin/` as its help requires.
    cleared environment and finds no certificate bundle on the device. No wrapper script is needed for either.
 8. **After a reboot the hassmic fork's satellite service starts the installed bridge** (owner decision 2026-11-19,
    [decisions](program/decisions.md)). The fork's `scripts/device/bridge.sh`, started by its `main.sh satellite`,
-   uses this same launch: `private/launch.sh` as nobody with groups 3990 and `inet`, in its own session, with the
+   uses this same launch: `private/launch.sh` as `runas nobody 3990,inet,input` (fork PR 12; its clock sync
+   keeps its own `3990,inet` groups), in its own session, with the
    installer's `private/run/` gate, FIFO and `stop`/`finished` markers. It starts only where the installer left
    `private/launch.sh` and `private/bridge.toml`, and refuses links and wrong owners as the installer does. It
    waits for the network before a start (a resolver known, then 10 s; fork PR 8), because a bridge started before

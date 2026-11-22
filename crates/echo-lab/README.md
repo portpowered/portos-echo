@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 20
+last modified: 2026, november, 21
 status: active
 ---
 
@@ -752,7 +752,7 @@ from it; the driver holds none.
   "trace": "/data/local/echo-bridge/private/trace.jsonl",
   "hassmic_log": "/data/local/hassmic/boot.log",
   "binary": "/data/local/echo-bridge/bin/echo-bridge",
-  "run_as": "/data/local/hassmic/runas nobody 3990,inet"
+  "run_as": "/data/local/hassmic/runas nobody 3990,inet,input"
 }
 ```
 
@@ -761,7 +761,7 @@ from it; the driver holds none.
 | `private_dir` | The bridge's one 0700 directory. `config` and `trace` must be inside it. |
 | `hassmic_log` | The log `hassmic` writes its link and wake lines to. |
 | `binary` | The armv7 `echo-bridge`. Selects the built-in start and stop commands. |
-| `run_as` | Omitted/empty defaults to the absolute nobody prefix above. Short `runas nobody 3990,inet` normalizes to it. Root/uid 0 is refused before effects. |
+| `run_as` | Omitted/empty defaults to the absolute nobody prefix above. Short `runas nobody 3990,inet,input` normalizes to it, and so does the older `3990,inet` spelling (short or absolute), so an older lab config runs with group `input` and can read the camera shutter. Root/uid 0 is refused before effects. |
 | `process` | Optional process name to look for. Default `echo-bridge`. |
 | `start`, `stop` | Instead of `binary`: exactly `["shell", "PAYLOAD"]`, executed under nobody. Scripts must be executable by nobody; payloads cannot contain single quotes. Other argv forms are refused. |
 

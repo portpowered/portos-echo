@@ -366,7 +366,7 @@ def prepared_run(base):
 def release_started(box, starts=1):
     calls = box.calls()
     launches = [c for c in calls if "setsid " in " ".join(c)]
-    expected = ('setsid /data/local/hassmic/runas "nobody" "3990,inet" '
+    expected = ('setsid /data/local/hassmic/runas "nobody" "3990,inet,input" '
                 "/system/bin/sh '/data/local/echo-bridge/private/launch.sh'")
     require(len(launches) == starts and all(expected in c[1] for c in launches), "launch argv/count differs")
     require((box.root / "runas-user").read_text() == "nobody", "release identity differs")

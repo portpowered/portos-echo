@@ -325,7 +325,7 @@ def set_owner(base, path, value):
 
 def metadata_tool(base, name, args):
     if name == "runas":
-        require(args[:2] == ["nobody", "3990,inet"], "wrong launch identity")
+        require(args[:2] == ["nobody", "3990,inet,input"], "wrong launch identity")
         # The private script and its inputs must be accessible before execution.
         for path in (base / "remote/echo-bridge/private").rglob("*"):
             require(owner(base, path).split(":")[0] == "9999", "nobody cannot access root-owned state")

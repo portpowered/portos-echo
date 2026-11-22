@@ -230,7 +230,7 @@ def fake_tool(base, label, args):
         wait_for_launch(base)
         return remote_tool()
     if label == "runas":
-        require(args[:2] == ["nobody", "3990,inet"], "runtime identity differs")
+        require(args[:2] == ["nobody", "3990,inet,input"], "runtime identity differs")
         if args[2:4] == [str(base / "remote/echo-bridge/bin/echo-bridge"), "status"]:
             private = base / "remote/echo-bridge/private"
             for leaf, value in (("screen-pairing.txt", PAIRING + "\n"), ("bridge.trace", TRACE)):

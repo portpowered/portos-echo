@@ -157,6 +157,32 @@ async fn snapshot_rechecks_shutter_after_preparing_the_report() {
     assert_eq!(recovered.data, JPEG);
 }
 
+/// A bridge that cannot read the shutter (no `input` group on the Echo) refuses
+/// with `CAMERA_ERROR`, never captures, and leaves one fixed-reason trace row.
+#[tokio::test(start_paused = true)]
+async fn snapshot_traces_an_unreadable_shutter() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("trace.jsonl");
+    let trace = crate::bridge_trace::Trace::open(&path, "test").unwrap();
+    let source = CameraPeer::open();
+    source.shutter.send_replace(Shutter::Unknown);
+    let mut camera = Camera::default();
+    camera.source = Some(source.clone());
+    let result = camera
+        .reply(json!({}), Instant::now(), Some(&trace), |snapshot, _| snapshot)
+        .await;
+    assert_eq!(result.unwrap_err().code(), "CAMERA_ERROR");
+    assert_eq!(source.captures.load(Ordering::SeqCst), 0);
+    let rows: Vec<Value> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["event"], "endpoint.camera_error");
+    assert_eq!(rows[0]["reason"], "shutter input unavailable");
+}
+
 #[tokio::test(start_paused = true)]
 async fn t3_endpoint_snapshot_without_a_source() {
     Box::pin(bridge_mcp::bridge_component::drive(async {
@@ -205,6 +231,7 @@ async fn t3_endpoint_snapshot_obeys_shutter_and_recovers_from_failures() {
             assert_snapshot_race(&gateway, &mock, &camera).await;
             let trace = std::fs::read_to_string(home.path().join("settings-trace")).unwrap();
             assert_eq!(trace.matches("camera permission denied").count(), 1);
+            assert_eq!(trace.matches("shutter input unavailable").count(), 1);
             settings.close().await;
             gateway.assert_disconnect().await;
             grant.close().await;
