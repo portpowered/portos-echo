@@ -16,7 +16,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: |
-          git checkout --detach HEAD^
+          git checkout --detach f87a6038d46487a48b209102efdb285b94fd5cc7
           git rev-parse HEAD
       - uses: ./.github/actions/setup
         with:
@@ -45,6 +45,13 @@ jobs:
           target/debug/echo-bridge device -S -p 17555 -n Lab-Sat | grep -F '<port>17555</port>'
           target/debug/echo-bridge notices | grep -Ex 'hassmic|Port OS hassmic shims|minimp3 \(CC0-1.0\)|monocypher\.c|monocypher\.h|RNNoise'
           cargo nextest run --locked -p echo-bridge --test bridge_t3 --run-ignored only --config-file .github/nextest.toml --profile ci --success-output immediate -E 'test(=hassmic_name::t3_hassmic_name_supervisor_cli)'
+          sh tests/hassmic_host_smoke.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_host_teardown.py -v
+          cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
+          printf 'TARGETED_RESULT P-REG components exit=0\n'
+
+      - name: Compare supervised direct and staged -V startup
+        run: |
           # -V disables hardware volume control in the fork. Exercise normal startup
           # and take version from Info and the ready log in an isolated loopback.
           cat >"$RUNNER_TEMP/cli-version.py" <<'PY'
@@ -71,14 +78,10 @@ jobs:
                           satellite = describe(peer)["satellite"]
                       assert satellite["name"] == "Wyoming Test"
                       assert satellite["version"] == version, satellite
-                      assert f"hassmic {version} (".encode() in host.log, host.log
+                      assert f"hassmic {version} (".encode() in host.tail, host.tail
                       print(f"{'direct' if use_direct else 'staged'} -V startup: satellite={satellite['name']!r}, version={version}")
                   finally:
                       host.stop()
           PY
           unshare --user --map-root-user --net -- /bin/sh -c 'ip link set lo up && exec "$@"' sh python3 "$RUNNER_TEMP/cli-version.py"
           printf 'TARGETED_RESULT P-CLI exit=0\n'
-          sh tests/hassmic_host_smoke.sh
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_host_teardown.py -v
-          cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
-          printf 'TARGETED_RESULT P-REG components exit=0\n'
