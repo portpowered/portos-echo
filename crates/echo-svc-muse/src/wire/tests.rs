@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use serde_json::json;
 use tokio::time::Instant;
 
 use super::*;

@@ -13,7 +13,7 @@ mod wire;
 
 use std::os::unix::fs::PermissionsExt as _;
 
-use echo_svc_muse::{MuseLink, MuseService as _, ServiceError, ServiceState};
+use echo_svc_muse::{MuseLink, MuseService, ServiceError, ServiceState};
 use futures_util::FutureExt as _;
 use serde_json::json;
 

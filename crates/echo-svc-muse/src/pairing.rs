@@ -289,7 +289,7 @@ fn file_error(error: Errno) -> ServiceError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{pairing_record, write_pairing};
+    use crate::support::{pairing_record, write_pairing};
     use std::os::unix::fs::symlink;
 
     #[test]

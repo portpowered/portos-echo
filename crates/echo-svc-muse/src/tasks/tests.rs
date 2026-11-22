@@ -3,10 +3,7 @@ use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 use futures_util::FutureExt as _;
 use serde_json::json;
 
-use crate::{
-    link::OsRandom,
-    tests::{ManualClock, demo_task},
-};
+use crate::{clock::ManualClock, link::OsRandom, support::demo_task};
 
 use super::*;
 

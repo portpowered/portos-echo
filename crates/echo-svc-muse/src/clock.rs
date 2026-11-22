@@ -34,3 +34,38 @@ impl Clock for EpochClock {
 fn since_epoch() -> Duration {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default()
 }
+
+#[cfg(test)]
+mod manual {
+    use tokio::sync::watch;
+
+    use super::{Clock, Wait};
+
+    #[derive(Clone)]
+    pub(crate) struct ManualClock(watch::Sender<u64>);
+
+    impl ManualClock {
+        pub(crate) fn new(now: u64) -> Self {
+            Self(watch::Sender::new(now))
+        }
+
+        pub(crate) fn set(&self, now: u64) {
+            self.0.send_replace(now);
+        }
+    }
+
+    impl Clock for ManualClock {
+        fn now(&self) -> u64 {
+            *self.0.borrow()
+        }
+
+        fn wait_until(&self, deadline: u64) -> Wait<'_> {
+            Box::pin(async move {
+                let _ = self.0.subscribe().wait_for(|now| *now >= deadline).await;
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) use manual::ManualClock;
