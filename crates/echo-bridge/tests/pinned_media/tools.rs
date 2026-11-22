@@ -336,7 +336,7 @@ async fn remote(
     output: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     mut commands: mpsc::Receiver<bool>,
     started: tokio::sync::oneshot::Sender<()>,
-    observation: &Value,
+    expected: &Value,
 ) -> (LivePeer, usize) {
     let request: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
     let mut peer = LivePeer::bind(([127, 0, 0, 1], 0).into(), Instant::now().into_std())
@@ -355,7 +355,7 @@ async fn remote(
             () = step(&mut peer) => (),
             observation = output.next_line() => {
                 let value: Value = serde_json::from_str(&observation.unwrap().unwrap()).unwrap();
-                assert_eq!(&value, observation);
+                assert_eq!(&value, expected);
                 started.take().expect("pinned daily cap: extra model request after admission refusal").send(()).unwrap();
             },
             command = commands.recv() => match command {
