@@ -398,7 +398,7 @@ async fn t3_chat_reset_and_replay_are_isolated() {
 
 #[tokio::test]
 async fn t3_chat_reset_before_ack_keeps_task_eligible() {
-    let (_, _, _, link, mut vm, control) = fixture().await;
+    let (_fake, _, _, link, mut vm, control) = fixture().await;
     let (id, ()) = tokio::join!(link.submit(demo_task()), async {
         let (stream, body) = send_request(&mut vm).await;
         let session = body["session_id"].as_str().unwrap();
