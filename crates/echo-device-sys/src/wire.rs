@@ -166,3 +166,42 @@ pub(super) fn write(fd: c_int, kind: &CStr, data: Option<&CStr>, payload: &[u8])
     // and owns publication of the borrowed connection until C closes it.
     unsafe { wy_write(fd, kind.as_ptr(), data, payload.as_ptr().cast(), payload.len()) >= 0 }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::write;
+    use std::{
+        fs::{self, OpenOptions},
+        io::{Read, Seek},
+        os::fd::AsRawFd,
+    };
+
+    #[test]
+    fn pinned_writer_preserves_header_order_and_omits_empty_segments() {
+        let path = std::env::temp_dir().join(format!("echo-device-wire-{}", std::process::id()));
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        fs::remove_file(path).unwrap();
+        assert!(write(
+            file.as_raw_fd(),
+            c"hassmic-speaker",
+            Some(c"{\"volume\":40,\"muted\":false}"),
+            &[],
+        ));
+        assert!(write(file.as_raw_fd(), c"audio-chunk", Some(c"{}"), b"\x13\x00"));
+        assert!(write(file.as_raw_fd(), c"pong", None, &[]));
+        file.rewind().unwrap();
+        let mut observed = Vec::new();
+        file.read_to_end(&mut observed).unwrap();
+        assert_eq!(
+            observed,
+            b"{\"type\":\"hassmic-speaker\",\"version\":\"1.5.4\",\"data_length\":27}\n{\"volume\":40,\"muted\":false}\
+              {\"type\":\"audio-chunk\",\"version\":\"1.5.4\",\"data_length\":2,\"payload_length\":2}\n{}\x13\x00\
+              {\"type\":\"pong\",\"version\":\"1.5.4\"}\n"
+        );
+    }
+}

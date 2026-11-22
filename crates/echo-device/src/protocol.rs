@@ -209,9 +209,9 @@ fn set_mute(core: &impl Satellite, event: &Event<'_>) {
 
 fn server_error(core: &impl Satellite, event: &Event<'_>) {
     log(b"server error: ", event.json.to_bytes());
-    let mut code = [0; 64];
-    let code = event.text(c"code", false, &mut code);
-    core.apply(if code == c"stt-no-text-recognized" {
+    let mut buffer = [0; 64];
+    let error_id = event.text(c"code", false, &mut buffer);
+    core.apply(if error_id == c"stt-no-text-recognized" {
         Action::NoSpeech
     } else {
         Action::Error
