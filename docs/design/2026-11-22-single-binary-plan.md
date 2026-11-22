@@ -70,6 +70,188 @@ Codex's own tools are off today. The thread settings set `features.shell_tool`, 
 ([echo-codex](../../crates/echo-codex/src/lib.rs)). The agent sees only the bridge's dynamic tools (Port OS, notes,
 prompts, session controls, emotion) and provider web search.
 
+### 1.4 How the bridge's runtime works today
+
+The bridge has no frame loop. It is one Tokio runtime, one main task and a handful of IO pump tasks. Each of them
+sleeps in a `select!` until one of its inputs is ready: a socket, a queue, or a deadline it holds as an `Instant`.
+Paths below are under `crates/`. Line numbers are at this commit.
+
+#### 1.4.1 Tokio in game-loop terms
+
+Tokio is an async runtime. An `async fn` compiles to a state machine (a future). The executor polls a task's future
+until it returns `Pending` at an `.await` that is not ready, and then runs another task. Scheduling is cooperative:
+nothing preempts a task between two `.await`s, so a long computation holds its worker thread. The reactor (epoll on
+Linux and Android) and the timer wheel wake a task when its socket is readable or its deadline passes. `select!`
+polls several futures in one task and runs the branch of the first one ready; `biased;` polls them in written order.
+
+The bridge builds its runtime by hand; there is no `#[tokio::main]` outside an example. `runtime()` in
+`echo-bridge/src/main.rs` (lines 62–68) and `process_generation` in
+`echo-bridge/src/bridge_voice/controls/voice_entry.rs` (line 58) both use
+`Builder::new_multi_thread().worker_threads(2).enable_all()`. Each settings
+generation gets a new runtime; a settings change destroys it and `exec`s the binary again (`execute_process`). The
+blocking pool is Tokio's default. One OS thread, `bridge-control`, blocks on stdin (`settings_process.rs` line 46).
+
+#### 1.4.2 The tasks and their loops
+
+Most of the voice path is one future in the main task: the Port OS endpoint (`bridge_endpoint/mod.rs` `scope`,
+`supervise`, lines 144–190) wraps the settings inbox, which wraps the voice runtime, admission and the run. The
+futures nested in it run on one task at a time, never in parallel.
+
+| Loop | Task | What its `select!` waits on |
+| --- | --- | --- |
+| Dormant wait, `voice_admission.rs` `wait` (409–461) | main | Cancel; settings restart; a 20 ms `interval` that re-reads the kill file; a 1 s device probe; Codex idle notifications; Wyoming events (wake, mute) |
+| Run, `bridge_voice.rs` `drive` (314–370) and `step` (372–414) | main | Endpoint end; earcon done; reply deadline; barge-in due; mouth due; then `step`: uplink space, Wyoming events, microphone frames, `port.next()` (Codex events and call PCM), the paced next reply frame, forwarding it |
+| Between replies, `voice_listen.rs` `listen` (305–352) | main | Cancel; endpoint end; settings restart; the listen deadline; device events, microphone and call events |
+| Tools, `bridge_codex/call_tools.rs` `next` (177–206) | main | The one in-flight tool future; a session-tool request; the nested call events |
+| Codex app server, `echo-codex/src/codex_io.rs` `progress` (140–190) | main | One 4096-byte stdout read, one stdin write, the next request deadline. It has no task: whoever awaits `next_event` drives it |
+| Port OS gateway, `bridge_endpoint/transport.rs` `serve`, `receive`, `respond` (167, 284, 308) | main | Socket frames versus a 45 s keepalive; commands, session ends and up to 16 in-flight replies |
+| Wyoming session, `echo-wyoming/src/wyoming_session.rs` `run` (143–168) | own | Playback cancel; commands; frames from the reader; the next reply frame to write |
+| Wyoming reader (`wyoming_session.rs` 83–92) and playback pump (`wyoming_playback.rs` 45–66) | own | One frame off the socket; one reply frame from the voice owner |
+| Media encode and decode, `echo-media/src/media_peer.rs` (105–124) and `media_state.rs` `receive` (142–172) | own | Next PCM frame to encode; a receive reset versus the next RTP packet. webrtc-rs runs its own tasks on the same runtime (`media_runtime.rs`) |
+| Screen, `echo-screen-server/src/lib.rs` (257–259), `screen_core.rs` `pump` (207–243) | own | Stop; publication barriers; `UiState`; one task per HTTP or SSE client |
+
+Smaller tasks: the health listener (`bridge_health.rs` 68), SNTP (`bridge_time/bridge_time.rs` 139), screen
+actions (`bridge_runtime/bridge_screen.rs` 244), MCP operator serving (`bridge_mcp/bridge_mcp.rs` 201–202).
+
+```mermaid
+flowchart LR
+    H[hassmic Wyoming server]
+    C[codex-app-server child]
+    L[OpenAI Live call]
+    W[echo-screen WebView]
+    subgraph B[echo-bridge runtime, 2 workers]
+        RD[Wyoming reader]
+        WS[Wyoming session]
+        PP[playback pump]
+        VO[main task: endpoint, settings, voice owner, tools, Codex IO]
+        EN[media encode]
+        DE[media decode]
+        RT[webrtc-rs tasks]
+        SC[screen pump and SSE tasks]
+    end
+    H -->|TCP| RD
+    RD -->|mpsc 1| WS
+    WS -->|mic queue 64 and event queue 32| VO
+    VO -->|commands mpsc 16| WS
+    VO -->|reply mpsc 1| PP
+    PP -->|reply queue 32| WS
+    WS -->|audio-chunk| H
+    VO -->|send queue 10| EN
+    EN --> RT
+    RT -->|ingress queue 10| DE
+    DE -->|recv queue 10| VO
+    RT <-->|RTP| L
+    VO <-->|stdio JSON-RPC| C
+    VO -->|UiState mpsc 32 and mouth batches| SC
+    SC -->|SSE| W
+```
+
+#### 1.4.3 How events cross between tasks
+
+| Channel | Capacity | When full |
+| --- | --- | --- |
+| Wyoming reader → session, `mpsc` | 1 | Backpressure: the reader stops reading the socket |
+| Commands → Wyoming session, `mpsc` plus a `oneshot` reply each (`wyoming_client.rs`) | 16 | Backpressure on the sender |
+| Microphone `FrameQueue` (`wyoming_queue.rs`, `mic_capacity`) | 64 chunks | Drops the oldest and counts it |
+| Device events (`wyoming_events.rs`, `event_capacity`) | 32 | Audio arrivals coalesce into one entry; 32 other events pending is `Error::Capacity` and fails the link |
+| Reply, voice owner → pump (`reply_channel(NonZeroUsize::MIN)`, `bridge_voice.rs` 254) | 1 | Backpressure |
+| Reply, pump → Wyoming (`reply_capacity`) | 32 frames | Drops the oldest; the pacer's 200 ms lead keeps it short |
+| Bridge reply buffer `ReplyAudio` (`bridge_codex/call_audio.rs` 143) | 128 frames, 2.56 s | Drops the oldest, counted in `reply_dropped` |
+| Media send, receive and RTP ingress (`echo-media/src/media_queue.rs`, `PeerConfig::default`) | 10 each | `push` drops the oldest; `try_push` refuses |
+| Uplink backlog `Source::uplink` (`voice_source.rs`, `UPLINK_BACKLOG`) | 1500 frames, 30 s | Holds what `try_send` refused, in order; evicts the oldest past 1500 |
+| Codex notifications and pending calls (`echo-codex/src/codex_rpc.rs` `Limits`) | 256 and 128; 10 s per call | `EventsFull` or `PendingFull` closes the app-server generation |
+| Early call events during ICE (`call_media.rs` 206) | 32 | Fails the call |
+| `UiState` → screen (`bridge_screen.rs` 87, `try_send` in `bridge_presentation.rs`) | 32 | `Error::Screen` |
+| Screen → each SSE client (`screen_core.rs`) | 32, at most 32 clients | A client that falls behind is disconnected; mouth batches skip it |
+| Gateway commands (`transport.rs` 383, `try_send`) and session ends (`broadcast`, `RECENT_ENDS`) | 32 and 32 | Commands are dropped; a lagging ends reader loses the oldest |
+| `watch` channels: peer state, endpoint status, health, settings restart | latest value | Coalesce: readers see only the newest |
+
+#### 1.4.4 Deadlines when no event comes
+
+Nothing polls a clock. The voice owner keeps deadlines as `Instant`s in `Source` and `Controller`. Each pass of the
+loop recomputes the earliest one and arms a fresh `sleep_until`; when another branch wins, `select!` drops that
+timer, and the next pass arms the new deadline. `bridge_voice.rs` lines 342–368, trimmed:
+
+```rust
+let barge = source.barge_due();
+let (deadline, on_timeout) = voice_wait::deadline(source, played);
+tokio::select! {
+    biased; // timeouts cannot be starved by a continuously ready peer
+    () = bridge_endpoint::voice::ending() => return voice_listen::remote_cut(port, source),
+    () = voice_listen::until(deadline) => voice_wait::expired(source, on_timeout)?,
+    () = voice_listen::until(barge) => source.interrupt(port)?,
+    () = voice_listen::until(source.mouth.due()) => { /* open or close the mouth */ }
+    result = step(events, microphone, port, sink.as_ref(), source, &mut pending, observe) => result?,
+}
+// until(None) is std::future::pending(): no deadline, no timer.
+```
+
+| Deadline | Value | Where | On expiry |
+| --- | --- | --- | --- |
+| Listen window | `voice.session_listen_seconds`, 15 | `Controller::idle_deadline`, renewed by `renew_idle`, lengthened by `extend_session` | The listen closes and the run ends |
+| No answer | 60 s, `NO_ANSWER_TIMEOUT` | `Source::answer_due`, from the user's last end of speech | `NoResponse`, or an unfailed end after an earlier reply |
+| Hand-back grace | 20 s, `HANDBACK_GRACE` | `voice_wait.rs` `owed` | As no answer |
+| Speech-start latch | `voice.speech_start_expiry_seconds`, 20 | `Source::latch_expiry`, merged by `earliest` | Clears the latch only; the pinned V3 session sends no speech-stopped |
+| Run cap | `voice.session_max_seconds`, 600 | `Source::run_ceiling`; deferred by one latch expiry while the user speaks (`run_cap`) | `SessionCeiling`, mark `capped` |
+| Played | 5 s after the last frame (`voice_config.rs` 335) | `drive`'s `played` | `Deadline` |
+| Barge-in | 2 s window, 500 ms quiet (`reply_barge.rs` 7–10) | `Source::barge_due` | Cut the reply |
+| Warm call between wakes | `live.session_idle_seconds`, 120 | `voice_session.rs` 379 and `wait` (421) | Close the Live call |
+
+Tests run on Tokio's paused clock: about 700 `start_paused = true` or `time::pause()` sites in 180 files, and 251
+`time::advance` calls. With the clock paused, Tokio jumps to the next timer whenever every task is idle, so a 600 s
+run cap takes microseconds (for example `bridge_voice/recovery/run_cap_cases.rs` line 170). Sim runs go further:
+`--sim-clock` starts a current-thread runtime with `start_paused(true)` and steps time on an `advance_playout`
+command (`bridge_mcp/bridge_clock.rs` 47–52).
+
+#### 1.4.5 PCM granularity and micro-batching
+
+| Stage | Unit and code | Buffer and owner |
+| --- | --- | --- |
+| hassmic → bridge | `audio-chunk`, 16 kHz s16le mono. hassmic-host in the sims sends 1600-byte, 50 ms blocks (`echo-lab/src/lab_run/sim/m2/codex/mod.rs` 318). On the Echo, M1 counted about 1,530 chunks in about 32 s (baselines). Assumption: about 20 ms per chunk on the Echo; the fork's chunk size is not read here, and the bridge does not depend on it | Mic queue 64, in the Wyoming session |
+| Capture re-chunk | `CaptureAudio::process` (`call_audio.rs` 75–91): any chunk up to 8192 bytes → i16 → `PcmResampler` to 16 kHz → 320-sample, 20 ms `PcmFrame = [i16; 320]` (`echo-media/src/lib.rs` 22); a partial tail waits in `pending` | Voice owner (`Source::microphone`) |
+| Uplink | `Source::forward` → `try_send`; Rubato 16 → 48 kHz, 960 samples per 20 ms Opus `Voip` packet (`media_audio.rs` 58–78) | Send queue 10, uplink backlog 1500 |
+| Downlink | Opus decode 960 samples at 48 kHz → Rubato to a 16 kHz `PcmFrame` (`media_audio.rs`). webrtc-rs's internal buffers were not read here; their depth is unknown | Ingress and receive queues 10, in echo-media |
+| Reply jitter buffer | `ReplyAudio::push` resamples 16 → 24 kHz into 960-byte, 20 ms frames; `ClockPacer::next_frame` (`reply_playout.rs` 158–181) releases frame n at start + 20 ms × n − lead, lead `audio.reply_lead_ms` 200. A dry start waits for a cushion of 100 to 320 ms (`reply_jitter.rs`); a stall fades out and silent frames are left out to give delay back | Voice owner (`Source::reply`); the Echo holds at most the lead |
+| Playback | Frame → reply `mpsc` 1 → pump → `audio-chunk` writes. hassmic sends `played` 120 ms after the player takes the last slot (`TAIL_MS`, baselines). A reply succeeds only on the device's `Played` event and the playback result | Wyoming reply queue 32 |
+| Barge-in | User speech holds the reply: `playable()` turns false, nothing more is forwarded and the Echo drains its lead (T3: transcript to silent device 187 ms). 500 ms of model quiet inside the 2 s window fires `Source::interrupt`, which retires the audio and cuts playback on the device; once per user turn (`Floor`) | Voice owner |
+| Mute | Nothing is zeroed; frames are dropped. The Wyoming queue's `mute` (`wyoming_queue.rs` 52–58) counts later chunks as dropped and ends the capture; `Source::capture` drops chunks while `muted`; a mute change drops the converter's history and tail and clears the uplink backlog (`mute_uplink`). The only zeros are hassmic's 800 ms lead-in | Wyoming session and voice owner |
+
+#### 1.4.6 Keeping the hot path cheap
+
+- **Per 20 ms chunk or frame:** the reader parses a JSON header into a fresh `Vec` (`wyoming_wire.rs` 7–45); the
+  voice owner wakes once, converts to i16, resamples, copies a `PcmFrame` by value, meters it (`Ear::heard`) and
+  `try_send`s it; the encode task resamples and Opus-encodes into a new 1275-byte `Vec`. Downlink mirrors this, plus
+  one pacer timer, one mouth sample and a non-waiting lip batch (at most 5 samples, `reply_lips.rs`).
+- **Per event:** transcripts, turn lifecycle, tools, session tools, mute, `played` and trace rows. Reply quality is
+  one `reply.quality` summary per reply, not a row per frame.
+- **Allocation:** no `Bytes` and no buffer pools. `PcmFrame` is a fixed array; resamplers keep scratch buffers
+  (`Converter::scratch`); the small per-chunk `Vec`s above remain.
+- **Locks:** the queues use a `std::sync::Mutex` for a few instructions and release it before any `.await`
+  (`media_queue.rs` `pop`, `wyoming_queue.rs`). The screen core is a `tokio::sync::Mutex`; the lip path only
+  `try_lock`s it (`screen_mouth.rs`).
+- **Blocking on the runtime:** `Trace::record` (`bridge_trace.rs` 101–140) serialises and calls `write_all` and
+  `flush` on a `std::fs::File` inline, per event. The kill switch `inspect` (`bridge_runtime/bridge_kill.rs` 13)
+  stats a file every 20 ms, dormant and in runs (`voice_kill.rs` `wait`, 111). `spawn_blocking` appears only in the
+  screen server's pack scans, archive preparation and settings reads (`echo-screen-server/src/packs/`).
+- **Pure logic apart from IO:** `session_controller::Controller` (Listening, Replying, Cutting, Retired, Closing,
+  Closed), the deadline functions in `voice_wait.rs`, `bridge_pacing` (`Barge`, `Jitter`, `Ear`, `Floor`,
+  `ReplyMeter`) and `codex_rpc.rs` take `Instant`s and values, not sockets, and are unit-tested on the paused clock.
+  They are sub-state machines in one `Source`, mutated by the `select!` branches, not one reducer.
+- **Measured (baselines):** on the Echo after PR 224, one 10.2 s reply played 510 of 525 frames, 0 dropped, 1
+  underrun after a 279 ms network gap; 1363 microphone chunks, 0 dropped. At a load average of 14 the audio HAL took
+  72% and hassmic 62% of one core of eight. The bridge's own CPU and RSS on the Echo are not recorded.
+
+#### 1.4.7 The owner's game-loop terms
+
+| Owner's term | What the code does instead | Does the target (10.3) change it? |
+| --- | --- | --- |
+| Loop | No single loop: one main task of nested `select!` loops (endpoint, settings, admission, run, listen), plus IO pump tasks | Yes in name: one core loop that owns the buffers; dispatch stays event-first (answer 1) |
+| Tick | None. Timers only: a deadline re-armed each pass, the pacer's 20 ms frame release while a reply plays, the 20 ms kill-file poll, a 1 s probe while dormant, a 45 s keepalive | Yes: a low-rate core tick (start at 10 Hz) for flushes and timers with no event |
+| Buffer | Owned by whoever drains it: Wyoming queues in the session task, echo-media queues in the peer, capture, uplink and reply buffers in the voice owner's `Source` | Partly: the voice owner already holds capture and playback; transcript and presentation buffers join it (answer 2) |
+| Subsystem | Crates behind bounded queues (Wyoming, media, screen) or futures polled inline (Codex IO, tools, endpoint, pacing) | Yes: the device role becomes a process (2.1) and Codex runs in-process (2.3) |
+| Event | Typed enums: `LinkEvent`, `MediaEvent` and `Event`, `Notice`, `UiState`; one `select!` branch per source | No; the draft's state names reach the traces (10.1) |
+| Frame | 20 ms both ways; microphone chunks as hassmic sends them | No |
+
 ## 2. Target
 
 ### 2.1 One file, four roles
@@ -331,7 +513,7 @@ Ratings: **good**, **fair**, **weak**.
 | Audio capture and AEC | hassmic, source 7 call pipeline, ASP index — **good** | Device-side AEC and beamforming — **good** | Same pipeline inside the device role — **good** |
 | Playback and barge-in | Bridge paces, hassmic plays; one cut per user turn; backchannels pass — **good** | Clear speaker queue, mic stays on; backchannel as a session state — **good** | Unchanged; adopt the draft's names in traces — **good** |
 | Wake | Pryon "Computer" in hassmic — **good** | Wake pipeline in the device layer; gaze wake later — **good** | Pryon in the device role; gaze as a second event source later — **good** |
-| Core loop model | Tokio tasks with bounded queues; one voice owner polls capture, control and PCM ([bridge_voice.rs](../../crates/echo-bridge/src/bridge_voice/bridge_voice.rs)) — **good**, undocumented as a loop | One loop, event plus tick, buffers, subsystems — **good** once the owner's answers are in (10.3) | Event-first loop that owns every buffer, plus a low-rate tick that flushes buffers and fires timers with no event of their own; the renderer ticks at display rate — **good** |
+| Core loop model | Tokio tasks with bounded queues; one voice owner polls capture, control and PCM ([bridge_voice.rs](../../crates/echo-bridge/src/bridge_voice/bridge_voice.rs)) — **good**; described in 1.4 | One loop, event plus tick, buffers, subsystems — **good** once the owner's answers are in (10.3) | Event-first loop that owns every buffer, plus a low-rate tick that flushes buffers and fires timers with no event of their own; the renderer ticks at display rate — **good** |
 | Session lifecycle | Run with a 15 s listen window, `extend_session` ceiling, `end_session`; Live call kept warm across wakes ([plan 3](../program/plan.md#3-the-bridge-runs-the-conversation-and-the-tools)) — **good** | Dormant, creating, active, held, ending; the connection kept when appropriate, closed when needed (owner, 10.3) — **good** | Draft states as the vocabulary; a warm-call substate of dormant with explicit close rules (10.3, answer 3) — **good** |
 | Realtime and agent loop | Live through the app-server child; delegation into Codex turns — **good** | Voice model plus parallel secondary inferencer — **good** | The same, in-process (2.3) — **good** |
 | Tool surface | Bridge tools plus search — **weak** against the owner's intent | Tools through a dispatcher and gateway; device actions — **good** | Full Codex surface minus code mode, plus bridge tools (4) — **good** |
@@ -355,7 +537,8 @@ Ratings: **good**, **fair**, **weak**.
   uid `system`, credentials must not be readable by it, and a crash in a firmware library must not drop a call. So
   the binary is one, with separate roles that keep the draft's boundary: device events in, commands out.
 - **Core loop.** The owner wants it ticked and event-driven where possible (10.3, answer 1), and the recommendation
-  now agrees. Latency-sensitive work (barge-in, wake, a model event) is dispatched the moment its event arrives, so
+  now agrees. Today there is no tick, only events and re-armed deadlines (1.4, with the terms mapped in 1.4.7).
+  Latency-sensitive work (barge-in, wake, a model event) is dispatched the moment its event arrives, so
   no event waits for a tick. A low-rate core tick (start at 10 Hz, measured on the Echo in P3) covers what has no
   event of its own: buffer flushes, stale-data checks and timers. The tick runs under the paused test clock, as the
   deadline timers do. The renderer ticks at display rate.
