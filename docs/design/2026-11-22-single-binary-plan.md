@@ -14,8 +14,8 @@ agent loop and tools as libraries from `openai/codex`. The user-facing result is
 
 Owner decisions folded in (2026-11-22, relayed by the coordinator):
 
-- **"Without the chromium runtime" means Codex's code mode.** In the owner's words, code mode "needs a full
-  Node/Chromium (JS engine) runtime" that "can't run easily on the Echo's armv7 hardware". Precisely, that is V8,
+- **"Without the chromium runtime" means Codex's code mode.** The owner: Codex has a "code mode variant that runs
+  with a full node/chromium runtime and we can't run that easily on our arm based" computer. Precisely, that is V8,
   the JavaScript engine of Chromium and Node (section 3.2). It does not mean the Android WebView or the Codex
   desktop app. The screen keeps its WebView.
 - **Full Codex tool surface.** Code mode is the only part of Codex we leave out. Web search and fetch, file editing,
