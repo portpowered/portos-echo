@@ -30,11 +30,12 @@ impl Endpoint {
     /// # Errors
     /// Rejects invalid socket paths and addresses outside IPv4 loopback.
     pub fn unix_first(path: PathBuf, tcp: SocketAddr) -> Result<Self, crate::Error> {
+        // Path::file_name normalizes a terminal dot. The kernel sees the raw path.
+        let name = path.as_os_str().as_encoded_bytes().rsplit(|byte| *byte == b'/').next();
         if tcp.ip() != std::net::Ipv4Addr::LOCALHOST
             || tcp.port() == 0
             || !path.is_absolute()
-            || path.file_name().is_none()
-            || path.as_os_str().as_encoded_bytes().ends_with(b"/")
+            || matches!(name, Some(b"" | b"." | b".."))
             || UnixAddress::from_pathname(&path).is_err()
         {
             return Err(crate::Error::InvalidOptions);

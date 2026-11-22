@@ -17,8 +17,9 @@ The FFI entry takes mutable, NUL-terminated argument storage and keeps it live
 through process exit. A1a linked the pinned C Wyoming implementation. A1b
 registers the Rust Wyoming protocol before native startup. The Rust provider
 dispatches events and publishes state through the pinned framing helpers. The
-C core owns connection accept and close, capture, wake, controls, playback and
-connection generation. Protocol callbacks, command dispatch and writes use
+C core owns the connection loop, capture, wake, controls, playback and
+connection generation. Rust performs Unix accept, stale probes, lease creation
+and termination handling at the FFI boundary. Protocol callbacks, command dispatch and writes use
 the existing core lock. A failed write shuts down the borrowed connection
 so its reader can unlink it before the C listener closes it.
 
@@ -42,7 +43,8 @@ access under the actual Fire OS launcher.
 
 `--wyoming-socket PATH` selects a Unix listener at an absolute filesystem path
 whose parent already exists, except that the Android default creates its own
-directory. Unix mode accepts legacy `-p` and suppresses the TCP service from
+directory. Paths ending in `/`, `/.` or `/..` exit with status 2 before startup.
+Unix mode accepts legacy `-p` and suppresses the TCP service from
 `-S`. An owner-only lock file next to the socket serializes bind, stale recovery
 and cleanup. A refused socket can be reclaimed after confirming its inode. On
 clean exit the device removes only the socket it bound. The bridge retries

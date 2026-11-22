@@ -16,7 +16,7 @@ use tokio::{
 };
 
 mod fixture;
-use fixture::{Fixture, NAME, TCP, isolated, listener_counts};
+use fixture::{Fixture, NAME, TCP, isolated, listener_counts, reject_terminal_components};
 
 const LIMIT: Duration = Duration::from_secs(6);
 
@@ -285,13 +285,29 @@ async fn t3_a1_socket_conflicts_leave_existing_entries() {
         assert_eq!(identity(&setup.socket), external);
         assert_eq!(listener_counts(&setup.socket), (1, 0));
         drop(outside);
+        fs::remove_file(&setup.socket).unwrap();
+        assert_full_backlog_preserved(&setup).await;
         writeln!(
             io::stdout(),
-            "file, symlink and external listener preserved; no TCP bind"
+            "file, symlink and external listener preserved; full Unix backlog refused reclamation; no TCP bind"
         )
         .unwrap();
     })
     .await;
+}
+
+async fn assert_full_backlog_preserved(setup: &Fixture) {
+    let listener = tokio::net::UnixSocket::new_stream().unwrap();
+    listener.bind(&setup.socket).unwrap();
+    let _listener = listener.listen(0).unwrap();
+    let _pending = timeout(LIMIT, UnixStream::connect(&setup.socket))
+        .await
+        .unwrap()
+        .unwrap();
+    let inode = identity(&setup.socket);
+    reject_endpoint(setup, &io::Error::from(rustix::io::Errno::AGAIN).to_string()).await;
+    assert_eq!(identity(&setup.socket), inode);
+    assert_eq!(listener_counts(&setup.socket), (1, 0));
 }
 
 #[tokio::test]
@@ -345,8 +361,10 @@ async fn t3_a1_socket_discovery_and_option_errors() {
             assert_eq!(result.stdout, b"");
             assert!(String::from_utf8(result.stderr).unwrap().contains("--wyoming-socket"));
         }
+        reject_terminal_components(&setup).await;
         assert_eq!(fs::read_dir(setup.socket.parent().unwrap()).unwrap().count(), 0);
-        writeln!(io::stdout(), "-S Unix stdout=0 bytes and zero endpoint entries; TCP discovery retains exact XML and port=16700; invalid options exit=2").unwrap();
+        assert_eq!(listener_counts(&setup.socket), (0, 0));
+        writeln!(io::stdout(), "-S Unix stdout=0 bytes; TCP discovery retains exact XML and port=16700; terminal dot paths exit=2 in device startup, discovery and bridge lab mode with zero endpoint entries and no trace").unwrap();
     }).await;
 }
 

@@ -1,15 +1,16 @@
 //! Owns the local Wyoming endpoint for the lifetime of the native satellite.
 
-#![expect(unsafe_code, reason = "Native listener and POSIX termination hooks")]
+#![expect(unsafe_code, reason = "Native listener entry hooks")]
 
+mod os;
 mod permissions;
 
 use std::{
-    ffi::{CString, c_char, c_int, c_void},
+    ffi::c_int,
     fs::{self, File, Metadata},
     io::{self, ErrorKind},
     os::{
-        fd::{AsRawFd, FromRawFd},
+        fd::AsRawFd,
         unix::{
             fs::{FileTypeExt, MetadataExt},
             net::{UnixDatagram, UnixListener},
@@ -26,13 +27,6 @@ static PATH: OnceLock<PathBuf> = OnceLock::new();
 static ENDPOINT: Mutex<Option<Endpoint>> = Mutex::new(None);
 static STOP: OnceLock<UnixDatagram> = OnceLock::new();
 static NOTIFY: AtomicI32 = AtomicI32::new(-1);
-
-unsafe extern "C" {
-    fn echo_hassmic_probe_unix(path: *const c_char) -> c_int;
-    fn echo_hassmic_open_lease(path: *const c_char) -> c_int;
-    fn echo_hassmic_on_stop(notify: extern "C" fn(c_int)) -> c_int;
-    fn write(fd: c_int, buffer: *const c_void, length: usize) -> isize;
-}
 
 pub(super) fn select(path: Option<PathBuf>) {
     if let Some(path) = path {
@@ -105,17 +99,13 @@ fn watch_stop() -> io::Result<()> {
             std::process::exit(0);
         }
     })?;
-    // SAFETY: The callback uses only a lock-free descriptor load and POSIX write.
-    if unsafe { echo_hassmic_on_stop(notify) } == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+    os::on_stop(notify)
 }
 
 extern "C" fn notify(_signal: c_int) {
     let fd = NOTIFY.load(Ordering::Acquire);
-    // SAFETY: STOP keeps this nonblocking descriptor live. write is async-signal-safe.
-    unsafe { write(fd, b"x".as_ptr().cast(), 1) };
+    // STOP keeps this nonblocking descriptor live for the signal handler.
+    os::notify(fd);
 }
 
 struct Endpoint {
@@ -161,15 +151,7 @@ fn lock(path: &Path) -> io::Result<File> {
     // different files for the same path. The kernel releases the lock on exit.
     let mut sidecar = path.as_os_str().to_owned();
     sidecar.push(".lock");
-    let sidecar = c_path(Path::new(&sidecar))?;
-    // SAFETY: sidecar is a live NUL-terminated pathname. The wrapper returns
-    // a new CLOEXEC descriptor and refuses to follow a final symlink.
-    let fd = unsafe { echo_hassmic_open_lease(sidecar.as_ptr()) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: This is the first Rust owner of the returned descriptor.
-    let file = unsafe { File::from_raw_fd(fd) };
+    let file = os::open_lease(Path::new(&sidecar))?;
     let meta = file.metadata()?;
     if !meta.is_file() || meta.nlink() != 1 || meta.mode() & 0o777 != 0o600 || meta.uid() != permissions::uid() {
         return Err(conflict());
@@ -190,18 +172,11 @@ fn reclaim(path: &Path) -> io::Result<()> {
     if !metadata.file_type().is_socket() || metadata.uid() != permissions::uid() {
         return Err(conflict());
     }
-    let endpoint = c_path(path)?;
-    // SAFETY: The C function borrows the NUL-terminated path and closes its
-    // nonblocking probe descriptor before returning the connect errno.
-    let status = unsafe { echo_hassmic_probe_unix(endpoint.as_ptr()) };
-    if status == 0 {
-        return Err(io::Error::new(ErrorKind::AddrInUse, "Wyoming listener is live"));
+    match os::probe(path) {
+        Ok(()) => Err(io::Error::new(ErrorKind::AddrInUse, "Wyoming listener is live")),
+        Err(error) if error.kind() == ErrorKind::ConnectionRefused => unlink_owned(path, identity(&metadata)),
+        Err(error) => Err(error),
     }
-    let error = io::Error::from_raw_os_error(status);
-    if error.kind() != ErrorKind::ConnectionRefused {
-        return Err(error);
-    }
-    unlink_owned(path, identity(&metadata))
 }
 
 fn unlink_owned(path: &Path, inode: (u64, u64)) -> io::Result<()> {
@@ -215,10 +190,6 @@ fn unlink_owned(path: &Path, inode: (u64, u64)) -> io::Result<()> {
 
 fn identity(metadata: &Metadata) -> (u64, u64) {
     (metadata.dev(), metadata.ino())
-}
-
-fn c_path(path: &Path) -> io::Result<CString> {
-    CString::new(path.as_os_str().as_encoded_bytes()).map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))
 }
 
 fn conflict() -> io::Error {

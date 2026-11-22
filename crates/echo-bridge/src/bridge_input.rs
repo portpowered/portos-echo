@@ -396,7 +396,9 @@ mod tests {
         );
         let configured = ["--config".into(), "unused".into(), "--trace".into(), "unused".into()];
         for (args, env, path) in [
-            (&[][..], lab, "relative"),
+            (&[][..], lab.clone(), "relative"),
+            (&[][..], lab.clone(), "/tmp/."),
+            (&[][..], lab, "/tmp/.."),
             (&[][..], [None, None, None], path),
             (&configured[..], [None, None, None], path),
         ] {

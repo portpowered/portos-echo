@@ -39,7 +39,7 @@ pub fn source(vendor: &Path, out: &Path) -> Result<PathBuf, Box<dyn Error>> {
         ),
         (
             "        int c = net_accept(ls);",
-            "        int c = echo_hassmic_accept(ls, unix_listener >= 0);",
+            "#ifdef __ANDROID__\n        int c = echo_hassmic_accept_unix(ls);\n#else\n        int c = unix_listener >= 0 ? echo_hassmic_accept_unix(ls) : net_accept(ls);\n#endif",
         ),
         (
             "          setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);",
@@ -62,44 +62,9 @@ pub fn source(vendor: &Path, out: &Path) -> Result<PathBuf, Box<dyn Error>> {
 }
 
 const REGISTRATION: &str = r#"
-#include <sys/un.h>
 extern int echo_hassmic_prepare_listener(void);
 extern void echo_hassmic_unix_ready(void);
-
-static int echo_hassmic_accept(int fd, int local)
-{
-#ifndef __ANDROID__
-    if (!local) return net_accept(fd);
-#else
-    (void)local;
-#endif
-    int client;
-    do client = accept4(fd, NULL, NULL, SOCK_CLOEXEC); while (client < 0 && errno == EINTR);
-    return client;
-}
-
-int echo_hassmic_probe_unix(const char *path)
-{
-    struct sockaddr_un addr = { .sun_family = AF_UNIX };
-    size_t len = strlen(path);
-    if (len >= sizeof addr.sun_path) return ENAMETOOLONG;
-    memcpy(addr.sun_path, path, len + 1);
-    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-    if (fd < 0) return errno;
-    int status = connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0 ? errno : 0;
-    close(fd);
-    return status;
-}
-
-int echo_hassmic_open_lease(const char *path)
-{
-    return open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
-}
-
-int echo_hassmic_on_stop(void (*notify)(int))
-{
-    return signal(SIGTERM, notify) == SIG_ERR || signal(SIGINT, notify) == SIG_ERR ? -1 : 0;
-}
+extern int echo_hassmic_accept_unix(int fd);
 
 static struct proto echo_hassmic_wyoming = {
     .id = "wyoming", .port = 16700, .threaded = 0,

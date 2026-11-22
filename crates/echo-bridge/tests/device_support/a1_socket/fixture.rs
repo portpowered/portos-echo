@@ -172,3 +172,39 @@ pub(super) fn listener_counts(socket: &Path) -> (usize, usize) {
         .sum();
     (unix, tcp)
 }
+
+pub(super) async fn reject_terminal_components(setup: &Fixture) {
+    let run = setup.socket.parent().unwrap();
+    for component in [".", ".."] {
+        // Append as raw text so the child receives the terminal component.
+        let path = format!("{}/{component}", run.display());
+        for flags in [&[][..], &["-S"][..]] {
+            let result = timeout(
+                LIMIT,
+                setup.device().args(flags).args(["--wyoming-socket", &path]).output(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!((result.status.code(), result.stdout), (Some(2), vec![]));
+            assert!(String::from_utf8(result.stderr).unwrap().contains("--wyoming-socket"));
+            assert_eq!(fs::read_dir(run).unwrap().count(), 0);
+        }
+        let result = timeout(
+            LIMIT,
+            super::super::bridge(PORT, "http://127.0.0.1:1", &setup.trace)
+                .env("ECHO_LAB_WYOMING_SOCKET", &path)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!((result.status.code(), result.stdout), (Some(2), vec![]));
+        assert_eq!(
+            result.stderr,
+            format!("echo-bridge: {}\n", echo_bridge::Error::Input).as_bytes()
+        );
+        assert!(!setup.trace.exists());
+    }
+}

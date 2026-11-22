@@ -27,9 +27,10 @@ pub(super) fn select(
                 .next()
                 .map(PathBuf::from)
                 .ok_or("--wyoming-socket requires a path")?;
+            // Path::file_name normalizes a terminal dot. The kernel sees the raw path.
+            let name = path.as_os_str().as_encoded_bytes().rsplit(|byte| *byte == b'/').next();
             if !path.is_absolute()
-                || path.file_name().is_none()
-                || path.as_os_str().as_encoded_bytes().ends_with(b"/")
+                || matches!(name, Some(b"" | b"." | b".."))
                 || SocketAddr::from_pathname(&path).is_err()
             {
                 return Err("--wyoming-socket requires an absolute filesystem socket path");
@@ -102,6 +103,8 @@ mod tests {
             vec![SOCKET_OPTION, "relative"],
             vec![SOCKET_OPTION, "/"],
             vec![SOCKET_OPTION, "/tmp/socket/"],
+            vec![SOCKET_OPTION, "/tmp/."],
+            vec![SOCKET_OPTION, "/tmp/.."],
             vec![SOCKET_OPTION, "/tmp/\0socket"],
             vec![SOCKET_OPTION, &too_long],
             vec![SOCKET_OPTION, "/tmp/one", SOCKET_OPTION, "/tmp/two"],
