@@ -186,6 +186,76 @@ impl Question {
     }
 }
 
+/// One cut per user turn (owner, 2026-11-21). The first sign of the user
+/// talking over a reply may arm a barge-in; once it has cut, the rest of that
+/// user turn cuts nothing more, so the model's backchannels ("mm-hm") under
+/// it play through. The turn ends where the Live session says it does: the
+/// user's whole transcript, its end of speech, the end of capture, or the
+/// speech-start expiry. Then the cut re-arms for the next turn.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Floor {
+    /// Counts the user turns that have cut, from 1: the turn now open.
+    turn: u32,
+    /// This turn has had its cut.
+    spent: bool,
+    /// The user has been heard since the turn last ended.
+    open: bool,
+    /// Signs passed in this turn since its cut.
+    passed: u32,
+}
+
+impl Default for Floor {
+    fn default() -> Self {
+        Self {
+            turn: 1,
+            spent: false,
+            open: false,
+            passed: 0,
+        }
+    }
+}
+
+impl Floor {
+    /// The user is speaking: their turn is open.
+    pub(crate) fn heard(&mut self) {
+        self.open = true;
+    }
+
+    /// A sign of the user talking over a reply, with no barge-in pending:
+    /// the turn that may cut, or the turn that already has and how many
+    /// signs it has passed since.
+    pub(crate) fn claim(&mut self) -> Result<u32, (u32, u32)> {
+        if self.spent {
+            self.passed += 1;
+            return Err((self.turn, self.passed));
+        }
+        Ok(self.turn)
+    }
+
+    /// The turn had its cut: the turn, and the same turn again when it had
+    /// already ended, since the cut then re-arms at once.
+    pub(crate) fn cut(&mut self) -> (u32, Option<u32>) {
+        let turn = self.turn;
+        self.spent = true;
+        (turn, (!self.open).then(|| self.rearm()))
+    }
+
+    /// The user's turn ended. The turn that re-armed, when it had cut and
+    /// no barge-in is still `pending`: one pending cuts and then re-arms.
+    pub(crate) fn ended(&mut self, pending: bool) -> Option<u32> {
+        self.open = false;
+        (self.spent && !pending).then(|| self.rearm())
+    }
+
+    fn rearm(&mut self) -> u32 {
+        let turn = self.turn;
+        self.turn += 1;
+        self.spent = false;
+        self.passed = 0;
+        turn
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,5 +375,24 @@ mod tests {
         assert!(question.speech_started());
         question.cut();
         assert!(!question.transcribed(false, true));
+    }
+
+    /// T1: one cut per user turn; the rest of the turn passes and counts what
+    /// it passed; the turn's end re-arms, also when it ended before its cut.
+    #[test]
+    fn floor_cuts_once_per_user_turn_and_rearms_when_it_ends() {
+        let mut floor = Floor::default();
+        floor.heard();
+        assert_eq!(floor.claim(), Ok(1));
+        assert_eq!(floor.cut(), (1, None));
+        assert_eq!((floor.claim(), floor.claim()), (Err((1, 1)), Err((1, 2))));
+        assert_eq!(floor.ended(false), Some(1));
+        assert_eq!(floor.ended(false), None);
+        floor.heard();
+        assert_eq!(floor.claim(), Ok(2));
+        // The turn ends under its pending barge-in: it re-arms at the cut.
+        assert_eq!(floor.ended(true), None);
+        assert_eq!(floor.cut(), (2, Some(2)));
+        assert_eq!(floor.claim(), Ok(3));
     }
 }

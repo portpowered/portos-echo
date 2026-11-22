@@ -112,7 +112,7 @@ fn voice_listen_defaults_and_overrides_match_both_offline_loaders() {
                 session_listen_enabled: true,
                 session_listen_seconds: listen,
                 session_max_seconds: max,
-                speech_start_expiry_seconds: 20,
+                ..VoiceConfig::default()
             }
         );
         assert_eq!(parsed.live.session_idle_seconds, 120);

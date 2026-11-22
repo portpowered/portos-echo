@@ -1,7 +1,9 @@
 use super::{Error, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
-use crate::bridge_runtime::bridge_pacing::Question;
-use crate::bridge_runtime::bridge_pacing::{Barge, BargeTrigger, Cut, Discard, Ear, QUIET, ReplyMeter, ReplyQuality};
+#[cfg(test)]
+use crate::bridge_runtime::bridge_pacing::BargeTrigger;
+use crate::bridge_runtime::bridge_pacing::{Barge, Cut, Discard, Ear, QUIET, ReplyMeter, ReplyQuality};
+use crate::bridge_runtime::bridge_pacing::{Floor, Question};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
@@ -9,6 +11,8 @@ use std::collections::VecDeque;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
+#[path = "recovery/voice_floor.rs"]
+mod voice_floor;
 #[path = "earcon/voice_mouth.rs"]
 mod voice_mouth;
 pub use super::voice_wait::Delegation;
@@ -83,6 +87,8 @@ pub(super) struct Source {
     ear: Ear,
     /// The session's transcript of the turn the reply answers.
     question: Question,
+    /// One cut per user turn.
+    floor: Floor,
 }
 
 impl Source {
@@ -208,42 +214,8 @@ impl Source {
             stale: false,
             ear: Ear::default(),
             question: Question::default(),
+            floor: Floor::default(),
         })
-    }
-
-    /// The Live session's sign of user speech during a reply arms a barge-in:
-    /// `said` is its transcript, a fragment or the `whole` turn. The reply is
-    /// held from the device at once, but not cut: the model may talk on (`Barge`).
-    /// A dispatch in flight is thinking, not a reply to talk over: user speech
-    /// neither cancels the delegated turn nor cuts the speaker until it
-    /// completes. The Live session still hears that speech.
-    pub fn heard_user(&mut self, trigger: BargeTrigger, said: &str, whole: bool) {
-        if whole {
-            self.user_quiet();
-        } else {
-            self.user_active(matches!(trigger, BargeTrigger::UserTranscript));
-        }
-        let replying = !self.delegation.in_flight() && self.controller.speaking();
-        // Nobody talks over a reply that has not sounded yet, and a reply
-        // that has is not talked over by its own question.
-        let over = match trigger {
-            BargeTrigger::UserTranscript => self.question.transcribed(whole, replying && self.ear.sounded()),
-            BargeTrigger::SpeechStarted => self.question.speech_started(),
-        };
-        if !(over && replying) {
-            return;
-        }
-        let now = Instant::now();
-        if self.barge.arm(now, trigger) {
-            self.meter.held(now);
-        }
-        self.barge.transcribed(said, whole);
-    }
-
-    /// When the pending barge-in fires unless the model is heard first.
-    #[must_use]
-    pub fn barge_due(&self) -> Option<Instant> {
-        self.barge.due(Instant::now(), self.reply.finished())
     }
 
     /// An applied `end_session` supersedes everything (owner, 2026-11-21):
@@ -271,34 +243,6 @@ impl Source {
         crate::bridge_runtime::bridge_pacing::reply_lips::cut(Instant::now());
         self.controller.cut();
         Ok(false)
-    }
-
-    /// The model has yielded to the user: the pending barge-in cuts the reply.
-    /// Retire all old playback state together; never flush an abandoned tail.
-    /// Stream order identifies the replacement at its next assistant delta.
-    pub fn interrupt(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
-        let Some(trigger) = self.barge.fire(Instant::now(), self.reply.finished()) else {
-            return Ok(());
-        };
-        if self.delegation.in_flight() || !self.controller.speaking() {
-            return Ok(());
-        }
-        let (silent_ms, yield_ms) = self.meter.cut(trigger);
-        let text = self.barge.said();
-        self.stats.cut = Some(Box::new(Cut {
-            text,
-            silent_ms,
-            yield_ms,
-        }));
-        self.stale = true;
-        self.question.cut();
-        port.retire_audio();
-        self.fresh_reply()?;
-        self.delegation = Delegation::default();
-        self.mouth = Mouth::default();
-        crate::bridge_runtime::bridge_pacing::reply_lips::cut(Instant::now());
-        self.controller.cut();
-        Ok(())
     }
 
     /// Return whether this chunk was suppressed by the defensive mute gate.

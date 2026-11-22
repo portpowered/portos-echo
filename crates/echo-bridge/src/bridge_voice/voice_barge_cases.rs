@@ -5,6 +5,8 @@ use crate::bridge_runtime::bridge_pacing::BARGE_QUIET;
 
 #[path = "controls/tests/voice_barge_stop.rs"]
 mod stop_cases;
+#[path = "controls/tests/voice_barge_turn.rs"]
+mod turn_cases;
 #[path = "controls/tests/voice_barge_yield.rs"]
 mod yield_cases;
 

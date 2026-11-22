@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 19
+last modified: 2026, november, 21
 status: accepted
 ---
 
@@ -226,3 +226,81 @@ Raw readers retain and validate these records. M4 golden normalization ignores
 only this exact payload-free envelope before assigning identity aliases; all
 other records and fields retain strict comparison. Revert the emitter, helper,
 consumer accommodation and this amendment together.
+
+## Barge-in: one cut per user turn (2026-11-21)
+
+The owner's rule: the first time the user talks over a reply, the reply is cut,
+once. For the rest of that user turn, agent audio such as a backchannel ("mm-hm")
+plays and is not cut. The cut arms again only after the user's turn ends.
+
+### Which layer does what
+
+Barge-in is partly free. The Live model already stops talking when the user talks
+over it. The bridge adds only a local hold and flush of audio it has already
+received. Checked against Codex `rust-v0.171.0`:
+
+| Layer | What it does on the pinned V3 route |
+| --- | --- |
+| OpenAI Live session | Decides when to yield. The call session sets no turn detection, interruption or input audio: `codex-api/.../methods_frameless_bidi.rs:52-100`, built via `methods_common.rs:140-165`. V2 would set server VAD with `interrupt_response` (`methods_v2.rs:93-105`); V3 does not. |
+| Codex core | Passes V3 events through and never truncates or cancels a reply. `core/src/realtime_conversation.rs:722` treats the V3 parser as a V1 session, and the truncate on speech start runs for V2 only (`:2906-2931`, `:3058-3081`). The V3 parser keeps only session, audio, transcript, `turn.done`, delegation and error events (`protocol_frameless_bidi.rs:15-35`); `turn.done` with role `user` ends the user transcript (`:58-68`). So no speech-start event reaches the bridge on V3. |
+| Codex app server | Forwards transcripts, audio and the item events (`app-server/src/bespoke_event_handling.rs:527-616`). `ThreadRealtimeStartParams` (`app-server-protocol/src/protocol/v2/realtime.rs:301-376`) and the `[realtime]` config (`config/src/config_toml.rs:691-699`) have no turn-taking field, so the bridge cannot configure turn detection without a Codex change. |
+| Bridge | Holds playback at the first talk-over sign. It cuts after 500 ms with no new model audio (`BARGE_QUIET`), or at once if the reply has ended. The cut empties the bridge queue and the device queue and marks call audio stale until the next assistant delta. Nothing is sent upstream. |
+| WebRTC track to the speaker | About 0.4 to 0.6 s of audio is already buffered: `audio.reply_lead_ms` (200 ms), the jitter cushion (100 to 320 ms; each call starts at 300 ms) and the Echo's output delay (about 85 ms). |
+
+There is no double handling upstream: Codex neither truncates nor cancels on V3.
+The local cut only removes audio the model has already sent. The gap is that the
+local cut did not know about user turns. Every talk-over sign could cut again, and
+a backchannel that arrived while a cut was pending was thrown away with the reply.
+The T3 pinned test `pinned_media` now records the turn-taking fields Codex sends
+in its call session. A Codex release that starts to configure them fails that
+test, and this section must then be reviewed.
+
+### The rule in the bridge
+
+A per-run floor counts user turns from 1.
+
+- The first talk-over sign in a turn claims the floor and arms the cut. Each
+  later sign in the same turn passes; agent audio plays on.
+- The user turn ends when the session's turn ends: a whole user transcript (V3
+  `turn.done` with role `user`), a speech stop, the end of capture, or the
+  20 s silent speech-start expiry (2026-11-21, `el-w6-barge-reply-hang`).
+- A speech stop followed by a new speech start therefore counts as two turns.
+  This follows the model's own turn semantics rather than guessing pauses
+  locally, and no local voice detector is added. The risk is that gpt-live
+  closes the user's turn around its own backchannel. If so, the device trace
+  shows `barge.rearmed` followed by a second `barge.cut` on a short reply.
+- The floor arms again when a spent turn ends. If the turn has already ended
+  when the cut fires, it arms again at once.
+
+The existing `Question` rule is unchanged: a reply is never cut by its own
+question. The PR 326 silent speech-start expiry is unchanged, and so are explicit
+end supersession and the farewell play-out.
+
+Known limit: a backchannel that arrives inside the pending hold, before the cut
+fires, is still emptied with the reply.
+
+### Switch
+
+`voice.local_barge_cut` (default `true`) keeps the hold and the cut. With
+`false`, the bridge never holds or cuts. The yield is left to the model, and the
+audio already buffered (0.4 to 0.6 s) plays out. The floor still counts turns, so
+the trace stays comparable.
+
+### Trace
+
+These events carry structure only, with no transcript text:
+
+- `barge.cut` (`turn`, `trigger`)
+- `barge.suppressed_in_turn` (`turn`, `trigger`, `count`)
+- `barge.rearmed` (`turn`, `reason`: `cleared`, `expired` or `ended`)
+- `barge.model_only` (`turn`, `trigger`): a talk-over that the switch left to
+  the model.
+
+### Keep and delete
+
+Keep the turn floor and the hold-then-empty of the local buffer. Without them,
+up to 0.6 s of stale reply plays after the model yields. If the device A/B with
+`local_barge_cut = false` shows that the tail is acceptable, the hold, the
+`BARGE_QUIET` window and the cut meter can be deleted, leaving only an empty of
+the buffer at the first talk-over sign in a turn. Revert `voice_floor.rs`, the `Floor` type, the
+switch and this section together.
