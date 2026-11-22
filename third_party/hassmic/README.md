@@ -25,7 +25,7 @@ firmware and never runs in the build or CI. The build consumes the pinned
 | --- | --- |
 | `LICENSE`, `src/hassmic/*`, `src/include/*`, `devices/athena/board.c`, `devices/athena/stubs/*.syms`, `tools/mkstubs.sh.txt` | Upstream MIT. The headers also include declarations required by common satellite code whose optional implementations are absent. |
 | `src/third_party/monocypher.c`, `src/third_party/monocypher.h` | BSD-2-Clause or CC0-1.0 as declared in both files. The shared dispatcher links the arbitration helpers, which reference Monocypher even though Wyoming has no arbitration callback. |
-| `src/third_party/minimp3.h` | CC0-1.0. `sounds.c` uses it to decode the satellite's sounds. |
+| `src/third_party/minimp3.h` | CC0-1.0. `sounds.c` uses it to decode the satellite's sounds. A local translation unit provides the implementation that the fork builds in its ESPHome source. |
 | Every `src/third_party/rnnoise/*` file in `sources.sha256` | Permissive BSD terms in `rnnoise/COPYING` and file-local notices. `micdenoise.c` uses the implementation, model data and FFT helpers. |
 
 The common dispatcher, settings and athena band code retain their upstream

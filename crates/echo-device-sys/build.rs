@@ -1,4 +1,4 @@
-use std::{env, error::Error, fs, io::Write, path::Path};
+use std::{env, error::Error, ffi::OsStr, fs, io::Write, path::Path};
 
 #[path = "build/android.rs"]
 mod android;
@@ -9,7 +9,7 @@ mod notices;
 
 const HOST: &[&str] = &["audio_file.c", "wake_none.c", "sound_none.c", "whisper_none.c"];
 const ATHENA: &[&str] = &["audio_android.c", "wake_pryon.c", "sound_pryon.c", "whisper_pryon.c"];
-const LOCAL: &[&str] = &["bluetooth.c", "services.c", "random.c"];
+const LOCAL: &[&str] = &["bluetooth.c", "minimp3.c", "services.c", "random.c"];
 
 fn main() -> Result<(), Box<dyn Error>> {
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
@@ -74,10 +74,13 @@ fn compile_satellite(
     let manifest = fs::read_to_string(vendor.join("sources.sha256"))?;
     for line in manifest.lines() {
         let (_, paths) = line.split_once("  ").ok_or("invalid hassmic inventory row")?;
-        let path = paths.split_once("  ").map_or(paths, |(_, stored)| stored);
-        if path.ends_with(".c") && !path.ends_with("/main.c") {
-            let basename = path.rsplit('/').next().ok_or("missing hassmic filename")?;
-            if !other_backend.contains(&basename) {
+        let path = Path::new(paths.split_once("  ").map_or(paths, |(_, stored)| stored));
+        if path.extension() == Some(OsStr::new("c")) {
+            let basename = path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .ok_or("missing hassmic filename")?;
+            if basename != "main.c" && !other_backend.contains(&basename) {
                 build.file(vendor.join(path));
             }
         }
