@@ -3,7 +3,7 @@ use crate::{ClientOptions, EventStream, Run, WyomingClient};
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
 use echo_link::{
     CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
-    ReplySink, RunFailure, RunStats, SpeakerRequest,
+    ReplySink, RunFailure, RunStats, SpeakerRequest, SpeakerState,
 };
 use std::{net::SocketAddr, num::NonZeroUsize, time::Duration};
 use tokio::sync::mpsc;
@@ -74,7 +74,9 @@ impl MicrophoneRun for Run {
     }
 }
 mod mute_events;
+mod speaker_events;
 pub use mute_events::Events;
+pub(crate) use speaker_events::Speaker;
 /// The existing bounded producer with neutral send errors.
 pub struct Sink(mpsc::Sender<Vec<u8>>);
 impl ReplySink for Sink {
@@ -88,7 +90,11 @@ impl EchoLink for WyomingClient {
     type ReplySource = mpsc::Receiver<Vec<u8>>;
     fn events(&mut self) -> Result<Events, Error> {
         let barrier = self.neutral_barrier;
-        Ok(Events::new(Self::events(self).map_err(error)?, barrier))
+        Ok(Events::new(
+            Self::events(self).map_err(error)?,
+            barrier,
+            self.speaker.clone(),
+        ))
     }
     fn reply_channel(&self, capacity: NonZeroUsize) -> (Self::ReplySink, Self::ReplySource) {
         let (tx, rx) = mpsc::channel(capacity.get());
@@ -108,6 +114,9 @@ impl EchoLink for WyomingClient {
     }
     async fn probe(&self) -> Result<(), Error> {
         self.describe().await.map(|_| ()).map_err(error)
+    }
+    async fn speaker_changed(&self, previous: SpeakerState) -> SpeakerState {
+        self.speaker.changed(previous).await
     }
     async fn request_speaker(&self, request: SpeakerRequest) -> Result<(), Error> {
         let (name, data) = match request {

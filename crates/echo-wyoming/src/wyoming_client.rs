@@ -21,6 +21,8 @@ pub struct WyomingClient {
     task: JoinHandle<()>,
     deadline: Duration,
     reset: Option<watch::Sender<u64>>,
+    /// The device's latest `hassmic-speaker` report, kept by the event stream.
+    pub(crate) speaker: crate::adapter::Speaker,
 }
 
 impl WyomingClient {
@@ -64,6 +66,7 @@ impl WyomingClient {
             task,
             deadline,
             reset: Some(reset),
+            speaker: crate::adapter::Speaker::default(),
         }
     }
 
@@ -85,6 +88,7 @@ impl WyomingClient {
             task,
             deadline,
             reset: None,
+            speaker: crate::adapter::Speaker::default(),
         }
     }
 

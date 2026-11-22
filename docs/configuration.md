@@ -136,8 +136,9 @@ with one report carrying the frame's id as `requestId` and no other reply. After
 it waits up to 3 s from receipt for the speaker state the device reports, and the ack carries that
 state as `speaker` (`volume` and `muted`) with `sampledAtMs`. Otherwise the ack carries `error`
 instead of `speaker`: `INVALID_REQUEST` for a bad body; `NOT_SUPPORTED` when the device reports no
-speaker state (hassmic today applies volume and mute but reports neither), and for a relative
-change with no reported base volume; `NOT_READY` when no voice session holds a speaker link, the
+speaker state (a hassmic older than the fork's speaker-state change, portpowered/echo-dot-assist#13,
+applies neither and reports neither), and for a relative change with no reported base volume;
+`NOT_READY` when no voice session holds a speaker link, the
 link is busy, or the device reports state but did not reflect the change in time. With no caller
 waiting (fire-and-forget, or past Port OS's 60 s) Port OS still applies the state and answers
 404; that ack is done and never sent again. Each ack is traced as `endpoint.speaker_ack` with its
@@ -147,6 +148,16 @@ delivery `outcome` (`answered`, `not_waiting` or `expired`), its `code` (`OK` or
 The audit row's code is the ack's. Speaker state reports without `requestId` stay plain state.
 Volume and output mute are unknown until the device reports them. Microphone privacy continues to
 control the assistant's muted state independently.
+
+Over Wyoming the bridge sends `hassmic-set-volume` `{"volume": 0..100}` and
+`hassmic-set-output-mute` `{"mute": bool}`. A hassmic with the speaker-state change reports
+`hassmic-speaker` `{"volume": 0..100, "muted": bool}` on connecting, on every volume or output-mute
+change whatever caused it (buttons, Settings, Sendspin, the bridge), and once in answer to each
+set, even one that changed nothing; that report is the ack's `speaker`. `muted` is output mute:
+while it is on the Echo plays silence and keeps its volume. It is not the microphone mute
+(`hassmic-mute`). The bridge ignores a malformed report and forgets the state when the connection
+changes, until the new connection reports. hassmic does not save output mute: a hassmic restart
+unmutes the speaker.
 
 Snapshot requests use the camera source's own shutter state. A closed shutter refuses capture,
 including if it closes during capture. A supported source returns one in-memory JPEG with its

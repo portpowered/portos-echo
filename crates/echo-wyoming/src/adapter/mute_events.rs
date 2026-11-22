@@ -1,5 +1,5 @@
 //! Cancellation-safe mute ordering and transport-owned connection barriers.
-use super::{Error, EventStream, LinkEvent, LinkEvents, Run, WyomingEvent, error};
+use super::{Error, EventStream, LinkEvent, LinkEvents, Run, Speaker, WyomingEvent, error};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -17,9 +17,10 @@ pub struct Events {
     capture: Capture,
     handshake: bool,
     barrier: bool,
+    speaker: Speaker,
 }
 impl Events {
-    pub(super) fn new(raw: EventStream, handshake: bool) -> Self {
+    pub(super) fn new(raw: EventStream, handshake: bool, speaker: Speaker) -> Self {
         Self {
             raw,
             current: None,
@@ -29,6 +30,7 @@ impl Events {
             capture: Capture::Ended,
             handshake,
             barrier: handshake,
+            speaker,
         }
     }
     fn generation(&mut self) -> bool {
@@ -46,6 +48,7 @@ impl Events {
         self.current = None;
         self.capture = Capture::Ended;
         self.barrier = self.handshake;
+        self.speaker.reset();
         let reset = self.muted
             && !matches!(&event.event,
             WyomingEvent::Other(name, data) if name == "hassmic-mute" && data["muted"] == true);
@@ -131,6 +134,15 @@ impl LinkEvents for Events {
             }
             if self.generation() {
                 return Ok(Some(LinkEvent::Mute(false)));
+            }
+            // Speaker reports update the link's state, before or after Info.
+            if self
+                .pending
+                .as_ref()
+                .is_some_and(|event| self.speaker.observe(&event.event))
+            {
+                self.pending = None;
+                continue;
             }
             if self.barrier
                 && self.pending.as_ref().is_some_and(|event| {
