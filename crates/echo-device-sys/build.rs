@@ -36,7 +36,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .ok_or("missing hassmic pin")?;
     let build_id = commit.get(..7).ok_or("invalid hassmic pin")?;
     let version = fs::read_to_string(vendor.join("version"))?;
-    let version = format!("\"{}\"", version.trim());
+    let version = version.trim();
+    writeln!(std::io::stdout(), "cargo:rustc-env=HASSMIC_VERSION={version}")?;
+    let version = format!("\"{version}\"");
     let build_id = format!("\"{build_id}\"");
     let mut build = cc::Build::new();
     build
@@ -80,7 +82,7 @@ fn compile_satellite(
                 .file_name()
                 .and_then(OsStr::to_str)
                 .ok_or("missing hassmic filename")?;
-            if basename != "main.c" && !other_backend.contains(&basename) {
+            if !["main.c", "proto_wyoming.c"].contains(&basename) && !other_backend.contains(&basename) {
                 build.file(vendor.join(path));
             }
         }

@@ -1,4 +1,10 @@
-//! Single process entry for the pinned C satellite.
+//! Process entry and Wyoming protocol boundary for the pinned C satellite.
+
+mod core;
+mod wire;
+
+pub use core::{Action, Core, Protocol};
+pub use wire::Event;
 
 use std::{
     convert::Infallible,
@@ -8,6 +14,7 @@ use std::{
 };
 
 pub const NOTICES: &str = include_str!(concat!(env!("OUT_DIR"), "/notices.txt"));
+pub const VERSION: &str = env!("HASSMIC_VERSION");
 
 static ENTERED: AtomicBool = AtomicBool::new(false);
 
@@ -28,7 +35,10 @@ pub enum Error {
 /// # Errors
 /// Returns an error before entering C for an interior NUL, an unrepresentable
 /// argument count or a second entry in the same process.
-pub fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<Infallible, Error> {
+pub fn run(
+    arguments: impl IntoIterator<Item = OsString>,
+    protocol: &'static dyn Protocol,
+) -> Result<Infallible, Error> {
     let mut storage = std::iter::once(OsString::from("hassmic"))
         .chain(arguments)
         .map(|arg| CString::new(arg.into_encoded_bytes()).map(CString::into_bytes_with_nul))
@@ -43,6 +53,7 @@ pub fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<Infallible, 
     if ENTERED.swap(true, Ordering::AcqRel) {
         return Err(Error::AlreadyEntered);
     }
+    core::register(protocol);
     #[expect(unsafe_code, reason = "Enter the C satellite once with owned mutable argv")]
     // SAFETY: argc is the checked count before the NULL sentinel. C may reorder
     // the pointer array and read or modify the NUL-terminated buffers. Both stay
