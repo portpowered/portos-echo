@@ -21,7 +21,7 @@ fn fill_from(source: &mut impl RngCore, dest: &mut [u8]) -> Result<(), EntropyUn
     source.try_fill_bytes(dest).map_err(|_| EntropyUnavailable)
 }
 
-/// Reproducible SplitMix64 samples for simulations.
+/// Reproducible `SplitMix64` samples for simulations.
 pub struct SeededRng(u64);
 
 impl SeededRng {
