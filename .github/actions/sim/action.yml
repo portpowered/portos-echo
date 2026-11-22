@@ -19,8 +19,8 @@ runs:
     - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: .cache/hassmic-host
-        key: hassmic-host-${{ runner.os }}-${{ hashFiles('hassmic.pin') }}
-    - name: Build pinned hassmic-host
+        key: hassmic-host-vendored-${{ runner.os }}-${{ hashFiles('third_party/hassmic/**', 'third_party/hassmic-stubs/**', 'hassmic.pin', 'crates/**', 'scripts/hassmic-host.sh', '.cargo/config.toml', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml') }}
+    - name: Build vendored hassmic-host
       shell: sh
       run: make hassmic-host
     - name: Select the newest stable Codex release

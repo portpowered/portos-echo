@@ -8,6 +8,8 @@ mod schema;
 mod secret;
 mod test_source;
 mod tokens;
+#[path = "vendor_license.rs"]
+mod vendor_license;
 
 pub(crate) fn has_syntax_token(source: &str, text: &str) -> bool {
     tokens::lex(source).iter().any(|token| token.text == text)
@@ -21,6 +23,7 @@ pub fn run() -> Result<(), String> {
     let adrs = read_adrs()?;
     let missing = missing_names(&current, &adrs);
     if missing.is_empty() {
+        vendor_license::run()?;
         identity::run()?;
         secret::run()?;
         network::run()?;
