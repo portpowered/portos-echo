@@ -1,4 +1,8 @@
-use std::{ffi::OsString, os::unix::net::SocketAddr, path::PathBuf};
+use std::{
+    ffi::{OsStr, OsString},
+    os::unix::net::SocketAddr,
+    path::PathBuf,
+};
 
 const SOCKET_OPTION: &str = "--wyoming-socket";
 
@@ -46,7 +50,7 @@ pub(super) fn select(
 }
 
 // Preserve the native short options, including attached values and clusters.
-fn takes_separate_value(arg: &OsString) -> bool {
+fn takes_separate_value(arg: &OsStr) -> bool {
     arg.as_encoded_bytes()
         .strip_prefix(b"-")
         .filter(|flags| !flags.starts_with(b"-"))

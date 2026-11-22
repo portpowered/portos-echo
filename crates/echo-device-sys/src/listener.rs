@@ -5,7 +5,7 @@
 mod permissions;
 
 use std::{
-    ffi::{CString, c_char, c_int},
+    ffi::{CString, c_char, c_int, c_void},
     fs::{self, File, Metadata},
     io::{self, ErrorKind},
     os::{
@@ -31,7 +31,7 @@ unsafe extern "C" {
     fn echo_hassmic_probe_unix(path: *const c_char) -> c_int;
     fn echo_hassmic_open_lease(path: *const c_char) -> c_int;
     fn echo_hassmic_on_stop(notify: extern "C" fn(c_int)) -> c_int;
-    fn write(fd: c_int, buffer: *const u8, length: usize) -> isize;
+    fn write(fd: c_int, buffer: *const c_void, length: usize) -> isize;
 }
 
 pub(super) fn select(path: Option<PathBuf>) {
@@ -115,7 +115,7 @@ fn watch_stop() -> io::Result<()> {
 extern "C" fn notify(_signal: c_int) {
     let fd = NOTIFY.load(Ordering::Acquire);
     // SAFETY: STOP keeps this nonblocking descriptor live. write is async-signal-safe.
-    unsafe { write(fd, b"x".as_ptr(), 1) };
+    unsafe { write(fd, b"x".as_ptr().cast(), 1) };
 }
 
 struct Endpoint {
