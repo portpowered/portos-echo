@@ -333,7 +333,8 @@ fn messages(request: &Request, state: &mut State) -> (u16, Value) {
         return (202, json!({}));
     }
     // A report without `requestId` is plain state. One with it must answer an
-    // open synchronous command, once; fire-and-forget commands open none.
+    // open command, once; with no command waiting (a speaker ack after its
+    // caller gave up) Port OS answers 404.
     if request_id(request).is_some_and(|id| !state.endpoint.open_requests.contains(id)) {
         state.endpoint.refusals.push("requestId answers no open command".into());
         return (404, json!({"code":"NOT_FOUND"}));

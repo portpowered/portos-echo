@@ -142,8 +142,14 @@ impl Report {
         if replies > 1 {
             return Err("more than one reply");
         }
-        if (replies == 1) == self.request_id.is_empty() {
+        // A speaker command's ack answers with its resulting speaker state,
+        // or an error instead, and never with another reply.
+        let answers = replies + usize::from(self.speaker.is_some() && !self.request_id.is_empty());
+        if self.request_id.is_empty() && replies > 0 {
             return Err("requestId goes with exactly one reply");
+        }
+        if !self.request_id.is_empty() && answers != 1 {
+            return Err("requestId goes with exactly one reply or speaker state");
         }
         if !state && replies == 0 && self.session_ended.is_none() {
             return Err("empty report");

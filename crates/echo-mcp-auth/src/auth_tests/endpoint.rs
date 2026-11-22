@@ -348,6 +348,7 @@ async fn t3_reports_with_a_request_id_answer_only_open_commands() {
         state.endpoint.device_id = Some("synthetic-echo-device".into());
         state.endpoint.claimed.insert(rest.expose().clone());
         state.endpoint.open_requests.insert("open-command".into());
+        state.endpoint.open_requests.insert("set-volume-2".into());
     }
     let now_ms = i64::try_from(EPOCH).unwrap() * 1000;
     let report = |payload: Value| {
@@ -378,8 +379,15 @@ async fn t3_reports_with_a_request_id_answer_only_open_commands() {
     assert_eq!(
         drive(post(&answered, "key-2")).await,
         404,
-        "a fire-and-forget command is never answered"
+        "a speaker ack nothing waits for is 404"
     );
+    // A speaker ack answers with its state, or an error instead, not both.
+    let ack = json!({"sampledAtMs":now_ms,"speaker":{"volume":40,"muted":false},"requestId":"set-volume-2"});
+    let mut doubled = ack.clone();
+    doubled["error"] = json!({"code":"NOT_READY"});
+    for (payload, key, status) in [(doubled, "key-5", 400), (ack, "key-6", 202)] {
+        assert_eq!(drive(post(&report(payload), key)).await, status);
+    }
     assert_eq!(drive(post(&reply, "key-3")).await, 202);
     assert_eq!(drive(post(&reply, "key-3")).await, 202, "a retried key is idempotent");
     assert_eq!(drive(post(&reply, "key-4")).await, 404, "one reply per command");
