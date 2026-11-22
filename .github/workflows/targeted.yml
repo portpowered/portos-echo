@@ -7,57 +7,6 @@ defaults:
   run:
     shell: bash
 jobs:
-  linux-regression:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - run: |
-          git checkout --detach HEAD^
-          git rev-parse HEAD
-      - uses: ./.github/actions/setup
-        with:
-          target: test-sim
-          sim: 'true'
-      - name: Paired witness commands and unchanged regression
-        run: |
-          unset HASSMIC_HOST_FROM_FORK HASSMIC_SRC
-          cargo test --locked -p echo-device --lib
-          cargo build --locked -p echo-bridge --bin echo-bridge
-          cargo nextest run --locked -p echo-device --test satellite_t3 --run-ignored only --config-file .github/nextest.toml --profile ci --success-output immediate
-          printf 'TARGETED_RESULT P-UNIT P-TCP exit=0\n'
-          make sim-prereqs
-          host=$(sh scripts/hassmic-host.sh path)
-          file "$host"
-          for flag in --invalid-test-option -V -S; do
-            left=0; right=0
-            "$host" -n Lab-Sat "$flag" >"$RUNNER_TEMP/host.out" 2>"$RUNNER_TEMP/host.err" || left=$?
-            target/debug/echo-bridge device -n Lab-Sat "$flag" >"$RUNNER_TEMP/dev.out" 2>"$RUNNER_TEMP/dev.err" || right=$?
-            test "$left" -eq "$right"
-            cmp "$RUNNER_TEMP/host.out" "$RUNNER_TEMP/dev.out"
-            cmp "$RUNNER_TEMP/host.err" "$RUNNER_TEMP/dev.err"
-            printf 'direct/staged %s status=%s\n' "$flag" "$left"
-            cat "$RUNNER_TEMP/dev.out" "$RUNNER_TEMP/dev.err"
-          done
-          target/debug/echo-bridge device -S -p 17555 -n Lab-Sat | grep -F '<port>17555</port>'
-          target/debug/echo-bridge notices | grep -Ex 'hassmic|Port OS hassmic shims|minimp3 \(CC0-1.0\)|monocypher\.c|monocypher\.h|RNNoise'
-          cargo nextest run --locked -p echo-bridge --test bridge_t3 --run-ignored only --config-file .github/nextest.toml --profile ci --success-output immediate -E 'test(=hassmic_name::t3_hassmic_name_supervisor_cli)'
-          printf 'TARGETED_RESULT P-CLI exit=0\n'
-          sh tests/hassmic_host_smoke.sh
-          make test-sim-bridge
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_host_teardown.py -v
-          cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
-          make test-sim-scenarios
-          printf 'TARGETED_RESULT P-REG exit=0\n'
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: targeted-reports-a1b
-          path: artifacts/**/report.json
-          if-no-files-found: warn
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -67,7 +16,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: |
-          git checkout --detach HEAD^
+          git checkout --detach 000c987f13c1cd46429baebb562d1dee30bcadc5
           git rev-parse HEAD
       - uses: ./.github/actions/setup
         with:
@@ -86,104 +35,6 @@ jobs:
           echo "79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e  $directory/gitleaks.tar.gz" | sha256sum --check
           tar -xzf "$directory/gitleaks.tar.gz" -C "$directory" gitleaks
           sudo install "$directory/gitleaks" /usr/local/bin/gitleaks
+          npm --prefix web/screen ci --offline=false
           make lint
           printf 'TARGETED_RESULT P-LINT exit=0\n'
-  arm:
-    strategy:
-      fail-fast: false
-      matrix:
-        source: [main, candidate]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
-      WITNESS_SOURCE: ${{ matrix.source }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Select detached comparator or candidate
-        run: |
-          case "$WITNESS_SOURCE" in
-            main) git checkout --detach 7c21b28da83db8d28ae918bdcdc7e3d65c6ab7cd ;;
-            candidate) git checkout --detach HEAD^ ;;
-          esac
-          git rev-parse HEAD
-      - uses: ./.github/actions/setup
-        with:
-          target: build-echo
-      - name: Locked release build, object and size inspection
-        run: |
-          test -f "$ANDROID_NDK_HOME/source.properties" || "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'ndk;27.3.13750724'
-          grep -F '27.3.13750724' "$ANDROID_NDK_HOME/source.properties"
-          rustup target add armv7-linux-androideabi
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/a1b-$WITNESS_SOURCE-target"
-          make build-echo
-          tools="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          binary="$CARGO_TARGET_DIR/armv7-linux-androideabi/release/echo-bridge"
-          cp "$binary" "$RUNNER_TEMP/echo-bridge-$WITNESS_SOURCE"
-          "$tools/llvm-strip" "$RUNNER_TEMP/echo-bridge-$WITNESS_SOURCE"
-          file "$RUNNER_TEMP/echo-bridge-$WITNESS_SOURCE"
-          wc -c "$RUNNER_TEMP/echo-bridge-$WITNESS_SOURCE"
-          if [[ "$WITNESS_SOURCE" == candidate ]]; then
-            find "$CARGO_TARGET_DIR" -name 'libecho_hassmic*.a' -print0 | while IFS= read -r -d '' archive; do
-              echo "archive=$archive"
-              "$tools/llvm-ar" t "$archive"
-              "$tools/llvm-nm" -A "$archive" >>"$RUNNER_TEMP/archive-nm.txt"
-            done | tee "$RUNNER_TEMP/members.txt"
-            grep -F 'hassmic_main.o' "$RUNNER_TEMP/members.txt"
-            grep -F 'wyoming.o' "$RUNNER_TEMP/members.txt"
-            ! grep -E 'proto_wyoming\.o|proto_wyoming$' "$RUNNER_TEMP/members.txt" "$RUNNER_TEMP/archive-nm.txt"
-            "$tools/llvm-nm" --demangle "$binary" >"$RUNNER_TEMP/elf-nm.txt"
-            grep -E '[[:space:]][Tt][[:space:]]+(echo_hassmic_(main|register)|echo_device_sys::core::serve.*)$' "$RUNNER_TEMP/elf-nm.txt"
-            ! grep -E '[[:space:]]proto_wyoming$' "$RUNNER_TEMP/elf-nm.txt"
-            git diff --exit-code 7c21b28d -- third_party/hassmic hassmic.pin Cargo.lock
-            printf 'TARGETED_RESULT P-LINK exit=0\n'
-          fi
-          printf 'TARGETED_RESULT P-ARM %s exit=0\n' "$WITNESS_SOURCE"
-  seed:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: test-sim
-      - name: Seed and restore initial speaker publication
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y libopus-dev zlib1g-dev
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          candidate=$(git rev-parse HEAD^)
-          scratch="$RUNNER_TEMP/seed-source"
-          git worktree add --detach "$scratch" "$candidate"
-          cd "$scratch"
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/seed-target"
-          export ECHO_DEVICE_TEST_BRIDGE="$CARGO_TARGET_DIR/debug/echo-bridge"
-          path=crates/echo-device/src/protocol.rs
-          sed -i 's/^    speaker(core, core.volume());$/    \/\/ Initial speaker publication intentionally omitted./' "$path"
-          git diff --stat
-          git diff -- "$path"
-          witness() {
-            cargo nextest run --locked -p echo-device --test satellite_t3 --run-ignored only --config-file .github/nextest.toml --profile ci --success-output immediate -E 'test(=t3_initial_speaker_state)'
-          }
-          cargo build --locked -p echo-bridge --bin echo-bridge
-          sha256sum "$ECHO_DEVICE_TEST_BRIDGE"
-          status=0
-          witness >"$RUNNER_TEMP/seed.log" 2>&1 || status=$?
-          cat "$RUNNER_TEMP/seed.log"
-          test "$status" -ne 0
-          grep -F 'unexpected Wyoming frame with data' "$RUNNER_TEMP/seed.log"
-          grep -F 'right: "hassmic-speaker"' "$RUNNER_TEMP/seed.log"
-          printf 'P-SEED seeded exit=%s\n' "$status"
-          git restore "$path"
-          git diff --exit-code
-          cargo build --locked -p echo-bridge --bin echo-bridge
-          sha256sum "$ECHO_DEVICE_TEST_BRIDGE"
-          witness
-          printf 'TARGETED_RESULT P-SEED restored exit=0\n'
-
