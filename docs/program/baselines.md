@@ -363,3 +363,11 @@ Measured on main at e8fb346, CI run 43827230421 (all jobs green). All 15 package
 `armv7-linux-androideabi` (release), with NDK r27d (13750724). `echo-bridge` is an ELF 32-bit LSB PIE executable,
 ARM EABI5, interpreter `/system/bin/linker`, for Android 24, unstripped, 10,440,840 bytes. The artifact was
 downloaded and checked independently. This establishes no device-runtime or T5 result.
+
+For the A1a satellite comparison, both builds used hosted Linux, Rust 1.100.0,
+NDK 27.3.13750724 at API 24, and `make build-echo` with separate Cargo targets.
+Both executables were copied and stripped with the same NDK `llvm-strip`.
+
+| Measurement | Main `dd07ed4d` | A1a `4d04312f` | Signed delta |
+| --- | ---: | ---: | ---: |
+| Stripped armv7 `echo-bridge` (2026-11-22) | 14,942,724 bytes | 15,449,940 bytes | +507,216 bytes |
