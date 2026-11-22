@@ -11,6 +11,8 @@ struct Rule {
     targets: &'static [&'static str],
     workspace_targets: bool,
     except_targets: &'static [&'static str],
+    include_dev: bool,
+    allow_same_name: bool,
     explanation: &'static str,
 }
 
@@ -34,6 +36,8 @@ const RULES: &[Rule] = &[
         ],
         workspace_targets: true,
         except_targets: &["echo-contracts", "echo-config", "echo-screen-contract", "echo-link"],
+        include_dev: false,
+        allow_same_name: false,
         explanation: "contract/config crates allow only contract peers and pure external dependencies",
     },
     Rule {
@@ -43,6 +47,8 @@ const RULES: &[Rule] = &[
         targets: &["echo-agent-*", "echo-mcp-*"],
         workspace_targets: false,
         except_targets: &[],
+        include_dev: false,
+        allow_same_name: false,
         explanation: "transport/audio crates must not depend on agent or MCP crates",
     },
     Rule {
@@ -52,6 +58,8 @@ const RULES: &[Rule] = &[
         targets: &["echo-agent-*"],
         workspace_targets: false,
         except_targets: &["echo-agent-api"],
+        include_dev: false,
+        allow_same_name: false,
         explanation: "agent crates depend on each other only through echo-agent-api",
     },
     Rule {
@@ -61,7 +69,79 @@ const RULES: &[Rule] = &[
         targets: &["oauth2", "openidconnect"],
         workspace_targets: false,
         except_targets: &[],
+        include_dev: false,
+        allow_same_name: false,
         explanation: "only echo-mcp-auth may depend on OAuth packages",
+    },
+    Rule {
+        id: "R5",
+        sources: &["echo-sub-*"],
+        except_sources: &[],
+        targets: &["echo-sub-*", "echo-svc-*"],
+        workspace_targets: false,
+        except_targets: &[],
+        include_dev: true,
+        allow_same_name: true,
+        explanation: "subsystems cannot depend on other subsystems or services (single-binary plan section 2.4)",
+    },
+    Rule {
+        id: "R6",
+        sources: &["echo-svc-*"],
+        except_sources: &[],
+        targets: &["echo-sub-*", "echo-svc-*"],
+        workspace_targets: false,
+        except_targets: &[],
+        include_dev: true,
+        allow_same_name: true,
+        explanation: "services cannot depend on subsystems or other services (single-binary plan section 2.4)",
+    },
+    Rule {
+        id: "R7",
+        sources: &["echo-core-api"],
+        except_sources: &[],
+        targets: &[
+            "tokio",
+            "async-std",
+            "smol",
+            "reqwest",
+            "hyper",
+            "rustls",
+            "webrtc",
+            "str0m",
+            "cpal",
+            "alsa",
+            "axum",
+            "hyper-util",
+            "rtc",
+            "tokio-rustls",
+            "tokio-tungstenite",
+            "echo-sub-*",
+            "echo-svc-*",
+            "echo-agent-loop",
+            "echo-bridge",
+            "echo-camera",
+            "echo-chatgpt-auth",
+            "echo-codex",
+            "echo-delegation",
+            "echo-device",
+            "echo-device-sys",
+            "echo-lab",
+            "echo-live",
+            "echo-mcp-auth",
+            "echo-mcp-client",
+            "echo-media",
+            "echo-muse-bridge",
+            "echo-screen-server",
+            "echo-setup",
+            "echo-signin",
+            "echo-spoof-mcp",
+            "echo-wyoming",
+        ],
+        workspace_targets: false,
+        except_targets: &[],
+        include_dev: true,
+        allow_same_name: false,
+        explanation: "echo-core-api cannot depend on I/O crates or loop implementations (single-binary plan section 2.4)",
     },
 ];
 
@@ -141,9 +221,11 @@ fn evaluate(input: &[u8]) -> Result<Vec<String>, String> {
     let names: HashSet<_> = roots.iter().map(|package| package.name.as_str()).collect();
     let mut violations = BTreeSet::new();
     for source in &roots {
-        for target in source.dependencies.iter().filter(|dep| dep.kind != Kind::Dev) {
+        for target in &source.dependencies {
             for rule in RULES {
-                if matches(rule.sources, &source.name)
+                if (rule.include_dev || target.kind != Kind::Dev)
+                    && (!rule.allow_same_name || source.name != target.name)
+                    && matches(rule.sources, &source.name)
                     && !matches(rule.except_sources, &source.name)
                     && (matches(rule.targets, &target.name)
                         || (rule.workspace_targets && names.contains(target.name.as_str())))
@@ -191,6 +273,8 @@ pub(super) fn run() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    mod single_binary;
+
     use super::*;
     use serde_json::{Value, json};
 
