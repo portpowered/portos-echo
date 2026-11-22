@@ -6,7 +6,7 @@ use crate::EndpointTokenSource;
 use serde_json::{Value, json};
 
 /// The endpoint scopes plus one read scope the bridge's MCP tools use.
-const SCOPES: [&str; 4] = ["group:read", "message:send", "endpoint:write", "endpoint:read"];
+pub(super) const SCOPES: [&str; 4] = ["group:read", "message:send", "endpoint:write", "endpoint:read"];
 
 async fn client(mock: &Mock, directory: &std::path::Path, scopes: &[&str], epoch: u64) -> Arc<AuthClient> {
     let explicit = options(mock, directory);
@@ -26,7 +26,7 @@ async fn client(mock: &Mock, directory: &std::path::Path, scopes: &[&str], epoch
     )
 }
 
-async fn linked(mock: &Mock, directory: &std::path::Path, scopes: &[&str]) -> Arc<AuthClient> {
+pub(super) async fn linked(mock: &Mock, directory: &std::path::Path, scopes: &[&str]) -> Arc<AuthClient> {
     offer_registration(mock);
     let owner = client(mock, directory, scopes, EPOCH).await;
     approve(mock, owner.clone(), &directory.join("grant.json")).await;
@@ -331,106 +331,6 @@ fn assert_refreshes(mock: &Mock, expected: &[(&str, &str)]) {
         assert!(request.headers.contains_key("dpop"));
         assert!(!request.headers.contains_key("authorization"));
     }
-}
-
-#[tokio::test(start_paused = true)]
-async fn t3_route_read_back_follows_next_token_unchanged() {
-    let mock = Mock::start().await;
-    mock.set_epoch(EPOCH);
-    mock.enable_endpoint_audience().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let owner = linked(&mock, home.path(), &SCOPES).await;
-    let tokens = owner.endpoint_grant(&mock.base).unwrap();
-    let exchange = crate::EndpointExchange::loopback(&mock.base, Duration::from_secs(2)).unwrap();
-    {
-        let mut state = mock.state.lock().unwrap();
-        state.endpoint.device_id = Some("synthetic-echo-device".into());
-        state.endpoint.route_padding = 150;
-    }
-    let found = drive(exchange.endpoint_id(&tokens, "synthetic-echo-device")).await;
-    assert_eq!(found.unwrap().as_deref(), Some(mock::ECHO_ENDPOINT_ID));
-    let mut scan = crate::RouteScan::default();
-    let absent = drive(exchange.read_routes(&tokens, "synthetic-absent-device", &mut scan)).await;
-    assert_eq!(absent.unwrap(), None);
-    assert_eq!(
-        scan,
-        crate::RouteScan {
-            pages: 2,
-            results: 152,
-            routed: 152
-        }
-    );
-    let state = mock.state.lock().unwrap();
-    let reads: Vec<_> = state.requests.iter().filter(|r| r.path == "/routes").collect();
-    assert_eq!(reads.len(), 4, "two pages per read-back");
-    for (read, next) in reads.iter().zip([None, Some("100"), None, Some("100")]) {
-        assert_eq!(read.query["owner"], "~caller");
-        assert_eq!(read.query["maxResults"], "100");
-        let expected = next.map(|start| format!("{}{start}", mock::ROUTE_TOKEN));
-        assert_eq!(read.query.get("nextToken"), expected.as_ref());
-    }
-}
-
-/// Regression (device): a full first page of 100 unrelated routes carries only
-/// `paginationContext.nextToken`; the Echo's route is on the second page.
-#[tokio::test(start_paused = true)]
-async fn t3_route_read_back_follows_the_nested_pagination_context() {
-    let mock = Mock::start().await;
-    mock.set_epoch(EPOCH);
-    mock.enable_endpoint_audience().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let owner = linked(&mock, home.path(), &SCOPES).await;
-    let tokens = owner.endpoint_grant(&mock.base).unwrap();
-    let exchange = crate::EndpointExchange::loopback(&mock.base, Duration::from_secs(2)).unwrap();
-    {
-        let mut state = mock.state.lock().unwrap();
-        state.endpoint.device_id = Some("synthetic-echo-device".into());
-        state.endpoint.route_padding = 100;
-    }
-    let found = drive(exchange.endpoint_id(&tokens, "synthetic-echo-device")).await;
-    assert_eq!(found.unwrap().as_deref(), Some(mock::ECHO_ENDPOINT_ID));
-    let state = mock.state.lock().unwrap();
-    let reads: Vec<_> = state.requests.iter().filter(|r| r.path == "/routes").collect();
-    assert_eq!(reads.len(), 2);
-    assert!(!reads[0].query.contains_key("nextToken"));
-    let cursor = format!("{}100", mock::ROUTE_TOKEN);
-    assert_eq!(reads[1].query.get("nextToken"), Some(&cursor));
-}
-
-#[tokio::test(start_paused = true)]
-async fn t3_route_pages_default_to_ten_and_cap_at_one_hundred() {
-    let mock = Mock::start().await;
-    mock.set_epoch(EPOCH);
-    mock.enable_endpoint_audience().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    let owner = linked(&mock, home.path(), &SCOPES).await;
-    let rest = drive(owner.endpoint_grant(&mock.base).unwrap().access_token())
-        .await
-        .unwrap();
-    mock.state.lock().unwrap().endpoint.route_padding = 24;
-    let page = |query: &'static str| {
-        let request = reqwest::Client::new()
-            .get(format!("{}/routes?owner=~caller{query}", mock.base))
-            .bearer_auth(rest.expose())
-            .send();
-        async move {
-            let response = request.await.unwrap();
-            let status = response.status().as_u16();
-            (status, response.json::<Value>().await.unwrap_or_default())
-        }
-    };
-    let (status, first) = drive(page("")).await;
-    assert_eq!(status, 200);
-    assert_eq!(first["results"].as_array().unwrap().len(), 10);
-    assert_eq!(
-        first["paginationContext"]["nextToken"],
-        format!("{}10", mock::ROUTE_TOKEN)
-    );
-    assert!(first.get("nextToken").is_none(), "nested, never top level");
-    let (_, last) = drive(page("&maxResults=100")).await;
-    assert_eq!(last["results"].as_array().unwrap().len(), 25);
-    assert!(last.get("paginationContext").is_none());
-    assert_eq!(drive(page("&maxResults=101")).await.0, 400);
 }
 
 #[tokio::test(start_paused = true)]

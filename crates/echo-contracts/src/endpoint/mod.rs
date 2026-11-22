@@ -356,6 +356,8 @@ pub struct RouteRecord {
     pub associated_plugin_route_id: Option<String>,
     #[serde(default)]
     pub associated_endpoint_id: Option<String>,
+    #[serde(default)]
+    pub associated_auth_link_id: Option<String>,
 }
 
 impl RoutePage {
@@ -369,12 +371,18 @@ impl RoutePage {
             .filter(|token| !token.is_empty())
     }
 
-    /// The endpoint id of the route whose plugin route id is this device. Never derived.
+    /// The endpoint id of the route whose plugin route id is this device's
+    /// `deviceId` and whose auth link is the current pairing's `authLinkId`,
+    /// so a route an old pairing left for the same device never matches.
+    /// Never derived.
     #[must_use]
-    pub fn endpoint_for(&self, device_id: &str) -> Option<&str> {
+    pub fn endpoint_for(&self, device_id: &str, auth_link_id: &str) -> Option<&str> {
         self.results
             .iter()
-            .find(|route| route.associated_plugin_route_id.as_deref() == Some(device_id))
+            .find(|route| {
+                route.associated_plugin_route_id.as_deref() == Some(device_id)
+                    && route.associated_auth_link_id.as_deref() == Some(auth_link_id)
+            })
             .and_then(|route| route.associated_endpoint_id.as_deref())
             .filter(|id| !id.trim().is_empty())
     }

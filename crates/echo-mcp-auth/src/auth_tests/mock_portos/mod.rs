@@ -4,15 +4,55 @@
 use super::{Request, State, wall_now};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod report;
 use report::envelope;
 
+/// The live Port OS contract, enforced once `enable_endpoint_audience` is called.
+#[derive(Default)]
+pub struct EndpointState {
+    pub(super) access: Option<u64>,
+    pub(super) enabled: bool,
+    pub(super) exchanges: BTreeMap<String, Option<Value>>,
+    pub mcp_claimed: bool,
+    pub endpoint_claimed: bool,
+    /// Access tokens minted by a refresh after pairing: they carry the auth-link claim.
+    pub claimed: BTreeSet<String>,
+    /// The resources the current device authorization approved, in request order.
+    pub resources: Vec<String>,
+    /// The scope the owner approved; both audiences carry it.
+    pub scope: String,
+    /// The scope the DCR client registered, when one registered.
+    pub registered_scope: Option<String>,
+    /// The audience a refresh without `resource` keeps.
+    last_audience: Option<String>,
+    /// The deviceId the pairing exchange named.
+    pub device_id: Option<String>,
+    /// Route discovery lags pairing: this many `/routes` reads omit the Echo; its state reports get 404 until then.
+    pub route_delay: usize,
+    /// Other owner routes listed before the Echo's, to exercise pagination.
+    pub route_padding: usize,
+    /// This many `/routes` reads that carry a `nextToken` get 400, as an expired continuation does.
+    pub route_token_rejections: usize,
+    /// List first a route an old pairing left for the same deviceId under this auth link.
+    pub stale_link: Option<&'static str>,
+    /// Command ids one report may still answer; any other `requestId` gets 404.
+    pub open_requests: BTreeSet<String>,
+    /// Report idempotency keys already taken.
+    pub report_keys: BTreeSet<String>,
+    /// Why each refused report was refused, for diagnostics.
+    pub refusals: Vec<String>,
+}
+
 const PLUGIN_ID: &str = "port1/systems/zero/plugins/15badf8f-fe9b-4bf0-be33-2d7eb287f89f";
-const AUTH_LINK: &str = "loopback link/%";
+/// The auth link id the pairing exchange answers with.
+pub const AUTH_LINK: &str = "loopback link/%";
 /// The endpoint id route read-back returns for the paired Echo.
 pub const ECHO_ENDPOINT_ID: &str = "synthetic-echo-endpoint";
+/// The auth link and endpoint of a route an old pairing left for the same deviceId.
+pub const STALE_LINK: &str = "synthetic-stale-link";
+pub const STALE_ENDPOINT_ID: &str = "synthetic-stale-endpoint";
 /// Another owner device whose route `/routes` also lists.
 pub const OTHER_DEVICE: &str = "synthetic-other-device";
 /// `/routes` page sizes: the default and the largest `maxResults`.
@@ -220,6 +260,10 @@ fn routes(request: &Request, state: &mut State) -> (u16, Value) {
     };
     let start = match request.query.get("nextToken") {
         None => 0,
+        Some(_) if state.endpoint.route_token_rejections > 0 => {
+            state.endpoint.route_token_rejections -= 1;
+            return (400, json!({}));
+        }
         Some(token) => match token
             .strip_prefix(ROUTE_TOKEN)
             .and_then(|start| start.parse::<usize>().ok())
@@ -238,14 +282,21 @@ fn routes(request: &Request, state: &mut State) -> (u16, Value) {
     (200, page)
 }
 
-/// The padding routes, another device, then the Echo once discovery caught up.
+/// An old pairing's route for the Echo, the padding routes, another device,
+/// then the Echo once discovery caught up.
 fn owner_routes(state: &mut State, first_page: bool) -> Vec<Value> {
     let other = |index: usize, device: &str| {
         json!({"id":format!("synthetic-other-route-{index}"),"associatedPluginRouteId":device,
         "associatedEndpointId":"synthetic-other-endpoint","associatedAuthLinkId":"synthetic-other-link","externalId":""})
     };
-    let mut results: Vec<_> = (0..state.endpoint.route_padding)
-        .map(|index| other(index, &format!("synthetic-padding-{index}")))
+    let old_pairing = state.endpoint.device_id.as_ref().zip(state.endpoint.stale_link);
+    let mut results: Vec<_> = old_pairing
+        .map(|(device, link)| {
+            json!({"id":"synthetic-stale-route","associatedPluginRouteId":device,
+            "associatedEndpointId":STALE_ENDPOINT_ID,"associatedAuthLinkId":link,"externalId":""})
+        })
+        .into_iter()
+        .chain((0..state.endpoint.route_padding).map(|index| other(index, &format!("synthetic-padding-{index}"))))
         .collect();
     results.push(other(state.endpoint.route_padding, OTHER_DEVICE));
     if state.endpoint.route_delay > 0 {

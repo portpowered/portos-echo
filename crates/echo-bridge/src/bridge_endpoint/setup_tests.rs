@@ -164,7 +164,7 @@ async fn t3_endpoint_traces_a_refused_route_read_back() {
 fn attempt(attempt: u32, outcome: &str, error: Option<(&str, u16)>, results: usize) -> Value {
     json!({"event":"endpoint.route_attempt","attempt":attempt,"outcome":outcome,
         "reason":error.map(|(reason, _)| reason),"http_status":error.map(|(_, status)| status),
-        "pages":usize::from(error.is_none()),"results":results,"routed":results})
+        "pages":usize::from(error.is_none()),"results":results,"routed":results,"restarts":0})
 }
 
 /// The status of each plain state report once `count` were sent; each is the full idle state.
