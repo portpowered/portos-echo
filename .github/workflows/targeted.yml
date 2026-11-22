@@ -1,168 +1,93 @@
 name: Targeted
 on:
   workflow_dispatch:
-    inputs:
-      nextest_filter:
-        description: Optional nextest -E expression
-        type: string
-        required: false
-        default: ''
-      scenarios:
-        description: Optional space-separated scenario stems or .yaml filenames
-        type: string
-        required: false
-        default: ''
-      repeat:
-        description: Number of executions, integer 1-10
-        type: number
-        required: false
-        default: 1
-      ignored:
-        description: Include ignored tests in the filter selection
-        type: boolean
-        required: false
-        default: true
-      release_bundle:
-        description: Build and verify the distributable release bundle
-        type: boolean
-        required: false
-        default: false
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
-  targeted:
-    if: ${{ !inputs.release_bundle || inputs.nextest_filter != '' || inputs.scenarios != '' }}
+  wire:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
           target: test-sim
-          sim: 'true'
-      - name: Execute requested selections
-        id: selections
-        shell: sh
-        env:
-          TARGETED_FILTER: ${{ inputs.nextest_filter }}
-          TARGETED_SCENARIOS: ${{ inputs.scenarios }}
-          TARGETED_REPEAT: ${{ inputs.repeat }}
-          TARGETED_IGNORED: ${{ inputs.ignored }}
+      - name: Build the staged simulator
         run: |
-          python - <<'PY'
-          import os
-          import re
-          import subprocess
-          import tempfile
+          sudo apt-get update -q
+          sudo apt-get install -y libopus-dev zlib1g-dev
+          unset HASSMIC_HOST_FROM_FORK HASSMIC_SRC
+          sh scripts/hassmic-host.sh build
+      - name: Check Wyoming wire values
+        run: |
+          unset HASSMIC_HOST_FROM_FORK HASSMIC_SRC
+          PYTHONPATH=tests python3 - <<'PY'
           from pathlib import Path
-          selection = os.environ["TARGETED_FILTER"].strip()
-          names = os.environ["TARGETED_SCENARIOS"].split()
-          count = os.environ["TARGETED_REPEAT"]
-          ignored = os.environ["TARGETED_IGNORED"]
-          if not re.fullmatch(r"(?:[1-9]|10)", count) or ignored not in ("true", "false"):
-              raise SystemExit("targeted: repeat must be 1-10 and ignored must be boolean")
-          if not selection and not names:
-              raise SystemExit("targeted: provide nextest_filter or scenarios")
-          paths = []
-          for name in names:
-              if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\.yaml)?", name):
-                  raise SystemExit("targeted: use scenario names within tests/scenarios")
-              path = Path("tests/scenarios") / (name if name.endswith(".yaml") else name + ".yaml")
-              if not path.is_file() or path.resolve().parent != Path("tests/scenarios").resolve():
-                  raise SystemExit("targeted: missing or unsafe scenario")
-              paths.append(path)
-          subprocess.run(["cargo", "build", "--locked", "-p", "echo-lab", "-p", "echo-bridge",
-                          "-p", "echo-muse-bridge", "--bins"], check=True)
-          report_root = Path(tempfile.mkdtemp(prefix="targeted-reports-", dir=os.environ["RUNNER_TEMP"])).resolve()
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              print(f"report_root={report_root}", file=output)
-          failed = False
-          for number in range(1, int(count) + 1):
-              code = 0
-              if selection:
-                  command = ["cargo", "nextest", "run", "--locked", "--workspace", "--all-targets",
-                             "--config-file", ".github/nextest.toml", "--profile", "ci",
-                             "--no-tests", "fail", "-E", selection]
-                  if ignored == "true":
-                      command += ["--run-ignored", "all"]
-                  code = subprocess.run(command).returncode
-              for index, path in enumerate(paths):
-                  parent = report_root / ("repeat-" + str(number))
-                  parent.mkdir(parents=True, exist_ok=True)
-                  destination = parent / (str(index) + "-" + path.stem)
-                  result = subprocess.run(["target/debug/echo-lab", "run", str(path),
-                                           "--driver", "sim", "--out", str(destination)]).returncode
-                  if result and not code:
-                      code = result
-              print(f"TARGETED_RESULT repeat={number} exit={code}", flush=True)
-              failed = failed or code != 0
-          raise SystemExit(1 if failed else 0)
+          import runpy
+          import socket
+          from tempfile import TemporaryDirectory
+          from wyoming_host import Host, describe
+          capture = runpy.run_path("scripts/capture-wyoming.py")
+          read_event = capture["read_event"]
+          encoded = capture["encoded"]
+
+          def send(conn, kind, data=None):
+              frame = {"type": kind}
+              if data is not None:
+                  frame["data"] = data
+              conn.sendall(encoded(frame) + b"\n")
+
+          def read(stream, kind):
+              event, payload = read_event(stream)
+              assert event["type"] == kind and not payload, (event, len(payload))
+              return event["data"]
+
+          with TemporaryDirectory() as folder:
+              host = Host(folder)
+              try:
+                  host.start()
+                  with socket.create_connection(("127.0.0.1", host.port), timeout=3) as conn:
+                      with conn.makefile("rb", buffering=0) as stream:
+                          initial = read(stream, "hassmic-speaker")
+                          assert set(initial) == {"volume", "muted"}, initial
+                          assert type(initial["volume"]) is int and 0 <= initial["volume"] <= 100, initial
+                          assert initial["muted"] is False, initial
+                          print(f"initial speaker={initial}")
+                          for kind, data, muted in [
+                              ("hassmic-set-volume", {"volume": 30}, False),
+                              ("hassmic-set-volume", {"volume": 30}, False),
+                              ("hassmic-set-output-mute", {"mute": True}, True),
+                          ]:
+                              send(conn, kind, data)
+                              send(conn, "ping")
+                              report = read(stream, "hassmic-speaker")
+                              assert report == {"volume": 30, "muted": muted}, report
+                              read(stream, "pong")
+                              print(f"{kind} {data} -> {report}, then pong")
+                          send(conn, "hassmic-set-volume", {"volume": 101})
+                          send(conn, "ping")
+                          read(stream, "pong")
+                          assert describe(conn)["satellite"]["name"] == "Wyoming Test"
+                          send(conn, "hassmic-set-output-mute", {"mute": True})
+                          report = read(stream, "hassmic-speaker")
+                          assert report == {"volume": 30, "muted": True}, report
+                          print(f"malformed volume -> pong, then unchanged speaker={report}")
+              finally:
+                  host.stop()
+          with TemporaryDirectory() as folder:
+              with capture["Session"](folder) as session:
+                  assert describe(session.sock)["satellite"]["name"] == "Capture Echo"
+                  session.wake()
+                  assert [row["header"]["type"] for row in session.rows][-2:] == ["run-pipeline", "audio-chunk"]
+                  header = session.rows[-1]["header"]
+                  fmt = {key: header["data"][key] for key in ("rate", "width", "channels")}
+                  assert fmt == {"rate": 16000, "width": 2, "channels": 1} and header["payload_length"] > 0
+                  print(f"Capture Echo: run-pipeline -> audio-chunk {fmt}, {header['payload_length']} bytes")
+              assert session.proc.poll() is not None
           PY
-      - name: Upload echo-lab reports
-        if: always() && steps.selections.outputs.report_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-reports-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.selections.outputs.report_root }}
-          if-no-files-found: ignore
-          retention-days: 3
-  release-bundle:
-    if: ${{ inputs.release_bundle }}
-    runs-on: ubuntu-24.04
-    # Existing standalone Codex job allows 180 minutes for a cold build.
-    timeout-minutes: 240
-    env:
-      CARGO_BUILD_JOBS: '4'
-      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Focused wrapper and packaging tests
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          python3 tests/test_release_kit.py
-          python3 tests/test_release_redirects.py
-      - uses: ./.github/actions/setup
-        with:
-          target: build-echo
-      - name: Provision release tools
-        shell: sh
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3 gcc-mingw-w64-x86-64-posix
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "platforms;android-34" "build-tools;35.0.0"
-          rustup target add --toolchain 1.100.0 armv7-linux-androideabi x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: Cheap release checks
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          actionlint .github/workflows/release.yml .github/workflows/targeted.yml
-          python3 tests/test_release_kit.py --configure-native
-      - name: Build and verify release bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          make dist
-          python3 tests/test_release_kit.py --assets dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-release-${{ github.sha }}
-          path: |
-            dist/echo-*-armv7.tar.gz
-            dist/default-*.screenpack.tar.gz
-            dist/companion-0.2.2.screenpack.tar.gz
-            dist/echo-setup-*-linux-x86_64
-            dist/echo-setup-*-windows-x86_64.exe
-            dist/install.sh
-            dist/install.ps1
-            dist/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 7
+          echo 'TARGETED_RESULT P-SIM wire exit=0'
