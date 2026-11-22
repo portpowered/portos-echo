@@ -48,14 +48,14 @@ impl Speaker {
 }
 
 /// Recognize malformed reports too, so they are consumed without publication.
-pub(crate) fn report(event: &WyomingEvent) -> Option<Option<SpeakerState>> {
+pub(crate) fn report_data(event: &WyomingEvent) -> Option<&Value> {
     match event {
-        WyomingEvent::Other(name, data) if name == EVENT => Some(parse(data)),
+        WyomingEvent::Other(name, data) if name == EVENT => Some(data),
         _ => None,
     }
 }
 
-fn parse(data: &Value) -> Option<SpeakerState> {
+pub(crate) fn parse(data: &Value) -> Option<SpeakerState> {
     let volume = data.get("volume")?.as_u64().filter(|volume| *volume <= 100)?;
     let muted = data.get("muted")?.as_bool()?;
     Some(SpeakerState {
@@ -74,8 +74,8 @@ mod tests {
     }
 
     fn observe(speaker: &Speaker, event: &WyomingEvent) -> bool {
-        if let Some(state) = report(event) {
-            speaker.publish(state);
+        if let Some(data) = report_data(event) {
+            speaker.publish(parse(data));
             return true;
         }
         false

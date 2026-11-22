@@ -1,3 +1,4 @@
+use crate::adapter::speaker_events;
 use crate::wyoming_client::device::Connection;
 use crate::wyoming_events;
 use crate::{Error, MicFrame, ReceivedEvent, Run, wyoming_queue::MicQueue};
@@ -126,7 +127,7 @@ impl Router {
     }
 
     fn observe_speaker(&mut self, event: &WyomingEvent) -> Option<SpeakerState> {
-        let report = crate::adapter::speaker_events::report(event)??;
+        let report = speaker_events::parse(speaker_events::report_data(event)?)?;
         let view = self.device.observe(DeviceEvent::SpeakerObserved {
             volume: report.volume,
             muted: report.muted,
