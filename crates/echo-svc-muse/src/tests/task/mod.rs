@@ -64,15 +64,11 @@ async fn t3_matching_report_completes_scoped_chat() {
         false,
     )
     .await;
-    vm.chunk(
-        chat.stream,
-        event(
-            &chat.session,
-            1,
-            "delta.message_start",
-            json!({"message_id":"reply","reply_to_message_id":"user-1"}),
-        ),
-        false,
+    chat.emit(
+        &mut vm,
+        1,
+        "delta.message_start",
+        json!({"message_id":"reply","reply_to_message_id":"user-1"}),
     )
     .await;
     let text = event(
@@ -86,13 +82,13 @@ async fn t3_matching_report_completes_scoped_chat() {
     vm.chunk(chat.stream, text[split..].to_vec(), false).await;
     assert_eq!(link.next_event(&first).await, Ok(Some(progress(&first, "Checking ✓"))));
     assert!(link.next_event(&second).now_or_never().is_none());
-    let done = event(
-        &chat.session,
+    chat.emit(
+        &mut vm,
         3,
         "delta.message_done",
         json!({"message_id":"reply","display_text":"Checking ✓"}),
-    );
-    vm.chunk(chat.stream, done, false).await;
+    )
+    .await;
     assert_eq!(
         invoke(&mut vm, control, "complete", &first, "completed", "Fixture read").await,
         json!({"method":"link.result","id":"complete","ok":true,"payload":{"accepted":true,"task_id":first}})
@@ -348,28 +344,33 @@ async fn t3_chat_reset_and_replay_are_isolated() {
         false,
     )
     .await;
-    vm.chunk(
-        adjacent.stream,
-        event(
-            &adjacent.session,
+    adjacent
+        .emit(&mut vm, 2, "message.user", json!({"message_id":"another-user"}))
+        .await;
+    adjacent
+        .emit(
+            &mut vm,
+            3,
+            "message.assistant",
+            json!({"message_id":"other-reply","content":"unrelated user"}),
+        )
+        .await;
+    adjacent
+        .emit(
+            &mut vm,
             1,
             "delta.message_start",
             json!({"message_id":"foreign","reply_to_message_id":"unrelated"}),
-        ),
-        false,
-    )
-    .await;
-    vm.chunk(
-        adjacent.stream,
-        event(
-            &adjacent.session,
+        )
+        .await;
+    adjacent
+        .emit(
+            &mut vm,
             2,
             "delta.text_append",
             json!({"message_id":"foreign","text":"wrong parent"}),
-        ),
-        false,
-    )
-    .await;
+        )
+        .await;
     let text = event(
         &adjacent.session,
         3,
@@ -393,6 +394,42 @@ async fn t3_chat_reset_and_replay_are_isolated() {
             summary: "After reset".into()
         }))
     );
+}
+
+#[tokio::test]
+async fn t3_chat_reset_before_ack_keeps_task_eligible() {
+    let (_, _, _, link, mut vm, control) = fixture().await;
+    let (id, ()) = tokio::join!(link.submit(demo_task()), async {
+        let (stream, body) = send_request(&mut vm).await;
+        let session = body["session_id"].as_str().unwrap();
+        vm.chunk(
+            stream + 1,
+            event(
+                session,
+                1,
+                "message.assistant",
+                json!({"message_id":"premature","content":"before ack"}),
+            ),
+            false,
+        )
+        .await;
+        vm.reset(stream).await;
+    });
+    let id = id.unwrap();
+    assert!(link.next_event(&id).now_or_never().is_none());
+    vm.barrier().await;
+    assert_eq!(
+        invoke(&mut vm, control, "ambiguous", &id, "completed", "Reported").await["ok"],
+        true
+    );
+    assert_eq!(
+        link.next_event(&id).await,
+        Ok(Some(TaskEvent::Completed {
+            task_id: id.clone(),
+            summary: "Reported".into()
+        }))
+    );
+    assert_eq!(link.next_event(&id).await, Ok(None));
 }
 
 fn assert_refused(value: &Value, id: &str) {

@@ -13,6 +13,13 @@ pub(super) struct Chat {
     pub(super) session: String,
 }
 
+impl Chat {
+    pub(super) async fn emit(&self, vm: &mut Vm, seq: u64, name: &str, payload: Value) {
+        vm.chunk(self.stream, event(&self.session, seq, name, payload), false)
+            .await;
+    }
+}
+
 pub(super) async fn connect(fake: &Fake, link: &MuseLink) -> (Vm, i64) {
     fake.lookup().await;
     let mut vm = fake.vm().await;

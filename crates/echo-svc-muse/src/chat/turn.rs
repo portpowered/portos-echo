@@ -16,6 +16,7 @@ pub(crate) struct Turn {
     ignored: HashSet<String>,
     running: HashSet<String>,
     sequence: [Option<u64>; 2],
+    after_user: bool,
     terminal: bool,
     busy: bool,
 }
@@ -36,6 +37,7 @@ impl Turn {
             ignored: HashSet::new(),
             running: HashSet::new(),
             sequence: [None; 2],
+            after_user: true,
             terminal: false,
             busy: false,
         }
@@ -71,18 +73,27 @@ impl Turn {
             return Ok(None);
         }
         let name = event["event"].as_str().unwrap_or_default();
-        let parent = identifier(&payload["reply_to_message_id"]).or_else(|| identifier(&payload["parent_message_id"]));
+        let parent = payload["reply_to_message_id"]
+            .as_str()
+            .or_else(|| payload["parent_message_id"].as_str());
         let linked = parent.is_some_and(|id| self.is_parent(id));
-        let lane = usize::from(name == "message.assistant");
+        let lane = usize::from(matches!(name, "message.user" | "message.assistant"));
         let sequence = event["seq"].as_u64();
         if sequence.zip(self.sequence[lane]).is_some_and(|(seq, last)| seq <= last) {
             return Ok(None);
         }
         let result = match name {
-            "delta.message_start" | "delta.text_append" | "delta.message_done" | "message.assistant" => {
-                self.message(event, payload, name, parent.is_none() || linked)?
+            "message.user" => {
+                if !self.users.is_empty() {
+                    self.after_user =
+                        message_id(event, payload).is_some_and(|id| self.users.iter().any(|user| user == id));
+                }
+                None
             }
-            "agent.status" | "task.status" if parent.is_none() || linked => {
+            "delta.message_start" | "delta.text_append" | "delta.message_done" | "message.assistant" => {
+                self.message(event, payload, name, parent.is_some() && !linked, linked)?
+            }
+            "agent.status" | "task.status" if linked || (parent.is_none() && self.after_user) => {
                 self.status(name, payload, linked)?;
                 None
             }
@@ -101,24 +112,25 @@ impl Turn {
         event: &Value,
         payload: &Value,
         name: &str,
-        scoped: bool,
+        foreign_parent: bool,
+        linked: bool,
     ) -> Result<Option<String>, InvalidWire> {
-        let Some(id) = identifier(&payload["message_id"])
-            .or_else(|| identifier(&event["message_id"]))
-            .or_else(|| identifier(&payload["id"]))
-        else {
+        let Some(id) = message_id(event, payload) else {
             return Ok(None);
         };
         if self.users.iter().any(|user| user == id) || self.ignored.contains(id) {
             return Ok(None);
         }
-        if !scoped || payload["role"].as_str().is_some_and(|role| role != "assistant") {
+        if foreign_parent || payload["role"].as_str().is_some_and(|role| role != "assistant") {
             self.ignored.insert(id.into());
             return if self.ignored.len() > MAX_IDS {
                 Err(InvalidWire)
             } else {
                 Ok(None)
             };
+        }
+        if !linked && !self.after_user && !self.replies.contains_key(id) {
+            return Ok(None);
         }
         if !self.replies.contains_key(id) && self.replies.len() >= MAX_IDS {
             return Err(InvalidWire);
@@ -182,6 +194,12 @@ impl Reply {
 
 fn identifier(value: &Value) -> Option<&str> {
     value.as_str().filter(|id| !id.is_empty() && id.len() <= 512)
+}
+
+fn message_id<'a>(event: &'a Value, payload: &'a Value) -> Option<&'a str> {
+    identifier(&payload["message_id"])
+        .or_else(|| identifier(&event["message_id"]))
+        .or_else(|| identifier(&payload["id"]))
 }
 
 fn clean(text: &str) -> String {

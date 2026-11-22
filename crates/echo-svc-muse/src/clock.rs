@@ -15,21 +15,22 @@ pub(super) struct EpochClock;
 
 impl Clock for EpochClock {
     fn now(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
+        since_epoch().as_secs()
     }
 
     fn wait_until(&self, deadline: u64) -> Wait<'_> {
         Box::pin(async move {
             loop {
-                let seconds = deadline.saturating_sub(self.now());
-                if seconds == 0 {
+                let remaining = Duration::from_secs(deadline).saturating_sub(since_epoch());
+                if remaining.is_zero() {
                     return;
                 }
-                tokio::time::sleep(Duration::from_secs(seconds.min(3600))).await;
+                tokio::time::sleep(remaining.min(Duration::from_secs(3600))).await;
             }
         })
     }
+}
+
+fn since_epoch() -> Duration {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default()
 }

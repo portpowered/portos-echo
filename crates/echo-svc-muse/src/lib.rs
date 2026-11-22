@@ -156,7 +156,7 @@ impl MuseService for MuseLink {
 
     async fn submit(&self, task: Task) -> Result<TaskId, ServiceError> {
         let endpoint = self.connected().ok_or(ServiceError::NotReady)?;
-        let submission = self.tasks.prepare(task)?;
+        let submission = self.tasks.prepare(&task)?;
         let permit = endpoint.reserve().await.map_err(|_| ServiceError::NotReady)?;
         if *self.stop.borrow() {
             return Err(ServiceError::NotReady);

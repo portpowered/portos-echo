@@ -56,7 +56,7 @@ impl Tasks {
         })
     }
 
-    pub(crate) fn prepare(&self, task: Task) -> Result<Submission, ServiceError> {
+    pub(crate) fn prepare(&self, task: &Task) -> Result<Submission, ServiceError> {
         let deadline = self
             .clock
             .now()

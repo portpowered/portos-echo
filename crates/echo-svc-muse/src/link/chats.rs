@@ -20,16 +20,25 @@ type Receipt = oneshot::Sender<Result<(), ServiceError>>;
 #[derive(Default)]
 pub(super) struct Chats(HashMap<i64, Chat>);
 
-struct Chat {
-    id: Option<TaskId>,
-    deadline: u64,
-    phase: Phase,
+enum Chat {
+    Ack(Ack),
+    Follow { id: TaskId, deadline: u64, turn: Turn },
 }
 
-enum Phase {
-    Ack(Ack),
-    Follow(Turn),
-    Advisory,
+impl Chat {
+    fn id(&self) -> &TaskId {
+        match self {
+            Self::Ack(ack) => &ack.id,
+            Self::Follow { id, .. } => id,
+        }
+    }
+
+    fn wake_at(&self) -> u64 {
+        match self {
+            Self::Ack(ack) => ack.expires,
+            Self::Follow { deadline, .. } => *deadline,
+        }
+    }
 }
 
 impl Chats {
@@ -46,19 +55,7 @@ impl Chats {
                 self.end_task(link, &id).await?;
                 let message = format!("Cancel task {id}. Do not call echo.report.result for it.");
                 let request = chat::send(tasks, node, &session, &message)?;
-                if self.0.len() < MAX_STREAMS {
-                    let stream = link.open_request(request).await?;
-                    let deadline = tasks.clock.now().saturating_add(ACK_SECONDS);
-                    self.0.insert(
-                        stream,
-                        Chat {
-                            id: None,
-                            deadline,
-                            phase: Phase::Advisory,
-                        },
-                    );
-                }
-                Ok(())
+                link.send_advisory(request).await
             }
         }
     }
@@ -77,7 +74,13 @@ impl Chats {
             deadline,
             message,
         } = submission;
-        let ready = self.0.len() < MAX_STREAMS && tasks.live(&id)?;
+        let ready = match tasks.live(&id) {
+            Ok(live) => live && self.0.len() < MAX_STREAMS,
+            Err(error) => {
+                let _ = receipt.send(Err(error));
+                return Ok(());
+            }
+        };
         let request = ready.then(|| chat::send(tasks, node, &session, &message)).transpose();
         let Ok(Some(request)) = request else {
             refuse(tasks, &id, receipt);
@@ -85,26 +88,22 @@ impl Chats {
         };
         let stream = link.open_request(request).await?;
         let expires = deadline.min(tasks.clock.now().saturating_add(ACK_SECONDS));
-        let phase = Phase::Ack(Ack {
-            session,
-            deadline,
-            expires,
-            receipt,
-            bytes: Vec::new(),
-        });
         self.0.insert(
             stream,
-            Chat {
-                id: Some(id),
-                deadline: expires,
-                phase,
-            },
+            Chat::Ack(Ack {
+                id,
+                session,
+                deadline,
+                expires,
+                receipt,
+                bytes: Vec::new(),
+            }),
         );
         Ok(())
     }
 
     pub(super) fn deadline(&self) -> Option<u64> {
-        self.0.values().map(|chat| chat.deadline).min()
+        self.0.values().map(Chat::wake_at).min()
     }
 
     pub(super) async fn wait(tasks: &Tasks, deadline: Option<u64>) {
@@ -123,14 +122,14 @@ impl Chats {
         let expired: Vec<_> = self
             .0
             .iter()
-            .filter(|(_, chat)| now >= chat.deadline)
+            .filter(|(_, chat)| now >= chat.wake_at())
             .map(|(&id, _)| id)
             .collect();
         for stream in expired {
-            if let Some(id) = self.0.remove(&stream).and_then(|chat| chat.id) {
+            if let Some(chat) = self.0.remove(&stream) {
                 // A send can time out before the task deadline. That leaves the task
                 // live; only its absolute deadline is allowed to produce a failure.
-                let _ = tasks.live(&id);
+                let _ = tasks.live(chat.id());
             }
             link.reset(stream).await?;
         }
@@ -142,7 +141,7 @@ impl Chats {
         link: &mut ControlLink<S>,
         id: &TaskId,
     ) -> Result<(), ServiceError> {
-        if let Some((&stream, _)) = self.0.iter().find(|(_, chat)| chat.id.as_ref() == Some(id)) {
+        if let Some((&stream, _)) = self.0.iter().find(|(_, chat)| chat.id() == id) {
             self.0.remove(&stream);
             link.reset(stream).await?;
         }
@@ -163,28 +162,16 @@ impl Chats {
             // Reset or protocol interruption leaves an already-admitted task pending.
             return Ok(());
         };
-        match chat.phase {
-            Phase::Ack(ack) => {
-                let id = chat.id.ok_or(ServiceError::PeerUnavailable)?;
-                self.ack(link, tasks, stream, id, ack, body).await
-            }
-            Phase::Follow(mut turn) => {
-                let id = chat.id.ok_or(ServiceError::PeerUnavailable)?;
+        match chat {
+            Chat::Ack(ack) => self.ack(link, tasks, stream, ack, body).await,
+            Chat::Follow { id, deadline, mut turn } => {
                 if follow(tasks, &id, &mut turn, &body) {
-                    self.0.insert(
-                        stream,
-                        Chat {
-                            phase: Phase::Follow(turn),
-                            id: Some(id),
-                            ..chat
-                        },
-                    );
+                    self.0.insert(stream, Chat::Follow { id, deadline, turn });
                     Ok(())
                 } else {
                     link.reset(stream).await
                 }
             }
-            Phase::Advisory => link.reset(stream).await,
         }
     }
 
@@ -193,40 +180,32 @@ impl Chats {
         link: &mut ControlLink<S>,
         tasks: &Tasks,
         stream: i64,
-        id: TaskId,
         mut ack: Ack,
         body: Data,
     ) -> Result<(), ServiceError> {
         if !body.ok || ack.bytes.len() + body.bytes.len() > MAX_ACK {
-            refuse(tasks, &id, ack.receipt);
+            refuse(tasks, &ack.id, ack.receipt);
             return link.reset(stream).await;
         }
         ack.bytes.extend(body.bytes);
         if !body.end {
-            self.0.insert(
-                stream,
-                Chat {
-                    id: Some(id),
-                    deadline: ack.expires,
-                    phase: Phase::Ack(ack),
-                },
-            );
+            self.0.insert(stream, Chat::Ack(ack));
             return Ok(());
         }
         let Ok(turn) = chat::acknowledge(&ack.bytes, ack.session) else {
-            refuse(tasks, &id, ack.receipt);
+            refuse(tasks, &ack.id, ack.receipt);
             return Ok(());
         };
         let _ = ack.receipt.send(Ok(()));
-        if tasks.live(&id) == Ok(true) {
+        if tasks.live(&ack.id) == Ok(true) {
             let subscribe = chat::subscribe(tasks, turn.session())?;
             let stream = link.open_request(subscribe).await?;
             self.0.insert(
                 stream,
-                Chat {
-                    id: Some(id),
+                Chat::Follow {
+                    id: ack.id,
                     deadline: ack.deadline,
-                    phase: Phase::Follow(turn),
+                    turn,
                 },
             );
         }
@@ -235,6 +214,7 @@ impl Chats {
 }
 
 struct Ack {
+    id: TaskId,
     session: String,
     deadline: u64,
     expires: u64,

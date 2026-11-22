@@ -15,7 +15,7 @@ fn open(path: &Path, clock: &ManualClock) -> Tasks {
 }
 
 fn admit(tasks: &Tasks) -> Submission {
-    let task = tasks.prepare(demo_task()).unwrap();
+    let task = tasks.prepare(&demo_task()).unwrap();
     tasks.admit(&task).unwrap();
     task
 }
@@ -33,10 +33,13 @@ async fn t1_task_deadline_arithmetic_and_terminal_races() {
     let root = tempfile::tempdir().unwrap();
     let clock = ManualClock::new(u64::MAX - 1);
     let tasks = open(&root.path().join("tasks.json"), &clock);
-    assert!(matches!(tasks.prepare(demo_task()), Err(ServiceError::InvalidDeadline)));
+    assert!(matches!(
+        tasks.prepare(&demo_task()),
+        Err(ServiceError::InvalidDeadline)
+    ));
     let mut task = demo_task();
     task.deadline_seconds = 0;
-    assert!(matches!(tasks.prepare(task), Err(ServiceError::InvalidDeadline)));
+    assert!(matches!(tasks.prepare(&task), Err(ServiceError::InvalidDeadline)));
 
     clock.set(4);
     let complete = admit(&tasks).id;
@@ -116,7 +119,7 @@ async fn t1_task_failed_commits_preserve_pending_state() {
     let clock = ManualClock::new(1);
     let tasks = open(&path, &clock);
     let first = admit(&tasks);
-    let second = tasks.prepare(demo_task()).unwrap();
+    let second = tasks.prepare(&demo_task()).unwrap();
     block_rename(&path, &aside);
     assert_eq!(tasks.admit(&second), Err(ServiceError::Storage));
     assert_eq!(tasks.report(report(&first.id)), Err(ServiceError::Storage));

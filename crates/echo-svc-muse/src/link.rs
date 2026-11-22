@@ -62,6 +62,7 @@ pub(super) async fn run<C: Connector>(
         if *stop.borrow() || stop.has_changed().is_err() {
             return Ok(ServiceState::Stopped);
         }
+        endpoint.send_replace(None);
         state.send_replace((ServiceState::Connecting, None));
         let mut rotates_at = pairing.saved_at().saturating_add(ROTATE_AFTER);
         if clock.now() >= rotates_at {
@@ -318,6 +319,14 @@ impl<S: Socket> ControlLink<S> {
             })
             .await?;
         }
+        Ok(())
+    }
+
+    async fn send_advisory(&mut self, request: Request) -> Result<(), ServiceError> {
+        let stream = self.open_request(request).await?;
+        // Cancellation is already committed. The advisory requires no response
+        // and the peer may finish handling it without waiting on another frame.
+        self.mux.forget(stream);
         Ok(())
     }
 
