@@ -6,11 +6,11 @@
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Read, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, Shutdown, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::mpsc::sync_channel,
+    sync::mpsc::{Receiver, channel, sync_channel},
     thread,
     time::{Duration, Instant},
 };
@@ -25,7 +25,8 @@ const SPEAKER: &str = "hassmic-speaker";
 #[test]
 #[ignore = "T3 uses a prebuilt Linux bridge and a private loopback namespace"]
 fn t3_initial_speaker_state() {
-    isolated("t3_initial_speaker_state", |satellite| {
+    isolated("t3_initial_speaker_state", || {
+        let satellite = Satellite::start();
         let mut peer = satellite.connect();
         peer.command("describe");
         peer.command("ping");
@@ -38,7 +39,8 @@ fn t3_initial_speaker_state() {
 #[test]
 #[ignore = "T3 uses a prebuilt Linux bridge and a private loopback namespace"]
 fn t3_speaker_setters() {
-    isolated("t3_speaker_setters", |satellite| {
+    isolated("t3_speaker_setters", || {
+        let satellite = Satellite::start();
         let mut peer = satellite.connect();
         peer.speaker(40, false);
         for (volume, inline) in [(0, true), (100, false), (100, true)] {
@@ -61,7 +63,8 @@ fn t3_speaker_setters() {
 #[test]
 #[ignore = "T3 uses a prebuilt Linux bridge and a private loopback namespace"]
 fn t3_wake_reply() {
-    isolated("t3_wake_reply", |satellite| {
+    isolated("t3_wake_reply", || {
+        let satellite = Satellite::start();
         let mut peer = satellite.connect();
         peer.arm();
         satellite.signal("USR1");
@@ -70,11 +73,7 @@ fn t3_wake_reply() {
         peer.set("transcript", r#"{"text":"synthetic words"}"#, false);
         peer.set("synthesize", r#"{"text":"synthetic reply"}"#, false);
         peer.set("audio-start", r#"{"rate":16000,"width":2,"channels":1}"#, false);
-        let pcm = [0x15, 0x02].repeat(640);
-        peer.send(
-            &format!("{{\"type\":\"audio-chunk\",\"payload_length\":{}}}\n", pcm.len()),
-            &pcm,
-        );
+        peer.audio_chunk(&[0x15, 0x02].repeat(640));
         peer.command("audio-stop");
         peer.expect_after_capture("played");
         assert_eq!(fs::metadata(satellite.dir.0.join("play.raw")).unwrap().len(), 1280);
@@ -87,7 +86,8 @@ fn t3_wake_reply() {
 #[test]
 #[ignore = "T3 uses a prebuilt Linux bridge and a private loopback namespace"]
 fn t3_action_button_run() {
-    isolated("t3_action_button_run", |satellite| {
+    isolated("t3_action_button_run", || {
+        let satellite = Satellite::start();
         let mut peer = satellite.connect();
         peer.arm();
         satellite.signal("USR2");
@@ -99,7 +99,8 @@ fn t3_action_button_run() {
 #[test]
 #[ignore = "T3 uses a prebuilt Linux bridge and a private loopback namespace"]
 fn t3_reconnect_after_frame_failure() {
-    isolated("t3_reconnect_after_frame_failure", |satellite| {
+    isolated("t3_reconnect_after_frame_failure", || {
+        let satellite = Satellite::start();
         drop(satellite.connect());
         for broken in [
             "{\"type\":\"ping\",\"data_length\":20}\n{}",
@@ -112,28 +113,80 @@ fn t3_reconnect_after_frame_failure() {
             peer.0.get_ref().shutdown(Shutdown::Write).unwrap();
             assert_eq!(peer.0.read(&mut [0; 1]).unwrap(), 0, "{broken:?}");
         }
-        let mut abandoned = satellite.connect();
-        abandoned.arm();
-        satellite.signal("USR1");
-        abandoned.expect("run-pipeline", START);
-        abandoned.read().assert_capture();
-        abandoned.set("audio-start", r#"{"rate":16000,"width":2,"channels":1}"#, false);
-        let pcm = [0x15, 0x02].repeat(16000);
-        abandoned.send("{\"type\":\"audio-chunk\",\"payload_length\":32000}\n", &pcm);
-        abandoned.command("audio-stop");
-        let mut byte = [0];
-        assert_eq!(abandoned.0.get_ref().peek(&mut byte).unwrap(), 1);
-        drop(abandoned);
-        let mut peer = satellite.connect();
-        peer.speaker(40, false);
-        peer.command("describe");
-        peer.info();
-        peer.command("ping");
-        peer.expect("pong", "");
+        satellite.connect().expect_fresh_session();
     });
 }
 
-fn isolated(test: &str, run: impl FnOnce(&Satellite)) {
+#[test]
+#[ignore = "T3 uses a prebuilt Linux bridge and a private loopback namespace"]
+fn t3_reconnect_after_write_failure() {
+    isolated("t3_reconnect_after_write_failure", || {
+        // These TCP defaults apply only to this test's private namespace. They
+        // let microphone output fill the buffers before the duplex watchdog.
+        let settings = ["net.ipv4.tcp_wmem=4096 4096 4096", "net.ipv4.tcp_rmem=4096 4096 4096"];
+        assert!(
+            Command::new("sysctl")
+                .arg("-qw")
+                .args(settings)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let satellite = Satellite::start();
+        let mut blocked = satellite.connect();
+        blocked.arm();
+        satellite.signal("USR1");
+        blocked.expect("run-pipeline", START);
+        blocked.read().assert_capture();
+        let mut replacement = satellite.connect();
+        // The old peer sends no more input and stays open and unread. The
+        // listener can serve the replacement only after a failed publication
+        // wakes the old reader. Allow for the native five-second send timeout.
+        let stream = replacement.0.get_ref();
+        stream.set_read_timeout(Some(Duration::from_secs(12))).unwrap();
+        replacement.expect_fresh_session();
+        assert!(io::copy(&mut blocked.0, &mut io::sink()).unwrap() > 0);
+    });
+}
+
+#[test]
+#[ignore = "T3 uses a prebuilt Linux bridge and a private loopback namespace"]
+fn t3_reconnect_fences_old_playback() {
+    isolated("t3_reconnect_fences_old_playback", || {
+        let satellite = Satellite::start();
+        let output = satellite.dir.0.join("play.raw");
+        make_fifo(&output);
+        let playback = OpenOptions::new().read(true).write(true).open(output).unwrap();
+        let mut old = satellite.connect();
+        old.speaker(40, false);
+        old.set("audio-start", r#"{"rate":192000,"width":2,"channels":16}"#, false);
+        // Keep the worker in one native sink write larger than the FIFO. It
+        // cannot process the queued flush while the test holds the read end.
+        old.audio_chunk(&[0x15, 0x02].repeat(60_000));
+        let mut tap = playback.try_clone().unwrap();
+        let (sample, observed) = sync_channel(1);
+        thread::spawn(move || {
+            let mut first = [0; 2];
+            let _ = sample.send(tap.read_exact(&mut first).map(|()| first));
+        });
+        assert_eq!(observed.recv_timeout(TIMEOUT).unwrap().unwrap(), [0x15, 0x02]);
+        old.command("hassmic-flush");
+        old.command("ping");
+        old.expect("pong", "");
+        drop(old);
+
+        let mut replacement = satellite.connect();
+        replacement.expect_fresh_session();
+        drop(playback);
+        // The worker logs completion under core_lock immediately before the
+        // played callback. The following pong is serialized behind both.
+        satellite.wait_for_log("duplex flush: receipt_ms=");
+        replacement.command("ping");
+        replacement.expect("pong", "");
+    });
+}
+
+fn isolated(test: &str, run: impl FnOnce()) {
     let current = fs::read_link("/proc/self/ns/net").unwrap();
     if let Some(parent) = env::var_os(NETNS) {
         assert_ne!(current.as_os_str(), parent);
@@ -144,7 +197,7 @@ fn isolated(test: &str, run: impl FnOnce(&Satellite)) {
             .filter_map(|line| line.split_once(':').map(|(name, _)| name.trim()))
             .collect();
         assert_eq!(interfaces, ["lo"]);
-        run(&Satellite::start());
+        run();
         return;
     }
     let status = Command::new("unshare")
@@ -193,6 +246,7 @@ struct Satellite {
     port: u16,
     dir: TempDir,
     _keys: File,
+    logs: Receiver<String>,
 }
 
 impl Satellite {
@@ -213,7 +267,7 @@ impl Satellite {
         fs::create_dir(root.join("mixer")).unwrap();
         fs::write(root.join("mixer/MainVolume"), "40\n").unwrap();
         let keys = root.join("keys");
-        assert!(Command::new("mkfifo").arg(&keys).status().unwrap().success());
+        make_fifo(&keys);
         let key_handle = OpenOptions::new().read(true).write(true).open(&keys).unwrap();
         let reservation = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = reservation.local_addr().unwrap().port();
@@ -244,39 +298,33 @@ impl Satellite {
             .stdin(Stdio::null())
             .stderr(Stdio::piped());
         drop(reservation);
-        let child = command.spawn().unwrap();
-        let mut satellite = Self {
+        let mut child = command.spawn().unwrap();
+        let logs = satellite_logs(&mut child);
+        let satellite = Self {
             child,
             port,
             dir,
             _keys: key_handle,
+            logs,
         };
-        satellite.ready();
+        satellite.wait_for_log(&format!("wyoming on {port}, wake=local"));
         satellite
     }
 
-    fn ready(&mut self) {
-        let stderr = self.child.stderr.take().unwrap();
-        let marker = format!("wyoming on {}, wake=local", self.port);
-        let (ready, signal) = sync_channel(1);
-        thread::spawn(move || {
-            let mut ready = Some(ready);
-            let mut startup = Vec::new();
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if let Some(signal) = ready.take_if(|_| line.contains(&marker)) {
-                    let _ = signal.send(Ok(()));
-                } else if ready.is_some() {
-                    startup.push(line);
-                }
+    fn wait_for_log(&self, marker: &str) {
+        let deadline = Instant::now() + TIMEOUT;
+        let mut seen = Vec::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let line = self
+                .logs
+                .recv_timeout(remaining)
+                .unwrap_or_else(|error| panic!("waiting for {marker:?}: {error}; satellite logs: {seen:?}"));
+            if line.contains(marker) {
+                return;
             }
-            if let Some(signal) = ready {
-                let _ = signal.send(Err(startup));
-            }
-        });
-        signal
-            .recv_timeout(TIMEOUT)
-            .expect("satellite readiness deadline")
-            .expect("satellite startup logs");
+            seen.push(line);
+        }
     }
 
     fn connect(&self) -> Peer {
@@ -297,6 +345,21 @@ impl Satellite {
     }
 }
 
+fn satellite_logs(child: &mut Child) -> Receiver<String> {
+    let stderr = child.stderr.take().unwrap();
+    let (lines, logs) = channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = lines.send(line);
+        }
+    });
+    logs
+}
+
+fn make_fifo(path: &Path) {
+    assert!(Command::new("mkfifo").arg(path).status().unwrap().success());
+}
+
 impl Drop for Satellite {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -307,6 +370,14 @@ impl Drop for Satellite {
 struct Peer(BufReader<TcpStream>);
 
 impl Peer {
+    fn expect_fresh_session(&mut self) {
+        self.speaker(40, false);
+        self.command("describe");
+        self.info();
+        self.command("ping");
+        self.expect("pong", "");
+    }
+
     fn command(&mut self, kind: &str) {
         self.send(&format!("{{\"type\":\"{kind}\"}}\n"), &[]);
     }
@@ -326,6 +397,13 @@ impl Peer {
         let stream = self.0.get_mut();
         stream.write_all(header.as_bytes()).unwrap();
         stream.write_all(body).unwrap();
+    }
+
+    fn audio_chunk(&mut self, pcm: &[u8]) {
+        self.send(
+            &format!("{{\"type\":\"audio-chunk\",\"payload_length\":{}}}\n", pcm.len()),
+            pcm,
+        );
     }
 
     fn arm(&mut self) {

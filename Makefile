@@ -101,6 +101,7 @@ test-sim-bridge: sim-prereqs
 test-sim-components: sim-prereqs
 	sh tests/hassmic_host_smoke.sh
 	cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
+	cargo nextest run -p echo-device --test satellite_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
 	cargo nextest run -p echo-lab --test sim_bridge_cli --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
 
 test-sim-host: sim-prereqs
