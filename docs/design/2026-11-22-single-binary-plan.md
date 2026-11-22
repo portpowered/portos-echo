@@ -252,6 +252,54 @@ command (`bridge_mcp/bridge_clock.rs` 47–52).
 | Event | Typed enums: `LinkEvent`, `MediaEvent` and `Event`, `Notice`, `UiState`; one `select!` branch per source | No; the draft's state names reach the traces (10.1) |
 | Frame | 20 ms both ways; microphone chunks as hassmic sends them | No |
 
+#### 1.4.8 Where the state lives today
+
+State is spread over struct fields held by futures, task-locals, `watch` channels and a few statics. No one value
+holds it all.
+
+| State | Owner (type, file) | How others see it | Lifetime | Allocation |
+| --- | --- | --- | --- | --- |
+| Run: phase, deadlines, speech latch, barge-in, floor, stats | `Source` and `Controller` (`bridge_voice/voice_source.rs`, `controls/session_controller.rs`) | Only through `Notice` callbacks to trace and screen | One run | Fields long-lived; `Stats` boxes per reply |
+| Session grants (`extend_session`, `end_session`) | `session_tools::Grants` in `Source` | Through `Notice::SessionTool` | One run | Long-lived |
+| Delegated turn, tool in flight, tool ledger | `Delegation` (`recovery/voice_wait.rs`), `ToolSession::work` (`bridge_codex/call_tools.rs`), `tool_ledger::Ledger` | Not shared; trace rows | One turn | One boxed future per tool call |
+| Live call, media peer | `MediaCall` (`bridge_codex/call_media.rs`); peer `Arc<Shared>` (`echo-media/src/media_state.rs`) | Peer state by `watch`; queues by `Arc` | One call, kept warm across wakes | Queues long-lived; a `Vec` per Opus packet |
+| Reply pacer and buffers, capture converter, uplink backlog | `ReplyAudio`, `ClockPacer`, `CaptureAudio`, `Source::uplink` | Not shared | One reply (pacer, queue); one run (converter, backlog) | Per frame `Vec`s; scratch reused |
+| Codex client, pending calls, notifications | `RpcIo` and `codex_rpc.rs` state, `Call` (`bridge_codex/bridge_codex.rs`) | Not shared; polled inline | One app-server generation | Per message |
+| Wyoming link, mic queue, speaker state | `Client` (`echo-wyoming/src/wyoming_client.rs`); `Speaker` `Arc<watch::Sender<SpeakerState>>` | Commands by `mpsc`; queue by `Arc`; speaker by `watch` | Process generation, across reconnects | Per chunk `Vec` |
+| Mute | `ServeOptions::session.muted` (`bool` passed by `&mut`); screen's `Arc<Mutex<Mute>>` (`bridge_runtime/bridge_screen.rs`) | Copied into each run's `Options` | Process generation | Long-lived |
+| Port OS grant, presentation | `Grant` (`bridge_mcp/bridge_mcp.rs`, atomics and `Mutex`es); `Presentation` (`Arc<Mutex<Projection>>`) | `Arc<Grant>` cloned into tools and health | Retained across runs | Long-lived |
+| Endpoint session view and ends | `Voice` task-local `CURRENT` (`bridge_endpoint/voice.rs`) | `watch<View>`, `broadcast` of ends | Settings generation | Per command |
+| Screen state, clients | `Core` in `Arc<tokio::sync::Mutex>` (`echo-screen-server/src/screen_core.rs`) | `UiState` by `mpsc`; SSE per client | Process generation | A JSON `String` per publication |
+| Settings, account, permissions | `SettingsHost` (`bridge_settings/settings_host.rs`), `Account` (`watch`), `PortosPermissions` (`Arc<Mutex>`) | `watch` and `Arc` | Process generation; a change re-execs | Long-lived |
+| Trace writer | `Trace` with `Arc<Mutex<File>>` (`bridge_trace.rs`) | Cloned into each owner | Process generation | A JSON `Vec` per row |
+
+Ambient state: twelve `tokio::task_local!`s carry state into nested futures, for example `run_marks.rs` `KNOBS`,
+`earcon.rs` `CURRENT`, `reply_lips.rs` `CURRENT`, `prompts.rs` `CURRENT`, `bridge_time.rs` `SIM_TIME` and
+`settings_restart.rs` `CURRENT`. A few statics remain: `bridge_time.rs` `ANCHOR` (the SNTP offset) and id counters
+such as `approval.rs` `IDS`.
+
+**How tests observe state.** Unit tests assert on `Source`, `Controller`, `Barge` and `ClockPacer` fields under
+the paused clock. The T3 suites read the trace back as JSON rows and count events (`echo-bridge/tests/bridge_t3.rs`
+`trace`, `bridge_support/bridge_cut.rs`). Observer tests check the wire through the Python host
+(`tests/bridge_observer/host.py`). The sims write `bridge.private.jsonl`, `session.trace.jsonl`, `ui.private.json`
+and `report.json`. A failing test therefore has several places to look and none that holds the whole state. For
+example, a missing `reply.played` row can mean a pacer stall (in `ClockPacer`, never traced per frame), a lost
+device event (in the Wyoming queue) or a cut (in `Controller`). A wrong screen state shows up in `ui.private.json`
+while the run state that caused it shows up only as `Notice`s in the trace.
+
+**Clocks and determinism today.**
+
+- *Synthetic monotonic time works.* Deadlines, the pacer and trace `elapsed_ms` all use `tokio::time::Instant`, so
+  `start_paused` and `advance` drive them. `--sim-clock` adds stepped playout (1.4.4).
+- *Wall time is partly injectable.* Model-facing time goes through `bridge_time::now()`, which honours `SIM_TIME`.
+  `echo-chatgpt-auth/src/auth_clock.rs` has its own `Clock` trait. Other places read `SystemTime::now()` directly:
+  DPoP `iat` (`echo-mcp-auth/src/wire.rs` `unix_now`), the supervisor's nonce (`codex_supervisor/mod.rs` 248),
+  `bridge_runtime.rs` 73 and `bridge_mcp.rs` 180.
+- *Randomness comes from the OS.* DPoP `jti` and client registration (`OsRng`), the RTP SSRC (`media_track.rs`,
+  `rand::random`) and camera ids. There is no seed.
+- *Scheduling is not fixed.* Production and most sims use 2 workers, so which task runs first can vary between
+  runs. Only `--sim-clock` runs on one thread. webrtc-rs and the Codex app server keep their own timers and threads.
+
 ## 2. Target
 
 ### 2.1 One file, four roles
@@ -290,6 +338,129 @@ The core links `codex-app-server` and runs it in-process through `codex_app_serv
 JSON-RPC methods and notifications stay those of [plan 3.3](../program/plan.md#33-the-codex-app-server). Only
 the stdio framing and the child process go away, so `echo-codex`'s request logic carries over. One adapter crate,
 `echo-codex-embed`, is the only crate of ours that imports `codex-*`.
+
+### 2.4 World state and subsystems
+
+The owner asks for three things: all world state in one blob that is reused for the runtime's life; subsystems
+that compose as plugins instead of one large custom runtime; and synthetic clocks for tests. Below is what that
+means in Rust and Tokio on armv7, and what we would build.
+
+**The shape.** `World` is a plain struct owned by the core loop. It has one field per subsystem state, plus `Clock`,
+`Rng` and preallocated rings. Each subsystem is a plain struct with one small trait. A step is synchronous and does
+no IO:
+
+```rust
+trait Subsystem {
+    type State;                                   // its slice of World
+    const INPUTS: &'static [EventKind];           // events it reads
+    const OUTPUTS: &'static [CommandKind];        // commands it may emit
+    fn on_event(state: &mut Self::State, event: &Event, now: Now, out: &mut Commands);
+    fn on_tick(_state: &mut Self::State, _now: Now, _out: &mut Commands) {}
+    fn next_deadline(state: &Self::State) -> Option<Instant>;
+    fn check(state: &Self::State) -> Result<(), Broken>; // invariants, run after every step in tests
+}
+// The core loop. Shells are async tasks that turn IO into Events and apply Commands without waiting.
+loop {
+    let event = inbox.next_until(world.next_deadline()).await; // the only await
+    world.step(&event, &mut commands); // fixed order, below
+    shells.apply(&mut commands);       // try_send into bounded shell queues; never waits
+    world.check()?;                    // tests and `--checks` builds
+}
+```
+
+Subsystems, in the fixed step order. The order is fixed so that one recording always gives the same result:
+
+| Subsystem | Today's state it takes (1.4.8) | Shell it keeps outside | Track |
+| --- | --- | --- | --- |
+| Device | mute, speaker state, run and capture state now in the `echo-wyoming` `Client` | Wyoming, later the device role's socket | A1 |
+| Session and turn | `Controller`, `Grants`, run fields of `Source`, `voice_wait` deadlines, `Barge`, `Floor` | none | A2 |
+| Reply pacer | `ReplyAudio`, `ClockPacer`, `Jitter`, `Ear`, `Mouth`, lip batches | none | A2 |
+| Live call and media | `MediaCall` phase, receive generation, uplink backlog | webrtc-rs peer | A2 |
+| Delegation and Codex | `Delegation`, the pending-call table of `codex_rpc.rs` | the in-process app server | B1 |
+| Tools | `ToolSession::work`, `Ledger`, `ToolBudget` | tool executors, exec role | B1 |
+| Port OS | `Grant` status, endpoint `View` | gateway WebSocket, MCP HTTP | B2 |
+| Screen and presentation | `Presentation`'s `Projection`, `UiState` | screen server, SSE | C1 |
+| Timers | new: the core tick (10.2) and persistent timers (10.3, answer 5) | timer store file | B2 |
+| Trace | new: a row ring | a writer task that drains it | A1 |
+
+**Against today.** Today the voice owner is one composed future (1.4.2). Its state already sits in structs, but
+`select!` branches mutate them directly and await IO in the middle of a step: `generation` joins playback,
+`media` awaits `finish_reply` and `complete_turn`, and a cut awaits the device. The twelve task-locals carry state
+that no test can see. In the target, those awaits become a `Command` and, later, a completion `Event`. `&mut World`
+never crosses an `.await`, so the borrow problems that drove the task-locals go away.
+
+**Trade-offs.**
+
+- *Generics, not `dyn`.* The set of subsystems is fixed and known at compile time. Concrete fields and static calls
+  inline, allocate nothing and show the order in one function. `dyn` stays at the IO shells, where tests already
+  swap fakes through `EchoLink`, `MediaPeer` and `LinkConnector`.
+- *No ECS or plugin loader.* About ten subsystems, each with different state, do not need entity storage or a
+  scheduler. A framework is the "large custom runtime" the owner wants to avoid. One trait and one `step` function
+  are enough to read.
+- *Shells feed one ordered inbox.* PCM travels by value (`PcmFrame` is `Copy`, 640 bytes) through fixed rings like
+  today's `media_queue.rs` `Queue`. Control events travel on a bounded `mpsc`. Deadlines come from
+  `World::next_deadline()`, so 1.4.4's pattern stays, but in one place.
+- *Cost.* The largest and riskiest change is reshaping the voice owner's awaits into commands. It is done one
+  subsystem at a time, under the existing T3 suites, so it is never a rip-out.
+
+**Memory and allocation.** Measured: the Echo has about 1.9 GB (`MemTotal`), about 670 MB available with stock
+Alexa, and the WebView takes about 220 MB. The bridge's RSS is not recorded yet (B0 records it). The long-lived
+audio buffers are small by construction: 128 × 960 B of reply ring is 123 KB and 1500 × 640 B of uplink backlog is
+960 KB. So a global arena would not visibly change RSS, and `bumpalo` per tick has no work to do if steps do not
+allocate. What preallocation buys is bounded memory over long uptimes, no allocator on the 20 ms path, and
+determinism. Allocator churn today is a handful of small allocations per frame each way. Its CPU cost on armv7 is
+not measured; the measured arrival gaps were not CPU-bound (decision of 2026-11-19).
+
+| Per-frame allocation today (1.4.6) | Where | In the target |
+| --- | --- | --- |
+| Event buffer and JSON header per chunk | `wyoming_wire.rs` `read` | Reused per-connection buffer; payload copied into a mic ring slot |
+| `MicFrame.payload` `Vec<u8>` | `echo-link` `MicFrame` | Fixed slots in the 64-entry mic ring |
+| Sample `Vec<i16>` and frame `Vec<PcmFrame>` per chunk | `call_audio.rs` `process` | Decode into scratch; frames pushed straight into the uplink ring |
+| Opus packet `vec![0; 1275]` | `media_audio.rs` `encode` | Reused packet buffer. Assumption: webrtc-rs's `track.send` may still need an owned buffer, at the fence |
+| `Box<PcmFrame>` per received frame | `call_media.rs` 267 | By value |
+| 960-byte reply `Vec` per frame and the `Vec<u8>` reply channel | `call_audio.rs` `frame_reply`, `reply_channel` | `[u8; 960]` slots in the 128-frame reply ring |
+| Audio-chunk header per write; lip batch `String` per client | `wyoming_wire.rs` `write`; `screen_core.rs` `mouth` | Header formatted into a reused buffer; lips copied into a ring that the screen shell formats |
+| Trace row `Vec` and a blocking write | `bridge_trace.rs` `record` | Fixed rows into the trace ring; the writer task serialises off the hot path |
+
+Mute and barge-in checks already allocate nothing (flags and `Instant`s), and stay that way. Sessions and tool calls
+get generational indices in fixed slots instead of `String`-keyed state; a slab crate is a new dependency, so it needs
+the owner's approval, and a small in-house index also works.
+
+**What cannot live in `World`.** webrtc-rs's ICE, DTLS, SRTP and its tasks; the Codex app server's threads, rollouts
+and auth, even in-process (B1); OS handles (sockets, files, the device role's audio handles in its own process); and
+credentials, which stay in their private stores and are redacted from every snapshot. `World` holds their ids and
+observed states; the shells hold the handles.
+
+**Clocks, determinism and replay.**
+
+- *One `Clock`* in `World`, monotonic (`tokio::time::Instant`) plus wall (today's `bridge_time::now()`). Every
+  direct `SystemTime::now()` in 1.4.8, DPoP `iat` included, goes through it, and clippy's `disallowed-methods`
+  bans new ones. Tests step it tick by tick, as `--sim-clock` does now.
+- *One `Rng`:* seeded in tests, `OsRng` in production. DPoP `jti` and the RTP SSRC must stay unpredictable on the
+  Echo.
+- *A simulated playback clock* in the device subsystem models frames written, depth, and `played` at depth plus
+  `TAIL_MS`. Pacer holds and lip sync then run on synthetic time; today the pacer turns its adaptive hold off under
+  the sim clock (`reply_playout.rs`), so sims never exercise it.
+- *Record and replay.* Each shell stamps its events with the tick and appends them to a recording. A replay feeds
+  the same events, clock and seed into a fresh `World`, and `World::snapshot()` is diffed per tick; a failing test
+  prints the first diff. Recordings hold PCM and transcripts, so they stay local, like the private traces.
+- *Fences.* Two workers make interleaving vary, so determinism runs use a current-thread runtime with the paused
+  clock. webrtc-rs already takes its sleeps and `now` from Tokio (`media_runtime.rs`), but packet arrival and DTLS
+  are not reproducible, so replay swaps the peer for a recorded `MediaPeer`. The Codex app server keeps its own clock
+  and HTTP, so replay records at the `codex-app-server-client` channel. Sockets are recorded at their shells.
+
+**Recommendation.** Build `World` and the plain `Subsystem` trait with static dispatch, synchronous steps and async
+IO shells. Bring it in subsystem by subsystem with the A, B and C tracks. Preallocate the audio path and gate it with
+a zero-allocation test. Inject one `Clock` and one `Rng`, and add record and replay at the shell boundary. Do not
+build a global arena, `bumpalo` scratch or an ECS. Make no memory claim until B0 has measured RSS.
+
+| Changes | Stays |
+| --- | --- |
+| Run, pacer, call, delegation, tool, Port OS and screen state move into `World` fields | The Tokio runtime, 2 workers, bounded queues and the paused test clock |
+| `select!` branches become events and steps; awaits inside steps become commands | The Wyoming subset, `EchoLink`, `MediaPeer` and the other IO traits as shell seams |
+| Task-locals and direct `SystemTime::now()` reads go | Deadlines as `Instant`s, now gathered in `next_deadline()` |
+| Per-frame `Vec`s become ring slots; traces leave the hot path | `PcmFrame`, 20 ms framing, the resamplers and Opus |
+| Tests assert on `World::check()` and one snapshot diff | Trace rows and sim artifacts, as the T5 and operator view |
 
 ## 3. Codex: what we take and what we leave
 
@@ -468,6 +639,20 @@ until its replacement has passed on the Echo:
 
 Technically B0 to B2 do not depend on A, but they start after A2 so that one track changes the Echo at a time.
 
+**World state and subsystems (2.4) are folded into the tracks; they are not a track of their own.** Each phase moves
+the subsystems it touches into `World` and leaves the rest of the voice owner as it is. These acceptance lines join
+the phases' own:
+
+- **A1:** `World`, `Clock`, `Rng`, the device and trace subsystems. Every T3 scenario ends with a `World` invariant
+  check, and a failing test prints one `World` diff. Clippy finds no direct `SystemTime::now()` outside the clock.
+- **A2:** the session, pacer and call subsystems, and the preallocated audio path. A T3 bench with a counting global
+  allocator asserts zero allocations per frame in the core's steps after warm-up, across capture, uplink, downlink,
+  pacing, playback, mute and barge-in. Allocations in fenced shells (webrtc-rs, Tokio) are reported, not asserted.
+- **B1:** the delegation and tool subsystems. A recorded call replays on the current-thread paused clock, and two
+  replays give an empty per-tick `World` diff.
+- **B2:** the Port OS and timer subsystems; the core tick runs as `on_tick`.
+- **C1:** the screen subsystem. Lip-sync and pacing goldens run on the simulated playback clock.
+
 ## 8. Risks and unknowns
 
 | Risk | What we know | Mitigation |
@@ -526,6 +711,10 @@ Ratings: **good**, **fair**, **weak**.
 | Playback and barge-in | Bridge paces, hassmic plays; one cut per user turn; backchannels pass — **good** | Clear speaker queue, mic stays on; backchannel as a session state — **good** | Unchanged; adopt the draft's names in traces — **good** |
 | Wake | Pryon "Computer" in hassmic — **good** | Wake pipeline in the device layer; gaze wake later — **good** | Pryon in the device role; gaze as a second event source later — **good** |
 | Core loop model | Tokio tasks with bounded queues; one voice owner polls capture, control and PCM ([bridge_voice.rs](../../crates/echo-bridge/src/bridge_voice/bridge_voice.rs)) — **good**; described in 1.4 | One loop, event plus tick, buffers, subsystems — **good** once the owner's answers are in (10.3) | Event-first loop that owns every buffer, plus a low-rate tick that flushes buffers and fires timers with no event of their own; the renderer ticks at display rate — **good** |
+| State ownership | Spread over the voice owner's futures, twelve task-locals and a few statics; tests read traces (1.4.8) — **fair** | One world blob owned by the loop — **good** | One `World` with a field per subsystem; credentials, webrtc-rs and the app server's internals stay outside (2.4) — **good** |
+| Subsystem structure | One composed voice-owner future whose branches await IO mid-step (1.4.2) — **fair** | Subsystems composed as plugins — **good** | A plain `Subsystem` trait, static dispatch, fixed step order, async IO shells; no ECS or plugin loader (2.4) — **good** |
+| Test clock and determinism | Paused Tokio clock and `--sim-clock`; direct `SystemTime::now()` reads, OS randomness, 2 workers (1.4.8) — **fair** | Synthetic clocks for tests — **good** | One injected `Clock` and seeded `Rng`, a simulated playback clock, record and replay with fenced shells (2.4) — **good** |
+| Hot-path allocation | A handful of small `Vec`s per frame each way and inline trace writes (2.4) — **fair** | Zero allocations, preallocated buffers — **good** | Ring slots and reused buffers, gated by A2's counting-allocator bench; no global arena — **good** |
 | Session lifecycle | Run with a 15 s listen window, `extend_session` ceiling, `end_session`; Live call kept warm across wakes ([plan 3](../program/plan.md#3-the-bridge-runs-the-conversation-and-the-tools)) — **good** | Dormant, creating, active, held, ending; the connection kept when appropriate, closed when needed (owner, 10.3) — **good** | Draft states as the vocabulary; a warm-call substate of dormant with explicit close rules (10.3, answer 3) — **good** |
 | Realtime and agent loop | Live through the app-server child; delegation into Codex turns — **good** | Voice model plus parallel secondary inferencer — **good** | The same, in-process (2.3) — **good** |
 | Tool surface | Bridge tools plus search — **weak** against the owner's intent | Tools through a dispatcher and gateway; device actions — **good** | Full Codex surface minus code mode, plus bridge tools (4) — **good** |
