@@ -8,12 +8,13 @@ NAMES = ("runner", "voice")
 FAILURE = "echo-install: device operation failed\n"
 HISTORICAL_PROMPTS = ROOT / "tests/fixtures/echo-install-prompts"
 # 218736fe changed runner.md only. Both releases shipped the same voice blob.
-# 1e2e682a changed voice.md only.
+# 1e2e682a and 45406f10 changed voice.md only.
 HISTORICAL_RELEASES = (
     ("3313a7da-runner.md", "3313a7da-voice.md"),
     ("e707712d-runner.md", "e707712d-voice.md"),
     ("218736fe-runner.md", "e707712d-voice.md"),
     ("218736fe-runner.md", "1e2e682a-voice.md"),
+    ("218736fe-runner.md", "45406f10-voice.md"),
 )
 
 

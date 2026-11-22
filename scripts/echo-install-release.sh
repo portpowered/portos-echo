@@ -223,7 +223,7 @@ test \"\${sum%% *}\" = '$digest'"
   run_adb shell "chown '$owner' '$stage_file' && chmod '$mode' '$stage_file' && mv -f '$stage_file' '$destination'"
 }
 
-# SHA-256 of the release blobs at 3313a7da, e707712d, 218736fe and 1e2e682a, per basename.
+# SHA-256 of the release blobs at 3313a7da, e707712d, 218736fe, 1e2e682a and 45406f10, per basename.
 historical_prompt_seed() {
   case $1:$2 in
     runner:0ab110ae3c6cd256eb01db6862b5d60db67fe2853bb9debb0ae0376a10daca04 | \
@@ -231,7 +231,8 @@ historical_prompt_seed() {
       runner:2656728cf9edbc981852fa484c49f4b27b90befb4f4421cba11cb61f2967297a | \
       voice:88821b161b9570cdd9a93663c3dff8fd75c85f633c8c36733eed5cbff5414212 | \
       voice:cb6f6bb7d6756a758e94beba11f91f5f9baa06f4fd7b27dd1619b73b15d92c34 | \
-      voice:2c7d33e9ec50149061e3fbb3b8d8198102917493a6975efebf9579177e0149dc) return 0 ;;
+      voice:2c7d33e9ec50149061e3fbb3b8d8198102917493a6975efebf9579177e0149dc | \
+      voice:62b17f013c93208c44c3fdee98b84f98920461361e5757aae367cb42bf01a9e4) return 0 ;;
     *) return 1 ;;
   esac
 }
