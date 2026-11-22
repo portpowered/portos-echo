@@ -9,9 +9,10 @@ use echo_link::{
     fake::{Command, FakeConnector, Observer},
 };
 
-/// Today's hassmic applies volume and mute but reports neither, so nothing
-/// can confirm a control: each is acked `NOT_SUPPORTED` once the settle
-/// window passes, and refused controls are acked at once.
+/// A hassmic that sends no `hassmic-speaker` (a build before the fork's
+/// speaker-state change) reports no speaker state, so nothing can confirm a
+/// control: each is acked `NOT_SUPPORTED` once the settle window passes, and
+/// refused controls are acked at once.
 #[tokio::test(start_paused = true)]
 async fn t3_endpoint_speaker_acks_refuse_without_device_state() {
     tokio::task::LocalSet::new()
@@ -71,6 +72,70 @@ async fn t3_endpoint_speaker_acks_refuse_without_device_state() {
             grant.close().await;
         })))
         .await;
+}
+
+/// A Wyoming peer that reports its speaker as hassmic does: `hassmic-speaker`
+/// on connecting and in answer to each set. Every control is then acked
+/// with the state it reports; a relative change uses the reported volume.
+#[tokio::test(start_paused = true)]
+async fn t3_endpoint_speaker_acks_apply_with_a_reporting_wyoming_device() {
+    tokio::task::LocalSet::new()
+        .run_until(Box::pin(bridge_mcp::bridge_component::drive(async {
+            let home = tempfile::tempdir().unwrap();
+            let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
+            mock.enable_endpoint_audience().unwrap();
+            let mut grant = registered(&mock, home.path()).await;
+            let mut gateway = Gateway::open(&mock).await;
+            let Fixture {
+                settings,
+                mut device,
+                app: _app,
+                ..
+            } = fixture(home.path(), &mock, &gateway, grant.grant.clone()).await;
+            settings.save(true, "Hall Echo").await;
+            gateway.assert_upgrade(CLAIMED).await;
+            let _ = message(&mock, "/assistant/state", &json!("IDLE")).await;
+            device.send("hassmic-speaker", json!({"volume":20,"muted":false})).await;
+            let connected = json!({"volume":20,"muted":false});
+            let report = drive(&mut device, || reported(&mock, &connected), "the connect report").await;
+            assert!(report.get("requestId").is_none(), "plain state");
+
+            // Each command, then the state the device reports back.
+            for (name, id, payload, (volume, muted)) in [
+                ("set-volume", "absolute", json!({"volume":30}), (30, false)),
+                ("adjust-volume", "relative", json!({"volumeDelta":-10}), (20, false)),
+                ("set-mute", "mute", json!({"mute":true}), (20, true)),
+            ] {
+                send_control(&gateway, name, id, &payload).await;
+                if name == "set-mute" {
+                    assert_control(&mut device, "hassmic-set-output-mute", &payload).await;
+                } else {
+                    assert_control(&mut device, "hassmic-set-volume", &json!({"volume":volume})).await;
+                }
+                let state = json!({"volume":volume,"muted":muted});
+                device.send("hassmic-speaker", state.clone()).await;
+                assert_speaker_ack(&acks(&mock, &mut device, &[id]).await[0], id, &state);
+            }
+            assert_eq!(receipts(&mock).len(), 3, "one ack per speaker command");
+            assert_no_refusals(&mock);
+            settings.close().await;
+            gateway.assert_disconnect().await;
+            grant.close().await;
+        })))
+        .await;
+}
+
+/// The first state report whose `speaker` is `speaker`.
+fn reported(mock: &Mock, speaker: &Value) -> Option<Value> {
+    mock.state
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|request| request.path == "/messages")
+        .filter_map(|request| request.json.as_ref())
+        .find(|body| body["payload"].get("speaker") == Some(speaker))
+        .map(|body| body["payload"].clone())
 }
 
 /// The audit and ack rows name the ack's code; a control that reached no
@@ -217,13 +282,22 @@ async fn assert_control(device: &mut Device, name: &str, payload: &Value) {
 /// Drive the clock, answering the device's describe probes, until each of
 /// `ids` has its ack; returns the ack payloads in that order.
 async fn acks(mock: &Mock, device: &mut Device, ids: &[&str]) -> Vec<Value> {
+    let all = || {
+        let found: Vec<_> = ids.iter().filter_map(|id| ack(mock, id)).collect();
+        (found.len() == ids.len()).then_some(found)
+    };
+    drive(device, all, &format!("speaker acks {ids:?}")).await
+}
+
+/// Drive the clock, answering the device's describe probes, until `found`
+/// gives a value.
+async fn drive<T>(device: &mut Device, mut found: impl FnMut() -> Option<T>, what: &str) -> T {
     let finish = Instant::now() + Duration::from_secs(10);
     loop {
-        let found: Vec<_> = ids.iter().filter_map(|id| ack(mock, id)).collect();
-        if found.len() == ids.len() {
-            return found;
+        if let Some(value) = found() {
+            return value;
         }
-        assert!(Instant::now() < finish, "missing speaker acks {ids:?}");
+        assert!(Instant::now() < finish, "missing {what}");
         tokio::select! {
             frame = device.next() => {
                 assert_eq!(frame.header.r#type, "describe");
