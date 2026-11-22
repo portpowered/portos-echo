@@ -1,168 +1,84 @@
-name: Targeted
+name: A1b exact regression witnesses
 on:
   workflow_dispatch:
-    inputs:
-      nextest_filter:
-        description: Optional nextest -E expression
-        type: string
-        required: false
-        default: ''
-      scenarios:
-        description: Optional space-separated scenario stems or .yaml filenames
-        type: string
-        required: false
-        default: ''
-      repeat:
-        description: Number of executions, integer 1-10
-        type: number
-        required: false
-        default: 1
-      ignored:
-        description: Include ignored tests in the filter selection
-        type: boolean
-        required: false
-        default: true
-      release_bundle:
-        description: Build and verify the distributable release bundle
-        type: boolean
-        required: false
-        default: false
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
-  targeted:
-    if: ${{ !inputs.release_bundle || inputs.nextest_filter != '' || inputs.scenarios != '' }}
+  regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
           persist-credentials: false
+      - run: |
+          git checkout --detach HEAD^
+          git rev-parse HEAD
       - uses: ./.github/actions/setup
         with:
           target: test-sim
           sim: 'true'
-      - name: Execute requested selections
-        id: selections
-        shell: sh
-        env:
-          TARGETED_FILTER: ${{ inputs.nextest_filter }}
-          TARGETED_SCENARIOS: ${{ inputs.scenarios }}
-          TARGETED_REPEAT: ${{ inputs.repeat }}
-          TARGETED_IGNORED: ${{ inputs.ignored }}
+      - name: Run unit and exact prebuilt TCP witnesses
         run: |
-          python - <<'PY'
-          import os
-          import re
-          import subprocess
+          unset HASSMIC_HOST_FROM_FORK HASSMIC_SRC
+          cargo test --locked -p echo-device --lib
+          cargo build --locked -p echo-bridge --bin echo-bridge
+          cargo nextest run --locked -p echo-device --test satellite_t3 --run-ignored only --config-file .github/nextest.toml --profile ci --success-output immediate
+          printf 'TARGETED_RESULT P-UNIT P-TCP exit=0\n'
+          make sim-prereqs
+          host=$(sh scripts/hassmic-host.sh path)
+          file "$host"
+          for flag in --invalid-test-option -S; do
+            left=0; right=0
+            "$host" -n Lab-Sat "$flag" >"$RUNNER_TEMP/host.out" 2>"$RUNNER_TEMP/host.err" || left=$?
+            target/debug/echo-bridge device -n Lab-Sat "$flag" >"$RUNNER_TEMP/dev.out" 2>"$RUNNER_TEMP/dev.err" || right=$?
+            test "$left" -eq "$right"
+            cmp "$RUNNER_TEMP/host.out" "$RUNNER_TEMP/dev.out"
+            cmp "$RUNNER_TEMP/host.err" "$RUNNER_TEMP/dev.err"
+            printf 'direct/staged %s status=%s\n' "$flag" "$left"
+            cat "$RUNNER_TEMP/dev.out" "$RUNNER_TEMP/dev.err"
+          done
+          target/debug/echo-bridge device -S -p 17555 -n Lab-Sat | grep -F '<port>17555</port>'
+          target/debug/echo-bridge notices | grep -Ex 'hassmic|Port OS hassmic shims|minimp3 \(CC0-1.0\)|monocypher\.c|monocypher\.h|RNNoise'
+          cargo nextest run --locked -p echo-bridge --test bridge_t3 --run-ignored only --config-file .github/nextest.toml --profile ci --success-output immediate -E 'test(=hassmic_name::t3_hassmic_name_supervisor_cli)'
+          # -V disables hardware volume control in the fork. Exercise normal startup
+          # and take version from Info and the ready log in an isolated loopback.
+          cat >"$RUNNER_TEMP/cli-version.py" <<'PY'
+          import socket
+          import sys
           import tempfile
           from pathlib import Path
-          selection = os.environ["TARGETED_FILTER"].strip()
-          names = os.environ["TARGETED_SCENARIOS"].split()
-          count = os.environ["TARGETED_REPEAT"]
-          ignored = os.environ["TARGETED_IGNORED"]
-          if not re.fullmatch(r"(?:[1-9]|10)", count) or ignored not in ("true", "false"):
-              raise SystemExit("targeted: repeat must be 1-10 and ignored must be boolean")
-          if not selection and not names:
-              raise SystemExit("targeted: provide nextest_filter or scenarios")
-          paths = []
-          for name in names:
-              if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\.yaml)?", name):
-                  raise SystemExit("targeted: use scenario names within tests/scenarios")
-              path = Path("tests/scenarios") / (name if name.endswith(".yaml") else name + ".yaml")
-              if not path.is_file() or path.resolve().parent != Path("tests/scenarios").resolve():
-                  raise SystemExit("targeted: missing or unsafe scenario")
-              paths.append(path)
-          subprocess.run(["cargo", "build", "--locked", "-p", "echo-lab", "-p", "echo-bridge",
-                          "-p", "echo-muse-bridge", "--bins"], check=True)
-          report_root = Path(tempfile.mkdtemp(prefix="targeted-reports-", dir=os.environ["RUNNER_TEMP"])).resolve()
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              print(f"report_root={report_root}", file=output)
-          failed = False
-          for number in range(1, int(count) + 1):
-              code = 0
-              if selection:
-                  command = ["cargo", "nextest", "run", "--locked", "--workspace", "--all-targets",
-                             "--config-file", ".github/nextest.toml", "--profile", "ci",
-                             "--no-tests", "fail", "-E", selection]
-                  if ignored == "true":
-                      command += ["--run-ignored", "all"]
-                  code = subprocess.run(command).returncode
-              for index, path in enumerate(paths):
-                  parent = report_root / ("repeat-" + str(number))
-                  parent.mkdir(parents=True, exist_ok=True)
-                  destination = parent / (str(index) + "-" + path.stem)
-                  result = subprocess.run(["target/debug/echo-lab", "run", str(path),
-                                           "--driver", "sim", "--out", str(destination)]).returncode
-                  if result and not code:
-                      code = result
-              print(f"TARGETED_RESULT repeat={number} exit={code}", flush=True)
-              failed = failed or code != 0
-          raise SystemExit(1 if failed else 0)
+          sys.path.insert(0, str(Path("tests").resolve()))
+          from wyoming_host import Host, describe
+          direct = Path("target/debug/echo-bridge").resolve()
+          version = Path("third_party/hassmic/version").read_text().strip()
+          class NoVolumeHost(Host):
+              def launch(self, args, **kwargs):
+                  if self.direct:
+                      args = [str(direct), "device", *args[1:]]
+                  super().launch([*args, "-V"], **kwargs)
+          for use_direct in (False, True):
+              with tempfile.TemporaryDirectory() as folder:
+                  host = NoVolumeHost(folder)
+                  host.direct = use_direct
+                  try:
+                      host.start()
+                      with socket.create_connection(("127.0.0.1", host.port), timeout=3) as peer:
+                          satellite = describe(peer)["satellite"]
+                      assert satellite["name"] == "Wyoming Test"
+                      assert satellite["version"] == version, satellite
+                      assert f"hassmic {version} (".encode() in host.log, host.log
+                      print(f"{'direct' if use_direct else 'staged'} -V startup: satellite={satellite['name']!r}, version={version}")
+                  finally:
+                      host.stop()
           PY
-      - name: Upload echo-lab reports
-        if: always() && steps.selections.outputs.report_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-reports-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.selections.outputs.report_root }}
-          if-no-files-found: ignore
-          retention-days: 3
-  release-bundle:
-    if: ${{ inputs.release_bundle }}
-    runs-on: ubuntu-24.04
-    # Existing standalone Codex job allows 180 minutes for a cold build.
-    timeout-minutes: 240
-    env:
-      CARGO_BUILD_JOBS: '4'
-      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Focused wrapper and packaging tests
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          python3 tests/test_release_kit.py
-          python3 tests/test_release_redirects.py
-      - uses: ./.github/actions/setup
-        with:
-          target: build-echo
-      - name: Provision release tools
-        shell: sh
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3 gcc-mingw-w64-x86-64-posix
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "platforms;android-34" "build-tools;35.0.0"
-          rustup target add --toolchain 1.100.0 armv7-linux-androideabi x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: Cheap release checks
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          actionlint .github/workflows/release.yml .github/workflows/targeted.yml
-          python3 tests/test_release_kit.py --configure-native
-      - name: Build and verify release bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          make dist
-          python3 tests/test_release_kit.py --assets dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-release-${{ github.sha }}
-          path: |
-            dist/echo-*-armv7.tar.gz
-            dist/default-*.screenpack.tar.gz
-            dist/companion-0.2.2.screenpack.tar.gz
-            dist/echo-setup-*-linux-x86_64
-            dist/echo-setup-*-windows-x86_64.exe
-            dist/install.sh
-            dist/install.ps1
-            dist/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 7
+          unshare --user --map-root-user --net -- /bin/sh -c 'ip link set lo up && exec "$@"' sh python3 "$RUNNER_TEMP/cli-version.py"
+          printf 'TARGETED_RESULT P-CLI exit=0\n'
+          sh tests/hassmic_host_smoke.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_host_teardown.py -v
+          cargo nextest run -p echo-wyoming --test wyoming_t3 --run-ignored only --locked --config-file .github/nextest.toml --profile ci --success-output immediate
+          printf 'TARGETED_RESULT P-REG components exit=0\n'
