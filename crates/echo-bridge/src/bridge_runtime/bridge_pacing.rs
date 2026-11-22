@@ -11,7 +11,7 @@ mod reply_playout;
 pub use reply_barge::BargeTrigger;
 #[cfg(test)]
 pub(crate) use reply_barge::{BARGE_QUIET, BARGE_WINDOW};
-pub(crate) use reply_barge::{Barge, Question};
+pub(crate) use reply_barge::{Barge, Floor, Question};
 pub(crate) use reply_ear::Ear;
 pub use reply_ear::Heard;
 pub use reply_lips::LipStats;

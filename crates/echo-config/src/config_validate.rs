@@ -76,6 +76,7 @@ fn schema_field(path: &str, key: &str) -> bool {
             "session_listen_seconds",
             "session_max_seconds",
             "speech_start_expiry_seconds",
+            "local_barge_cut",
         ],
         "codex" => &[
             "home",

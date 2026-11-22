@@ -4,7 +4,9 @@
 //! or end of speech clears it. The pinned V3 session forwards no
 //! speech-stopped, so a speech start that never produces transcript text
 //! expires after `voice.speech_start_expiry_seconds` (owner, 2026-11-21) and
-//! the run's no-answer, idle and listen deadlines apply again.
+//! the run's no-answer, idle and listen deadlines apply again. Each end of
+//! the latch is also the end of a user turn for the barge-in (`Floor`).
+use crate::bridge_runtime::bridge_pacing::BargeTrigger;
 use crate::bridge_voice::{Error, Notice, Source, UserSpeech};
 use serde_json::{Value, json};
 use std::future::Future;
@@ -13,17 +15,44 @@ use tokio::time::{Duration, Instant};
 /// `voice.speech_start_expiry_seconds` outside a configured scope.
 pub(crate) const SPEECH_START_EXPIRY: Duration = Duration::from_secs(20);
 
-tokio::task_local! {
-    static EXPIRY: Duration;
+/// The run's configured `[voice]` knobs.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Knobs {
+    /// `voice.speech_start_expiry_seconds`.
+    pub expiry: Duration,
+    /// `voice.local_barge_cut`: the bridge holds and cuts a reply the user
+    /// talks over. Off, the model's own yield is the only barge-in.
+    pub local_cut: bool,
 }
 
-/// Run voice work under the configured speech-start expiry.
-pub(crate) async fn scope<T>(expiry: Duration, work: impl Future<Output = T>) -> T {
-    EXPIRY.scope(expiry, work).await
+impl Default for Knobs {
+    fn default() -> Self {
+        Self {
+            expiry: SPEECH_START_EXPIRY,
+            local_cut: true,
+        }
+    }
+}
+
+tokio::task_local! {
+    static KNOBS: Knobs;
+}
+
+/// Run voice work under the configured knobs.
+pub(crate) async fn scope<T>(knobs: Knobs, work: impl Future<Output = T>) -> T {
+    KNOBS.scope(knobs, work).await
+}
+
+fn knobs() -> Knobs {
+    KNOBS.try_with(|knobs| *knobs).unwrap_or_default()
 }
 
 pub(super) fn expiry() -> Duration {
-    EXPIRY.try_with(|expiry| *expiry).unwrap_or(SPEECH_START_EXPIRY)
+    knobs().expiry
+}
+
+pub(in crate::bridge_voice) fn local_cut() -> bool {
+    knobs().local_cut
 }
 
 /// One structure-only trace fact: no transcript text, ever.
@@ -39,6 +68,21 @@ pub enum Mark {
     },
     /// The run cap ended a `reply` or a `listen`.
     Capped(&'static str),
+    /// A barge-in armed by `trigger` cut the reply: the user `turn`'s one cut.
+    BargeCut { turn: u32, trigger: BargeTrigger },
+    /// The `count`-th sign of user speech over a reply in a `turn` that has
+    /// had its cut: passed, so the reply (a backchannel) plays on.
+    BargePassed {
+        turn: u32,
+        trigger: BargeTrigger,
+        count: u32,
+    },
+    /// The user `turn` that cut ended (`cleared`, `expired`, or `ended`
+    /// before its cut): the next turn may cut again.
+    BargeRearmed { turn: u32, reason: &'static str },
+    /// `voice.local_barge_cut` is off: the `turn`'s first sign over a reply
+    /// was left to the model's own yield.
+    BargeLeft { turn: u32, trigger: BargeTrigger },
 }
 
 impl Mark {
@@ -47,6 +91,10 @@ impl Mark {
         match self {
             Self::Latched { .. } => "speech.latched",
             Self::Capped(_) => "run.capped",
+            Self::BargeCut { .. } => "barge.cut",
+            Self::BargePassed { .. } => "barge.suppressed_in_turn",
+            Self::BargeRearmed { .. } => "barge.rearmed",
+            Self::BargeLeft { .. } => "barge.model_only",
         }
     }
 
@@ -63,6 +111,13 @@ impl Mark {
                 "transcribed": transcribed,
             }),
             Self::Capped(during) => json!({ "during": during }),
+            Self::BargeCut { turn, trigger } | Self::BargeLeft { turn, trigger } => {
+                json!({ "turn": turn, "trigger": trigger.name() })
+            }
+            Self::BargePassed { turn, trigger, count } => {
+                json!({ "turn": turn, "trigger": trigger.name(), "count": count })
+            }
+            Self::BargeRearmed { turn, reason } => json!({ "turn": turn, "reason": reason }),
         }
     }
 }
@@ -93,6 +148,10 @@ impl Marks {
     pub fn capped(&mut self, during: &'static str) {
         self.pending.push(Mark::Capped(during));
     }
+
+    pub(in crate::bridge_voice) fn push(&mut self, mark: Mark) {
+        self.pending.push(mark);
+    }
 }
 
 impl Source {
@@ -118,6 +177,7 @@ impl Source {
             self.answer_due = due;
         }
         self.marks.release(reason);
+        self.turn_ended(reason);
     }
 
     /// When a latched speech start with no transcript since stops counting

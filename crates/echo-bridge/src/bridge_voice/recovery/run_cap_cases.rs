@@ -74,7 +74,7 @@ impl Ended {
                 reason,
                 transcribed,
             } => (reason == wanted).then_some((held, transcribed)),
-            Mark::Capped(_) => None,
+            _ => None,
         });
         latched.collect()
     }
@@ -82,7 +82,7 @@ impl Ended {
     fn capped(&self) -> Vec<&'static str> {
         let capped = self.marks.iter().filter_map(|mark| match *mark {
             Mark::Capped(during) => Some(during),
-            Mark::Latched { .. } => None,
+            _ => None,
         });
         capped.collect()
     }

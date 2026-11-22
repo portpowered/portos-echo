@@ -20,6 +20,21 @@ output_lock = threading.Lock()
 delegation = None
 manual_cases = {}
 session = None
+turn_taking = None
+TURN_KEYS = ('turn_detection', 'interrupt_response', 'create_response', 'eagerness', 'noise_reduction')
+
+
+def turn_paths(value, path=''):
+    """Paths of the call session's turn-taking settings, wherever they sit."""
+    found = []
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            here = f'{path}.{key}' if path else key
+            found += [here] if key in TURN_KEYS else turn_paths(inner, here)
+    elif isinstance(value, list):
+        for index, inner in enumerate(value):
+            found += turn_paths(inner, f'{path}[{index}]')
+    return found
 
 
 def emit(value):
@@ -123,8 +138,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             observed['external'] += 1
             self.respond(403, b'{}')
             return
-        global session
+        global session, turn_taking
         session = {key: body['session'].get(key) for key in ('instructions', 'initial_items')}
+        turn_taking = {
+            'paths': turn_paths(body['session']),
+            'audio': sorted(body['session'].get('audio', {})),
+        }
         call_voices.append(body['session'].get('audio', {}).get('output', {}).get('voice'))
         observed['calls'].append({
             'path': self.path, 'model': body['session']['model'],
@@ -224,6 +243,8 @@ try:
             emit({'append_receipts': delegation.append_receipts})
         elif command == {'session': True}:
             emit({'session': session})
+        elif command == {'turn_taking': True}:
+            emit({'turn_taking': turn_taking})
         elif command == {'call_voices': True}:
             emit({'call_voices': call_voices})
         elif 'release_model' in command:

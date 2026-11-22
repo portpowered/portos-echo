@@ -10,6 +10,9 @@ pub struct VoiceConfig {
     pub session_max_seconds: u32,
     /// How long a user speech start with no transcript text counts as speech.
     pub speech_start_expiry_seconds: u32,
+    /// The bridge holds and cuts a reply the user talks over, once per user
+    /// turn. Off, the Live model's own yield is the only barge-in.
+    pub local_barge_cut: bool,
 }
 
 impl Default for VoiceConfig {
@@ -19,6 +22,7 @@ impl Default for VoiceConfig {
             session_listen_seconds: 15,
             session_max_seconds: 600,
             speech_start_expiry_seconds: 20,
+            local_barge_cut: true,
         }
     }
 }
@@ -69,6 +73,7 @@ pub(super) fn decode(value: toml::de::DeValue<'_>) -> Result<VoiceConfig, Config
         speech_start_expiry_seconds: f
             .optional("speech_start_expiry_seconds")?
             .unwrap_or(defaults.speech_start_expiry_seconds),
+        local_barge_cut: f.optional("local_barge_cut")?.unwrap_or(defaults.local_barge_cut),
     };
     f.finish()?;
     Ok(result)

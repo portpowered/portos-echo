@@ -164,22 +164,38 @@ async fn journey(voice: Option<&str>, provider_voice: &str) {
         "path":"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
         "model":"gpt-live-1.1-codex", "alpha":"quicksilver=v2"}], "sidebands":1,"external":0})
     );
-    input.write_all(b"{\"call_voices\":true}\n").await.unwrap();
-    let voices: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-    assert_eq!(voices, json!({"call_voices":[provider_voice]}));
-    // The pinned server must hand the provider the Live prompt both as session
-    // instructions and as the developer item that opens the Live history.
-    input.write_all(b"{\"session\":true}\n").await.unwrap();
-    let session: Value = serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-    assert_eq!(
-        session,
-        json!({"session":{"instructions":"Live voice prompt", "initial_items":[{"type":"message",
-            "role":"developer", "content":[{"type":"input_text","text":"Live voice prompt"}]}]}})
-    );
+    call_session(&mut input, &mut output, provider_voice).await;
     drop(input);
     assert!(provider.wait().await.unwrap().success());
     // with_host_options has reaped its child and dropped the home lease.
     drop(Supervisor::new(SupervisorConfig::new(config.binary.unwrap(), config.home.unwrap())).unwrap());
+}
+
+/// What the pinned server put in the call session it sent the provider.
+async fn call_session(input: &mut ChildStdin, output: &mut Lines<BufReader<ChildStdout>>, provider_voice: &str) {
+    let mut ask = async |command: &str| -> Value {
+        input.write_all(format!("{command}\n").as_bytes()).await.unwrap();
+        serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap()
+    };
+    assert_eq!(
+        ask(r#"{"call_voices":true}"#).await,
+        json!({"call_voices":[provider_voice]})
+    );
+    // The pinned server must hand the provider the Live prompt both as session
+    // instructions and as the developer item that opens the Live history.
+    assert_eq!(
+        ask(r#"{"session":true}"#).await,
+        json!({"session":{"instructions":"Live voice prompt", "initial_items":[{"type":"message",
+            "role":"developer", "content":[{"type":"input_text","text":"Live voice prompt"}]}]}})
+    );
+    // Owned by Codex/OpenAI, not the bridge: the V3 call session Codex sends
+    // for the bridge's start sets no turn detection, interruption or input
+    // audio. Barge-in is the model's own judgment; a release that configures
+    // it changes what the bridge's local cut sits on (ADR 0024, 2026-11-21).
+    assert_eq!(
+        ask(r#"{"turn_taking":true}"#).await,
+        json!({"turn_taking":{"paths":[], "audio":["output"]}})
+    );
 }
 
 fn host_options<'a>(config: &'a CodexConfig, routes: &'a LocalRoutes, key: &'a Secret<String>) -> HostOptions<'a> {

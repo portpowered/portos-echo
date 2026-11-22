@@ -148,11 +148,8 @@ impl Configured {
                 let api_key = self.api_key()?;
                 let _time = self.watch_time().await;
                 let options = self.options(api_key.as_ref(), tools);
-                super::voice_wait::run_marks::scope(
-                    self.speech_start_expiry(),
-                    super::execute(options, connector, peer, cancelled),
-                )
-                .await
+                super::voice_wait::run_marks::scope(self.knobs(), super::execute(options, connector, peer, cancelled))
+                    .await
             },
         ))
         .await
@@ -191,7 +188,7 @@ impl Configured {
     ) -> Result<super::RuntimeCompletion, Error> {
         let startup = self.startup.take().filter(|startup| startup.config.home.is_some());
         let prompts = retained.as_ref().map(|host| host.prompts());
-        let expiry = self.speech_start_expiry();
+        let knobs = self.knobs();
         let generation = Box::pin(super::prompts::scope_retained(
             self.config.home.as_ref().map(|home| home.dir.as_path()),
             prompts,
@@ -230,13 +227,17 @@ impl Configured {
                 }
             },
         ));
-        super::voice_wait::run_marks::scope(expiry, generation).await
+        super::voice_wait::run_marks::scope(knobs, generation).await
     }
 
     /// `voice.speech_start_expiry_seconds`: when a speech start with no
-    /// transcript text stops holding the run's deadlines.
-    fn speech_start_expiry(&self) -> Duration {
-        Duration::from_secs(u64::from(self.config.voice.speech_start_expiry_seconds))
+    /// transcript text stops holding the run's deadlines; and
+    /// `voice.local_barge_cut`: whether the bridge cuts a reply talked over.
+    fn knobs(&self) -> super::voice_wait::run_marks::Knobs {
+        super::voice_wait::run_marks::Knobs {
+            expiry: Duration::from_secs(u64::from(self.config.voice.speech_start_expiry_seconds)),
+            local_cut: self.config.voice.local_barge_cut,
+        }
     }
 
     /// Record one failed OS replacement, keeping the original active config.

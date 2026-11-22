@@ -65,6 +65,7 @@ pairing_token_file = "credentials/screen-pairing.txt"
 session_listen_seconds = 15 # Integer 3..300.
 session_max_seconds = 600 # Integer 3..2147483647, at least listen; bounds delegated waiting and tool-granted listening extensions.
 speech_start_expiry_seconds = 20 # Integer 3..300; a speech start with no transcript text stops counting as speech after this.
+local_barge_cut = true # Boolean; false leaves barge-in to the Live model's own yield (no local hold or cut).
 
 # Private delegation payload capture. Restart to apply; remove this table before rollback.
 [trace]
