@@ -101,11 +101,18 @@ For that API the WSS template defaults to
 `wss://devices.portoperatingsystem.com/devices/{authLinkId}`; any other API base needs
 `gateway_url`, which ends in `/devices/{authLinkId}`. Omit inline credentials, queries, fragments
 and other substitutions from both. Commands and reports address the Echo by its `deviceId`; the
-bridge reads its route back (`GET /routes?owner=~caller`, following `nextToken` pages) for
-display and logs only. The bridge sends a text `ping` on the gateway every 45 seconds. Close 4000
-reconnects at once, 4503 backs off with the same token, 4401 retries with a refreshed token up to
-three times, 4403 stops after one refreshed retry, and 4409 stops. Snapshot replies are always
-inline base64 JPEG stamped with the capture time.
+bridge reads its route back for display and logs only. The read-back uses the same REST
+API-resource token that posts `/messages`. Every page is `GET /routes?owner=~caller&maxResults=100`,
+and the bridge follows each page's `paginationContext.nextToken`, sent back unchanged as the
+`nextToken` query parameter. Port OS answers 400 for a continuation token that was modified, has
+expired or was rebound. On that 400 the read-back starts again from page 1, at most once per
+read-back. A 400 for page 1 is a rejection. A route matches only when its `associatedPluginRouteId`
+is the `deviceId` sent at pairing and its `associatedAuthLinkId` is the current pairing's
+`authLinkId`. A route that an earlier pairing left for the same `deviceId` therefore never matches.
+The bridge sends a text `ping` on the gateway every 45 seconds. Close 4000 reconnects at once, 4503
+backs off with the same token, 4401 retries with a refreshed token up to three times, 4403 stops
+after one refreshed retry, and 4409 stops. Snapshot replies are always inline base64 JPEG stamped
+with the capture time.
 
 Remote and wake sessions share one voice slot. A text start can speak a reply without opening
 device capture. Set `remote_mic = true` only for a Wyoming peer that acknowledges the correlated
@@ -119,7 +126,7 @@ every ten minutes while connected. A state report that Port OS answers `NOT_FOUN
 route exists, is sent again once the route is found. Each route read-back is traced as
 `endpoint.route_attempt` with `outcome` (`none`, `found` or `error`), the failure `reason` and
 `http_status`, and counts of `pages`, `results` and `routed` records (those that carry an
-`associatedPluginRouteId`). It never records ids.
+`associatedPluginRouteId`), and `restarts` (0 or 1). It never records ids.
 
 Port OS speaker commands request absolute volume, a relative change from the last reported volume,
 or output mute. They get no reply. A command that reaches no device is traced as

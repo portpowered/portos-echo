@@ -37,6 +37,20 @@ pub struct RouteScan {
     pub results: usize,
     /// Records that carry an `associatedPluginRouteId` at all.
     pub routed: usize,
+    /// Restarts from page 1 after Port OS refused a continuation (at most one).
+    pub restarts: usize,
+}
+
+impl RouteScan {
+    fn count(&mut self, page: &RoutePage) {
+        self.pages += 1;
+        self.results += page.results.len();
+        self.routed += page
+            .results
+            .iter()
+            .filter(|route| route.associated_plugin_route_id.is_some())
+            .count();
+    }
 }
 
 pub struct EndpointExchange {
@@ -278,8 +292,11 @@ impl EndpointExchange {
 
 impl EndpointExchange {
     /// Read back the caller's routes and return the endpoint id of the one
-    /// whose plugin route id is this `deviceId`. `None` while discovery lags.
-    /// Pages follow `nextToken` until it is absent or the route is found.
+    /// whose plugin route id is this `deviceId` and whose auth link is this
+    /// pairing's `authLinkId`. `None` while discovery lags. Every page repeats
+    /// `owner=~caller&maxResults=100`; pages follow `paginationContext.nextToken`
+    /// until it is absent or the route is found. A 400 for a continuation (a
+    /// modified, expired or rebound token) restarts once from page 1.
     /// The id is for display and logs; nothing is derived from it.
     ///
     /// # Errors
@@ -288,8 +305,10 @@ impl EndpointExchange {
         &self,
         tokens: &dyn EndpointTokenSource,
         device_id: &str,
+        auth_link_id: &str,
     ) -> Result<Option<String>, ExchangeError> {
-        self.read_routes(tokens, device_id, &mut RouteScan::default()).await
+        self.read_routes(tokens, device_id, auth_link_id, &mut RouteScan::default())
+            .await
     }
 
     /// As [`Self::endpoint_id`], counting what the read-back saw into `scan`
@@ -301,30 +320,38 @@ impl EndpointExchange {
         &self,
         tokens: &dyn EndpointTokenSource,
         device_id: &str,
+        auth_link_id: &str,
         scan: &mut RouteScan,
     ) -> Result<Option<String>, ExchangeError> {
         let token = tokens.access_token().await.map_err(|_| ExchangeError::Grant)?;
         let mut next: Option<String> = None;
+        let mut restarted = false;
         for _ in 0..MAX_ROUTE_PAGES {
             let mut url = self.routes.clone();
             if let Some(next) = &next {
                 url.query_pairs_mut().append_pair("nextToken", next);
             }
-            let page = self.route_page(url, token.expose()).await?;
-            scan.pages += 1;
-            scan.results += page.results.len();
-            scan.routed += page
-                .results
-                .iter()
-                .filter(|route| route.associated_plugin_route_id.is_some())
-                .count();
-            if let Some(endpoint) = page.endpoint_for(device_id) {
+            let page = match self.route_page(url, token.expose()).await {
+                // A modified, expired or rebound continuation: start over from
+                // page 1, once per read-back, so a persistent 400 cannot loop.
+                Err(ExchangeError::Rejected(status))
+                    if status == StatusCode::BAD_REQUEST.as_u16() && next.is_some() && !restarted =>
+                {
+                    restarted = true;
+                    scan.restarts += 1;
+                    next = None;
+                    continue;
+                }
+                page => page?,
+            };
+            scan.count(&page);
+            if let Some(endpoint) = page.endpoint_for(device_id, auth_link_id) {
                 return Ok(Some(endpoint.to_owned()));
             }
-            match page.next_token.filter(|token| !token.is_empty()) {
+            match page.next_token() {
                 None => return Ok(None),
-                Some(token) if next.as_ref() == Some(&token) => return Err(ExchangeError::Protocol),
-                Some(token) => next = Some(token),
+                Some(token) if next.as_deref() == Some(token) => return Err(ExchangeError::Protocol),
+                Some(token) => next = Some(token.to_owned()),
             }
         }
         Err(ExchangeError::Protocol)

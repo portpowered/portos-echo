@@ -7,6 +7,7 @@ mod lifecycle;
 use crate::mock;
 mod protocol;
 mod registration;
+mod routes;
 mod storage;
 
 use super::*;

@@ -330,15 +330,23 @@ enum InstallStatus {
     Succeeded,
 }
 
-/// One `GET /routes?owner=~caller` page. Only the fields the bridge reads.
+/// One `GET /routes?owner=~caller` page (`EnumerateRoutesResponse`). Only the
+/// fields the bridge reads. The cursor is nested:
+/// `{"results":[..],"paginationContext":{"nextToken":".."}}`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutePage {
     #[serde(default)]
     pub results: Vec<RouteRecord>,
-    /// The opaque continuation, passed back unchanged; absent on the last page.
     #[serde(default)]
-    pub next_token: Option<String>,
+    pagination_context: Option<PaginationContext>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PaginationContext {
+    #[serde(default)]
+    next_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -348,15 +356,33 @@ pub struct RouteRecord {
     pub associated_plugin_route_id: Option<String>,
     #[serde(default)]
     pub associated_endpoint_id: Option<String>,
+    #[serde(default)]
+    pub associated_auth_link_id: Option<String>,
 }
 
 impl RoutePage {
-    /// The endpoint id of the route whose plugin route id is this device. Never derived.
+    /// The opaque `paginationContext.nextToken`, passed back unchanged as the
+    /// `nextToken` query parameter. `None` (absent or empty) on the last page.
     #[must_use]
-    pub fn endpoint_for(&self, device_id: &str) -> Option<&str> {
+    pub fn next_token(&self) -> Option<&str> {
+        self.pagination_context
+            .as_ref()
+            .and_then(|context| context.next_token.as_deref())
+            .filter(|token| !token.is_empty())
+    }
+
+    /// The endpoint id of the route whose plugin route id is this device's
+    /// `deviceId` and whose auth link is the current pairing's `authLinkId`,
+    /// so a route an old pairing left for the same device never matches.
+    /// Never derived.
+    #[must_use]
+    pub fn endpoint_for(&self, device_id: &str, auth_link_id: &str) -> Option<&str> {
         self.results
             .iter()
-            .find(|route| route.associated_plugin_route_id.as_deref() == Some(device_id))
+            .find(|route| {
+                route.associated_plugin_route_id.as_deref() == Some(device_id)
+                    && route.associated_auth_link_id.as_deref() == Some(auth_link_id)
+            })
             .and_then(|route| route.associated_endpoint_id.as_deref())
             .filter(|id| !id.trim().is_empty())
     }

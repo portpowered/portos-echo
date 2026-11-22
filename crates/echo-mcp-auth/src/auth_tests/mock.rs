@@ -17,7 +17,9 @@ use tokio::{
 mod http;
 #[path = "mock_portos/mod.rs"]
 mod portos;
-pub use portos::{ECHO_ENDPOINT_ID, OTHER_DEVICE, ROUTE_TOKEN};
+pub use portos::{
+    AUTH_LINK, ECHO_ENDPOINT_ID, EndpointState, OTHER_DEVICE, ROUTE_TOKEN, STALE_ENDPOINT_ID, STALE_LINK,
+};
 #[path = "mock_proofs.rs"]
 #[cfg(test)]
 mod tests;
@@ -68,38 +70,6 @@ pub struct State {
     pub held: bool,
     mcp_access: u64,
     pub endpoint: EndpointState,
-}
-
-/// The live Port OS contract, enforced once `enable_endpoint_audience` is called.
-#[derive(Default)]
-pub struct EndpointState {
-    access: Option<u64>,
-    enabled: bool,
-    exchanges: BTreeMap<String, Option<Value>>,
-    pub mcp_claimed: bool,
-    pub endpoint_claimed: bool,
-    /// Access tokens minted by a refresh after pairing: they carry the auth-link claim.
-    pub claimed: BTreeSet<String>,
-    /// The resources the current device authorization approved, in request order.
-    pub resources: Vec<String>,
-    /// The scope the owner approved; both audiences carry it.
-    pub scope: String,
-    /// The scope the DCR client registered, when one registered.
-    pub registered_scope: Option<String>,
-    /// The audience a refresh without `resource` keeps.
-    last_audience: Option<String>,
-    /// The deviceId the pairing exchange named.
-    pub device_id: Option<String>,
-    /// Route discovery lags pairing: this many `/routes` reads omit the Echo; its state reports get 404 until then.
-    pub route_delay: usize,
-    /// Other owner routes listed before the Echo's, to exercise pagination.
-    pub route_padding: usize,
-    /// Command ids one report may still answer; any other `requestId` gets 404.
-    pub open_requests: BTreeSet<String>,
-    /// Report idempotency keys already taken.
-    pub report_keys: BTreeSet<String>,
-    /// Why each refused report was refused, for diagnostics.
-    pub refusals: Vec<String>,
 }
 
 pub struct Mock {
