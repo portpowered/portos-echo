@@ -101,7 +101,11 @@ async fn configured_options_preserve_overrides_budgets_tools_and_default_voice()
     prepared.config.live.voice = None;
     prepared.config.agent.model = None;
     assert_eq!(prepared.options(None, vec![]).voice.call.voice, None);
-    assert_eq!(prepared.options(None, vec![]).voice.call.model, None);
+    // Unset everywhere: the bridge's default, never the app server's.
+    assert_eq!(
+        prepared.options(None, vec![]).voice.call.model,
+        Some(echo_config::DEFAULT_DELEGATE_MODEL)
+    );
     let prepared = prepared.with_mcp_epoch(Some(1_800_000_000));
     assert_eq!(prepared.options(None, vec![]).mcp_epoch, Some(1_800_000_000));
 }

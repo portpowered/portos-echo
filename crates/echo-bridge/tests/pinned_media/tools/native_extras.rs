@@ -44,7 +44,7 @@ async fn exercise() {
     let flags = (false, false, model_started, budget, "gpt-6.1-sol");
     let ((), (mut remote, _)) = tokio::join!(
         client(&config, &routes, (host, catalog), commands, flags),
-        remote(&mut input, &mut output, receive, started)
+        remote(&mut input, &mut output, receive, started, &MODEL_STARTED)
     );
     remote.close();
     input.write_all(b"{\"snapshot\":true}\n").await.unwrap();

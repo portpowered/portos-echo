@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 20
+last modified: 2026, november, 21
 status: active; documentation index
 ---
 
@@ -22,6 +22,7 @@ status: active; documentation index
 - [Coordinator and factory](program/coordinator.md)
 - [Measured baselines](program/baselines.md)
 - [Decisions](program/decisions.md)
+- [Technical debt](tech-debt/README.md)
 - [Required checks and branch protection](program/branch-protection.md)
 
 ## Architecture decisions

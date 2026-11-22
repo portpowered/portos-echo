@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 20
+last modified: 2026, november, 21
 status: active; accepted bridge configuration reference
 ---
 
@@ -177,6 +177,7 @@ The repository has no established subscription-tier guarantee for Live. Third-pa
 terms and account entitlement remain open under [plan section 4.5](program/plan.md#45-risks-the-operator-accepts-with-the-chatgpt-mode).
 Do not assume that a particular paid plan, API subscription or a working Codex login guarantees Live eligibility.
 The pinned server owns its realtime model; `codex.delegate_model` chooses the runner model, not the voice model.
+Unset, the runner uses `gpt-6.1-sol`. gpt-6.2-* models currently refuse the direct `web.run` that search needs.
 
 In paired Settings, open OpenAI, select **Delegated fast mode**, and choose **Save settings**. Wait for
 Settings to report that the saved values are active. The next runner thread starts with the saved tier.
@@ -336,7 +337,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `codex.web_search` | `live` default (also with table/key omitted), `cached` or `disabled`. Provider-backed search only (hosted or native `web.run`); all other tool restrictions stay intact. Invalid type/value: `codex.web_search: invalid type or value`, exit 2 before runtime effects. Set disabled and restart to turn off; remove key before restoring an older binary. | boundary / yes |
 | `codex.voice` | Default unset; overrides live.voice. `default` omits outgoing field; other choices below, nonblank. | boundary / yes |
 | `codex.model` | Optional nonblank legacy runner-model alias; overrides agent.model. | restart / no |
-| `codex.delegate_model` | Optional nonblank runner model; overrides both older model keys. An empty screen override selects the pinned app server default even when a legacy model key is set. | boundary / yes |
+| `codex.delegate_model` | Optional nonblank runner model; overrides both older model keys. Unset everywhere, the bridge selects `gpt-6.1-sol`. An empty screen override selects that default even when a legacy model key is set. gpt-6.2-* models currently refuse the direct `web.run` that search needs (HTTP 400, decision 2026-11-21), so every delegated turn fails with them while search is on. | boundary / yes |
 | `codex.delegate_effort` | Optional nonempty string sent to runner; decoder imposes no enum, pinned app server validates supported effort. | boundary / yes |
 | `codex.delegate_fast` | Boolean, default false. True requests priority processing for the delegated model. False selects standard routing. | boundary / yes |
 | `codex.time_zone` | Default unset; IANA-name syntax (nonempty slash components using ASCII letters/digits/underscore/plus/minus). Not a lookup validating that zone exists. | restart / no |

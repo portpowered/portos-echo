@@ -1232,6 +1232,8 @@ declaration of it must match its configured schema. Declaring only `functions` d
 `web_search = "disabled"`. Both configuration paths now set `["functions"]`. The T3 fake backend
 refuses a direct `web.run` the same way. Search then sits behind `exec`, which needs
 `codex-code-mode-host`, so it is unavailable on the Echo until that host is built for armv7.
+(Superseded the same day: search is restored by a direct `web` declaration with the default delegated
+model `gpt-6.1-sol`; see the next section.)
 
 **`request_user_input_async`.** Codex registers it only when its request-user-input feature is on,
 and the bridge keeps that feature off, so the tool is absent. The bridge never called it and nothing
@@ -1244,3 +1246,33 @@ unlisted configured voice out, so the app server's default speaks instead of the
 Until a list has been read, Settings offers echo-config's nine built-in names. `echo-config` checks
 only the shape of a voice name. At `rust-v0.171.0` the v3 list has 26 voices, including `miko`,
 `himari`, `hanul` and `leher`; `alloy` is not a v3 voice and stays refused.
+
+## Search restored by a direct web declaration (2026-11-21)
+
+Owner: "switch to 6.1 and offer directly without code-mode for now". This supersedes the statement above
+that search is unavailable on the Echo until `codex-code-mode-host` is built for armv7.
+
+Measured with codex-cli 0.171.0 on the operator PC, with `web` and `functions` declared directly and live
+search: `gpt-6.2-sol`, the app server's default delegated model, refuses the request with HTTP 400 ("Function
+'web.run' is reserved for use by this model and must match the configured schema"). `gpt-6.1-sol` accepts it,
+searches and answers with a cited result; `gpt-5.6-sol` accepts it and searches. The refusal is a property of
+the gpt-6.2 models, not of every code-mode-only model. Every catalog model is code-mode-only with Responses
+Lite, so Codex never sends a hosted search declaration there: a direct `web.run` is the only search path.
+
+**Settings.** `ThreadSettings` and the operator routes set
+`features.code_mode.direct_only_tool_namespaces=["web","functions"]` for live and cached search and
+`["functions"]` when search is disabled, so disabled keeps the previous catalog.
+
+**Default delegated model.** When `[codex] delegate_model`, `codex.model` and `agent.model` are all unset, the
+bridge starts delegated threads with `gpt-6.1-sol` (`echo_config::DEFAULT_DELEGATE_MODEL`) instead of the app
+server's default. The key stays configurable; a gpt-6.2-* model there refuses every delegated turn while search
+is on.
+
+**T3.** The fake backend refuses a direct `web.run` only for a gpt-6.2 model and otherwise requires it exactly
+while search is on. `t3_pinned_tools_reserved_model_refuses_direct_web_run` runs `gpt-6.2-sol` through the real
+app server: the first model request is refused once, the model never runs and nothing is handed back. The
+`gpt-6.1-sol` witnesses (`t3_pinned_tools_native_direct_call_*`, `t3_pinned_tools_native_extras_are_inert`)
+run with live search and record `web.run` as a direct declaration.
+
+This keeps the Echo dependent on Codex code mode and on the backend's tool reservations. The debt, its exit
+plan and the trigger to act are in [technical debt](../tech-debt/README.md).

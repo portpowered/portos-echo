@@ -363,6 +363,15 @@ async fn call_matching_error_is_sanitized_and_foreign_error_is_ignored() {
     );
 }
 
+/// `web` is declared directly only while search is on.
+fn direct(web_search: echo_config::WebSearch) -> serde_json::Value {
+    if web_search == echo_config::WebSearch::Disabled {
+        json!(["functions"])
+    } else {
+        json!(["web", "functions"])
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn call_profile_fields_are_independent_and_unset_request_is_unchanged() {
     for web_search in [
@@ -405,7 +414,7 @@ async fn call_profile_fields_are_independent_and_unset_request_is_unchanged() {
                         "features.multi_agent": false, "features.multi_agent_v2": false, "agents.enabled": false,
                         "features.goals": false, "tools.experimental_request_user_input.enabled": false,
                         "tools.update_plan.enabled": false,
-                        "features.code_mode.direct_only_tool_namespaces": ["functions"],
+                        "features.code_mode.direct_only_tool_namespaces": direct(web_search),
                         "web_search": web_search.as_str(), "mcp_servers": {}, "skills.include_instructions": false
                     }
                 });

@@ -21,7 +21,8 @@ session_idle_seconds = 120
 # time_zone = "America/Los_Angeles"
 # Provider-backed read-only search: live (default), cached, or disabled.
 web_search = "live"
-# Optional delegated runner settings. Fast mode is off by default.
+# Optional delegated runner settings. Fast mode is off by default. Unset delegate_model selects
+# gpt-6.1-sol; gpt-6.2-* models currently refuse the direct web.run that search needs (HTTP 400).
 # delegate_model = "gpt-6-sol"
 # delegate_effort = "low"
 delegate_fast = false
