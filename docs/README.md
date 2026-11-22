@@ -63,6 +63,7 @@ status: active; documentation index
 - [RFC](design/echo-live-rfc.md)
 - [Single-binary plan](design/2026-11-22-single-binary-plan.md)
 - [Single-binary quick start](design/2026-11-22-single-binary-quickstart.md)
+- [The Echo as a Muse gadget](design/2026-11-22-muse-direct-gadget.md)
 
 ## Checking documentation
 
