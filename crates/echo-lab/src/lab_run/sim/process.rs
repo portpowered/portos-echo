@@ -107,6 +107,7 @@ impl Process {
         input.flush().await.map_err(|_| "process: cannot flush control".into())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub async fn close(&mut self) -> Result<(), String> {
         drop(self.input.take());
         let (_, deadline) = *self.stopping.get_or_insert_with(|| {

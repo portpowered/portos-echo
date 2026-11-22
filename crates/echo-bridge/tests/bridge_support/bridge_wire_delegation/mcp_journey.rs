@@ -58,6 +58,7 @@ pub(super) async fn failed_without_clock_advance(path: &Path) {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn event_without_clock_advance(path: &Path, event: &str) -> Vec<Value> {
     let started = std::time::Instant::now();
     loop {
@@ -80,6 +81,7 @@ async fn event_without_clock_advance(path: &Path, event: &str) -> Vec<Value> {
 /// Closing stdin while that describe/info exchange is in flight leaves the
 /// info unread in the bridge's socket, so its exit resets the satellite
 /// instead of closing it. Finish only after the probe that follows `event`.
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 pub(super) async fn finish_after_idle_probe(process: &mut Process, path: &Path, event: &str) {
     let started = std::time::Instant::now();
     let cursor = loop {

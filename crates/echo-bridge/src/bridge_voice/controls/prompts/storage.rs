@@ -71,6 +71,7 @@ fn read_current(dir: &impl AsFd, kind: Kind) -> Result<Option<String>> {
     Ok(Some(text))
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 pub(super) fn write(home: &Path, kind: Kind, content: &str) -> Result<()> {
     commit(home, kind, content, SystemTime::now(), Fault::None)
 }

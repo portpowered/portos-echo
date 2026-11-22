@@ -245,7 +245,8 @@ mod codex_restart_tests {
     #[test]
     fn drop_releases_home_with_retained_open_description() -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::DirBuilderExt;
-        let nonce = std::time::SystemTime::now()
+        let nonce = echo_core_api::Clock::now(&echo_core_api::SystemClock)
+            .wall
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos();
         let parent = std::env::temp_dir().join(format!("echo-lease-{}-{nonce}", std::process::id()));
@@ -273,6 +274,7 @@ mod codex_restart_tests {
 
     #[cfg(unix)]
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn launch_form_selects_argv_and_the_work_directory_is_owner_only() -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
         let nonce = std::time::SystemTime::now()

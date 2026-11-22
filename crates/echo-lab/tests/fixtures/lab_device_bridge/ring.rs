@@ -78,6 +78,7 @@ fn completions(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 pub fn play(count: usize, fixture: &Value) -> Result<(), Box<dyn std::error::Error>> {
     let root = root()?;
     if fixture["ring_wakes"].get(count) == Some(&json!(false)) || preempted(fixture, count) {

@@ -14,6 +14,7 @@ static NONCE: AtomicU64 = AtomicU64::new(0);
 struct Scratch(PathBuf);
 
 impl Scratch {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     fn create() -> Result<Self> {
         let epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -119,6 +120,7 @@ pub async fn install(
     result
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 async fn guide_installed(
     adb: &Adb,
     stage: &str,

@@ -22,6 +22,7 @@ impl Drop for Clock {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn until(path: &Path, event: &str, count: usize) {
     let ceiling = std::time::Instant::now();
     while trace(path).iter().filter(|row| row["event"] == event).count() < count {

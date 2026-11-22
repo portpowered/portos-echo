@@ -1,7 +1,8 @@
 use super::{Command, generation};
 use crate::wyoming_events;
 use crate::{ClientOptions, Error};
-use std::{future::Future, time::Duration};
+use echo_core_api::DeviceControl;
+use std::{future::Future, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{mpsc, watch},
@@ -49,6 +50,7 @@ pub(crate) struct Supervisor {
     pub(crate) events: wyoming_events::Sender,
     pub(crate) end: watch::Sender<Option<Error>>,
     pub(crate) reset: watch::Receiver<u64>,
+    pub(crate) control: Arc<dyn DeviceControl>,
 }
 
 impl Supervisor {
@@ -67,6 +69,7 @@ impl Supervisor {
                 self.events.clone(),
                 &mut self.reset,
                 &mut enabled,
+                self.control.clone(),
             )
             .await;
             if closing || error == Error::Capacity {

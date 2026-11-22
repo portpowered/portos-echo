@@ -117,6 +117,7 @@ pub fn trace(sink: &Sink, id: &str, count: usize) {
     assert_eq!(*sink.0.lock().unwrap(), expected);
     record(&format!("delegation={id} trace={expected:?}"));
 }
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 pub async fn live(id: &str) -> (FakeLive, LiveCall) {
     let fake = FakeLive::bind(FakeScript {
         events: vec![serde_json::to_string(&event(id)).unwrap()],
@@ -148,6 +149,7 @@ pub async fn live(id: &str) -> (FakeLive, LiveCall) {
     (fake, call)
 }
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn d01_d02_d10_success_error_and_denial() {
     for (mode, fault, allowed, id) in [
         (LiveMode::Chatgpt, Fault::None, true, "d-echo"),

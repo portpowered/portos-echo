@@ -21,6 +21,8 @@ pub mod bridge_time;
 pub mod bridge_trace;
 #[path = "bridge_voice/bridge_voice.rs"]
 pub mod bridge_voice;
+#[path = "bridge_voice/controls/world/mod.rs"]
+mod bridge_world;
 
 /// Fixed diagnostics never contain input, credentials, audio or provider bodies.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]

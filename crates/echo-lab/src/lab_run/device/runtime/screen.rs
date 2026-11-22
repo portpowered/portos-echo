@@ -55,6 +55,7 @@ fn mcp_state(expected: &Value, actual: &Value, now: u64) -> Result<Value, String
 }
 
 impl Runtime {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub(super) async fn ui_portos(
         &mut self,
         expected: &Value,

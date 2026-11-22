@@ -122,6 +122,7 @@ fn t3_reconnect_after_frame_failure() {
 
 #[test]
 #[ignore = "T3 uses a prebuilt Linux bridge and a private loopback namespace"]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn t3_reconnect_after_write_failure() {
     isolated("t3_reconnect_after_write_failure", || {
         stalled_peer::limit_send_buffer();
@@ -145,6 +146,7 @@ fn t3_reconnect_after_write_failure() {
 
 #[test]
 #[ignore = "T3 uses a prebuilt Linux bridge and a private loopback namespace"]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn t3_reconnect_fences_old_playback() {
     isolated("t3_reconnect_fences_old_playback", || {
         let satellite = Satellite::start();
@@ -244,6 +246,7 @@ struct Satellite {
 }
 
 impl Satellite {
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn start() -> Self {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let bridge = env::var_os("ECHO_DEVICE_TEST_BRIDGE")
@@ -305,6 +308,7 @@ impl Satellite {
         satellite
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn wait_for_log(&self, marker: &str, deadline: Instant) {
         let mut seen = Vec::new();
         loop {
@@ -431,6 +435,7 @@ impl Peer {
         self.read().assert_event(kind, data);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn expect_after_capture(&mut self, kind: &str) {
         let deadline = Instant::now() + TIMEOUT;
         loop {

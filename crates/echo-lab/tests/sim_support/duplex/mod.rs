@@ -100,6 +100,7 @@ fn m3_missing_playback_expectation_fails_and_closes_private_world() {
 
 #[test]
 #[ignore = "T3 requires prebuilt echo-bridge and pinned hassmic-host"]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn m3_caller_cancels_overlap_and_collects_children_without_inventing_answer() {
     let session = Session::new();
     scenario(&session, SCENARIO);

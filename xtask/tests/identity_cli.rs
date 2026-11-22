@@ -42,6 +42,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn lint_rules_cli_clean_seeded_root_launch_and_recovered_clean() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

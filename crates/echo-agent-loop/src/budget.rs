@@ -9,6 +9,7 @@ pub(crate) struct Budget {
 }
 
 impl Budget {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub(crate) fn new(cap: u64) -> Self {
         Self::with_day(cap, || {
             SystemTime::now()

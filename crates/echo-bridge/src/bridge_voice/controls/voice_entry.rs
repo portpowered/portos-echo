@@ -70,7 +70,7 @@ fn process_generation(
         let shutdown = settings_process::shutdown()?;
         let clean_stop = Cell::new(true);
         let cancelled = async { clean_stop.set(matches!(shutdown.await, Ok(true))) };
-        let connector = echo_wyoming::adapter::endpoint_connector(endpoint, echo_wyoming::ClientOptions::default());
+        let connector = crate::bridge_world::connector(endpoint);
         let result = configured
             .execute_generation(
                 connector,

@@ -33,6 +33,7 @@ impl Approvals {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub async fn request(&self, presentation: &Presentation) -> Result<bool, Error> {
         let epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

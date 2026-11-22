@@ -6,6 +6,7 @@ use serde_json::json;
 use std::path::Path;
 
 impl Runtime {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub async fn start(
         &mut self,
         bridge: Option<&Path>,

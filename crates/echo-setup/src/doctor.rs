@@ -35,6 +35,7 @@ pub async fn execute(options: &Options) -> Value {
     json!({"type":"result", "command":"doctor", "ok":passed.iter().all(|ok| *ok), "checks":checks})
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 async fn observe(options: &Options, passed: &mut [bool; 7]) -> crate::Result<()> {
     let mut adb = Adb::discover(options.adb.as_deref())?;
     passed[0] = true;

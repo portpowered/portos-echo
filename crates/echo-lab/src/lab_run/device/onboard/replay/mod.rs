@@ -145,6 +145,7 @@ async fn reject(python: &str, record: &Secret<Value>, pem: &[u8]) -> Result<(), 
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 fn proof(record: &Value, endpoint: &str) -> Result<Secret<String>, String> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let jwk = &record["private_key_jwk"];

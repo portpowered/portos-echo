@@ -12,6 +12,7 @@ use tokio::sync::watch;
 const BEHIND_SECONDS: i64 = 63_000;
 const NTP_UNIX_SECONDS: i64 = 2_208_988_800;
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn system_seconds() -> i64 {
     i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()).unwrap()
 }

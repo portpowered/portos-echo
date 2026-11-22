@@ -245,6 +245,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn invalid_sdp_and_wrong_state_never_connect() -> Result<(), Error> {
         let now = Instant::now();
         let mut rtc = connection("127.0.0.1:12345".parse().unwrap(), now)?;
@@ -263,6 +264,7 @@ mod tests {
         Ok(())
     }
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn parsed_bad_transport_preserves_new_and_pending_negotiation() -> Result<(), Error> {
         let now = Instant::now();
         let mut a = connection("127.0.0.1:12345".parse().unwrap(), now)?;

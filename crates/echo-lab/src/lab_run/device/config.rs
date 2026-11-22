@@ -6,6 +6,7 @@ pub mod scenario;
 pub mod setup;
 pub mod voice;
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 pub fn load(options: &Options) -> Result<Option<String>, String> {
     let Some(path) = &options.bridge_config else {
         return Ok(None);
@@ -178,6 +179,7 @@ mod tests {
         observed_config(path, home, "{}", "fake")
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn observed_config(path: &Path, home: &Path, settings: &str, mode: &str) -> serde_json::Value {
         let observer = r"
 import contextlib, io, json, os, sys

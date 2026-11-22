@@ -29,6 +29,7 @@ pub struct Artifacts {
 }
 
 impl Artifacts {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub fn create(root: PathBuf) -> Result<Self, String> {
         fs::create_dir(&root).map_err(|_| "run output: cannot create fresh directory")?;
         let events = File::create(root.join("events.jsonl")).map_err(|_| "run output: cannot create events")?;

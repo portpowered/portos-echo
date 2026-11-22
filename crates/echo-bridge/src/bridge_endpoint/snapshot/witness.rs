@@ -132,6 +132,7 @@ fn sampled_at() -> SystemTime {
     UNIX_EPOCH + Duration::from_millis(sampled_at_ms().unsigned_abs())
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn sampled_at_ms() -> i64 {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     i64::try_from(now.as_millis()).unwrap() / 1000 * 1000 + 125

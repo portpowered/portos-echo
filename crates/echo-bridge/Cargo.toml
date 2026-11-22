@@ -9,6 +9,8 @@ publish = false
 workspace = true
 
 [dependencies]
+echo-core-api = { version = "0.1.0", path = "../echo-core-api" }
+echo-sub-device = { version = "0.1.0", path = "../echo-sub-device" }
 echo-codex = { version = "0.1.0", path = "../echo-codex" }
 echo-device = { version = "0.1.0", path = "../echo-device" }
 echo-media = { version = "0.1.0", path = "../echo-media" }

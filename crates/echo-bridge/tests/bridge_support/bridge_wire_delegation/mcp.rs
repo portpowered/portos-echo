@@ -105,6 +105,7 @@ impl Session {
         assert_eq!(bridge_short::read(&mut self.satellite).await.0["type"], "describe");
         self.answer_probe().await;
     }
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     async fn answer_recovery_probe(&mut self) {
         let cursor = std::fs::read(&self.trace_path).unwrap().len();
         self.send_probe_reply().await;
@@ -126,6 +127,7 @@ impl Session {
     }
 }
 impl Session {
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     async fn restart_probe(&mut self) {
         let deadline = Instant::now() + OBSERVATION_TIMEOUT;
         let cursor = std::fs::read(&self.trace_path).unwrap().len();
@@ -161,6 +163,7 @@ impl Session {
     }
 }
 #[tokio::test(start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn restart_probe_observation_deadline() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("trace");
@@ -442,6 +445,7 @@ fn clock_command(directory: &Path, resource: &str, peers: Option<(&str, &str)>, 
     }
     command
 }
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn wall_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

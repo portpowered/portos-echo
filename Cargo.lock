@@ -823,6 +823,7 @@ dependencies = [
  "echo-codex",
  "echo-config",
  "echo-contracts",
+ "echo-core-api",
  "echo-delegation",
  "echo-device",
  "echo-lab",
@@ -835,6 +836,7 @@ dependencies = [
  "echo-screen-server",
  "echo-signin",
  "echo-spoof-mcp",
+ "echo-sub-device",
  "echo-wyoming",
  "futures-util",
  "hex",
@@ -883,6 +885,7 @@ name = "echo-codex"
 version = "0.1.0"
 dependencies = [
  "echo-contracts",
+ "echo-core-api",
  "serde",
  "serde_json",
  "tokio",
@@ -907,6 +910,13 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "trybuild",
+]
+
+[[package]]
+name = "echo-core-api"
+version = "0.1.0"
+dependencies = [
+ "rand_core 0.6.4",
 ]
 
 [[package]]
@@ -989,6 +999,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "echo-contracts",
+ "echo-core-api",
  "jsonschema",
  "p256",
  "rand_core 0.6.4",
@@ -1133,6 +1144,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-sub-device"
+version = "0.1.0"
+dependencies = [
+ "echo-core-api",
+]
+
+[[package]]
 name = "echo-svc-muse"
 version = "0.1.0"
 dependencies = [
@@ -1162,6 +1180,7 @@ name = "echo-wyoming"
 version = "0.1.0"
 dependencies = [
  "echo-contracts",
+ "echo-core-api",
  "echo-link",
  "loom",
  "serde_json",

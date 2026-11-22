@@ -36,6 +36,13 @@ pub struct Control {
 
 /// # Errors
 /// All failures use fixed categories. EOF closes owned tasks and sockets.
+pub async fn execute_wyoming(settings: Settings) -> Result<(), Error> {
+    let connector = crate::bridge_world::connector(settings.wyoming.clone());
+    execute(settings, connector).await
+}
+
+/// # Errors
+/// All failures use fixed categories. EOF closes owned tasks and sockets.
 pub async fn execute<C: LinkConnector>(settings: Settings, connector: C) -> Result<(), Error> {
     let control = Control {
         utc_day: std::sync::Arc::new(utc_day),
@@ -70,7 +77,8 @@ pub fn configured(settings: &Settings) -> bool {
 }
 
 fn utc_day() -> u64 {
-    std::time::SystemTime::now()
+    echo_core_api::Clock::now(&echo_core_api::SystemClock)
+        .wall
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()

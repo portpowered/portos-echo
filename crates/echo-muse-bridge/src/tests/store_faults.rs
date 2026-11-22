@@ -60,6 +60,7 @@ async fn snapshot_rejects_inconsistent_terminal_queues_without_replacing_bytes()
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn production_clock_uses_epoch_and_past_deadline_is_already_ready() {
     let before = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

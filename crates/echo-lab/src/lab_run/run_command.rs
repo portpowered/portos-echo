@@ -121,6 +121,7 @@ impl ReapChild for Child {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 pub(super) fn stop_child(
     child: &mut impl ReapChild,
     remaining: Duration,
@@ -158,6 +159,7 @@ fn stop_with(
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 fn reap(child: &mut Child, deadline: Instant, cancel: Option<&Path>) -> Result<bool, String> {
     loop {
         if cancelled(cancel) || Instant::now() >= deadline {
@@ -187,6 +189,7 @@ fn reap(child: &mut Child, deadline: Instant, cancel: Option<&Path>) -> Result<b
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 pub fn bytes(executable: &Path, args: &[String]) -> Result<Vec<u8>, String> {
     controlled(executable, args, Instant::now() + Duration::from_secs(30), None)
 }
@@ -215,6 +218,7 @@ pub struct Pending {
 }
 
 impl Pending {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub fn start(executable: &Path, args: &[String], deadline: Instant, cancel: Option<&Path>) -> Result<Self, String> {
         if cancelled(cancel) {
             return Err("run cancelled".into());
@@ -323,6 +327,7 @@ mod tests {
 
     // An expired budget must refuse launching even an otherwise successful tool.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn expired_budget_fails_even_for_an_otherwise_successful_tool() {
         let result = controlled(Path::new("python"), &["-c".into(), "pass".into()], Instant::now(), None);
         assert_eq!(result, Err("child deadline exceeded before launch".into()));
@@ -331,6 +336,7 @@ mod tests {
     // T3 real local child. The event never fires; the timeout is a ceiling,
     // not a synchronization delay. Returning proves kill/wait/pipe reaping.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn stalled_child_is_reaped_at_its_operation_deadline() {
         let result = controlled(
             Path::new("python"),
@@ -427,6 +433,7 @@ mod lifecycle_tests {
 
     // T3: actual local pipe/exit-status boundary; no runtime compilation or sleeps.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn t3_pending_drop_closes_stdin_collects_status_and_joins_reader() {
         let python = "python3";
         let mut pending = Pending::start(

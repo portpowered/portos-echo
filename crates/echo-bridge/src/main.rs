@@ -80,9 +80,7 @@ fn bridge(args: &[String]) -> ExitCode {
     if bridge_runtime::configured(&settings) {
         return outcome(echo_bridge::bridge_voice::execute_process(settings));
     }
-    let connector =
-        echo_wyoming::adapter::endpoint_connector(settings.wyoming.clone(), echo_wyoming::ClientOptions::default());
-    outcome(runtime().and_then(|runtime| runtime.block_on(bridge_runtime::execute(settings, connector))))
+    outcome(runtime().and_then(|runtime| runtime.block_on(bridge_runtime::execute_wyoming(settings))))
 }
 
 fn mcp_operator(command: bridge_mcp::Command) -> ExitCode {

@@ -56,6 +56,7 @@ pub struct Clip {
 }
 
 impl Clip {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub fn load(path: &str, python: &str) -> Result<Self, String> {
         let output = super::super::run_command::controlled(
             Path::new(python),

@@ -75,7 +75,7 @@ async fn run(
     let proxy = proxy::Proxy::bind(settings.wyoming.tcp_addr(), context.clone()).await?;
     settings.wyoming = proxy.address.into();
     let (stop, shutdown) = oneshot::channel();
-    let connector = echo_wyoming::adapter::connector(proxy.address, echo_wyoming::ClientOptions::default());
+    let connector = crate::bridge_world::connector(settings.wyoming.clone());
     let work = bridge_runtime::execute_with_control(
         settings,
         Control {

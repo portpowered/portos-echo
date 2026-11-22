@@ -98,6 +98,7 @@ pub(super) async fn start_with_prompt(server: &mut Server, prompt: &str) -> Valu
 }
 
 // Service admission adds a fresh snapshot; direct signaling keeps `start` above.
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 pub(super) async fn admitted_start(server: &mut Server, began: std::time::SystemTime) {
     let params = thread(server).await;
     let request = read(server).await;

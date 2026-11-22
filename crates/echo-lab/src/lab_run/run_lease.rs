@@ -19,6 +19,7 @@ impl LeaseClock {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub fn observe(&mut self, now: u64) -> Result<(), String> {
         if now < self.observed_ms {
             return Err("clock: monotonic time moved backwards".into());
@@ -31,6 +32,7 @@ impl LeaseClock {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub fn start(&mut self) {
         self.opened_ms = self.observed_ms;
         self.deadline = Some(Instant::now() + Duration::from_millis(LIFETIME_MS));
@@ -40,6 +42,7 @@ impl LeaseClock {
         self.deadline = None;
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub fn renew(&self) -> bool {
         // A playback plus WAV processing can consume two 30s slots; leave
         // another 30s for release. Rotate before starting work that cannot fit.
@@ -47,6 +50,7 @@ impl LeaseClock {
             .is_some_and(|end| end.saturating_duration_since(Instant::now()) <= COMMAND * 3)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub fn deadline(&self, cleanup: bool) -> Instant {
         let limit = Instant::now() + COMMAND;
         self.deadline.map_or(limit, |end| {
@@ -98,6 +102,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn budgets_never_extend_and_clock_regressions_fail_closed() {
         let mut clock = LeaseClock::new();
         clock.observe(1_000).unwrap();

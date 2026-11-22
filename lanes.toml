@@ -139,3 +139,13 @@ kind = "lib"
 name = "echo-media"
 path = "crates/echo-media"
 kind = "lib"
+
+[[crate]]
+name = "echo-core-api"
+path = "crates/echo-core-api"
+kind = "lib"
+
+[[crate]]
+name = "echo-sub-device"
+path = "crates/echo-sub-device"
+kind = "lib"

@@ -15,6 +15,7 @@ async fn bridge_wire_auth_failure_paced_microphone_without_screen_survives() {
     survival(true).await;
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn survival(paced: bool) {
     let started = std::time::Instant::now();
     let directory = tempfile::tempdir().unwrap();

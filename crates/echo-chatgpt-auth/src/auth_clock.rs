@@ -17,6 +17,7 @@ impl SystemClock {
     }
 }
 impl Clock for SystemClock {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     fn unix(&self) -> Result<u64, AuthError> {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

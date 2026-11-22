@@ -63,6 +63,7 @@ async fn t3_mcp_link_owner_observes_only_401_on_notification_list_and_call() {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn token() -> Arc<Mutex<String>> {
     Arc::new(Mutex::new(format!(
         "local-{}",

@@ -33,6 +33,7 @@ async fn two_calls(server: &mut Server, began: std::time::SystemTime) {
 }
 
 #[tokio::test(start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn serving_waits_past_startup_budget_then_reopens_after_idle_on_same_io() {
     let began = std::time::SystemTime::now();
     let (mut io, mut server) = fixture();

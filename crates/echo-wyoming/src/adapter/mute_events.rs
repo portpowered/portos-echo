@@ -2,19 +2,13 @@
 use super::{Error, EventStream, LinkEvent, LinkEvents, Run, Speaker, WyomingEvent, error};
 use std::sync::Arc;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Capture {
-    Ended,
-    Open,
-}
-
 pub struct Events {
     raw: EventStream,
     current: Option<Arc<crate::wyoming_queue::MicQueue>>,
     pending: Option<crate::ReceivedEvent>,
     generation: Option<Arc<()>>,
-    muted: bool,
-    capture: Capture,
+    // The last mute notification delivered to the voice owner, which may lag the wire.
+    last_mute: bool,
     handshake: bool,
     barrier: bool,
     speaker: Speaker,
@@ -26,8 +20,7 @@ impl Events {
             current: None,
             pending: None,
             generation: None,
-            muted: false,
-            capture: Capture::Ended,
+            last_mute: false,
             handshake,
             barrier: handshake,
             speaker,
@@ -46,13 +39,12 @@ impl Events {
         }
         self.generation = Some(event.generation.clone());
         self.current = None;
-        self.capture = Capture::Ended;
         self.barrier = self.handshake;
         self.speaker.reset();
-        let reset = self.muted
+        let reset = self.last_mute
             && !matches!(&event.event,
             WyomingEvent::Other(name, data) if name == "hassmic-mute" && data["muted"] == true);
-        self.muted = false;
+        self.last_mute = false;
         reset
     }
     async fn next(&mut self) -> Result<Option<LinkEvent<Run>>, Error> {
@@ -78,22 +70,14 @@ impl Events {
         }
         let event = self.pending.take().ok_or(Error::Closed)?;
         if let Some(muted) = mute {
-            self.muted = muted;
-            if muted {
-                self.capture = Capture::Ended;
-            }
+            self.last_mute = muted;
             return Ok(Some(LinkEvent::Mute(muted)));
         }
         if matches!(event.event, WyomingEvent::RunPipeline(_)) {
             return Ok(Some(self.pipeline(event.run)));
         }
-        if matches!(event.event, WyomingEvent::AudioChunk(_))
-            && (self.capture == Capture::Ended || !event.capture_active)
-        {
+        if matches!(event.event, WyomingEvent::AudioChunk(_)) && !event.capture_active {
             return Ok(Some(LinkEvent::MicrophoneDropped(event.audio_count)));
-        }
-        if matches!(event.event, WyomingEvent::AudioStop(_)) {
-            self.capture = Capture::Ended;
         }
         if matches!(event.event, WyomingEvent::Info(_)) {
             self.barrier = false;
@@ -113,7 +97,6 @@ impl Events {
         // Once admitted, its completion must not be filtered as pre-Info noise.
         self.barrier = false;
         self.current = Some(run.queue.clone());
-        self.capture = if self.muted { Capture::Ended } else { Capture::Open };
         if let Some(request_id) = run.pipeline().extra.get("requestId").and_then(|id| id.as_str()) {
             LinkEvent::RemoteCapture {
                 request_id: request_id.to_owned(),
@@ -136,11 +119,10 @@ impl LinkEvents for Events {
                 return Ok(Some(LinkEvent::Mute(false)));
             }
             // Speaker reports update the link's state, before or after Info.
-            if self
-                .pending
-                .as_ref()
-                .is_some_and(|event| self.speaker.observe(&event.event))
+            if let Some(event) = &self.pending
+                && matches!(&event.event, WyomingEvent::Other(name, _) if name == "hassmic-speaker")
             {
+                self.speaker.publish(event.speaker);
                 self.pending = None;
                 continue;
             }

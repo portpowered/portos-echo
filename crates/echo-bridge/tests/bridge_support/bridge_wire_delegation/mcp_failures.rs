@@ -47,6 +47,7 @@ impl Session {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn observed(path: &Path, event: &str) -> Vec<Value> {
     let started = std::time::Instant::now();
     loop {

@@ -1,11 +1,12 @@
 //! Converts the neutral link to the existing Wyoming client without a second queue.
 use crate::{ClientOptions, Endpoint, EventStream, Run, WyomingClient};
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
+use echo_core_api::DeviceControl;
 use echo_link::{
     CutStats, EchoLink, Error, LinkConnector, LinkEvent, LinkEvents, MicFrame, MicrophoneRun, PcmFormat, PlayOutcome,
     ReplySink, RunFailure, RunStats, SpeakerRequest, SpeakerState,
 };
-use std::{net::SocketAddr, num::NonZeroUsize, time::Duration};
+use std::{net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 
 /// Configured transport selection; retry ownership remains in `WyomingClient`.
@@ -17,16 +18,39 @@ pub fn connector(addr: SocketAddr, options: ClientOptions) -> impl LinkConnector
 /// Uses the same endpoint selection for the initial connection and reconnects.
 #[must_use]
 pub fn endpoint_connector(endpoint: Endpoint, options: ClientOptions) -> impl LinkConnector {
-    Connector { endpoint, options }
+    Connector {
+        endpoint,
+        options,
+        control: None,
+    }
+}
+
+/// Connects the wire service to the device state owned by the session controller.
+#[must_use]
+pub fn controlled_connector(
+    endpoint: Endpoint,
+    options: ClientOptions,
+    control: Arc<dyn DeviceControl>,
+) -> impl LinkConnector {
+    Connector {
+        endpoint,
+        options,
+        control: Some(control),
+    }
 }
 struct Connector {
     endpoint: Endpoint,
     options: ClientOptions,
+    control: Option<Arc<dyn DeviceControl>>,
 }
 impl LinkConnector for Connector {
     type Link = WyomingClient;
     async fn connect(&self) -> Result<Self::Link, Error> {
-        let mut client = WyomingClient::connect_endpoint(self.endpoint.clone(), self.options.clone())
+        let control = self
+            .control
+            .clone()
+            .unwrap_or_else(|| Arc::new(crate::wyoming_client::device::Standalone::default()));
+        let mut client = WyomingClient::connect_endpoint(self.endpoint.clone(), self.options.clone(), control)
             .await
             .map_err(error)?;
         client.neutral_barrier = true;
@@ -80,7 +104,7 @@ impl MicrophoneRun for Run {
     }
 }
 mod mute_events;
-mod speaker_events;
+pub(crate) mod speaker_events;
 pub use mute_events::Events;
 pub(crate) use speaker_events::Speaker;
 /// The existing bounded producer with neutral send errors.

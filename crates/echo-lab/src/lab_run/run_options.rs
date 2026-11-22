@@ -156,6 +156,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 fn device_output(flags: &BTreeMap<String, String>) -> PathBuf {
     flags.get("--out").map_or_else(
         || {
@@ -179,6 +180,7 @@ fn wake_clip(flags: &BTreeMap<String, String>) -> Result<Option<super::device::p
         .transpose()
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 fn sim(scenarios: Vec<String>, flags: &BTreeMap<String, String>) -> Result<Options, String> {
     if scenarios.len() != 1
         || flags

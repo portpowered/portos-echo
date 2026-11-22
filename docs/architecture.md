@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 21
+last modified: 2026, november, 22
 status: current main overview; W4 deployment and in-progress changes are labelled
 ---
 
@@ -1311,18 +1311,19 @@ in a crate do not imply the configured voice owner calls them.
 | echo-agent-api | [Task/backend/tool traits](../crates/echo-agent-api/src/lib.rs), [0007](adr/0007-echo-agent-api.md) | In-process consumers; no runtime of its own | contracts |
 | echo-agent-loop | [Retained Responses backend](../crates/echo-agent-loop/src/lib.rs), [0013](adr/0013-echo-agent-loop.md) | PC legacy/Muse/provider consumers; superseded for configured Codex voice | agent-api, contracts, config |
 | echo-audio | [PCM conversion, Opus, queues/pacer](../crates/echo-audio/src/lib.rs), [0008](adr/0008-echo-audio.md) | Bridge host | contracts |
-| echo-bridge | [Conversation executable and orchestration](../crates/echo-bridge/src/lib.rs), [0024](adr/0024-echo-bridge.md) | PC today; Echo W4 | codex, device, media, agent-api, link, agent-loop, delegation, mcp-client, mcp-auth, audio, config, contracts, live, screen-contract, screen-server, signin, wyoming |
+| echo-bridge | [Conversation executable and orchestration](../crates/echo-bridge/src/lib.rs), [0024](adr/0024-echo-bridge.md) | PC today; Echo W4 | codex, core-api, device, sub-device, media, agent-api, link, agent-loop, delegation, mcp-client, mcp-auth, audio, config, contracts, live, screen-contract, screen-server, signin, wyoming |
 | echo-device | [Rust Wyoming protocol and device role](../crates/echo-device/src/lib.rs), [0034](adr/0034-vendored-device-satellite.md) | Wyoming event dispatch and publication over the existing TCP wire | echo-device-sys |
 | echo-device-sys | [C satellite build and protocol callback boundary](../crates/echo-device-sys/src/lib.rs), [0034](adr/0034-vendored-device-satellite.md) | Pinned framing and native core with Linux file audio and athena Android audio | cc (build) |
 | echo-chatgpt-auth | [Retained independent credential source](../crates/echo-chatgpt-auth/src/lib.rs), [0015](adr/0015-chatgpt-auth.md) | Legacy/Muse/sign-in adapters on bridge host | config, contracts |
-| echo-codex | [App-server JSON-RPC client/supervisor](../crates/echo-codex/src/lib.rs), [0026](adr/0026-codex-client.md) | Bridge host; child itself is upstream, not this crate | contracts |
+| echo-codex | [App-server JSON-RPC client/supervisor](../crates/echo-codex/src/lib.rs), [0026](adr/0026-codex-client.md) | Bridge host; child itself is upstream, not this crate | contracts, core-api |
 | echo-config | [Synchronous validated TOML](../crates/echo-config/src/lib.rs), [0005](adr/0005-echo-config.md) | Bridge and validation callers; offline | None |
 | echo-contracts | [IDs, secret wrapper and wire vocabulary](../crates/echo-contracts/src/lib.rs), [0006](adr/0006-echo-contracts.md) | Shared in-process data; no transport | None |
+| echo-core-api | [World, clock, RNG and typed subsystem boundaries](../crates/echo-core-api/src/lib.rs), [0036](adr/0036-a1-world.md) | Shared in-process interfaces | None |
 | echo-delegation | [Codex dispatcher and retained legacy runner](../crates/echo-delegation/src/lib.rs), [0017](adr/0017-echo-delegation.md), [0026](adr/0026-codex-client.md) | Bridge host | agent-api, agent-loop, config, codex, contracts, mcp-client |
 | echo-lab | [Scenario/probe/calibration CLI and fakes](../crates/echo-lab/src/main.rs), [0003](adr/0003-echo-lab-schema-validation.md), [0019](adr/0019-touch-calibration.md) | Workstation/CI; test-only in this diagram | contracts, codex, config, wyoming, screen-contract, spoof-mcp, live |
 | echo-link | [Protocol-neutral capture/playback traits](../crates/echo-link/src/lib.rs), [0025](adr/0025-echo-link.md) | Bridge adapters; no process/runtime of its own | None |
 | echo-live | [Retained encoded-Opus peer/provisional call API](../crates/echo-live/src/lib.rs), [0009](adr/0009-live-transport.md), [0011](adr/0011-live-call.md) | Legacy/Muse and local fake consumers; not configured Codex media | contracts |
-| echo-mcp-auth | [Port OS device grant and rotating store](../crates/echo-mcp-auth/src/lib.rs), [0010](adr/0010-mcp-auth.md) | Bridge host | contracts |
+| echo-mcp-auth | [Port OS device grant and rotating store](../crates/echo-mcp-auth/src/lib.rs), [0010](adr/0010-mcp-auth.md) | Bridge host | contracts, core-api |
 | echo-mcp-client | [Stateless MCP ToolHost](../crates/echo-mcp-client/src/lib.rs), [0014](adr/0014-mcp-http.md) | Bridge host | agent-api, config, contracts |
 | echo-media | [Frame-based WebRTC/Opus peer](../crates/echo-media/src/lib.rs), [0027](adr/0027-echo-media.md) | Bridge host | None |
 | echo-muse-bridge | [Optional task core, Unix daemon/report binaries](../crates/echo-muse-bridge/src/lib.rs), [0020](adr/0020-muse-core.md), [0022](adr/0022-muse-service.md) | Separate Linux gadget host; optional | agent-api, contracts |
@@ -1331,7 +1332,8 @@ in a crate do not imply the configured voice owner calls them.
 | echo-screen-server | [Loopback HTTP/SSE and actions](../crates/echo-screen-server/src/lib.rs), [0016](adr/0016-screen-server.md) | Within bridge process | contracts, screen-contract |
 | echo-signin | [Writer-based commands and Codex account adapter](../crates/echo-signin/src/lib.rs), [0018](adr/0018-signin.md), [0026](adr/0026-codex-client.md) | Bridge/operator command process | codex, live, agent-loop, contracts, config, chatgpt-auth |
 | echo-spoof-mcp | [Deterministic MCP library/executable](../crates/echo-spoof-mcp/src/lib.rs), [0014](adr/0014-mcp-http.md) | Local tests/CI | contracts |
-| echo-wyoming | [Bounded duplex client and link adapter](../crates/echo-wyoming/src/lib.rs), [0012](adr/0012-echo-wyoming.md), [0025](adr/0025-echo-link.md) | Bridge host | link, contracts |
+| echo-sub-device | [Device reducer and World invariants](../crates/echo-sub-device/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
+| echo-wyoming | [Bounded duplex client and link adapter](../crates/echo-wyoming/src/lib.rs), [0012](adr/0012-echo-wyoming.md), [0025](adr/0025-echo-link.md) | Bridge host | link, contracts, core-api |
 
 ## Conversation sequences
 

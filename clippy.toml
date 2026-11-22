@@ -2,3 +2,8 @@ too-many-lines-threshold = 60
 cognitive-complexity-threshold = 15
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "Read wall time through Clock" },
+    { path = "std::time::Instant::now", reason = "Read monotonic time through the clock boundary" },
+]

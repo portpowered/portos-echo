@@ -177,7 +177,8 @@ impl Runtime {
             failed: AtomicBool::new(false),
             epoch: match epoch {
                 Some(epoch) => epoch,
-                None => std::time::SystemTime::now()
+                None => echo_core_api::Clock::now(&echo_core_api::SystemClock)
+                    .wall
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(|_| Error::Control)?
                     .as_secs(),

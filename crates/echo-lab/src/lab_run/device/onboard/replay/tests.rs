@@ -57,6 +57,7 @@ fn mcp_device_replay_uses_committed_id_or_checks_an_explicit_pin() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn mcp_device_replay_proof_is_signed_by_snapshot_key_with_unique_fresh_claims() {
     let record = record();
     let endpoint = "https://127.0.0.1/token";

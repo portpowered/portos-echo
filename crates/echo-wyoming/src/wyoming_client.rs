@@ -4,13 +4,22 @@ use crate::{
     wyoming_session::{self, Command},
 };
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
-use std::{future::Future, net::SocketAddr, sync::Weak, time::Duration};
+use echo_core_api::DeviceControl;
+use std::{
+    future::Future,
+    net::SocketAddr,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::{
     sync::{mpsc, oneshot, watch},
     task::JoinHandle,
     time::timeout,
 };
+
+#[path = "wyoming_client/device.rs"]
+pub(crate) mod device;
 
 /// Owns the reconnect supervisor. Drop aborts its current connection and reader.
 pub struct WyomingClient {
@@ -30,18 +39,29 @@ impl WyomingClient {
     /// # Errors
     /// Invalid options. Refusal/timeouts retry with capped backoff until cancelled.
     pub async fn connect(addr: SocketAddr, opts: ClientOptions) -> Result<Self, Error> {
-        Self::connect_with(opts, move || tokio::net::TcpStream::connect(addr)).await
+        Self::connect_endpoint(addr.into(), opts, Arc::new(device::Standalone::default())).await
     }
 
-    pub(crate) async fn connect_endpoint(endpoint: Endpoint, opts: ClientOptions) -> Result<Self, Error> {
+    pub(crate) async fn connect_endpoint(
+        endpoint: Endpoint,
+        opts: ClientOptions,
+        control: Arc<dyn DeviceControl>,
+    ) -> Result<Self, Error> {
         if endpoint.prefers_unix() {
-            Self::connect_with(opts, move || endpoint.clone().dial()).await
+            Self::connect_with(opts, control, move || endpoint.clone().dial()).await
         } else {
-            Self::connect(endpoint.tcp_addr(), opts).await
+            Self::connect_with(opts, control, move || {
+                tokio::net::TcpStream::connect(endpoint.tcp_addr())
+            })
+            .await
         }
     }
 
-    async fn connect_with<T, F, Fut>(opts: ClientOptions, mut connector: F) -> Result<Self, Error>
+    async fn connect_with<T, F, Fut>(
+        opts: ClientOptions,
+        control: Arc<dyn DeviceControl>,
+        mut connector: F,
+    ) -> Result<Self, Error>
     where
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         F: FnMut() -> Fut + Send + 'static,
@@ -49,10 +69,20 @@ impl WyomingClient {
     {
         opts.validate()?;
         let socket = wyoming_session::wyoming_reconnect::connect(&opts, &mut connector, false).await;
-        Ok(Self::reconnecting(socket, opts, connector))
+        Ok(Self::with_control(socket, opts, connector, control))
     }
 
+    #[cfg(test)]
     pub(crate) fn reconnecting<T, F, Fut>(socket: T, opts: ClientOptions, connector: F) -> Self
+    where
+        T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        F: FnMut() -> Fut + Send + 'static,
+        Fut: Future<Output = std::io::Result<T>> + Send + 'static,
+    {
+        Self::with_control(socket, opts, connector, Arc::new(device::Standalone::default()))
+    }
+
+    fn with_control<T, F, Fut>(socket: T, opts: ClientOptions, connector: F, control: Arc<dyn DeviceControl>) -> Self
     where
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         F: FnMut() -> Fut + Send + 'static,
@@ -69,6 +99,7 @@ impl WyomingClient {
             events,
             end,
             reset: resets,
+            control,
         };
         let task = tokio::spawn(supervisor.serve(socket, connector));
         Self {

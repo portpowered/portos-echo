@@ -22,20 +22,12 @@ impl Default for Speaker {
 }
 
 impl Speaker {
-    /// Whether `event` is a speaker report. A well-formed one becomes the
-    /// latest state; a malformed one is ignored.
-    pub(super) fn observe(&self, event: &WyomingEvent) -> bool {
-        let WyomingEvent::Other(name, data) = event else {
-            return false;
-        };
-        if name != EVENT {
-            return false;
-        }
-        if let Some(state) = parse(data) {
+    /// Publish the device decision in the adapter's existing delivery order.
+    pub(super) fn publish(&self, state: Option<SpeakerState>) {
+        if let Some(state) = state {
             self.0
                 .send_if_modified(|current| std::mem::replace(current, state) != state);
         }
-        true
     }
 
     /// A new connection reports afresh; until then nothing is known.
@@ -55,6 +47,14 @@ impl Speaker {
     }
 }
 
+/// Recognize malformed reports too, so they are consumed without publication.
+pub(crate) fn report(event: &WyomingEvent) -> Option<Option<SpeakerState>> {
+    match event {
+        WyomingEvent::Other(name, data) if name == EVENT => Some(parse(data)),
+        _ => None,
+    }
+}
+
 fn parse(data: &Value) -> Option<SpeakerState> {
     let volume = data.get("volume")?.as_u64().filter(|volume| *volume <= 100)?;
     let muted = data.get("muted")?.as_bool()?;
@@ -69,14 +69,22 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn report(data: Value) -> WyomingEvent {
+    fn frame(data: Value) -> WyomingEvent {
         WyomingEvent::Other(EVENT.into(), data)
+    }
+
+    fn observe(speaker: &Speaker, event: &WyomingEvent) -> bool {
+        if let Some(state) = report(event) {
+            speaker.publish(state);
+            return true;
+        }
+        false
     }
 
     #[test]
     fn well_formed_reports_set_the_state_and_malformed_ones_are_ignored() {
         let speaker = Speaker::default();
-        assert!(speaker.observe(&report(json!({"volume":30,"muted":false}))));
+        assert!(observe(&speaker, &frame(json!({"volume":30,"muted":false}))));
         let reported = SpeakerState {
             volume: Some(30),
             muted: Some(false),
@@ -92,10 +100,13 @@ mod tests {
             json!({"volume":30,"muted":"true"}),
             json!(null),
         ] {
-            assert!(speaker.observe(&report(data)), "still a speaker report");
+            assert!(observe(&speaker, &frame(data)), "still a speaker report");
             assert_eq!(*speaker.0.borrow(), reported);
         }
-        assert!(!speaker.observe(&WyomingEvent::Other("hassmic-mute".into(), json!({"muted":true}))));
+        assert!(!observe(
+            &speaker,
+            &WyomingEvent::Other("hassmic-mute".into(), json!({"muted":true}))
+        ));
         assert_eq!(*speaker.0.borrow(), reported, "microphone privacy is not output mute");
         speaker.reset();
         assert_eq!(*speaker.0.borrow(), SpeakerState::default());
@@ -108,17 +119,17 @@ mod tests {
             volume: Some(40),
             muted: Some(true),
         };
-        speaker.observe(&report(json!({"volume":40,"muted":true})));
+        observe(&speaker, &frame(json!({"volume":40,"muted":true})));
         assert_eq!(speaker.changed(SpeakerState::default()).await, known);
         let waiting = speaker.changed(known);
         tokio::pin!(waiting);
         assert!(futures_poll(&mut waiting).is_pending());
-        speaker.observe(&report(json!({"volume":40,"muted":true})));
+        observe(&speaker, &frame(json!({"volume":40,"muted":true})));
         assert!(
             futures_poll(&mut waiting).is_pending(),
             "an unchanged report wakes nothing"
         );
-        speaker.observe(&report(json!({"volume":40,"muted":false})));
+        observe(&speaker, &frame(json!({"volume":40,"muted":false})));
         assert_eq!(
             waiting.await,
             SpeakerState {

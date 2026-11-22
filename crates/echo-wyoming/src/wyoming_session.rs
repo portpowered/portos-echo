@@ -1,8 +1,10 @@
+use crate::wyoming_client::device::Connection;
 use crate::wyoming_events;
 use crate::{ClientOptions, CutStats, Error, PlayOutcome, wyoming_route::Router, wyoming_wire};
 use echo_contracts::wyoming::{AudioChunkData, AudioFormat, WyomingEvent};
+use echo_core_api::{DeviceControl, DeviceEvent, LinkState};
 use serde_json::Value;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 use tokio::{
     io::{AsyncRead, AsyncWrite, BufReader},
     sync::{mpsc, oneshot, watch},
@@ -41,11 +43,9 @@ struct Session<W> {
     router: Router,
     describe: Option<Reply<WyomingEvent>>,
     play: Option<Playback>,
-    registered: bool,
-    registration: Value,
-    paused: bool,
+    // The last complete registration frame can be replayed on a new socket.
+    registration: Option<Value>,
     closing: bool,
-    run_open: Option<()>,
 }
 
 struct ReaderTask(JoinHandle<()>);
@@ -65,7 +65,8 @@ pub(crate) async fn serve<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 ) {
     let (_reset, mut reset) = watch::channel(0_u64);
     let mut enabled = None;
-    let (result, _) = generation(io, opts, &mut commands, events, &mut reset, &mut enabled).await;
+    let control = Arc::new(crate::wyoming_client::device::Standalone::default());
+    let (result, _) = generation(io, opts, &mut commands, events, &mut reset, &mut enabled, control).await;
     end.send_replace(Some(result));
 }
 
@@ -76,6 +77,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     events: wyoming_events::Sender,
     reset: &mut watch::Receiver<u64>,
     enabled: &mut Option<Value>,
+    control: Arc<dyn DeviceControl>,
 ) -> (Error, bool) {
     let (reader, writer) = tokio::io::split(io);
     let (tx, mut incoming) = mpsc::channel(1);
@@ -92,23 +94,19 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     }));
     let mut session = Session {
         writer,
-        router: Router::new(events, opts.mic_capacity),
+        router: Router::with_device(events, opts.mic_capacity, Connection::new(control)),
         opts,
         describe: None,
         play: None,
-        registered: enabled.is_some(),
-        registration: enabled.clone().unwrap_or(Value::Null),
-        paused: false,
+        registration: enabled.clone(),
         closing: false,
-        run_open: None,
     };
     reset.borrow_and_update();
     let work = async {
-        if enabled.is_some() {
-            if let Err(error) = session.register(session.registration.clone()).await {
-                return error;
-            }
-            session.registered = true;
+        if let Some(data) = session.registration.clone()
+            && let Err(error) = session.register(data).await
+        {
+            return error;
         }
         session.run(commands, &mut incoming).await
     };
@@ -117,7 +115,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         _ = reset.changed() => Error::Timeout,
         result = work => result,
     };
-    *enabled = session.registered.then_some(session.registration.clone());
+    *enabled = session.registration.take();
     session.router.end(if session.closing { Ok(()) } else { Err(result) });
     if let Some(reply) = session.describe.take() {
         let _ = reply.send(Err(result));
@@ -185,7 +183,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
 
     fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
         let frame = frame?;
-        if self.paused
+        if self.router.device.view().link == LinkState::Paused
             && matches!(
                 frame.header.r#type.as_str(),
                 "run-pipeline" | "audio-chunk" | "audio-start" | "audio-stop"
@@ -195,13 +193,12 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             return Ok(());
         }
         match self.router.route(frame)? {
-            (WyomingEvent::RunPipeline(_), true) => self.run_open = Some(()),
-            (event @ WyomingEvent::Info(_), _) => {
+            event @ WyomingEvent::Info(_) => {
                 if let Some(reply) = self.describe.take() {
                     let _ = reply.send(Ok(event));
                 }
             }
-            (WyomingEvent::Played(_), _) if self.play.as_ref().is_some_and(|p| p.stopped) => {
+            WyomingEvent::Played(_) if self.play.as_ref().is_some_and(|p| p.stopped) => {
                 if let Some(play) = self.play.take() {
                     let outcome = if play.cut {
                         PlayOutcome::Cut
@@ -227,7 +224,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
                 }
             }
             Some(Command::Register(data, reply)) => {
-                if !self.registered {
+                if self.router.device.view().link != LinkState::Registered {
                     self.register(data).await?;
                 }
                 let _ = reply.send(Ok(()));
@@ -284,9 +281,8 @@ impl<W: AsyncWrite + Unpin> Session<W> {
 
     async fn register(&mut self, data: Value) -> Result<(), Error> {
         self.send(WyomingEvent::RunSatellite(data.clone()), vec![]).await?;
-        self.registration = data;
-        self.registered = true;
-        self.paused = false;
+        self.registration = Some(data);
+        self.router.device.observe(DeviceEvent::Registered { registered: true });
         Ok(())
     }
 
@@ -295,7 +291,8 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             return Ok(());
         }
         let request_id = id.upgrade().filter(|_| Instant::now() < deadline);
-        if let Some(request_id) = request_id.filter(|_| self.registered && !self.paused && !self.router.muted) {
+        let view = self.router.device.view();
+        if let Some(request_id) = request_id.filter(|_| view.link == LinkState::Registered && !view.privacy.mic_muted) {
             let data = serde_json::json!({"requestId": &*request_id});
             drop(request_id);
             self.send(WyomingEvent::Other("hassmic-start-run".into(), data), vec![])
@@ -326,12 +323,14 @@ impl<W: AsyncWrite + Unpin> Session<W> {
     }
 
     async fn pause_capture(&mut self) -> Result<(), Error> {
-        if !self.paused {
+        if self.router.device.view().link != LinkState::Paused {
             self.retire_playback().await?;
             self.end_device().await?;
             self.send(WyomingEvent::PauseSatellite(Value::Null), vec![]).await?;
-            self.paused = true;
-            self.registered = false;
+            self.registration = None;
+            self.router
+                .device
+                .observe(DeviceEvent::Registered { registered: false });
             self.router.clear_remote();
             self.router.end(Ok(()));
         }
@@ -343,7 +342,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
             let _ = reply.send(Err(Error::Busy));
             return Ok(());
         }
-        let result = if self.run_open.is_some() {
+        let result = if self.router.device.view().run_open {
             self.end_device().await
         } else {
             Ok(())
@@ -383,12 +382,12 @@ impl<W: AsyncWrite + Unpin> Session<W> {
     async fn end_device(&mut self) -> Result<(), Error> {
         self.send(WyomingEvent::Other("hassmic-end".into(), Value::Null), vec![])
             .await?;
-        self.run_open = None;
+        self.router.device.observe(DeviceEvent::RunClosed);
         Ok(())
     }
 
     async fn end_device_if_active(&mut self) -> Result<(), Error> {
-        if self.run_open.is_some() || self.play.is_some() {
+        if self.router.device.view().run_open || self.play.is_some() {
             self.end_device().await?;
         }
         Ok(())

@@ -51,6 +51,7 @@ fn reference_ms() -> Option<i64> {
 
 /// The current time for everything the model is told.
 #[must_use]
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 pub fn now() -> SystemTime {
     if let Ok(Some((epoch, start))) = SIM_TIME.try_with(|anchor| *anchor) {
         return epoch.checked_add(start.elapsed()).unwrap_or(epoch);
@@ -92,6 +93,7 @@ struct Reporter {
 
 impl Reporter {
     /// Adopt a good measurement, trace it, and say whether it was one.
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     fn observe(&mut self, outcome: Outcome) -> bool {
         let fields = match outcome {
             Outcome::Synced { offset_ms, hosts } => {

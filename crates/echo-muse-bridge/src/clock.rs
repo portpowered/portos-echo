@@ -12,6 +12,7 @@ pub trait Clock: Send + Sync {
 pub struct EpochClock;
 
 impl Clock for EpochClock {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     fn now(&self) -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

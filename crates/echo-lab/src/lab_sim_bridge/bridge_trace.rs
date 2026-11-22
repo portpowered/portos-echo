@@ -11,6 +11,7 @@ pub(super) struct Trace {
 }
 
 impl Trace {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub(super) fn create(path: &Path) -> Result<Self, String> {
         let file = OpenOptions::new()
             .write(true)

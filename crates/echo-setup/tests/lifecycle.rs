@@ -189,6 +189,7 @@ fn t3_uninstall_dispatches_only_authored_shell_and_does_not_report_failed_remova
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn t3_doctor_reports_each_failure_with_fixed_fixes_and_no_external_data() -> Result {
     let names = [
         "adb",

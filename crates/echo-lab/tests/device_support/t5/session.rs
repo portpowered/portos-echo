@@ -40,6 +40,7 @@ fn host(listener: &TcpListener, root: &Path, replies: u64) {
     while !receive(&mut wire).is_empty() {}
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 pub(super) fn accept(listener: &TcpListener) -> BufReader<TcpStream> {
     listener.set_nonblocking(true).unwrap();
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -54,6 +55,7 @@ pub(super) fn accept(listener: &TcpListener) -> BufReader<TcpStream> {
     wire
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 pub(super) fn wait_play(root: &Path, count: u64) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
