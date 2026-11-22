@@ -11,7 +11,7 @@ use std::{
 #[must_use]
 pub fn satellite_name(program: &OsStr) -> bool {
     let basename = Path::new(program).file_name();
-    ["hassmic-host", "hassmic"]
+    ["hassmic-host"]
         .iter()
         .any(|name| basename == Some(OsStr::new(name)))
 }
