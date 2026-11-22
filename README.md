@@ -4,15 +4,47 @@ Port OS Echo turns a rooted Amazon Echo Show 8 (2nd gen, 2021, codename `athena`
 Say **"Computer"** and talk: ChatGPT Live answers out loud, a delegated Codex agent handles requests that need tools
 or live data, Port OS controls your home, and an animated character shows what the assistant is doing.
 
-**See it working:** [demo video on YouTube](https://youtube.com/shorts/Dgh7j3M_-kc).
+Everything runs on the Echo. The community firmware's `hassmic` handles the wake word, microphone and speaker.
+`echo-bridge` and OpenAI's Codex app server run beside it and carry the conversation and the tool calls. The screen
+app shows the bridge's page. Your PC only installs and maintains these components.
 
 > [!CAUTION]
 > **Early software.** v0.1.0 has been tested on one Echo Show 8. Rooting wipes the Echo, unlocks its bootloader and
 > can brick it. Read what you run; there is no warranty. See [Known limits](#known-limits).
 
-Everything runs on the Echo. The community firmware's `hassmic` handles the wake word, microphone and speaker.
-`echo-bridge` and OpenAI's Codex app server run beside it and carry the conversation and the tool calls. The screen
-app shows the bridge's page. Your PC only installs and maintains these components.
+**See it working:** [demo video on YouTube](https://youtube.com/shorts/Dgh7j3M_-kc).
+
+## Screenshots
+
+Captured from the Echo's own screen. For the assistant in motion, watch the
+[demo video](https://youtube.com/shorts/Dgh7j3M_-kc).
+
+<!-- markdownlint-disable MD033 -->
+<table>
+  <tr>
+    <td><img src="docs/img/screens/echo-kitten-idle.jpg" width="420"
+      alt="Orange kitten character at rest on a yellow background, clock and date bottom right"><br>
+      Orange kitten pack at rest</td>
+    <td><img src="docs/img/screens/echo-kitten-listening.jpg" width="420"
+      alt="Orange kitten character with a blue light band along the bottom edge"><br>
+      Mid-conversation: the blue band shows it is listening or answering</td>
+  </tr>
+  <tr>
+    <td><img src="docs/img/screens/echo-junco-idle.jpg" width="420"
+      alt="Junco bird character on a branch, yellow background, clock and date bottom right"><br>
+      Junco bird pack at rest</td>
+    <td><img src="docs/img/screens/echo-companion-idle.jpg" width="420"
+      alt="Cel-shaded companion character in a green jacket on a dark background"><br>
+      Companion pack, included in the release</td>
+  </tr>
+  <tr>
+    <td><img src="docs/img/screens/echo-default-idle.jpg" width="420"
+      alt="Two large round glowing eyes on a dark background, clock and date bottom centre"><br>
+      Default pack</td>
+    <td></td>
+  </tr>
+</table>
+<!-- markdownlint-enable MD033 -->
 
 ## What you need
 
