@@ -20,11 +20,56 @@ use tokio::{
 const BRIDGE: &str = env!("CARGO_BIN_EXE_echo-bridge");
 const NAME: &str = "Lab Sim hassmic-name";
 const CEILING: Duration = Duration::from_secs(8);
+const PARENT_NETNS: &str = "ECHO_T3_HASSMIC_NAME_PARENT_NETNS";
 const USAGE: &str = "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-W port] [-G dir] [-L] [-E] [-V] [-S] [-D]";
 
 #[tokio::test]
-#[ignore = "T3 exercises the prebuilt Linux satellite over loopback"]
+#[ignore = "T3 requires a private Linux network namespace for the copied satellite"]
 async fn t3_hassmic_name_supervisor_cli() {
+    let current_netns = fs::read_link("/proc/self/ns/net").unwrap();
+    let Some(parent_netns) = std::env::var_os(PARENT_NETNS) else {
+        run_in_loopback_namespace(&current_netns).await;
+        return;
+    };
+    assert_ne!(current_netns.as_os_str(), parent_netns);
+    let devices = fs::read_to_string("/proc/self/net/dev").unwrap();
+    let interfaces: Vec<_> = devices
+        .lines()
+        .skip(2)
+        .filter_map(|line| line.split_once(':').map(|(name, _)| name.trim()))
+        .collect();
+    assert_eq!(interfaces, ["lo"]);
+    writeln!(
+        io::stdout(),
+        "T3-01 private network namespace interfaces={interfaces:?}"
+    )
+    .unwrap();
+    supervisor_cli().await;
+}
+
+async fn run_in_loopback_namespace(parent_netns: &Path) {
+    // Re-exec just this case so the copied binary and its client share the same
+    // loopback interface, regardless of which parallel suite launches the test.
+    let status = Command::new("unshare")
+        .args(["--user", "--map-root-user", "--net", "--", "/bin/sh", "-c"])
+        .arg("ip link set lo up && exec \"$@\"")
+        .arg("sh")
+        .arg(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "hassmic_name::t3_hassmic_name_supervisor_cli",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env(PARENT_NETNS, parent_netns)
+        .kill_on_drop(true)
+        .status()
+        .await
+        .expect("start T3-NAME with unshare and ip in a private Linux network namespace");
+    assert!(status.success(), "isolated T3-NAME exited with {status}");
+}
+
+async fn supervisor_cli() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let hassmic = copy_bridge(root, "hassmic");
@@ -97,6 +142,9 @@ async fn describe_copy(command: &mut Command, reservation: TcpListener, port: u1
         let marker = format!("wyoming on {port},");
         while let Some(line) = stderr.next_line().await? {
             if line.contains(&marker) {
+                if fs::read_link(format!("/proc/{pid}/ns/net"))? != fs::read_link("/proc/self/ns/net")? {
+                    return Err("the copied satellite left the client's private network namespace".into());
+                }
                 let comm = fs::read_to_string(format!("/proc/{pid}/comm"))?;
                 return Ok((comm, describe(port).await?));
             }
