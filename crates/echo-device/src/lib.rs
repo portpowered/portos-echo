@@ -1,5 +1,7 @@
 //! Dedicated Wyoming satellite process and its offline notices.
 
+mod protocol;
+
 use std::{
     convert::Infallible,
     ffi::{OsStr, OsString},
@@ -21,7 +23,7 @@ pub fn satellite_name(program: &OsStr) -> bool {
 /// # Errors
 /// Returns an error if the process entry or argument list is invalid.
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<Infallible, &'static str> {
-    echo_device_sys::run(args).map_err(|error| match error {
+    echo_device_sys::run(args, &protocol::Wyoming).map_err(|error| match error {
         echo_device_sys::Error::Nul(_) => "satellite argument contains a NUL byte",
         echo_device_sys::Error::TooManyArgs => "too many satellite arguments",
         echo_device_sys::Error::AlreadyEntered => "satellite already entered",
