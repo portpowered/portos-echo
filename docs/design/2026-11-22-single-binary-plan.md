@@ -423,8 +423,9 @@ not measured; the measured arrival gaps were not CPU-bound (decision of 2026-11-
 | Trace row `Vec` and a blocking write | `bridge_trace.rs` `record` | Fixed rows into the trace ring; the writer task serialises off the hot path |
 
 Mute and barge-in checks already allocate nothing (flags and `Instant`s), and stay that way. Sessions and tool calls
-get generational indices in fixed slots instead of `String`-keyed state; a slab crate is a new dependency, so it needs
-the owner's approval, and a small in-house index also works.
+get generational indices in fixed slots instead of `String`-keyed state. The owner decided (2026-11-22): a small
+in-house slot table (a `Vec` of entries, a free list and a generation per slot), no slab crate, owned by the
+session and turn subsystem. Other subsystems hold only its handles.
 
 **What cannot live in `World`.** webrtc-rs's ICE, DTLS, SRTP and its tasks; the Codex app server's threads, rollouts
 and auth, even in-process (B1); OS handles (sockets, files, the device role's audio handles in its own process); and
@@ -453,6 +454,28 @@ observed states; the shells hold the handles.
 IO shells. Bring it in subsystem by subsystem with the A, B and C tracks. Preallocate the audio path and gate it with
 a zero-allocation test. Inject one `Clock` and one `Rng`, and add record and replay at the shell boundary. Do not
 build a global arena, `bumpalo` scratch or an ECS. Make no memory claim until B0 has measured RSS.
+
+**Ownership and boundaries (owner, 2026-11-22).** Each subsystem is the strong owner of one interface, and nothing
+crosses between subsystems except through those interfaces:
+
+- **One owner per interface.** A subsystem owns its state, the events it accepts and the commands it emits. Only
+  the owner mutates its state. Others read it through the owner's published view, a small `Copy` or snapshot type,
+  never by reaching into its fields. Examples: the session subsystem owns the slot table and session handles, the
+  device subsystem owns mute and speaker state, and the pacer owns the reply ring.
+- **Buffer readers talk to owners, not to each other.** The IO shells that read sockets and rings (Wyoming, media,
+  Codex, Port OS, screen) turn what they read into events addressed to the owning subsystem. They apply only the
+  commands that subsystem emits. No shell calls another shell or another subsystem.
+- **Cross-subsystem traffic goes through the core loop.** When one subsystem needs another to act, it emits a
+  typed command or event declared in the shared interface crate, and the loop delivers it in the fixed step order.
+  There are no direct calls, no shared `Arc<Mutex>` and no back channels between subsystems. That keeps every
+  interaction visible in one recording and one `World` diff.
+- **Enforced by crates.** The interface types (`Event`, `Command`, handles, views and the `Subsystem` trait) live in
+  one crate, `echo-core-api`, with no IO dependencies. Each subsystem is its own crate (`echo-sub-device`,
+  `echo-sub-session`, `echo-sub-pacer` and so on) that depends on `echo-core-api` and its own libraries, never on
+  another subsystem crate. Only the composition crate (the core loop) depends on all of them. An xtask check reads
+  `cargo metadata` in CI and fails if any subsystem crate depends on another subsystem crate or on a shell crate,
+  or if a shell crate depends on a subsystem crate. The check lands with the first subsystem in A1, so every later
+  subsystem is born inside the rule.
 
 | Changes | Stays |
 | --- | --- |
