@@ -3,7 +3,7 @@ use serde_json::json;
 use std::{
     error::Error,
     fs::{self, File, OpenOptions},
-    io,
+    io::{self, Write},
     net::{Ipv4Addr, TcpListener},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -60,7 +60,11 @@ async fn t3_hassmic_name_supervisor_cli() {
     assert_eq!(invalid.stdout, b"");
     let stderr = String::from_utf8(invalid.stderr).unwrap();
     assert_eq!(stderr.lines().last(), Some(USAGE));
-    println!("T3-04 --invalid-test-option exit=2 stdout=\"\" stderr={stderr:?}");
+    writeln!(
+        io::stdout(),
+        "T3-04 --invalid-test-option exit=2 stdout=\"\" stderr={stderr:?}"
+    )
+    .unwrap();
 
     let host = copy_bridge(root, "hassmic-host");
     avahi_output(&host, root, &args, port, "T3-05 hassmic-host").await;
@@ -73,11 +77,13 @@ async fn t3_hassmic_name_supervisor_cli() {
             help.stdout,
             format!("{}\n", echo_bridge::bridge_operator::HELP).as_bytes()
         );
-        println!(
+        writeln!(
+            io::stdout(),
             "T3-05 {} --help exit=0 stderr=\"\" stdout:\n{}",
             binary.file_name().unwrap().display(),
             String::from_utf8(help.stdout).unwrap()
-        );
+        )
+        .unwrap();
     }
 }
 
@@ -105,17 +111,23 @@ async fn describe_copy(command: &mut Command, reservation: TcpListener, port: u1
     if exit.is_none() {
         child.kill().await.unwrap();
     }
-    let (comm, info) = observed
-        .expect("T3-01 hassmic Wyoming readiness/describe deadline")
-        .unwrap_or_else(|error| panic!("T3-01 hassmic Wyoming readiness or info failed: exit={exit:?}, {error}"));
+    let observed = observed.expect("T3-01 hassmic Wyoming readiness/describe deadline");
+    assert!(
+        observed.is_ok(),
+        "T3-01 hassmic Wyoming readiness or info failed: exit={exit:?}, {:?}",
+        observed.as_ref().err()
+    );
+    let (comm, info) = observed.unwrap();
     assert_eq!(comm, "hassmic\n");
     assert_info(&info);
-    println!(
+    writeln!(
+        io::stdout(),
         "T3-01 comm={:?} info={} payload_bytes={}",
         comm.trim_end(),
         info.data.unwrap(),
         info.payload.len()
-    );
+    )
+    .unwrap();
 }
 
 async fn ring_output(hassmic: &Path, root: &Path) {
@@ -126,10 +138,14 @@ async fn ring_output(hassmic: &Path, root: &Path) {
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(output.stdout, b"");
         assert_eq!(output.stderr, diagnostic.as_bytes());
-        println!("T3-02 -G {destination} exit=1 stdout=\"\" stderr={diagnostic:?}");
+        writeln!(
+            io::stdout(),
+            "T3-02 -G {destination} exit=1 stdout=\"\" stderr={diagnostic:?}"
+        )
+        .unwrap();
     }
     assert_eq!(fs::read_dir(root.join("ring")).unwrap().count(), 0);
-    println!("T3-02 ring directory entries=0");
+    writeln!(io::stdout(), "T3-02 ring directory entries=0").unwrap();
 }
 
 async fn avahi_output(binary: &Path, root: &Path, args: &[&str], port: u16, label: &str) {
@@ -146,7 +162,7 @@ async fn avahi_output(binary: &Path, root: &Path, args: &[&str], port: u16, labe
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(output.stderr, b"");
     assert_eq!(xml, expected);
-    println!("{label} -S exit=0 stderr=\"\" stdout:\n{xml}");
+    writeln!(io::stdout(), "{label} -S exit=0 stderr=\"\" stdout:\n{xml}").unwrap();
 }
 
 async fn run(binary: &Path, root: &Path, args: &[&str]) -> Output {
