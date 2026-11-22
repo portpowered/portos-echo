@@ -61,6 +61,8 @@ status: active; documentation index
 
 - [Execution plan](design/echo-live-execution-plan.md)
 - [RFC](design/echo-live-rfc.md)
+- [Single-binary plan](design/2026-11-22-single-binary-plan.md)
+- [Single-binary quick start](design/2026-11-22-single-binary-quickstart.md)
 
 ## Checking documentation
 
