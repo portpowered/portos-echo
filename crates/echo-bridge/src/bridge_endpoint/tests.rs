@@ -133,7 +133,7 @@ impl Settings {
     ) -> (SettingsService, mpsc::Sender<echo_screen_server::SettingsRequest>) {
         let (owner, desired) = settings_owner(home, mock, base_enabled);
         let (service, send) = SettingsService::resume(Box::new(owner));
-        let mut transport = Transport::new(&gateway.template, &mock.base, true).unwrap();
+        let mut transport = Transport::new(&gateway.template, &mock.base, true, None).unwrap();
         transport.camera.source = camera;
         let runtime = Runtime::new(
             home.into(),

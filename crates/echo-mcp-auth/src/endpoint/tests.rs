@@ -72,17 +72,17 @@ fn endpoint_exchange_requires_a_secure_base() {
         "https://127.0.0.1/{substitution}",
     ] {
         assert_eq!(
-            EndpointExchange::open(value, timeout).err(),
+            EndpointExchange::open(value, timeout, None).err(),
             Some(ExchangeError::Unavailable)
         );
     }
-    assert!(EndpointExchange::open("https://127.0.0.1", timeout).is_ok());
+    assert!(EndpointExchange::open("https://127.0.0.1", timeout, None).is_ok());
 }
 
 #[tokio::test]
 async fn t3_endpoint_exchange_uses_one_path_and_endpoint_bearer() {
     let mock = Mock::start().await;
-    let exchange = EndpointExchange::new(Url::parse(&mock.base).unwrap(), Duration::from_secs(2)).unwrap();
+    let exchange = EndpointExchange::new(Url::parse(&mock.base).unwrap(), Duration::from_secs(2), None).unwrap();
     let device_id = "00000000-0000-4000-8000-000000000001";
     let key = "00000000-0000-4000-8000-000000000002";
     let auth_link = "synthetic/link %";
@@ -135,4 +135,52 @@ async fn t3_endpoint_exchange_uses_one_path_and_endpoint_bearer() {
         assert!(!request.headers.contains_key("dpop"));
         assert_eq!(request.json.as_ref(), Some(&body));
     }
+}
+
+#[test]
+fn endpoint_exchange_refuses_unusable_configured_roots() {
+    let timeout = Duration::from_secs(2);
+    for pem in [
+        b"".as_slice(),
+        b"not PEM",
+        b"-----BEGIN CERTIFICATE-----\nbad\n-----END CERTIFICATE-----",
+    ] {
+        assert_eq!(
+            EndpointExchange::open("https://127.0.0.1", timeout, Some(pem)).err(),
+            Some(ExchangeError::Unavailable)
+        );
+    }
+}
+
+/// Each failure keeps its HTTP status and a fixed reason; only an unanswered
+/// request and a server error are sent again.
+#[tokio::test]
+async fn t3_endpoint_exchange_failures_keep_status_and_reason() {
+    let mock = Mock::start().await;
+    let exchange = EndpointExchange::new(Url::parse(&mock.base).unwrap(), Duration::from_secs(2), None).unwrap();
+    let install = InstallRequest::new("00000000-0000-4000-8000-000000000001", "Hall Echo", None);
+    let key = "00000000-0000-4000-8000-000000000002";
+    for (status, expected, reason, retryable) in [
+        (503, ExchangeError::Server(503), "server_error", true),
+        (401, ExchangeError::Rejected(401), "rejected", false),
+        (409, ExchangeError::Conflict, "conflict", false),
+    ] {
+        mock.fault(EXCHANGE_PATH, status, json!({"error": "synthetic"}));
+        let error = exchange.submit(&EndpointToken, key, &install).await.err().unwrap();
+        assert_eq!(error, expected);
+        assert_eq!(
+            (error.reason(), error.http_status(), error.retryable()),
+            (reason, Some(status), retryable)
+        );
+    }
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", closed.local_addr().unwrap()); // lint-rules: allow-literal loopback listener address
+    drop(closed);
+    let refused = EndpointExchange::new(Url::parse(&base).unwrap(), Duration::from_secs(2), None).unwrap();
+    let error = refused.submit(&EndpointToken, key, &install).await.err().unwrap();
+    assert_eq!(error, ExchangeError::Transport(Unanswered::Connect));
+    assert_eq!(
+        (error.reason(), error.http_status(), error.retryable()),
+        ("connect", None, true)
+    );
 }

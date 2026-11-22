@@ -22,7 +22,7 @@ pub use auth::{AuthClient, EndpointGrant, GrantStatus, LinkInstructions};
 use echo_contracts::secret::Secret;
 pub use endpoint::{
     EndpointExchange, EndpointInstall, EndpointInstallExchange, EndpointRegistration, EndpointTokenSource,
-    ExchangeError, new_request_id,
+    ExchangeError, Unanswered, new_request_id,
 };
 pub use refusal::LinkFailure;
 use std::{future::Future, path::PathBuf, pin::Pin, time::Duration};

@@ -22,6 +22,8 @@ pub struct SettingsService {
     trace: Option<crate::bridge_trace::Trace>,
     account: Option<Account>,
     endpoint: Option<(bridge_endpoint::Runtime, bridge_endpoint::Control)>,
+    /// Why this generation has no endpoint runtime, traced if Settings enables it.
+    unconfigured: Option<&'static str>,
 }
 
 /// Accepted state survives resource cleanup without reopening the home. A
@@ -104,7 +106,10 @@ impl SettingsService {
     #[must_use]
     pub fn resume(host: Box<SettingsHost>) -> (Self, mpsc::Sender<SettingsRequest>) {
         let (send, inbox) = settings_channel();
-        let endpoint = bridge_endpoint::Runtime::configured(host.effective());
+        let (endpoint, unconfigured) = match bridge_endpoint::Runtime::configured(host.effective()) {
+            Ok(endpoint) => (Some(endpoint), None),
+            Err(reason) => (None, Some(reason)),
+        };
         (
             Self {
                 host,
@@ -113,6 +118,7 @@ impl SettingsService {
                 trace: None,
                 account: None,
                 endpoint,
+                unconfigured,
             },
             send,
         )
@@ -151,6 +157,7 @@ impl SettingsService {
     #[cfg(test)]
     pub(crate) fn with_endpoint(mut self, runtime: (bridge_endpoint::Runtime, bridge_endpoint::Control)) -> Self {
         self.endpoint = Some(runtime);
+        self.unconfigured = None;
         self
     }
 
@@ -176,6 +183,11 @@ impl SettingsService {
             let trace = self.trace.clone();
             let settings = self.serve_inbox(work, link_status, &current_grant, Some(&control));
             return Box::pin(runtime.scope(settings, &current_grant, trace)).await;
+        }
+        if let Some((reason, trace)) = self.unconfigured.zip(self.trace.as_mut())
+            && self.host.effective().portos_endpoint.enabled
+        {
+            let _ = trace.record("endpoint.unconfigured", None, serde_json::json!({ "reason": reason }));
         }
         self.serve_inbox(work, link_status, &current_grant, None).await
     }

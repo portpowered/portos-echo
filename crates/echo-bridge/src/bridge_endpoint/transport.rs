@@ -1,10 +1,12 @@
+mod tls;
 mod uplink;
 
-use super::{Status, commands::Receipts, snapshot::Camera, voice::Voice};
+use super::{Attempts, Status, commands::Receipts, note, snapshot::Camera, voice::Voice};
 use echo_contracts::endpoint::{Report, Uplink};
 use echo_mcp_auth::{EndpointTokenSource, new_request_id};
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use reqwest::{Client, Url};
+use serde_json::json;
 use std::{
     fmt::Write as _,
     time::{Duration, UNIX_EPOCH},
@@ -15,7 +17,7 @@ use tokio::{
     time::{Instant, MissedTickBehavior, interval_at, timeout},
 };
 use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async_with_config,
+    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
     tungstenite::{
         Message,
         client::IntoClientRequest,
@@ -49,6 +51,7 @@ pub(super) struct Transport {
     gateway: String,
     messages: Url,
     http: Client,
+    connector: Option<Connector>,
     pub(super) camera: Camera,
     pub(super) trace: Option<crate::bridge_trace::Trace>,
 }
@@ -61,7 +64,8 @@ struct Frame {
 }
 
 impl Transport {
-    pub(super) fn new(gateway: &str, api: &str, loopback: bool) -> Option<Self> {
+    /// `ca_pem` adds the bridge's configured roots to both clients; see `tls`.
+    pub(super) fn new(gateway: &str, api: &str, loopback: bool, ca_pem: Option<&[u8]>) -> Option<Self> {
         let mut messages = Url::parse(api).ok()?;
         let gateway = gateway.strip_suffix(PATH_MARKER)?;
         let url = Url::parse(gateway).ok()?;
@@ -84,17 +88,20 @@ impl Transport {
             return None;
         }
         messages.set_path("/messages");
-        let http = Client::builder()
+        let trust = tls::Trust::configured(ca_pem)?;
+        let mut http = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .no_proxy()
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .ok()?;
+            .timeout(REQUEST_TIMEOUT);
+        for root in trust.rest {
+            http = http.add_root_certificate(root);
+        }
         Some(Self {
             gateway: gateway.into(),
             messages,
-            http,
+            http: http.build().ok()?,
+            connector: trust.gateway,
             camera: Camera::default(),
             trace: None,
         })
@@ -105,30 +112,47 @@ impl Transport {
         auth_link: &str,
         tokens: &dyn EndpointTokenSource,
         fresh: bool,
-    ) -> Result<Socket, Status> {
+    ) -> Result<Socket, Refused> {
+        let refused = |status, reason| Refused {
+            status,
+            reason,
+            http_status: None,
+        };
         let url = addressed(&self.gateway, auth_link);
-        let mut request = url.into_client_request().map_err(|_| Status::Unavailable)?;
+        let mut request = url
+            .into_client_request()
+            .map_err(|_| refused(Status::Unavailable, "request"))?;
         let token = if fresh {
             tokens.fresh_token().await
         } else {
             tokens.access_token().await
         }
-        .map_err(|error| super::auth_status(&error))?;
-        let mut bearer =
-            HeaderValue::from_str(&format!("Bearer {}", token.expose())).map_err(|_| Status::Unavailable)?;
+        .map_err(|error| refused(super::auth_status(&error), super::auth_reason(&error)))?;
+        let mut bearer = HeaderValue::from_str(&format!("Bearer {}", token.expose()))
+            .map_err(|_| refused(Status::Unavailable, "request"))?;
         bearer.set_sensitive(true);
         request.headers_mut().insert(AUTHORIZATION, bearer);
         let config = WebSocketConfig::default()
             .max_frame_size(Some(MAX_COMMAND))
             .max_message_size(Some(MAX_COMMAND));
-        match timeout(REQUEST_TIMEOUT, connect_async_with_config(request, Some(config), false)).await {
+        let connect = connect_async_tls_with_config(request, Some(config), false, self.connector.clone());
+        match timeout(REQUEST_TIMEOUT, connect).await {
             Ok(Ok((socket, _))) => Ok(socket),
-            Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response)))
-                if response.status().is_client_error() || response.status().is_redirection() =>
-            {
-                Err(Status::Unavailable)
+            Ok(Err(tokio_tungstenite::tungstenite::Error::Http(response))) => {
+                let status = response.status();
+                let terminal = status.is_client_error() || status.is_redirection();
+                Err(Refused {
+                    status: if terminal {
+                        Status::Unavailable
+                    } else {
+                        Status::Connecting
+                    },
+                    reason: if terminal { "rejected" } else { "server_error" },
+                    http_status: Some(status.as_u16()),
+                })
             }
-            _ => Err(Status::Connecting),
+            Ok(Err(error)) => Err(refused(Status::Connecting, tls::unanswered(&error))),
+            Err(_) => Err(refused(Status::Connecting, "timeout")),
         }
     }
 
@@ -156,20 +180,42 @@ impl Transport {
         intake: &mpsc::Sender<Frame>,
     ) -> Status {
         let mut retry = Retry::default();
+        let mut failures = Attempts::default();
         loop {
+            let trace = self.trace.as_ref();
+            note(
+                trace,
+                "endpoint.gateway_connecting",
+                json!({ "fresh_token": retry.fresh }),
+            );
             match self.handshake(auth_link, tokens, retry.fresh).await {
                 Ok(socket) => {
+                    failures = Attempts::default();
                     state.send_replace(Status::Connected);
+                    note(trace, "endpoint.gateway_connected", json!({}));
                     let close = self.connected(socket, device_id, tokens, intake).await;
-                    if let Some(status) = retry.closed(close) {
+                    let ended = retry.closed(close);
+                    let next = if ended.is_some() { "stop" } else { "reconnect" };
+                    note(
+                        trace,
+                        "endpoint.gateway_closed",
+                        json!({ "close_code": close, "next": next }),
+                    );
+                    if let Some(status) = ended {
                         return status;
                     }
                     if close == Some(CLOSE_CYCLE) {
                         continue;
                     }
                 }
-                Err(Status::Connecting) => retry.fresh = false,
-                Err(terminal) => return terminal,
+                Err(refused) => {
+                    let retrying = refused.status == Status::Connecting;
+                    refused.note(trace, &mut failures, retrying);
+                    if !retrying {
+                        return refused.status;
+                    }
+                    retry.fresh = false;
+                }
             }
             state.send_replace(Status::Connecting);
             tokio::time::sleep(retry.pause()).await;
@@ -270,6 +316,26 @@ impl Transport {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Why a gateway upgrade did not open, and the status it leaves.
+struct Refused {
+    status: Status,
+    reason: &'static str,
+    http_status: Option<u16>,
+}
+
+impl Refused {
+    /// Record the failure: its first time, a changed reason and every power-of-two repeat.
+    fn note(&self, trace: Option<&crate::bridge_trace::Trace>, failures: &mut Attempts, retry: bool) {
+        if let Some(attempt) = failures.failed(self.reason) {
+            let fields = json!({
+                "reason": self.reason, "http_class": self.http_status.map(super::http_class),
+                "http_status": self.http_status, "attempt": attempt, "retry": retry,
+            });
+            note(trace, "endpoint.gateway_failed", fields);
         }
     }
 }
@@ -391,61 +457,9 @@ fn addressed(prefix: &str, identity: &str) -> String {
     url
 }
 
-/// Gateway close-code policy and the keepalive reply (live gateway, 2026-11-21).
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn close_4403_stops_after_one_refreshed_retry() {
-        let mut retry = Retry::default();
-        assert_eq!(retry.closed(Some(CLOSE_FORBIDDEN)), None);
-        assert!(retry.fresh, "the retry refreshes the token");
-        assert_eq!(retry.closed(Some(CLOSE_FORBIDDEN)), Some(Status::Unavailable));
-    }
-
-    #[test]
-    fn close_4401_refreshes_and_gives_up_after_three() {
-        let mut retry = Retry::default();
-        for _ in 1..REFUSALS {
-            assert_eq!(retry.closed(Some(CLOSE_UNAUTHORIZED)), None);
-            assert!(retry.fresh);
-        }
-        assert_eq!(retry.closed(Some(CLOSE_UNAUTHORIZED)), Some(Status::Unavailable));
-    }
-
-    #[test]
-    fn close_4503_backs_off_with_the_same_token() {
-        let mut retry = Retry::default();
-        let first = retry.pause();
-        assert_eq!(retry.closed(Some(CLOSE_RETRY)), None);
-        assert!(!retry.fresh, "4503 keeps the token");
-        let second = retry.pause();
-        assert!(second > first, "the backoff keeps growing: {first:?} then {second:?}");
-        assert!(second >= Duration::from_secs(2));
-        assert_eq!(retry.closed(Some(CLOSE_RETRY)), None);
-        assert!(retry.pause() >= Duration::from_secs(4));
-    }
-
-    #[test]
-    fn close_4000_and_4409_keep_their_meaning() {
-        let mut retry = Retry::default();
-        assert_eq!(retry.closed(Some(CLOSE_FORBIDDEN)), None);
-        let _ = retry.pause();
-        assert_eq!(retry.closed(Some(CLOSE_CYCLE)), None);
-        assert!(!retry.fresh, "a cycle refreshes only a token near expiry");
-        assert_eq!(retry.refusals, 0);
-        assert_eq!(retry.delay, Duration::from_secs(1));
-        assert_eq!(retry.closed(Some(CLOSE_REPLACED)), Some(Status::Unavailable));
-    }
-
-    #[test]
-    fn only_the_exact_pong_is_a_keepalive_reply() {
-        assert!(keepalive_reply("pong"));
-        for text in ["ping", "PONG", "pong ", "{\"header\":{}}"] {
-            assert!(!keepalive_reply(text), "{text}");
-        }
-        assert_eq!(PING, "ping");
-        assert_eq!(KEEPALIVE, Duration::from_secs(45));
-    }
-}
+#[path = "transport/policy_tests.rs"]
+mod tests;
+#[cfg(test)]
+#[path = "transport/tls_tests.rs"]
+mod tls_tests;

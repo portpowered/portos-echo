@@ -815,6 +815,8 @@ dependencies = [
  "p256",
  "reqwest",
  "rustix",
+ "rustls",
+ "rustls-native-certs",
  "serde_json",
  "sha2",
  "tempfile",
