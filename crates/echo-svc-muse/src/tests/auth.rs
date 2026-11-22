@@ -12,6 +12,7 @@ use tokio::sync::{Notify, watch};
 use tokio_tungstenite::{WebSocketStream, tungstenite::http::StatusCode};
 
 use crate::{
+    MuseLink, MuseService as _, ServiceError, ServiceState,
     api::{Connector, Lease, Network, RefreshError, UpgradeError},
     clock::Clock,
     link::OsRandom,
@@ -19,9 +20,7 @@ use crate::{
     trust,
 };
 
-use super::{
-    Fake, MuseLink, MuseService as _, Pki, ServiceError, ServiceState, assert_catalogue, fake::Vm, write_pairing,
-};
+use super::{Fake, Pki, assert_catalogue, fake::Vm, write_pairing};
 
 const SAVED_AT: u64 = 1_700_000_000;
 const ROTATION_BOUNDARY: u64 = SAVED_AT + 10_800;
