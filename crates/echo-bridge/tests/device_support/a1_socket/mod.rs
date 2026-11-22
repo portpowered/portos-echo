@@ -62,21 +62,7 @@ async fn observe_wire(setup: &mut Fixture, satellite: &fixture::Satellite) {
     satellite.signal("-USR1").await;
     let wake = peer.next("run-pipeline").await;
     assert_eq!(wake.data.unwrap()["wake_word_name"], "alexa");
-    let mut audio = peer.next("audio-chunk").await;
-    // The existing wire starts with silent lead-in. The native gain stage
-    // changes amplitude but preserves the fixture's alternating PCM polarity.
-    timeout(LIMIT, async {
-        while !audio.payload.chunks_exact(4).any(alternating_samples) {
-            audio = peer.next("audio-chunk").await;
-        }
-    })
-    .await
-    .unwrap();
-    let sample = audio
-        .payload
-        .chunks_exact(4)
-        .find(|samples| alternating_samples(samples))
-        .unwrap();
+    let (audio, sample) = capture(&mut peer).await;
     let format = audio.data.unwrap();
     assert_eq!(
         (
@@ -88,29 +74,49 @@ async fn observe_wire(setup: &mut Fixture, satellite: &fixture::Satellite) {
     );
     assert_eq!(audio.header.payload_length, audio.payload.len());
     assert_eq!(audio.payload.len() % 2, 0);
+    assert_mute(setup, &mut peer).await;
+    writeln!(io::stdout(), "AF_UNIX speaker->info(name={NAME})->run-pipeline->audio-chunk header={:?} data={format} s16le sample={sample:02x?}; muted=true then pong, zero intervening audio chunks", audio.header).unwrap();
+}
+
+async fn capture(peer: &mut Peer<UnixStream>) -> (Event, [u8; 4]) {
+    // The existing wire starts with silent lead-in. The native gain stage
+    // changes amplitude but preserves the fixture's alternating PCM polarity.
+    timeout(LIMIT, async {
+        loop {
+            let audio = peer.next("audio-chunk").await;
+            if let Some(sample) = alternating_samples(&audio.payload) {
+                return (audio, sample);
+            }
+        }
+    })
+    .await
+    .expect("capture contains the alternating PCM fixture")
+}
+
+async fn assert_mute(setup: &mut Fixture, peer: &mut Peer<UnixStream>) {
     setup.toggle_mic();
     let mute = timeout(LIMIT, async {
         loop {
             let event = peer.read().await;
-            match event.header.r#type.as_str() {
-                "hassmic-mute" => break event,
-                "audio-chunk" => (),
-                kind => panic!("unexpected event before mute: {kind}"),
+            if event.header.r#type != "audio-chunk" {
+                break event;
             }
         }
     })
     .await
     .unwrap();
+    assert_eq!(mute.header.r#type, "hassmic-mute");
     assert_eq!(mute.data, Some(json!({"muted":true})));
     peer.send("ping").await;
     peer.next("pong").await;
-    writeln!(io::stdout(), "AF_UNIX speaker->info(name={NAME})->run-pipeline->audio-chunk header={:?} data={format} s16le sample={sample:02x?}; muted=true then pong, zero intervening audio chunks", audio.header).unwrap();
 }
 
-fn alternating_samples(bytes: &[u8]) -> bool {
-    let a = i16::from_le_bytes([bytes[0], bytes[1]]);
-    let b = i16::from_le_bytes([bytes[2], bytes[3]]);
-    a.signum() * b.signum() == -1 && (i32::from(a) + i32::from(b)).abs() <= 4
+fn alternating_samples(bytes: &[u8]) -> Option<[u8; 4]> {
+    bytes.as_chunks::<4>().0.iter().copied().find(|&[al, ah, bl, bh]| {
+        let a = i16::from_le_bytes([al, ah]);
+        let b = i16::from_le_bytes([bl, bh]);
+        a.signum() * b.signum() == -1 && (i32::from(a) + i32::from(b)).abs() <= 4
+    })
 }
 
 #[tokio::test]
@@ -384,18 +390,17 @@ fn event_count(path: &Path, event: &str) -> usize {
 }
 
 async fn wait_trace(path: &Path, event: &str, count: usize) {
-    timeout(LIMIT, async {
+    let observed = timeout(LIMIT, async {
         while event_count(path, event) < count {
             tokio::time::sleep(POLL_INTERVAL).await;
         }
     })
-    .await
-    .unwrap_or_else(|_| {
-        panic!(
-            "waiting for {count} {event} events, observed {}",
-            event_count(path, event)
-        )
-    });
+    .await;
+    assert!(
+        observed.is_ok(),
+        "waiting for {count} {event} events, observed {}",
+        event_count(path, event)
+    );
 }
 
 struct Peer<T> {

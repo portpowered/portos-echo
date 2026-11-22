@@ -123,17 +123,17 @@ pub(super) struct Satellite {
 impl Satellite {
     pub(super) async fn wait_for_log(&mut self, marker: &str) {
         let mut observed = Vec::new();
-        timeout(LIMIT, async {
+        let found = timeout(LIMIT, async {
             while let Some(line) = self.logs.next_line().await.unwrap() {
                 if line.contains(marker) {
-                    return;
+                    return true;
                 }
                 observed.push(line);
             }
-            panic!("satellite exited before {marker}: {observed:?}");
+            false
         })
-        .await
-        .unwrap_or_else(|_| panic!("satellite deadline for {marker}: {observed:?}"));
+        .await;
+        assert_eq!(found.ok(), Some(true), "satellite readiness for {marker}: {observed:?}");
     }
 
     pub(super) async fn signal(&self, signal: &str) {
