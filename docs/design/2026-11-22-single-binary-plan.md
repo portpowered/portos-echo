@@ -230,8 +230,8 @@ it ever runs, follows hassmic's method.
   path. Each release publishes a `screenpacks.json` index with the name, version, asset URL, SHA-256, a preview
   still and the licence of every pack. **Settings > Screen packs** fetches the index from the latest release and shows
   a gallery with a search box. One tap downloads, checks the digest from the index and switches to the pack. The
-  index's own authenticity is an owner question (section 9): HTTPS to GitHub alone, or a signature by a release key
-  built into `echo-bridge`.
+  owner decided (2026-11-22) that the index is trusted on HTTPS to GitHub alone ("trust github"): no release-key
+  signature. Each pack is still checked against the SHA-256 the index gives for it.
 - **Wi-Fi on the Echo.** hassmic's settings page owned "Switch network" (fork `scripts/device/wifi.sh` and
   `wifictl.dex`, which calls Android 9's `IWifiManager` as uid 1000). When hassmic goes away, **Settings > Wi-Fi**
   takes over: scan, join with a password, forget. The device role runs the same `IWifiManager` calls; whether it
@@ -307,9 +307,6 @@ P1 and P3 are independent, and P2 needs P1. P4 needs P3, and P5 needs P4.
    camera? The 2026-11-18 decision chose no approval UI for notes.
 8. **Bridge notes tools.** Retire them once file tools work, or keep them as the safe default?
 9. **On-device updates.** Should the Echo fetch signed releases itself, or does `echo-setup update` stay the only path?
-
-Added 2026-11-22: should the pack index be trusted on HTTPS to GitHub alone, or signed by a release key built into
-`echo-bridge`?
 
 ## 10. Evaluation against the owner's architecture draft
 
