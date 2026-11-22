@@ -111,13 +111,16 @@ async fn configured_call_options_include_context_and_preserve_policy() {
         .voice
         .conversation((&text, "live snapshot"), options.host.deadline);
     assert_eq!(call.call.prompt, "live snapshot");
-    assert!(
-        options
-            .voice
-            .call
-            .prompt
-            .contains("Waiting and ending are background-agent tasks")
-    );
+    let prompt = &options.voice.call.prompt;
+    // The delegate-first rules lead; the backchannel, informal and patient guidance follows.
+    let order = [
+        "Waiting and ending are background-agent tasks",
+        "Speaking style: Keep it casual and conversational.",
+        "Backchannel policy: Use moderate backchannels.",
+        "Patience: Don't rush the user.",
+    ]
+    .map(|phrase| prompt.find(phrase));
+    assert!(order.iter().all(Option::is_some) && order.is_sorted());
     assert_eq!(options.voice.call.prompt, echo_config::LIVE_INSTRUCTIONS);
     assert_eq!(
         call.call.instructions,

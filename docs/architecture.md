@@ -533,7 +533,12 @@ also maps "hold on" to one `extend_session` call with the requested seconds. The
 waiting and ending as background-agent tasks the voice delegates first, with the user's exact words,
 every time, speaking only after the delegation: after an answered question the Echo's voice otherwise
 answered a hold or an end with speech alone (2026-11-21). The default voice prompt keeps conversation
-with the voice but no longer argues against a hand-off.
+with the voice but no longer argues against a hand-off. After its delegate-first rules it follows the
+section order of OpenAI's Live prompting guide: a casual speaking style, a moderate backchannel policy
+(short, varied listening sounds such as "mm-hm" at natural pauses, never a turn of their own), an
+interruption policy, patience (pauses, false starts and a requested wait are left alone) and the
+delegation policy (owner, 2026-11-21). The bridge plays those backchannels during a user turn (ADR 0024),
+so the voice guidance says a listening sound is not a reply and may come before the delegation.
 An applied `end_session` ends the run at once: the bridge drops the delegation it waited for, cuts a
 reply opened for the turn that has not spoken yet (an audible farewell plays out first) and interrupts
 the running delegated turn (best effort: a missed acknowledgement cancels the request and keeps the
