@@ -359,18 +359,18 @@ trait Subsystem {
     fn next_deadline(state: &Self::State) -> Option<Instant>;
     fn check(state: &Self::State) -> Result<(), Broken>; // invariants, run after every step in tests
 }
-// The core loop. Shells are async tasks that turn IO into Events and apply Commands without waiting.
+// The core loop. Services are async tasks that turn IO into Events and apply Commands without waiting.
 loop {
     let event = inbox.next_until(world.next_deadline()).await; // the only await
     world.step(&event, &mut commands); // fixed order, below
-    shells.apply(&mut commands);       // try_send into bounded shell queues; never waits
+    services.apply(&mut commands);       // try_send into bounded service queues; never waits
     world.check()?;                    // tests and `--checks` builds
 }
 ```
 
 Subsystems, in the fixed step order. The order is fixed so that one recording always gives the same result:
 
-| Subsystem | Today's state it takes (1.4.8) | Shell it keeps outside | Track |
+| Subsystem | Today's state it takes (1.4.8) | Service it talks to | Track |
 | --- | --- | --- | --- |
 | Device | mute, speaker state, run and capture state now in the `echo-wyoming` `Client` | Wyoming, later the device role's socket | A1 |
 | Session and turn | `Controller`, `Grants`, run fields of `Source`, `voice_wait` deadlines, `Barge`, `Floor` | none | A2 |
@@ -380,7 +380,7 @@ Subsystems, in the fixed step order. The order is fixed so that one recording al
 | Tools | `ToolSession::work`, `Ledger`, `ToolBudget` | tool executors, exec role | B1 |
 | Port OS | `Grant` status, endpoint `View` | gateway WebSocket, MCP HTTP | B2 |
 | Screen and presentation | `Presentation`'s `Projection`, `UiState` | screen server, SSE | C1 |
-| Timers | new: the core tick (10.2) and persistent timers (10.3, answer 5) | timer store file | B2 |
+| Timers | new: the core tick (10.2) and the deadlines due from the cron service | the cron service | B2 |
 | Trace | new: a row ring | a writer task that drains it | A1 |
 
 **Against today.** Today the voice owner is one composed future (1.4.2). Its state already sits in structs, but
@@ -392,12 +392,12 @@ never crosses an `.await`, so the borrow problems that drove the task-locals go 
 **Trade-offs.**
 
 - *Generics, not `dyn`.* The set of subsystems is fixed and known at compile time. Concrete fields and static calls
-  inline, allocate nothing and show the order in one function. `dyn` stays at the IO shells, where tests already
+  inline, allocate nothing and show the order in one function. `dyn` stays at the services, where tests already
   swap fakes through `EchoLink`, `MediaPeer` and `LinkConnector`.
 - *No ECS or plugin loader.* About ten subsystems, each with different state, do not need entity storage or a
   scheduler. A framework is the "large custom runtime" the owner wants to avoid. One trait and one `step` function
   are enough to read.
-- *Shells feed one ordered inbox.* PCM travels by value (`PcmFrame` is `Copy`, 640 bytes) through fixed rings like
+- *Services feed one ordered inbox.* PCM travels by value (`PcmFrame` is `Copy`, 640 bytes) through fixed rings like
   today's `media_queue.rs` `Queue`. Control events travel on a bounded `mpsc`. Deadlines come from
   `World::next_deadline()`, so 1.4.4's pattern stays, but in one place.
 - *Cost.* The largest and riskiest change is reshaping the voice owner's awaits into commands. It is done one
@@ -425,12 +425,12 @@ not measured; the measured arrival gaps were not CPU-bound (decision of 2026-11-
 Mute and barge-in checks already allocate nothing (flags and `Instant`s), and stay that way. Sessions and tool calls
 get generational indices in fixed slots instead of `String`-keyed state. The owner decided (2026-11-22): a small
 in-house slot table (a `Vec` of entries, a free list and a generation per slot), no slab crate, owned by the
-session and turn subsystem. Other subsystems hold only its handles.
+session controller service (the loop control plane below). Subsystems and other services hold only its handles.
 
 **What cannot live in `World`.** webrtc-rs's ICE, DTLS, SRTP and its tasks; the Codex app server's threads, rollouts
 and auth, even in-process (B1); OS handles (sockets, files, the device role's audio handles in its own process); and
 credentials, which stay in their private stores and are redacted from every snapshot. `World` holds their ids and
-observed states; the shells hold the handles.
+observed states; the services hold the handles.
 
 **Clocks, determinism and replay.**
 
@@ -442,29 +442,44 @@ observed states; the shells hold the handles.
 - *A simulated playback clock* in the device subsystem models frames written, depth, and `played` at depth plus
   `TAIL_MS`. Pacer holds and lip sync then run on synthetic time; today the pacer turns its adaptive hold off under
   the sim clock (`reply_playout.rs`), so sims never exercise it.
-- *Record and replay.* Each shell stamps its events with the tick and appends them to a recording. A replay feeds
+- *Record and replay.* Each service stamps its events with the tick and appends them to a recording. A replay feeds
   the same events, clock and seed into a fresh `World`, and `World::snapshot()` is diffed per tick; a failing test
   prints the first diff. Recordings hold PCM and transcripts, so they stay local, like the private traces.
 - *Fences.* Two workers make interleaving vary, so determinism runs use a current-thread runtime with the paused
   clock. webrtc-rs already takes its sleeps and `now` from Tokio (`media_runtime.rs`), but packet arrival and DTLS
   are not reproducible, so replay swaps the peer for a recorded `MediaPeer`. The Codex app server keeps its own clock
-  and HTTP, so replay records at the `codex-app-server-client` channel. Sockets are recorded at their shells.
+  and HTTP, so replay records at the `codex-app-server-client` channel. Sockets are recorded at their services.
 
 **Recommendation.** Build `World` and the plain `Subsystem` trait with static dispatch, synchronous steps and async
-IO shells. Bring it in subsystem by subsystem with the A, B and C tracks. Preallocate the audio path and gate it with
-a zero-allocation test. Inject one `Clock` and one `Rng`, and add record and replay at the shell boundary. Do not
+services. Bring it in subsystem by subsystem with the A, B and C tracks. Preallocate the audio path and gate it with
+a zero-allocation test. Inject one `Clock` and one `Rng`, and add record and replay at the service boundary. Do not
 build a global arena, `bumpalo` scratch or an ECS. Make no memory claim until B0 has measured RSS.
+
+**Terms (owner, 2026-11-22).** These words mean one thing each in this plan:
+
+- **Core loop.** It consumes events and buffers, and it is composed of subsystems, stepped in a fixed order.
+- **Subsystem.** A pure step unit inside the core loop (the trait above): its own `World` slice, events in and
+  commands out, no IO. Subsystems exist only inside the loop.
+- **Loop control plane, the session controller service.** It constructs the core loop: it builds `World`, registers
+  the subsystems in their order, wires the services' inboxes and command queues, starts and stops the loop, and
+  owns the session slot table. It is a service, not a subsystem.
+- **Service.** Everything else with a life of its own: the device link (later the device role), the media peer, the
+  Codex app server, the Port OS gateway, the screen server, the trace writer, and the cron service, which owns
+  persistent timers and schedules and posts "due" events into the loop. Services are not subsystems. Each one has
+  its own crate, does the IO, and talks to the loop only through `echo-core-api` events and commands. The cron
+  service is the owner's example of a service. Inside the loop, the timers subsystem only reacts to its "due"
+  events and to the core tick.
 
 **Ownership and boundaries (owner, 2026-11-22).** Each subsystem is the strong owner of one interface, and nothing
 crosses between subsystems except through those interfaces:
 
 - **One owner per interface.** A subsystem owns its state, the events it accepts and the commands it emits. Only
   the owner mutates its state. Others read it through the owner's published view, a small `Copy` or snapshot type,
-  never by reaching into its fields. Examples: the session subsystem owns the slot table and session handles, the
+  never by reaching into its fields. Examples: the session controller owns the slot table and session handles, the
   device subsystem owns mute and speaker state, and the pacer owns the reply ring.
-- **Buffer readers talk to owners, not to each other.** The IO shells that read sockets and rings (Wyoming, media,
+- **Buffer readers talk to owners, not to each other.** The services that read sockets and rings (Wyoming, media,
   Codex, Port OS, screen) turn what they read into events addressed to the owning subsystem. They apply only the
-  commands that subsystem emits. No shell calls another shell or another subsystem.
+  commands that subsystem emits. No service calls another service or another subsystem.
 - **Cross-subsystem traffic goes through the core loop.** When one subsystem needs another to act, it emits a
   typed command or event declared in the shared interface crate, and the loop delivers it in the fixed step order.
   There are no direct calls, no shared `Arc<Mutex>` and no back channels between subsystems. That keeps every
@@ -472,15 +487,17 @@ crosses between subsystems except through those interfaces:
 - **Enforced by crates.** The interface types (`Event`, `Command`, handles, views and the `Subsystem` trait) live in
   one crate, `echo-core-api`, with no IO dependencies. Each subsystem is its own crate (`echo-sub-device`,
   `echo-sub-session`, `echo-sub-pacer` and so on) that depends on `echo-core-api` and its own libraries, never on
-  another subsystem crate. Only the composition crate (the core loop) depends on all of them. An xtask check reads
-  `cargo metadata` in CI and fails if any subsystem crate depends on another subsystem crate or on a shell crate,
-  or if a shell crate depends on a subsystem crate. The check lands with the first subsystem in A1, so every later
+  another subsystem crate. Each service is its own crate too (`echo-svc-cron`, `echo-svc-portos` and so on),
+  depending on `echo-core-api` and never on a subsystem crate or another service crate. Only the session
+  controller's crate, which composes the loop, depends on all of them. An xtask check reads
+  `cargo metadata` in CI and fails if any subsystem crate depends on another subsystem crate or on a service crate,
+  or if a service crate depends on a subsystem crate. The check lands with the first subsystem in A1, so every later
   subsystem is born inside the rule.
 
 | Changes | Stays |
 | --- | --- |
 | Run, pacer, call, delegation, tool, Port OS and screen state move into `World` fields | The Tokio runtime, 2 workers, bounded queues and the paused test clock |
-| `select!` branches become events and steps; awaits inside steps become commands | The Wyoming subset, `EchoLink`, `MediaPeer` and the other IO traits as shell seams |
+| `select!` branches become events and steps; awaits inside steps become commands | The Wyoming subset, `EchoLink`, `MediaPeer` and the other IO traits as service seams |
 | Task-locals and direct `SystemTime::now()` reads go | Deadlines as `Instant`s, now gathered in `next_deadline()` |
 | Per-frame `Vec`s become ring slots; traces leave the hot path | `PcmFrame`, 20 ms framing, the resamplers and Opus |
 | Tests assert on `World::check()` and one snapshot diff | Trace rows and sim artifacts, as the T5 and operator view |
@@ -670,7 +687,7 @@ the phases' own:
   check, and a failing test prints one `World` diff. Clippy finds no direct `SystemTime::now()` outside the clock.
 - **A2:** the session, pacer and call subsystems, and the preallocated audio path. A T3 bench with a counting global
   allocator asserts zero allocations per frame in the core's steps after warm-up, across capture, uplink, downlink,
-  pacing, playback, mute and barge-in. Allocations in fenced shells (webrtc-rs, Tokio) are reported, not asserted.
+  pacing, playback, mute and barge-in. Allocations in fenced services (webrtc-rs, Tokio) are reported, not asserted.
 - **B1:** the delegation and tool subsystems. A recorded call replays on the current-thread paused clock, and two
   replays give an empty per-tick `World` diff.
 - **B2:** the Port OS and timer subsystems; the core tick runs as `on_tick`.
