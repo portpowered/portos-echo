@@ -50,15 +50,13 @@ instance() {
   # After the comm in /proc/PID/stat, ppid and starttime are fields 2 and 20.
   IFS= read -r record <"$1/stat" || return 1
   case "$record" in "$2 (hassmic) "*) ;; *) return 1 ;; esac
-  fields=${record#*) }
-  set -f
-  # Splitting the kernel's space-delimited numeric fields is intentional.
-  # shellcheck disable=SC2086
-  set -- $fields
-  set +f
-  [ "$#" -ge 20 ] && [ "$1" != Z ] && [ "$1" != X ] || return 1
-  parent=$2
+  IFS=' ' read -r state parent _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ start _ <<EOF
+${record#*) }
+EOF
+  [ "$state" != Z ] && [ "$state" != X ] || return 1
+  case "$start" in '' | *[!0-9]*) return 1 ;; esac
   case "$parent" in '' | *[!0-9]* | 0 | 1) return 1 ;; esac
+  [ "$(stat -c '%u' "/proc/$parent")" = 0 ] || return 1
   command=$(proc_argv "/proc/$parent") || return 1
   # The pinned boot.sh execs sh with one of these scripts; runas execs its child.
   case "$command" in
@@ -69,7 +67,7 @@ $base/ota/current/main.sh
 satellite") ;;
     *) return 1 ;;
   esac
-  printf '%s:%s\n' "$parent" "${20}"
+  printf '%s:%s\n' "$parent" "$start"
 }
 
 select_child() {
