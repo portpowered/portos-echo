@@ -1,11 +1,12 @@
 //! T3 against a prebuilt echo-bridge copied as hassmic in an isolated namespace.
 
 #![cfg(target_os = "linux")]
+#![cfg(test)]
 
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::{Ipv4Addr, Shutdown, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
