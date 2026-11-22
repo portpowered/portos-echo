@@ -89,9 +89,19 @@ impl MuseLink {
 
     fn spawn(
         runtime: &tokio::runtime::Handle,
+        pairing: pairing::Pairing,
+        connector: impl api::Connector,
+        tasks: tasks::Tasks,
+    ) -> Self {
+        Self::spawn_with(runtime, pairing, connector, tasks, control::Handler::default())
+    }
+
+    fn spawn_with(
+        runtime: &tokio::runtime::Handle,
         mut pairing: pairing::Pairing,
         connector: impl api::Connector,
         tasks: tasks::Tasks,
+        handler: control::Handler,
     ) -> Self {
         let (state_sink, state) = watch::channel((ServiceState::Connecting, None));
         let (endpoint_sink, endpoint) = watch::channel(None);
@@ -103,16 +113,19 @@ impl MuseLink {
                 &mut pairing,
                 &connector,
                 &worker_tasks,
+                &handler,
                 &state_sink,
                 &endpoint_sink,
                 stop_requested,
             )
             .await;
-            drop(pairing);
+            endpoint_sink.send_replace(None);
             let status = match result {
+                Ok(ServiceState::PairingRemoved) => (ServiceState::PairingRemoved, pairing.remove().err()),
                 Ok(status) => (status, None),
                 Err(error) => (ServiceState::Disconnected, Some(error)),
             };
+            drop(pairing);
             state_sink.send_replace(status);
         });
         Self {
@@ -158,7 +171,7 @@ impl MuseService for MuseLink {
         let endpoint = self.connected().ok_or(ServiceError::NotReady)?;
         let submission = self.tasks.prepare(&task)?;
         let permit = endpoint.reserve().await.map_err(|_| ServiceError::NotReady)?;
-        if *self.stop.borrow() {
+        if endpoint.is_closed() || *self.stop.borrow() {
             return Err(ServiceError::NotReady);
         }
         self.tasks.admit(&submission)?;
@@ -199,6 +212,9 @@ impl MuseService for MuseLink {
             *worker = None;
             result.map_err(|_| ServiceError::PeerUnavailable)?;
         }
-        Ok(())
+        match *self.state.borrow() {
+            (ServiceState::PairingRemoved, Some(error)) => Err(error),
+            _ => Ok(()),
+        }
     }
 }

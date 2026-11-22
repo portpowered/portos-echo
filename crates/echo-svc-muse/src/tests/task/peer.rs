@@ -8,8 +8,8 @@ use crate::{
 
 use super::{Fake, Vm};
 
-pub(super) struct Chat {
-    pub(super) stream: i64,
+pub(in crate::tests) struct Chat {
+    pub(in crate::tests) stream: i64,
     pub(super) session: String,
 }
 
@@ -22,9 +22,13 @@ impl Chat {
 
 pub(super) async fn connect(fake: &Fake, link: &MuseLink) -> (Vm, i64) {
     fake.lookup().await;
-    let mut vm = fake.vm().await;
+    register(fake.vm().await, link).await
+}
+
+pub(in crate::tests) async fn register(mut vm: Vm, link: &MuseLink) -> (Vm, i64) {
     let control = vm.read_control_request().await;
     let register = vm.read_register(control).await;
+    super::super::assert_catalogue(&register);
     vm.control_response(control, 200).await;
     vm.register_ack(control, &register["id"], true).await;
     assert_eq!(link.wait_registered().await, Ok(()));
@@ -113,7 +117,7 @@ pub(super) async fn invoke(
     vm.read_register(control_id).await
 }
 
-pub(super) async fn expect_reset(vm: &mut Vm, id: i64) {
+pub(in crate::tests) async fn expect_reset(vm: &mut Vm, id: i64) {
     let frame = vm.next_frame().await;
     assert_eq!(frame.id, id);
     assert_eq!(

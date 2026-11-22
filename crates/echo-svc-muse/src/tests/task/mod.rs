@@ -1,16 +1,17 @@
-mod peer;
+pub(super) mod peer;
 
 use echo_agent_api::Task;
 use echo_contracts::{ids::TaskId, task::TaskEvent};
 use futures_util::FutureExt as _;
 use serde_json::{Value, json};
+use tokio_tungstenite::tungstenite::http::StatusCode;
 
-use crate::{MuseLink, MuseService as _, ServiceError};
+use crate::{MuseLink, MuseService as _, ServiceError, ServiceState};
 
-use self::peer::{Chat, connect, event, expect_reset, invoke, progress, send_ack, send_request, subscribe};
-use super::{Fake, ManualClock, Pki, auth, demo_task, fake::Vm};
+use self::peer::{Chat, connect, event, expect_reset, invoke, progress, register, send_ack, send_request, subscribe};
+use super::{Fake, ManualClock, Pki, auth, demo_task, fake::Vm, wait_state};
 
-const NOW: u64 = 1_700_000_000;
+pub(super) const NOW: u64 = 1_700_000_000;
 
 async fn fixture() -> (Fake, Pki, ManualClock, MuseLink, Vm, i64) {
     let pki = Pki::new();
@@ -21,7 +22,7 @@ async fn fixture() -> (Fake, Pki, ManualClock, MuseLink, Vm, i64) {
     (fake, pki, clock, link, vm, control)
 }
 
-async fn start_chat(fake: &Fake, link: &MuseLink, vm: &mut Vm, task: Task) -> (TaskId, Chat) {
+pub(super) async fn start_chat(fake: &Fake, link: &MuseLink, vm: &mut Vm, task: Task) -> (TaskId, Chat) {
     let (id, chat) = tokio::join!(link.submit(task), async {
         let (send, request) = send_request(vm).await;
         let session = request["session_id"].as_str().unwrap();
@@ -437,4 +438,59 @@ fn assert_refused(value: &Value, id: &str) {
         *value,
         json!({"method":"link.result","id":id,"ok":false,"error":"unknown task_id"})
     );
+}
+
+#[tokio::test]
+async fn t3_recovered_link_delivers_task_and_unpairs() {
+    let pki = Pki::new();
+    let fake = Fake::new(&pki, &pki, "127.0.0.1").await;
+    let link = auth::start(&fake, &pki, &ManualClock::new(NOW));
+    fake.lookup().await;
+    assert!(
+        fake.upgrade("vm%201%26x", "synthetic-default", Some(StatusCode::UNAUTHORIZED))
+            .await
+            .is_none()
+    );
+    fake.leases(
+        "synthetic-access",
+        auth::fresh_lease("replacement", "synthetic-replacement"),
+    )
+    .await;
+    let vm = fake
+        .upgrade("replacement", "synthetic-replacement", None)
+        .await
+        .unwrap();
+    let (mut vm, control) = register(vm, &link).await;
+    auth::idle(&fake);
+    let (id, chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
+    chat.emit(
+        &mut vm,
+        1,
+        "message.assistant",
+        json!({"message_id":"reply","display_text":"Checking the fixture"}),
+    )
+    .await;
+    assert_eq!(
+        link.next_event(&id).await,
+        Ok(Some(progress(&id, "Checking the fixture")))
+    );
+    assert_eq!(
+        invoke(&mut vm, control, "final", &id, "completed", "Fixture read").await,
+        json!({"method":"link.result","id":"final","ok":true,"payload":{"accepted":true,"task_id":id}})
+    );
+    assert_eq!(
+        link.next_event(&id).await,
+        Ok(Some(TaskEvent::Completed {
+            task_id: id.clone(),
+            summary: "Fixture read".into()
+        }))
+    );
+    assert_eq!(link.next_event(&id).await, Ok(None));
+    expect_reset(&mut vm, chat.stream).await;
+    vm.send_control(control, &json!({"type":"evt","event":"link.unpaired"}))
+        .await;
+    vm.expect_closed().await;
+    wait_state(&link, ServiceState::PairingRemoved).await;
+    assert!(!fake.pairing.exists());
+    auth::idle(&fake);
 }

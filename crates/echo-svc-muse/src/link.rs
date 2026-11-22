@@ -52,6 +52,7 @@ pub(super) async fn run<C: Connector>(
     pairing: &mut Pairing,
     connector: &C,
     tasks: &Tasks,
+    handler: &control::Handler,
     state: &State,
     endpoint: &Endpoint,
     mut stop: watch::Receiver<bool>,
@@ -74,13 +75,16 @@ pub(super) async fn run<C: Connector>(
             }
             rotates_at = pairing.saved_at().saturating_add(ROTATE_AFTER);
         }
-        let error = tokio::select! {
+        let outcome = tokio::select! {
             biased;
             _ = stop.changed() => return Ok(ServiceState::Stopped),
             () = clock.wait_until(rotates_at) => continue,
-            error = run_attempt(pairing, connector, tasks, state, endpoint) => error,
+            outcome = run_attempt(pairing, connector, tasks, handler, state, endpoint) => outcome,
         };
         endpoint.send_replace(None);
+        let Err(error) = outcome else {
+            return Ok(ServiceState::PairingRemoved);
+        };
         if state.borrow().0 == ServiceState::Registered {
             delay = FIRST_RETRY;
         }
@@ -111,10 +115,7 @@ async fn rotate(
             pairing.replace_tokens(tokens, clock.now())?;
             Ok(Rotation::Replaced)
         }
-        Err(RefreshError::Revoked) => {
-            pairing.remove()?;
-            Ok(Rotation::Removed)
-        }
+        Err(RefreshError::Revoked) => Ok(Rotation::Removed),
         Err(RefreshError::Unavailable) => Err(ServiceError::PeerUnavailable),
     }
 }
@@ -123,22 +124,20 @@ async fn run_attempt<C: Connector>(
     pairing: &Pairing,
     connector: &C,
     tasks: &Tasks,
+    handler: &control::Handler,
     state: &State,
     endpoint: &Endpoint,
-) -> ServiceError {
-    let result = timeout(START_TIMEOUT, establish(pairing, connector, &*tasks.random)).await;
-    let (mut link, pending) = match result {
-        Ok(Ok(link)) => link,
-        Ok(Err(error)) => return error,
-        Err(_) => return ServiceError::PeerUnavailable,
+) -> Result<(), ServiceError> {
+    let (mut link, registration) = timeout(START_TIMEOUT, establish(pairing, connector, &*tasks.random))
+        .await
+        .map_err(|_| ServiceError::PeerUnavailable)??;
+    let Registration::Accepted(pending) = registration else {
+        return Ok(());
     };
     let (commands, receiver) = mpsc::channel(16);
     endpoint.send_replace(Some(commands));
     state.send_replace((ServiceState::Registered, None));
-    match link.registered(tasks, pairing, receiver, pending).await {
-        Err(error) => error,
-        Ok(()) => ServiceError::PeerUnavailable,
-    }
+    link.registered(tasks, pairing, handler, receiver, pending).await
 }
 
 async fn connect<C: Connector>(pairing: &Pairing, connector: &C) -> Result<C::Socket, ServiceError> {
@@ -160,7 +159,7 @@ async fn establish<C: Connector>(
     pairing: &Pairing,
     connector: &C,
     random: &dyn Random,
-) -> Result<(ControlLink<C::Socket>, Vec<serde_json::Value>), ServiceError> {
+) -> Result<(ControlLink<C::Socket>, Registration), ServiceError> {
     let mut socket = connect(pairing, connector).await?;
     let mut bytes = [0; 32];
     random.fill(&mut bytes)?;
@@ -196,6 +195,11 @@ struct ControlLink<S> {
     assembler: Assembler,
 }
 
+enum Registration {
+    Accepted(Vec<serde_json::Value>),
+    Removed,
+}
+
 trait Socket: Sink<Message, Error = Error> + Stream<Item = Result<Message, Error>> + Unpin {}
 impl<S> Socket for S where S: Sink<Message, Error = Error> + Stream<Item = Result<Message, Error>> + Unpin {}
 
@@ -223,13 +227,17 @@ impl<S: Socket> ControlLink<S> {
         Ok(link)
     }
 
-    async fn register(&mut self) -> Result<Vec<serde_json::Value>, ServiceError> {
+    async fn register(&mut self) -> Result<Registration, ServiceError> {
         loop {
             let (_, body) = self.receive().await?;
+            // Removal applies even when the VM has not acknowledged registration yet.
             let mut messages = self.decode_control(body)?.into_iter();
             for message in &mut messages {
+                if control::unpaired(&message) {
+                    return Ok(Registration::Removed);
+                }
                 match control::register_ack(&message) {
-                    Some(true) => return Ok(messages.collect()),
+                    Some(true) => return Ok(Registration::Accepted(messages.collect())),
                     Some(false) => return Err(ServiceError::NotReady),
                     None => {}
                 }
@@ -241,47 +249,63 @@ impl<S: Socket> ControlLink<S> {
         &mut self,
         tasks: &Tasks,
         pairing: &Pairing,
+        handler: &control::Handler,
         mut commands: mpsc::Receiver<Command>,
         pending: Vec<serde_json::Value>,
     ) -> Result<(), ServiceError> {
         let mut chats = Chats::default();
-        self.handle_control(tasks, &mut chats, pending).await?;
+        let mut invokes = control::Invocations::new(handler, tasks);
+        if self.handle_control(&mut invokes, pending).await? {
+            return Ok(());
+        }
         loop {
             tokio::select! {
                 frame = self.receive() => {
                     let (id, body) = frame?;
                     if id == self.control_id {
                         let messages = self.decode_control(body)?;
-                        self.handle_control(tasks, &mut chats, messages).await?;
+                        if self.handle_control(&mut invokes, messages).await? {
+                            return Ok(());
+                        }
                     } else {
                         chats.receive(self, tasks, id, body).await?;
                     }
                 }
                 Some(command) = commands.recv() => chats.command(self, tasks, pairing.node_id(), command).await?,
                 () = Chats::wait(tasks, chats.deadline()) => chats.expire(self, tasks).await?,
+                reply = invokes.next() => {
+                    let data = control::encode_result(reply.message).map_err(|_| ServiceError::PeerUnavailable)?;
+                    self.send_control_data(data).await?;
+                    if let Some(task) = reply.task {
+                        chats.end_task(self, &task).await?;
+                    }
+                }
             }
         }
     }
 
     async fn handle_control(
         &mut self,
-        tasks: &Tasks,
-        chats: &mut Chats,
+        invokes: &mut control::Invocations<'_>,
         messages: Vec<serde_json::Value>,
-    ) -> Result<(), ServiceError> {
-        for mut message in messages {
-            if let Some((result, task)) = control::invoke(&mut message, tasks) {
-                self.send_control(&result).await?;
-                if let Some(id) = task {
-                    chats.end_task(self, &id).await?;
-                }
+    ) -> Result<bool, ServiceError> {
+        if messages.iter().any(control::unpaired) {
+            return Ok(true);
+        }
+        for message in messages {
+            if let Some(reply) = invokes.admit(message) {
+                self.send_control(&reply.message).await?;
             }
         }
-        Ok(())
+        Ok(false)
     }
 
     async fn send_control(&mut self, value: &serde_json::Value) -> Result<(), ServiceError> {
         let data = control::encode(value).map_err(|_| ServiceError::PeerUnavailable)?;
+        self.send_control_data(data).await
+    }
+
+    async fn send_control_data(&mut self, data: Vec<u8>) -> Result<(), ServiceError> {
         self.send(&Frame {
             id: self.control_id,
             body: Body::Chunk { data, end_body: false },

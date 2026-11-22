@@ -25,6 +25,19 @@ registers again. An incomplete or uncertain refresh ends that instance and
 preserves the previously committed pairing. A refresh rejected with HTTP 401
 removes the pairing and leaves the service in `PairingRemoved`.
 
+The control link runs up to four report invocations at a time. If all are
+busy, waiting requests start in arrival order and excess requests receive an
+error. Control result output is limited to 96 KiB after JSON escaping, within
+the 256 KiB control frame limit. This limit leaves the accepted task summary
+intact.
+
+Either `link.unpaired` or `node.unpaired` closes the connection, discards
+in-flight and waiting invocations, and removes the private pairing. The
+instance stays in `PairingRemoved` and refuses submissions. If removal fails,
+`stop` reports a storage error. Operator stop also releases the connection
+and discards invocation work, and keeps the pairing available for a new
+instance. Pending tasks keep their original deadlines.
+
 `MuseLink::start` also takes a separate caller-owned task snapshot path. The
 service commits each task ID, side-chat UUID and absolute deadline before it
 sends the prompt. Assistant text from the acknowledged side chat yields

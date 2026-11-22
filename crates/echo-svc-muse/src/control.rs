@@ -1,16 +1,19 @@
+mod invokes;
+
 use serde_json::{Value, json};
 
-use crate::{
-    ServiceError,
-    tasks::{Report, Tasks},
-    wire::InvalidWire,
-};
-use echo_contracts::ids::TaskId;
+use crate::wire::InvalidWire;
+
+#[cfg(test)]
+pub(super) use invokes::HeldInvoke;
+pub(super) use invokes::{Handler, Invocations};
 
 const MAX_CONTROL: usize = 256 * 1024;
+const MAX_OUTPUT: usize = 96 * 1024;
 const PREFIX: usize = size_of::<u32>();
 const REGISTER_ID: &str = "reg-1";
 const REPORT: &str = "echo.report.result";
+const REPORT_TIMEOUT_MS: u64 = 15_000;
 
 pub(super) fn registration(node_id: &str) -> Value {
     json!({
@@ -35,7 +38,7 @@ pub(super) fn registration(node_id: &str) -> Value {
                         "summary": {"type": "string", "description": "A short result summary."}
                     },
                     "optional": {},
-                    "timeout_ms": 15000
+                    "timeout_ms": REPORT_TIMEOUT_MS
                 }
             }
         }
@@ -47,36 +50,37 @@ pub(super) fn register_ack(message: &Value) -> Option<bool> {
     response.then(|| message["ok"] == true)
 }
 
-pub(super) fn invoke(message: &mut Value, tasks: &Tasks) -> Option<(Value, Option<TaskId>)> {
-    if message["method"] != "link.invoke" {
-        return None;
-    }
-    let id = message["id"].as_str().filter(|id| !id.is_empty())?.to_owned();
-    let result = report(message, tasks);
-    let (response, task) = match result {
-        Ok(task_id) => (
-            json!({"method":"link.result", "id":id, "ok":true, "payload":{"accepted":true, "task_id":task_id}}),
-            Some(task_id),
-        ),
-        Err(error) => (
-            json!({"method":"link.result", "id":id, "ok":false, "error":error}),
-            None,
-        ),
-    };
-    Some((response, task))
+pub(super) fn unpaired(message: &Value) -> bool {
+    matches!(message["event"].as_str(), Some("link.unpaired" | "node.unpaired"))
 }
 
-fn report(message: &mut Value, tasks: &Tasks) -> Result<TaskId, &'static str> {
-    if message["command"] != REPORT {
-        return Err("unknown command");
+pub(super) fn encode_result(mut value: Value) -> Result<Vec<u8>, InvalidWire> {
+    if let Some(Value::String(output)) = value.get_mut("payload").and_then(|payload| payload.get_mut("output")) {
+        let output = std::mem::take(output);
+        value["payload"]["truncated"] = Value::Bool(false);
+        let envelope_len = serde_json::to_vec(&value).map_err(|_| InvalidWire)?.len() + PREFIX;
+        let budget = MAX_OUTPUT.min(MAX_CONTROL.checked_sub(envelope_len).ok_or(InvalidWire)?);
+        let kept = output_prefix(&output, budget);
+        value["payload"]["truncated"] = Value::Bool(kept.len() != output.len());
+        value["payload"]["output"] = Value::String(kept.to_owned());
     }
-    let params: Report = serde_json::from_value(message["params"].take()).map_err(|_| "invalid report parameters")?;
-    let id = params.task_id.clone();
-    tasks.report(params).map_err(|error| match error {
-        ServiceError::UnknownTask => "unknown task_id",
-        _ => "task storage failed",
-    })?;
-    Ok(id)
+    encode(&value)
+}
+
+fn output_prefix(output: &str, mut budget: usize) -> &str {
+    for (offset, ch) in output.char_indices() {
+        // Match serde_json's UTF-8 string encoding, excluding the surrounding quotes.
+        let encoded = match ch {
+            '"' | '\\' | '\u{8}' | '\t' | '\n' | '\u{c}' | '\r' => 2,
+            '\u{0}'..='\u{1f}' => 6,
+            _ => ch.len_utf8(),
+        };
+        if encoded > budget {
+            return &output[..offset];
+        }
+        budget -= encoded;
+    }
+    output
 }
 
 pub(super) fn encode(value: &Value) -> Result<Vec<u8>, InvalidWire> {

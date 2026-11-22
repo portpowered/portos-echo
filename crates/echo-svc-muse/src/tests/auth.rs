@@ -14,6 +14,7 @@ use tokio_tungstenite::{WebSocketStream, tungstenite::http::StatusCode};
 use crate::{
     MuseLink, MuseService as _, ServiceError, ServiceState,
     api::{Connector, Lease, Network, RefreshError, UpgradeError},
+    control::Handler,
     link::OsRandom,
     pairing::{Pairing, Tokens},
     tasks::Tasks,
@@ -26,13 +27,18 @@ const SAVED_AT: u64 = 1_700_000_000;
 const ROTATION_BOUNDARY: u64 = SAVED_AT + 10_800;
 
 pub(super) fn start(fake: &Fake, pki: &Pki, clock: &ManualClock) -> MuseLink {
+    start_with(fake, pki, clock, Handler::default())
+}
+
+pub(super) fn start_with(fake: &Fake, pki: &Pki, clock: &ManualClock, handler: Handler) -> MuseLink {
     let pairing = Pairing::open(&fake.pairing).unwrap();
     let connector = Network::new(trust::client_config(&pki.pem).unwrap()).unwrap();
-    MuseLink::spawn(
+    MuseLink::spawn_with(
         &tokio::runtime::Handle::current(),
         pairing,
         connector,
         Tasks::open(&fake.task_path(), clock.clone(), OsRandom::new()).unwrap(),
+        handler,
     )
 }
 
@@ -46,7 +52,7 @@ fn age_pairing(fake: &Fake, already_prefixed: bool) -> Vec<u8> {
     std::fs::read(&fake.pairing).unwrap()
 }
 
-fn fresh_lease(id: &str, token: &str) -> Value {
+pub(super) fn fresh_lease(id: &str, token: &str) -> Value {
     json!([{"vm_ws_url": "wss://127.0.0.1:1", "vm_auth_token": token, "vm_id": id}])
 }
 
@@ -59,7 +65,7 @@ async fn register(vm: &mut Vm, link: &MuseLink) {
     assert_eq!(link.wait_registered().await, Ok(()));
 }
 
-fn idle(fake: &Fake) {
+pub(super) fn idle(fake: &Fake) {
     assert!(fake.api.accept().now_or_never().is_none());
     assert!(fake.vm_listener.accept().now_or_never().is_none());
 }

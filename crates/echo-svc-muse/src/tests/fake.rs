@@ -307,20 +307,34 @@ impl Vm {
     }
 
     pub(super) async fn read_register(&mut self, id: i64) -> Value {
+        self.read_control(id).await.0
+    }
+
+    pub(super) async fn read_control(&mut self, id: i64) -> (Value, usize) {
         let frame = self.next_frame().await;
         assert_eq!(frame.id, id);
         let Body::Chunk { data, end_body: false } = frame.body else {
             panic!("invalid registration stream body");
         };
         let mut decoder = control::Decoder::default();
+        let length = data.len();
         let mut data = data.as_slice();
         let message = decoder.next(&mut data).unwrap().unwrap();
         assert!(data.is_empty());
-        message
+        (message, length)
     }
 
     pub(super) async fn register_ack(&mut self, id: i64, request: &Value, ok: bool) {
-        let data = control::encode(&json!({"type": "res", "id": request, "ok": ok})).unwrap();
+        self.send_control(id, &json!({"type": "res", "id": request, "ok": ok}))
+            .await;
+    }
+
+    pub(super) async fn send_control(&mut self, id: i64, value: &Value) {
+        let data = control::encode(value).unwrap();
+        self.control_bytes(id, data).await;
+    }
+
+    pub(super) async fn control_bytes(&mut self, id: i64, data: Vec<u8>) {
         self.send(&Frame {
             id,
             body: Body::Chunk { data, end_body: false },

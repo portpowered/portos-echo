@@ -1,5 +1,6 @@
 mod auth;
 mod fake;
+mod lifecycle;
 mod task;
 
 use std::{os::unix::fs::PermissionsExt, path::Path};
@@ -17,6 +18,11 @@ use crate::{
 };
 
 use self::fake::{Fake, Pki};
+
+async fn wait_state(link: &MuseLink, expected: ServiceState) {
+    let mut state = link.state.clone();
+    let _ = state.wait_for(|(state, _)| *state == expected).await.unwrap();
+}
 
 #[derive(Clone)]
 pub(super) struct ManualClock(watch::Sender<u64>);
