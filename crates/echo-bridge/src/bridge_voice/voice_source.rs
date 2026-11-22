@@ -94,6 +94,7 @@ pub(super) struct Source {
 impl Source {
     pub fn resume_reply(&mut self) -> Result<(), Error> {
         self.controller.resume()?;
+        self.marks.reopened();
         self.fresh_reply()?;
         self.delegation = self.delegation.carried();
         self.mouth = Mouth::default();

@@ -123,6 +123,7 @@ pub(super) fn expired(source: &mut Source, error: Error) -> Result<(), Error> {
         return Err(error);
     }
     source.follow_up = FollowUp::Unanswered;
+    source.marks.lapsed();
     source.reply.finish()
 }
 

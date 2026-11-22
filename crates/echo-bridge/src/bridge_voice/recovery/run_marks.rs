@@ -7,7 +7,7 @@
 //! the run's no-answer, idle and listen deadlines apply again. Each end of
 //! the latch is also the end of a user turn for the barge-in (`Floor`).
 use crate::bridge_runtime::bridge_pacing::BargeTrigger;
-use crate::bridge_voice::{Error, Notice, Source, UserSpeech};
+use crate::bridge_voice::{Error, Notice, Source, UserSpeech, voice_source::FollowUp};
 use serde_json::{Value, json};
 use std::future::Future;
 use tokio::time::{Duration, Instant};
@@ -68,6 +68,10 @@ pub enum Mark {
     },
     /// The run cap ended a `reply` or a `listen`.
     Capped(&'static str),
+    /// Speech after a settled reply went unanswered and its `window` lapsed:
+    /// `listen` resumed when a speech start expired untranscribed, or
+    /// `no_answer` after the user's end of speech. The run ends unfailed.
+    Lapsed(&'static str),
     /// A barge-in armed by `trigger` cut the reply: the user `turn`'s one cut.
     BargeCut { turn: u32, trigger: BargeTrigger },
     /// The `count`-th sign of user speech over a reply in a `turn` that has
@@ -91,6 +95,7 @@ impl Mark {
         match self {
             Self::Latched { .. } => "speech.latched",
             Self::Capped(_) => "run.capped",
+            Self::Lapsed(_) => "run.lapsed",
             Self::BargeCut { .. } => "barge.cut",
             Self::BargePassed { .. } => "barge.suppressed_in_turn",
             Self::BargeRearmed { .. } => "barge.rearmed",
@@ -111,6 +116,7 @@ impl Mark {
                 "transcribed": transcribed,
             }),
             Self::Capped(during) => json!({ "during": during }),
+            Self::Lapsed(window) => json!({ "window": window }),
             Self::BargeCut { turn, trigger } | Self::BargeLeft { turn, trigger } => {
                 json!({ "turn": turn, "trigger": trigger.name() })
             }
@@ -128,6 +134,8 @@ pub struct Marks {
     since: Option<Instant>,
     heard: Option<Instant>,
     transcribed: bool,
+    /// The wait for an answer is the listen window resumed at an expiry.
+    resumed: bool,
     pending: Vec<Mark>,
 }
 
@@ -149,6 +157,17 @@ impl Marks {
         self.pending.push(Mark::Capped(during));
     }
 
+    /// Speech after a settled reply went unanswered: its window lapsed.
+    pub fn lapsed(&mut self) {
+        let window = if self.resumed { "listen" } else { "no_answer" };
+        self.pending.push(Mark::Lapsed(window));
+    }
+
+    /// A new reply opened with its own no-answer window.
+    pub(in crate::bridge_voice) fn reopened(&mut self) {
+        self.resumed = false;
+    }
+
     pub(in crate::bridge_voice) fn push(&mut self, mark: Mark) {
         self.pending.push(mark);
     }
@@ -160,6 +179,7 @@ impl Source {
     pub fn user_active(&mut self, transcribed: bool) {
         let now = Instant::now();
         self.user_speech = UserSpeech::Active;
+        self.marks.resumed = false;
         self.marks.since.get_or_insert(now);
         self.marks.heard = Some(now);
         self.marks.transcribed |= transcribed;
@@ -174,10 +194,30 @@ impl Source {
     fn quiet(&mut self, reason: &'static str) {
         self.user_speech = UserSpeech::Quiet;
         if let Ok(due) = self.controller.replacement_deadline() {
-            self.answer_due = due;
+            let resumed = (reason == "expired").then(|| self.resumed_listen(due)).flatten();
+            self.marks.resumed = resumed.is_some();
+            self.answer_due = resumed.unwrap_or(due);
         }
         self.marks.release(reason);
         self.turn_ended(reason);
+    }
+
+    /// A speech start after a settled reply expired with no transcript and no
+    /// end of speech: no user turn was taken, so no answer is owed. The listen
+    /// window resumes from the expiry, as from a settled reply, and a granted
+    /// hold still holds; the no-answer window `due` stays the outer bound.
+    /// None while anything answers: delegated work or a reply being spoken.
+    fn resumed_listen(&self, due: Instant) -> Option<Instant> {
+        if self.follow_up != FollowUp::Replied
+            || self.delegation.waiting()
+            || self.controller.speaking()
+            || self.mouth.voiced()
+        {
+            return None;
+        }
+        let window = Instant::now().checked_add(self.session.listen()?)?;
+        let window = self.session.granted().map_or(window, |granted| window.max(granted));
+        Some(window.min(due))
     }
 
     /// When a latched speech start with no transcript since stops counting
