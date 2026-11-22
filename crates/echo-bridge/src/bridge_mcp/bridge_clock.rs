@@ -55,7 +55,7 @@ pub fn execute(settings: Settings) -> Result<(), Error> {
         crate::bridge_time::SIM_TIME
             .scope(
                 clock,
-                receipt::CURRENT.scope(context.clone(), drive(run(settings, commands, context))),
+                receipt::CURRENT.scope(context.clone(), drive(Box::pin(run(settings, commands, context)))),
             )
             .await
     })
