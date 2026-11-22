@@ -24,10 +24,36 @@ Its author asks that it only ever be run by hand from the
 [XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-8-2nd-gen-2021-athena.4804958/),
 never from an installer or another guide, so its commands are not repeated here.
 
-1. Download the unlock's files and `boot-root.zip` from the thread's first post.
-2. Run the unlock exactly as the first post says. **Stop when TWRP shows on the Echo's screen.**
-3. In TWRP, choose **Install**, pick `boot-root.zip`, swipe to confirm, then choose **Reboot > System**.
-4. When Fire OS has started, check root adb from the PC:
+1. **Download** the unlock's files and `boot-root.zip` from the thread's first post onto your PC.
+2. **Unlock.** Run the unlock exactly as the first post says. **Stop when TWRP shows on the Echo's screen.**
+
+   > **TODO screenshot (Echo screen):** TWRP's main menu, the point where you stop the unlock.
+
+3. **Copy `boot-root.zip` to the Echo.** TWRP runs its own adb, so keep the USB cable in. Check that the PC sees it,
+   then send the zip with TWRP's sideload:
+
+   ```sh
+   adb devices                 # one device, state "recovery"
+   ```
+
+   On the Echo, tap **Advanced > ADB Sideload** and swipe to start it. Then, on the PC:
+
+   ```sh
+   adb sideload boot-root.zip  # ends with "Total xfer: 1.00x"; TWRP shows the install log
+   ```
+
+   If sideload is not offered, push the file instead and install it from TWRP's **Install** screen:
+
+   ```sh
+   adb push boot-root.zip /sdcard/boot-root.zip
+   ```
+
+   Then tap **Install**, pick `boot-root.zip` from `/sdcard` and swipe to confirm.
+
+   > **TODO screenshot (Echo screen):** TWRP's ADB Sideload screen, and the log after a successful install.
+
+4. **Reboot.** Tap **Reboot > System**. Fire OS starts as before.
+5. **Check root** from the PC:
 
    ```sh
    adb devices      # exactly one device, state "device"
@@ -38,8 +64,8 @@ Nothing else from the thread or any other firmware project is needed.
 
 ## 2. Install
 
-Connect the Echo over USB and run one line. It checks the release digest, pushes the one file `echo-bridge`, sets
-up its start at boot, installs the screen app from inside that file and reboots the Echo.
+Keep the Echo connected over USB and run one line. The installer checks the release digest, pushes the one file
+`echo-bridge`, sets up its start at boot, installs the screen app from inside that file and reboots the Echo.
 
 ```sh
 curl -fsSLO https://github.com/portpowered/portos-echo/releases/latest/download/install.sh && sh install.sh
@@ -49,11 +75,13 @@ curl -fsSLO https://github.com/portpowered/portos-echo/releases/latest/download/
 irm https://github.com/portpowered/portos-echo/releases/latest/download/install.ps1 | iex
 ```
 
-## 3. Sign in
+> **TODO screenshot (Echo screen):** the first screen after the reboot, with the sign-in code.
 
-The Echo's screen and your terminal show a URL and a code. Open the URL on your phone, sign in to ChatGPT and enter
-the code. If the code expires, run step 2 again; it resumes. To link Port OS too, enter the second code the screen
-shows in Port OS.
+## 3. Sign in to ChatGPT
+
+After the reboot, the Echo's screen and your terminal show a URL and a code. Open the URL on your phone or computer,
+sign in to ChatGPT and enter the code. The installer continues on its own. If the code expires, run step 2 again; it
+resumes where it stopped. To sign in again later, use **Settings > Accounts > OpenAI** on the Echo.
 
 ## 4. Talk to it
 
@@ -65,8 +93,29 @@ and memories, and looks through the camera when the shutter is open. To check ev
 echo-setup doctor   # ends with "tools: parity ok"
 ```
 
+> **TODO screenshot (Echo screen):** the character listening after "Computer", and speaking a reply.
+
 The agent has every Codex tool except code mode, the JavaScript `exec` tool. Code mode needs the V8 engine from
 Chromium and Node, which we do not ship on the Echo's 32-bit ARM. The agent calls the same tools directly instead.
+
+## 5. Connect Port OS (optional)
+
+[Port OS](https://portoperatingsystem.com) lets the assistant control your smart home, and lets Port OS reach the
+Echo as a device.
+
+1. **Link your account.** On the Echo, open **Settings > Accounts > Port OS** and choose **Link Port OS**. The screen
+   shows a URL and a code. Open the URL on your phone, sign in to Port OS, review the permissions it asks for and
+   approve them.
+
+   > **TODO screenshot (Echo screen):** Settings > Accounts > Port OS with the link code.
+
+2. **Control your home by voice.** Say "Computer, turn off the kitchen lights." The agent calls the Port OS tools
+   your link allows. If the Echo asks you to link again, a tool needs a permission the link lacks.
+3. **Add the Echo to Port OS.** In the same screen, set **Name in Port OS**, tick **Connect this Echo to Port OS** and
+   choose **Save Port OS endpoint**. The Echo then shows up in Port OS under that name.
+4. **Use it from Port OS.** Start the assistant with text (the Echo speaks the reply), end a session, take a camera
+   snapshot while the shutter is open, and set the volume or mute.
+5. **Unlink** with **Remove**, then **Remove link**, in the same screen. This does not sign you out of ChatGPT.
 
 ## Addendum A: screen packs
 
@@ -76,6 +125,8 @@ A screen pack is a layout and an animated character for the Echo's screen. The d
 release, with a preview of each. Search by name, tap a pack, then tap **Install**. The Echo downloads it, checks its
 SHA-256 against the release index and switches to it. **Disable screen packs** goes back to the built-in screen.
 Under **Advanced** you can still add a pack from any URL with its SHA-256.
+
+> **TODO screenshot (Echo screen):** the pack gallery with search, and a pack's Install button.
 
 **Install your own from a PC.** Unpack or build the pack into a directory named `<name>@<version>` and push it:
 
@@ -109,6 +160,8 @@ The Echo remembers the networks it has joined. In a new place:
    back on its own; you don't need to sign in again.
 3. To remove a network you no longer use, tap it and choose **Forget**.
 
+> **TODO screenshot (Echo screen):** Settings > Wi-Fi with the network list and the password field.
+
 No screen, or a hidden network? Connect the Echo over USB and run:
 
 ```sh
@@ -130,6 +183,8 @@ All of these apply from the next conversation; nothing needs a restart.
   instructions (the `prompts` tool group, on by default).
 - **From a PC.** The same prompts are the files `home/prompts/voice.md` and `home/prompts/runner.md` under
   `/data/local/echo` on the Echo. A prompt that can't be read keeps the last good one.
+
+> **TODO screenshot (Echo screen):** Settings > Conversation with the voice list, and the Voice instructions editor.
 
 The other settings (listening time, the daily request cap, the delegated model) are in
 [configuration](../configuration.md).
