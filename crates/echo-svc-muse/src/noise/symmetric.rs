@@ -129,3 +129,18 @@ fn hkdf(salt: &[u8], input: &[u8]) -> Result<[u8; 2 * KEY_BYTES]> {
         .map_err(|_| InvalidNoise)?;
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn t2_noise_nonce_counter_never_wraps() {
+        let mut cipher = Cipher::new(&[7; KEY_BYTES]).unwrap();
+        cipher.counter = NONCE_LIMIT - 1;
+        assert_eq!(cipher.encrypt(&[], &[]).unwrap().len(), 16);
+        assert_eq!(cipher.encrypt(&[], &[]), Err(InvalidNoise));
+        assert_eq!(cipher.decrypt(vec![0; 16], &[]), Err(InvalidNoise));
+        assert_eq!(cipher.counter, NONCE_LIMIT);
+    }
+}

@@ -1,3 +1,5 @@
+use std::io::Write as _;
+
 use serde::Deserialize;
 use x25519_dalek::StaticSecret;
 
@@ -70,7 +72,12 @@ fn t2_noise_vectors() {
     assert_eq!(peer.send.encrypt(&six.0, &[]), Ok(six.1.clone()));
     assert_eq!(client.receive.decrypt(six.1, &[]), Ok(six.0));
     assert_eq!(client.receive.decrypt(vec![0; 16], &[]), Err(InvalidNoise));
-    println!("{} vectors: 1 passed (6 messages)", vector.protocol_name);
+    writeln!(
+        std::io::stdout().lock(),
+        "{} vectors: 1 passed (6 messages)",
+        vector.protocol_name
+    )
+    .unwrap();
 }
 
 #[test]

@@ -94,7 +94,9 @@ impl Fake {
         let pairing = directory.path().join("pairing.json");
         let mut record = pairing_record();
         record["noise_host"] = json!(vm_listener.local_addr().unwrap().to_string());
-        record["api_url_v2"] = json!(format!("https://{}", api.local_addr().unwrap()));
+        let mut api_url = reqwest::Url::parse("https://127.0.0.1").unwrap();
+        api_url.set_port(Some(api.local_addr().unwrap().port())).unwrap();
+        record["api_url_v2"] = json!(api_url.as_str());
         write_pairing(&pairing, &record);
         Self {
             _directory: directory,
@@ -131,9 +133,10 @@ impl Fake {
         assert!(request.contains("\r\nx-api-version: 1.0.0\r\n"));
         assert!(request.contains("\r\nuser-agent: musegadget/"));
         let body = json!({"vm_list": [
-            {"vm_ws_url": "wss://vm.example.invalid", "vm_auth_token": "synthetic-other", "vm_id": "other"},
-            {"vm_url": "wss://vm.example.invalid", "vm_auth_token": "synthetic-default", "vm_id": "vm 1&x", "default": true}
-        ]}).to_string();
+            {"vm_ws_url": "wss://127.0.0.1:1", "vm_auth_token": "synthetic-other", "vm_id": "other"},
+            {"vm_url": "wss://127.0.0.1:1", "vm_auth_token": "synthetic-default", "vm_id": "vm 1&x", "default": true}
+        ]})
+        .to_string();
         let reply = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()

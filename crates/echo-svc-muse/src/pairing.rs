@@ -120,6 +120,12 @@ pub(super) fn valid_token(token: &str) -> bool {
 }
 
 pub(super) fn parse_url(value: &str, scheme: &str) -> Result<Url, ServiceError> {
+    if value
+        .bytes()
+        .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control() || byte == b'\\')
+    {
+        return Err(ServiceError::UnsafePairing);
+    }
     let url = Url::parse(value).map_err(|_| ServiceError::UnsafePairing)?;
     if url.scheme() != scheme
         || url.host().is_none()
@@ -245,9 +251,9 @@ mod tests {
             ("access_token", serde_json::json!("token\r\n")),
             ("refresh_token", serde_json::json!("")),
             ("noise_static_key", serde_json::json!("short")),
-            ("noise_host", serde_json::json!("fixture.example.invalid/path")),
-            ("api_url_v2", serde_json::json!("http://fixture.example.invalid")),
-            ("api_url_v2", serde_json::json!("https://fixture.example.invalid?bad")),
+            ("noise_host", serde_json::json!("127.0.0.1/path")),
+            ("api_url_v2", serde_json::json!("http://127.0.0.1")),
+            ("api_url_v2", serde_json::json!("https://127.0.0.1?bad")),
         ] {
             let mut record = pairing_record();
             record[key] = value;

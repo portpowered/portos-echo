@@ -36,9 +36,7 @@ impl Packetizer {
                 let mut frame = Writer::default();
                 frame.uint(1, self.next_id);
                 frame.uint(2, index as u64);
-                if count > 1 {
-                    frame.uint(3, count as u64);
-                }
+                frame.uint(3, count as u64);
                 frame.bytes(4, payload);
                 frame.finish()
             })

@@ -43,7 +43,7 @@ fn t2_chunk_limit_default_and_malformed_input() {
     let now = Instant::now();
     let mut assembler = Assembler::default();
     let mut writer = Packetizer::default();
-    assert_eq!(writer.split(&[1, 2]).unwrap(), [[8, 1, 34, 2, 1, 2]]);
+    assert_eq!(writer.split(&[1, 2]).unwrap(), [[8, 1, 24, 1, 34, 2, 1, 2]]);
     assert_eq!(assembler.push(&[8, 1, 34, 2, 1, 2], now), Ok(Some(vec![1, 2])));
     assert_eq!(writer.split(&vec![3; 65_489]).unwrap().len(), 1);
     let data = vec![3; 65_490];
