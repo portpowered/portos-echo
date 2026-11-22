@@ -38,6 +38,8 @@ mod bridge_wire_auth_failure;
 mod bridge_wire_delegation;
 #[path = "bridge_support/bridge_wire_screen.rs"]
 mod bridge_wire_screen;
+#[path = "device_support/hassmic_name.rs"]
+mod hassmic_name;
 // Observation ceiling for slow instrumented loopback runs; product deadlines stay unchanged.
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(30);
 /// Gap between re-reads of a trace file or health endpoint while waiting for the bridge.  A bare `yield_now` loop

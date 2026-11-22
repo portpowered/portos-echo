@@ -7,10 +7,13 @@ use std::{
     path::Path,
 };
 
-/// The simulator copies the shipped bridge under this basename for host staging.
+/// Recognizes the basenames used by the device supervisor and the simulator.
 #[must_use]
-pub fn staged_host(program: &OsStr) -> bool {
-    Path::new(program).file_name() == Some(OsStr::new("hassmic-host"))
+pub fn satellite_name(program: &OsStr) -> bool {
+    let basename = Path::new(program).file_name();
+    ["hassmic-host", "hassmic"]
+        .iter()
+        .any(|name| basename == Some(OsStr::new(name)))
 }
 
 /// Enters the satellite before the bridge creates any runtime resources.
