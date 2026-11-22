@@ -36,7 +36,7 @@ async fn t3_endpoint_command_replies_are_correlated_and_deduplicated_across_reco
         gateway.assert_upgrade(CLAIMED).await;
         send(&gateway, &start).await;
         assert_unsupported_command(&gateway, &mock).await;
-        assert_unlinked_speaker(&gateway, home.path()).await;
+        assert_unlinked_speaker(&gateway, &mock, home.path()).await;
         assert_unknown_end(&gateway, &mock).await;
         assert_cycle(&mut gateway, &mock).await;
 
@@ -212,10 +212,23 @@ async fn assert_unsupported_command(gateway: &Gateway, mock: &Mock) {
     assert_reply(mock, "unknown", "UNSUPPORTED_COMMAND").await;
 }
 
-/// Without a speaker link a control reaches no device: dropped, unanswered, never audited OK.
-async fn assert_unlinked_speaker(gateway: &Gateway, home: &Path) {
+/// Without a voice session's speaker link a control reaches no device: it is
+/// traced as dropped and acked at once with the transient `NOT_READY`.
+async fn assert_unlinked_speaker(gateway: &Gateway, mock: &Mock, home: &Path) {
+    let sent = Instant::now();
     send(gateway, &command("set-mute", "unlinked", DEVICE, &json!({"mute":true}))).await;
-    let rows = setup_tests::wait_event(home, "endpoint.speaker_dropped").await;
+    assert_reply(mock, "unlinked", "NOT_READY").await;
+    assert!(
+        sent.elapsed() < Duration::from_secs(1),
+        "a refusal does not wait to settle"
+    );
+    let rows = setup_tests::wait_event(home, "endpoint.speaker_ack").await;
+    let ack: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "endpoint.speaker_ack")
+        .map(|row| (row["outcome"].clone(), row["code"].clone(), row["http_status"].clone()))
+        .collect();
+    assert_eq!(ack, [(json!("answered"), json!("NOT_READY"), Value::Null)]);
     let dropped: Vec<_> = rows
         .iter()
         .filter(|row| row["event"] == "endpoint.speaker_dropped")
@@ -223,8 +236,9 @@ async fn assert_unlinked_speaker(gateway: &Gateway, home: &Path) {
     assert_eq!(dropped.len(), 1);
     assert_eq!(dropped[0]["reason"], "no_speaker_link");
     assert!(
-        rows.iter()
-            .any(|row| { row["event"] == "endpoint.command" && row["name"] == "set-mute" && row["code"] == "DROPPED" })
+        rows.iter().any(|row| {
+            row["event"] == "endpoint.command" && row["name"] == "set-mute" && row["code"] == "NOT_READY"
+        })
     );
 }
 
@@ -248,7 +262,7 @@ fn assert_unique_replies(mock: &Mock) {
         })
         .collect();
     ids.sort_unstable();
-    assert_eq!(ids, ["cycled", "first", "invalid", "last", "unknown"]);
+    assert_eq!(ids, ["cycled", "first", "invalid", "last", "unknown", "unlinked"]);
 }
 
 /// One live gateway frame. The interface follows the command name.

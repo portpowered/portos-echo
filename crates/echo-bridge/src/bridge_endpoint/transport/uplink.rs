@@ -21,6 +21,7 @@ impl Transport {
             Prepared::Reply(body) => {
                 self.send(tokens, body, deadline).await;
             }
+            Prepared::Speaker { body, code } => self.send_speaker_ack(tokens, body, code, deadline).await,
             Prepared::Snapshot {
                 body,
                 timeout,
@@ -36,6 +37,25 @@ impl Transport {
                 }
             }
         }
+    }
+
+    /// Send one speaker ack. Port OS applies its state even when no caller
+    /// waits any more (a fire-and-forget request, or one past its 60 s) and
+    /// then answers 404: that ack is done, never retried.
+    async fn send_speaker_ack(
+        &self,
+        tokens: &dyn EndpointTokenSource,
+        body: Option<Vec<u8>>,
+        code: &'static str,
+        deadline: Instant,
+    ) {
+        let (outcome, http_status) = match self.deliver(tokens, body, deadline).await {
+            Delivery::Answered => ("answered", None),
+            Delivery::Unrouted => ("not_waiting", Some(StatusCode::NOT_FOUND.as_u16())),
+            Delivery::Expired => ("expired", None),
+        };
+        let fields = serde_json::json!({ "outcome": outcome, "code": code, "http_status": http_status });
+        crate::bridge_endpoint::note(self.trace.as_ref(), "endpoint.speaker_ack", fields);
     }
 
     /// Returns false when the deadline prevents this report's delivery or next retry.
@@ -112,7 +132,8 @@ impl Transport {
 pub(super) enum Delivery {
     /// Port OS answered it, or it cannot be sent at all.
     Answered,
-    /// Port OS has no route for this device yet (404); send the state again once one appears.
+    /// Port OS answered 404: for state, no route for this device yet, so send it
+    /// again once one appears; for a reply, no command is waiting for it.
     Unrouted,
     /// The deadline passed first.
     Expired,

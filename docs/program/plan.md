@@ -671,8 +671,9 @@ endpoint issuer and authoritative route resolver.
 The endpoint uses the existing voice and device owners. Immediate decisions and text starts have one
 final reply within 1 s. Mic starts that wait for the device decide at the 2 s boundary and deliver one
 final reply by 2.5 s with a healthy uplink. Explicit end-session cancels a running delegation,
-stops speech and closes the mic run immediately. The device owns speaker acknowledgements, and the camera
-source owns the snapshot shutter. Workers exercise this path through local fakes.
+stops speech and closes the mic run immediately. Every speaker command is acked by one report with its
+`requestId` and the speaker state the device reports back within 3 s, or a reason-code error instead;
+the camera source owns the snapshot shutter. Workers exercise this path through local fakes.
 
 Remote microphone starts require explicit `portos_endpoint.remote_mic` capability configuration,
 off by default. The Wyoming request carries a fresh `requestId` echoed by the corresponding

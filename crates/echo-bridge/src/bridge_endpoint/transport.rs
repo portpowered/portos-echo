@@ -250,6 +250,8 @@ impl Transport {
     /// Report the full state on connect, whenever it changes and once the
     /// route is found; each report is stamped when it is sent. A report Port
     /// OS could not route yet is sent again with the next change or route.
+    /// It runs only inside one live gateway connection: Port OS marks the
+    /// device by its socket, so no state report goes out while disconnected.
     async fn report(&self, device_id: &str, tokens: &dyn EndpointTokenSource) {
         let voice = Voice::current().unwrap_or_default();
         let mut states = voice.subscribe();
@@ -329,9 +331,7 @@ impl Transport {
                         let lease = lease.clone();
                         replies.push(Box::pin(async move {
                             let prepare = |report| serde_json::to_vec(&Uplink::report(device_id, report)).ok();
-                            let Some(body) = command.reply(lease, &self.camera, self.trace.as_ref(), prepare).await else {
-                                return;
-                            };
+                            let body = command.reply(lease, &self.camera, self.trace.as_ref(), prepare).await;
                             self.send_reply(tokens, body, deadline).await;
                         }));
                     }
@@ -461,7 +461,7 @@ impl Retry {
 }
 
 /// Corrected wall-clock milliseconds since the Unix epoch.
-fn wall_ms() -> Option<i64> {
+pub(super) fn wall_ms() -> Option<i64> {
     let elapsed = crate::bridge_time::now().duration_since(UNIX_EPOCH).ok()?;
     i64::try_from(elapsed.as_millis()).ok()
 }

@@ -1,8 +1,9 @@
 //! The endpoint T3 device gateway, as the live gateway README describes it:
 //! any upgrade with a Bearer is accepted, and a token without the auth-link
 //! claim (or no longer current) is closed at once with 4403. The device's text
-//! `ping` is answered with `pong`, and every synchronous command frame sent to
-//! the device opens one `requestId` that a single report may answer.
+//! `ping` is answered with `pong`, and every command frame sent to the device
+//! opens one `requestId` that a single report may answer, unless the test says
+//! no caller waits for it.
 use echo_mcp_auth::mock::{Mock, State};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::{
@@ -29,10 +30,13 @@ pub(super) struct Gateway {
     /// When each keepalive `ping` arrived.
     pub(super) pings: Pings,
     failures: Arc<AtomicUsize>,
+    unwaited: Unwaited,
     task: JoinHandle<()>,
 }
 
 pub(super) type Pings = Arc<Mutex<Vec<Instant>>>;
+/// Command ids no caller waits for: their frames open no `requestId`.
+type Unwaited = Arc<Mutex<std::collections::BTreeSet<String>>>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum GatewayEvent {
@@ -56,11 +60,13 @@ impl Gateway {
         let (frames, outgoing) = mpsc::channel(8);
         let failures = Arc::new(AtomicUsize::new(0));
         let pings = Pings::default();
+        let unwaited = Unwaited::default();
         let peer = Peer {
             events,
             failures: failures.clone(),
             issuer: mock.state.clone(),
             pings: pings.clone(),
+            unwaited: unwaited.clone(),
         };
         let task = tokio::spawn(peer.serve(listener, outgoing));
         Self {
@@ -69,8 +75,15 @@ impl Gateway {
             frames,
             pings,
             failures,
+            unwaited,
             task,
         }
+    }
+
+    /// No caller waits for command `id`: a fire-and-forget request, or one
+    /// past Port OS's 60 s. Its reply is answered 404.
+    pub(super) fn unwaited(&self, id: &str) {
+        self.unwaited.lock().unwrap().insert(id.into());
     }
 
     /// The next upgrade was admitted with this access token.
@@ -113,6 +126,7 @@ struct Peer {
     failures: Arc<AtomicUsize>,
     issuer: Arc<Mutex<State>>,
     pings: Pings,
+    unwaited: Unwaited,
 }
 
 impl Peer {
@@ -172,17 +186,15 @@ impl Peer {
         }
     }
 
-    /// Speaker commands are fire-and-forget; every other command id may be
-    /// answered once.
+    /// Every command id a caller waits for may be answered once.
     fn open_request(&self, frame: &Message) {
         let Message::Text(text) = frame else { return };
         let Ok(command) = serde_json::from_str::<serde_json::Value>(text.as_str()) else {
             return;
         };
-        let speaker = command["header"]["namespace"]
-            .as_str()
-            .is_some_and(|namespace| namespace.ends_with("/speaker"));
-        if let (false, Some(id)) = (speaker, command["header"]["id"].as_str()) {
+        if let Some(id) = command["header"]["id"].as_str()
+            && !self.unwaited.lock().unwrap().contains(id)
+        {
             self.issuer.lock().unwrap().endpoint.open_requests.insert(id.into());
         }
     }

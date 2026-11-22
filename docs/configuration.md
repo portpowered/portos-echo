@@ -122,17 +122,31 @@ requests follow-up tries capture after its first reply has played. An explicit r
 delegated work and closes playback and capture.
 
 The bridge reports full state on every gateway connection, after it finds its route, and at least
-every ten minutes while connected. A state report that Port OS answers `NOT_FOUND`, before the
+every ten minutes while connected. It posts no state report while the gateway is disconnected:
+Port OS marks the device `DISCONNECTED` 30 s after its socket is gone and `CONNECTED` when it
+returns, and a `4000` (CYCLE) close reconnects at once. A state report that Port OS answers `NOT_FOUND`, before the
 route exists, is sent again once the route is found. Each route read-back is traced as
 `endpoint.route_attempt` with `outcome` (`none`, `found` or `error`), the failure `reason` and
 `http_status`, and counts of `pages`, `results` and `routed` records (those that carry an
 `associatedPluginRouteId`), and `restarts` (0 or 1). It never records ids.
 
 Port OS speaker commands request absolute volume, a relative change from the last reported volume,
-or output mute. They get no reply. A command that reaches no device is traced as
-`endpoint.speaker_dropped` with a fixed `reason` (`volume_unknown` or `no_speaker_link`), and its
-audit row says `DROPPED`, not `OK`. Volume and output mute are unknown until the device reports
-them. Microphone privacy continues to control the assistant's muted state independently.
+or output mute. They are synchronous: the bridge acks every one, even when the caller does not wait,
+with one report carrying the frame's id as `requestId` and no other reply. After sending the change
+it waits up to 3 s from receipt for the speaker state the device reports, and the ack carries that
+state as `speaker` (`volume` and `muted`) with `sampledAtMs`. Otherwise the ack carries `error`
+instead of `speaker`: `INVALID_REQUEST` for a bad body; `NOT_SUPPORTED` when the device reports no
+speaker state (hassmic today applies volume and mute but reports neither), and for a relative
+change with no reported base volume; `NOT_READY` when no voice session holds a speaker link, the
+link is busy, or the device reports state but did not reflect the change in time. With no caller
+waiting (fire-and-forget, or past Port OS's 60 s) Port OS still applies the state and answers
+404; that ack is done and never sent again. Each ack is traced as `endpoint.speaker_ack` with its
+delivery `outcome` (`answered`, `not_waiting` or `expired`), its `code` (`OK` or the refusal) and
+`http_status` (404 for `not_waiting`). A command that reaches no device is also traced as
+`endpoint.speaker_dropped` with a fixed `reason` (`volume_unknown`, `no_speaker_link` or `busy`).
+The audit row's code is the ack's. Speaker state reports without `requestId` stay plain state.
+Volume and output mute are unknown until the device reports them. Microphone privacy continues to
+control the assistant's muted state independently.
 
 Snapshot requests use the camera source's own shutter state. A closed shutter refuses capture,
 including if it closes during capture. A supported source returns one in-memory JPEG with its

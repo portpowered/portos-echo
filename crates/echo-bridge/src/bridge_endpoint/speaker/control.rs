@@ -1,5 +1,5 @@
 use super::voice::{View, Voice};
-use echo_contracts::endpoint::{AdjustVolume, SetOutputMute, SetVolume};
+use echo_contracts::endpoint::{AdjustVolume, SetOutputMute, SetVolume, SpeakerReport};
 use echo_link::{EchoLink, SpeakerRequest, SpeakerState};
 use serde_json::Value;
 use std::{future::Future, time::Duration};
@@ -24,18 +24,45 @@ const NO_SPEAKER_LINK: &str = "no_speaker_link";
 const VOLUME_UNKNOWN: &str = "volume_unknown";
 const BUSY: &str = "busy";
 
-/// What became of one speaker command. Port OS keeps no pending request for
-/// these, so a drop is traced on the bridge rather than answered.
+/// How long a command may wait to reach the device link.
+const SEND_WINDOW: Duration = Duration::from_secs(1);
+/// How long, from receipt, a sent command waits for the device to report the
+/// resulting speaker state. Port OS waits 60 s for the ack.
+pub(super) const SETTLE_WINDOW: Duration = Duration::from_secs(3);
+
+/// What became of one speaker command. Every command is acknowledged by one
+/// report carrying its `requestId`.
 pub(super) enum Outcome {
-    /// Sent to the device link, which gives no applied acknowledgement.
-    Sent,
+    /// The device reported this speaker state after the command was sent.
+    Applied(SpeakerReport),
     Invalid,
+    /// Sent, but the device never reported both volume and mute, so nothing
+    /// confirms it.
+    NoState,
+    /// Sent, and the device reports speaker state, but no report reflected the
+    /// change within the settle window.
+    Unconfirmed,
     Dropped(&'static str),
+}
+
+impl Outcome {
+    /// The ack's refusal code, or `None` when the ack carries `speaker`.
+    /// `NOT_SUPPORTED` means this device cannot do it; `NOT_READY` is transient.
+    pub(super) fn refusal(&self) -> Option<&'static str> {
+        match self {
+            Self::Applied(_) => None,
+            Self::Invalid => Some("INVALID_REQUEST"),
+            // A relative change needs a reported base volume, which a device
+            // that reports no speaker state never supplies.
+            Self::NoState | Self::Dropped(VOLUME_UNKNOWN) => Some("NOT_SUPPORTED"),
+            Self::Unconfirmed | Self::Dropped(_) => Some("NOT_READY"),
+        }
+    }
 }
 
 struct Request {
     change: Change,
-    sent: oneshot::Sender<Result<(), &'static str>>,
+    sent: oneshot::Sender<Result<SpeakerRequest, &'static str>>,
 }
 
 struct Attachment<'a>(&'a Control, &'a watch::Sender<View>);
@@ -65,7 +92,8 @@ impl Control {
         }
     }
 
-    async fn send(&self, change: Change, deadline: Instant) -> Result<(), &'static str> {
+    /// Send one change; returns the request the device link accepted.
+    async fn send(&self, change: Change, deadline: Instant) -> Result<SpeakerRequest, &'static str> {
         let (sent, wait) = oneshot::channel();
         let sender = self.0.borrow().clone().ok_or(NO_SPEAKER_LINK)?;
         if Instant::now() >= deadline {
@@ -80,6 +108,10 @@ impl Control {
             Ok(Err(_)) => Err(NO_SPEAKER_LINK),
             Err(_) => Err(BUSY),
         }
+    }
+
+    fn attached(&self) -> bool {
+        self.0.borrow().is_some()
     }
 }
 
@@ -114,7 +146,7 @@ async fn send_requests(client: &impl EchoLink, view: &watch::Sender<View>, mut r
             Ok(request) => tokio::select! {
                 biased;
                 () = sent.closed() => continue,
-                result = client.request_speaker(request) => result.map_err(|_| NO_SPEAKER_LINK),
+                result = client.request_speaker(request) => result.map(|()| request).map_err(|_| NO_SPEAKER_LINK),
             },
             Err(reason) => Err(reason),
         };
@@ -122,7 +154,8 @@ async fn send_requests(client: &impl EchoLink, view: &watch::Sender<View>, mut r
     }
 }
 
-/// Deliver one fire-and-forget speaker command.
+/// Apply one speaker command, then wait within the settle window for the
+/// speaker state the device reports back.
 pub(super) async fn command(name: &str, body: Value, received: Instant) -> Outcome {
     let Some(change) = change(name, body) else {
         return Outcome::Invalid;
@@ -130,9 +163,42 @@ pub(super) async fn command(name: &str, body: Value, received: Instant) -> Outco
     let Some(voice) = Voice::current() else {
         return Outcome::Dropped(NO_SPEAKER_LINK);
     };
-    match voice.speaker.send(change, received + Duration::from_secs(1)).await {
-        Ok(()) => Outcome::Sent,
-        Err(reason) => Outcome::Dropped(reason),
+    let mut states = voice.subscribe();
+    let before = states.borrow_and_update().speaker;
+    let request = match voice.speaker.send(change, received + SEND_WINDOW).await {
+        Ok(request) => request,
+        Err(reason) => return Outcome::Dropped(reason),
+    };
+    // A state that already matches, or any newly reported state, settles the
+    // command: the device may clamp or ignore a value.
+    let settled =
+        |view: &View| complete(view.speaker).is_some() && (view.speaker != before || applies(request, view.speaker));
+    if let Ok(Ok(view)) = timeout_at(received + SETTLE_WINDOW, states.wait_for(settled)).await
+        && let Some(speaker) = complete(view.speaker)
+    {
+        return Outcome::Applied(speaker);
+    }
+    if !voice.speaker.attached() {
+        Outcome::Dropped(NO_SPEAKER_LINK)
+    } else if complete(states.borrow().speaker).is_some() {
+        Outcome::Unconfirmed
+    } else {
+        Outcome::NoState
+    }
+}
+
+/// The reportable speaker state: both values known.
+fn complete(speaker: SpeakerState) -> Option<SpeakerReport> {
+    speaker
+        .volume
+        .zip(speaker.muted)
+        .map(|(volume, muted)| SpeakerReport { volume, muted })
+}
+
+fn applies(request: SpeakerRequest, speaker: SpeakerState) -> bool {
+    match request {
+        SpeakerRequest::Volume(volume) => speaker.volume == Some(volume),
+        SpeakerRequest::OutputMute(muted) => speaker.muted == Some(muted),
     }
 }
 

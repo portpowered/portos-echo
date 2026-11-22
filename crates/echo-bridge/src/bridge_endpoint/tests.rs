@@ -27,6 +27,8 @@ mod gateway_test_peer;
 mod setup_tests;
 #[path = "snapshot/witness.rs"]
 mod snapshot_tests;
+#[path = "speaker/ack_witness.rs"]
+mod speaker_ack_tests;
 #[path = "speaker/witness.rs"]
 mod speaker_tests;
 #[path = "voice_tests.rs"]

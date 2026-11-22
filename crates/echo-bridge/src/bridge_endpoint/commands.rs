@@ -1,7 +1,8 @@
 //! Correlate gateway command frames before they reach a local owner.
 //!
-//! A frame's `header.id` is the command id; a synchronous command is answered by
-//! one report whose `requestId` is that id. Speaker commands are fire-and-forget.
+//! A frame's `header.id` is the command id; every command is answered by one
+//! report whose `requestId` is that id. A speaker command's ack carries the
+//! resulting `speaker` state, or an `error` instead, and no other reply.
 use super::snapshot::Camera;
 use crate::bridge_trace::Trace;
 use echo_contracts::endpoint::{EndSession, Frame, FrameHeader, Reply, Report, StartSession, VERSION};
@@ -22,7 +23,16 @@ pub(super) struct Command {
 
 pub(super) enum Prepared<T> {
     Reply(T),
-    Snapshot { body: T, timeout: T, received: Instant },
+    Snapshot {
+        body: T,
+        timeout: T,
+        received: Instant,
+    },
+    /// A speaker ack, traced with its delivery; `code` is `OK` or the refusal.
+    Speaker {
+        body: T,
+        code: &'static str,
+    },
 }
 
 impl Receipts {
@@ -53,28 +63,24 @@ impl Receipts {
 }
 
 impl Command {
-    /// Prepare the command's report, or return `None` for a fire-and-forget command.
+    /// Prepare the command's one report.
     pub(super) async fn reply<T>(
         self,
         lease: tokio::sync::watch::Receiver<()>,
         camera: &Camera,
         trace: Option<&Trace>,
         prepare: impl Fn(Report) -> T,
-    ) -> Option<Prepared<T>> {
+    ) -> Prepared<T> {
         let Self { header, body, received } = self;
         let name = audit_name(&header);
         match (header.interface(), header.name.as_str()) {
             (Some("speaker"), "set-volume" | "adjust-volume" | "set-mute") => {
-                let code = match super::speaker::command(&header.name, body, received).await {
-                    super::speaker::Outcome::Sent => "OK",
-                    super::speaker::Outcome::Invalid => "INVALID_REQUEST",
-                    super::speaker::Outcome::Dropped(reason) => {
-                        super::note(trace, "endpoint.speaker_dropped", json!({ "reason": reason }));
-                        "DROPPED"
-                    }
-                };
+                let (report, code) = speaker(&header, body, received, trace).await;
                 audit(trace, name, code, received);
-                None
+                Prepared::Speaker {
+                    body: prepare(report),
+                    code,
+                }
             }
             (Some("snapshot"), "get-snapshot") => {
                 let prepared = camera
@@ -84,7 +90,7 @@ impl Command {
                         prepare(report)
                     })
                     .await;
-                Some(match prepared {
+                match prepared {
                     Ok(body) => Prepared::Snapshot {
                         body,
                         timeout: prepare(Report::reply(&header.id, refusal("TIMEOUT"))),
@@ -94,15 +100,40 @@ impl Command {
                         audit(trace, name, reply.code(), received);
                         Prepared::Reply(prepare(Report::reply(&header.id, reply)))
                     }
-                })
+                }
             }
             _ => {
                 let reply = correlate(&header, body, received, lease).await;
                 audit(trace, name, reply.code(), received);
-                Some(Prepared::Reply(prepare(Report::reply(&header.id, reply))))
+                Prepared::Reply(prepare(Report::reply(&header.id, reply)))
             }
         }
     }
+}
+
+/// Apply a speaker command; its ack carries `requestId` and either the
+/// resulting `speaker` state or an `error`, never another reply.
+async fn speaker(
+    header: &FrameHeader,
+    body: Value,
+    received: Instant,
+    trace: Option<&Trace>,
+) -> (Report, &'static str) {
+    let outcome = super::speaker::command(&header.name, body, received).await;
+    if let super::speaker::Outcome::Dropped(reason) = outcome {
+        super::note(trace, "endpoint.speaker_dropped", json!({ "reason": reason }));
+    }
+    let super::speaker::Outcome::Applied(speaker) = outcome else {
+        let code = outcome.refusal().unwrap_or("NOT_READY");
+        return (Report::reply(&header.id, refusal(code)), code);
+    };
+    let report = Report {
+        sampled_at_ms: super::transport::wall_ms(),
+        speaker: Some(speaker),
+        request_id: Some(header.id.clone()),
+        ..Report::default()
+    };
+    (report, "OK")
 }
 
 fn audit_name(header: &FrameHeader) -> &str {
