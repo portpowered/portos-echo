@@ -81,6 +81,10 @@ pub(super) struct Fake {
 }
 
 impl Fake {
+    pub(super) fn task_path(&self) -> PathBuf {
+        self._directory.path().join("tasks.json")
+    }
+
     pub(super) async fn new(api: &Pki, vm: &Pki, api_name: &str) -> Self {
         Self::listeners(api.server(api_name), vm.server("127.0.0.1")).await
     }
@@ -259,7 +263,7 @@ impl Vm {
         }
     }
 
-    async fn next_frame(&mut self) -> Frame {
+    pub(in crate::tests) async fn next_frame(&mut self) -> Frame {
         loop {
             let packet = binary(&mut self.socket).await;
             let chunk = self.noise.receive.decrypt(packet, &[]).unwrap();
@@ -269,7 +273,7 @@ impl Vm {
         }
     }
 
-    async fn send(&mut self, frame: &Frame) {
+    pub(in crate::tests) async fn send(&mut self, frame: &Frame) {
         for chunk in self.packetizer.split(&encode_response(frame)).unwrap() {
             let data = self.noise.send.encrypt(&chunk, &[]).unwrap();
             self.socket.send(Message::binary(data)).await.unwrap();

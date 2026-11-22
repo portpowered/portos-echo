@@ -223,11 +223,11 @@ pub(super) fn parse_url(value: &str, scheme: &str) -> Result<Url, ServiceError> 
     Ok(url)
 }
 
-fn private_flags() -> OFlags {
+pub(super) fn private_flags() -> OFlags {
     OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC
 }
 
-fn open_directory(path: &Path) -> Result<File, ServiceError> {
+pub(super) fn open_directory(path: &Path) -> Result<File, ServiceError> {
     let flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let base = if path.is_absolute() { "/" } else { "." };
     let mut dir = openat(CWD, base, flags, Mode::empty())

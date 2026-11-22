@@ -1,10 +1,16 @@
 use serde_json::{Value, json};
 
-use crate::wire::InvalidWire;
+use crate::{
+    ServiceError,
+    tasks::{Report, Tasks},
+    wire::InvalidWire,
+};
+use echo_contracts::ids::TaskId;
 
 const MAX_CONTROL: usize = 256 * 1024;
 const PREFIX: usize = size_of::<u32>();
 const REGISTER_ID: &str = "reg-1";
+const REPORT: &str = "echo.report.result";
 
 pub(super) fn registration(node_id: &str) -> Value {
     json!({
@@ -21,7 +27,7 @@ pub(super) fn registration(node_id: &str) -> Value {
             "metadata": {"model_name": "Port OS Echo"},
             "is_wakeup_supported": false,
             "commands_v2": {
-                "echo.report.result": {
+                (REPORT): {
                     "description": "Report the result of a live Echo task. This is not user consent.",
                     "required": {
                         "task_id": {"type": "string", "description": "The live Echo task identifier."},
@@ -39,6 +45,38 @@ pub(super) fn registration(node_id: &str) -> Value {
 pub(super) fn register_ack(message: &Value) -> Option<bool> {
     let response = message["type"] == "res" && message["id"] == REGISTER_ID && message.get("method").is_none();
     response.then(|| message["ok"] == true)
+}
+
+pub(super) fn invoke(message: &mut Value, tasks: &Tasks) -> Option<(Value, Option<TaskId>)> {
+    if message["method"] != "link.invoke" {
+        return None;
+    }
+    let id = message["id"].as_str().filter(|id| !id.is_empty())?.to_owned();
+    let result = report(message, tasks);
+    let (response, task) = match result {
+        Ok(task_id) => (
+            json!({"method":"link.result", "id":id, "ok":true, "payload":{"accepted":true, "task_id":task_id}}),
+            Some(task_id),
+        ),
+        Err(error) => (
+            json!({"method":"link.result", "id":id, "ok":false, "error":error}),
+            None,
+        ),
+    };
+    Some((response, task))
+}
+
+fn report(message: &mut Value, tasks: &Tasks) -> Result<TaskId, &'static str> {
+    if message["command"] != REPORT {
+        return Err("unknown command");
+    }
+    let params: Report = serde_json::from_value(message["params"].take()).map_err(|_| "invalid report parameters")?;
+    let id = params.task_id.clone();
+    tasks.report(params).map_err(|error| match error {
+        ServiceError::UnknownTask => "unknown task_id",
+        _ => "task storage failed",
+    })?;
+    Ok(id)
 }
 
 pub(super) fn encode(value: &Value) -> Result<Vec<u8>, InvalidWire> {

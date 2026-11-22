@@ -237,6 +237,10 @@ pub(crate) struct StreamMux {
 }
 
 impl StreamMux {
+    pub(crate) fn forget(&mut self, id: i64) -> bool {
+        self.incoming.remove(&id).is_some()
+    }
+
     pub(crate) fn open(&mut self, request: Request) -> Result<Frame> {
         self.last_id = self.last_id.checked_add(1).ok_or(InvalidWire)?;
         self.incoming.insert(self.last_id, false);

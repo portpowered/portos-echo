@@ -25,6 +25,18 @@ registers again. An incomplete or uncertain refresh ends that instance and
 preserves the previously committed pairing. A refresh rejected with HTTP 401
 removes the pairing and leaves the service in `PairingRemoved`.
 
+`MuseLink::start` also takes a separate caller-owned task snapshot path. The
+service commits each task ID, side-chat UUID and absolute deadline before it
+sends the prompt. Assistant text from the acknowledged side chat yields
+`Progress`. A matching `echo.report.result` commits the only remote terminal
+outcome. The absolute deadline produces a nonretryable failure if the report
+never arrives. Cancelling commits the local cancellation before advising the
+original chat. A report grants no user consent.
+
+Reopening the owner-only snapshot retains pending events and task tombstones.
+An uncertain send or interrupted subscription leaves the task eligible for
+its original report or deadline. The service sends each task prompt once.
+
 The crate is exercised through its local Rust boundary and real loopback HTTPS,
 WebSocket and encrypted daemon framing. Use the component suite on Linux:
 

@@ -1,22 +1,26 @@
+mod chats;
+
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use ring::rand::{SecureRandom, SystemRandom};
 use tokio::{
-    sync::watch,
+    sync::{mpsc, watch},
     time::{Instant, sleep, timeout},
 };
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Error, Message};
 use x25519_dalek::StaticSecret;
 
 use crate::{
     ServiceError, ServiceState,
     api::{Connector, RefreshError, UpgradeError},
-    clock::Clock,
+    chat::Command,
     control,
+    link::chats::Chats,
     noise::{Initiator, Session},
     pairing::Pairing,
-    wire::{Assembler, Body, Frame, Packetizer, Request, StreamMux, decode_response, encode_request},
+    tasks::Tasks,
+    wire::{Assembler, Body, Frame, InvalidWire, Packetizer, Request, StreamMux, decode_response, encode_request},
 };
 
 const START_TIMEOUT: Duration = Duration::from_secs(15);
@@ -24,6 +28,7 @@ const FIRST_RETRY: Duration = Duration::from_secs(2);
 const MAX_RETRY: Duration = Duration::from_secs(60);
 const ROTATE_AFTER: u64 = 3 * 60 * 60;
 type State = watch::Sender<(ServiceState, Option<ServiceError>)>;
+pub(super) type Endpoint = watch::Sender<Option<mpsc::Sender<Command>>>;
 
 pub(super) trait Random: Send + Sync + 'static {
     fn fill(&self, bytes: &mut [u8]) -> Result<(), ServiceError>;
@@ -46,12 +51,13 @@ impl Random for OsRandom {
 pub(super) async fn run<C: Connector>(
     pairing: &mut Pairing,
     connector: &C,
-    random: &impl Random,
-    clock: &impl Clock,
+    tasks: &Tasks,
     state: &State,
+    endpoint: &Endpoint,
     mut stop: watch::Receiver<bool>,
 ) -> Result<ServiceState, ServiceError> {
     let mut delay = FIRST_RETRY;
+    let clock = &*tasks.clock;
     loop {
         if *stop.borrow() || stop.has_changed().is_err() {
             return Ok(ServiceState::Stopped);
@@ -71,8 +77,9 @@ pub(super) async fn run<C: Connector>(
             biased;
             _ = stop.changed() => return Ok(ServiceState::Stopped),
             () = clock.wait_until(rotates_at) => continue,
-            error = run_attempt(pairing, connector, random, state) => error,
+            error = run_attempt(pairing, connector, tasks, state, endpoint) => error,
         };
+        endpoint.send_replace(None);
         if state.borrow().0 == ServiceState::Registered {
             delay = FIRST_RETRY;
         }
@@ -95,7 +102,7 @@ enum Rotation {
 async fn rotate(
     pairing: &mut Pairing,
     connector: &impl Connector,
-    clock: &impl Clock,
+    clock: &dyn crate::clock::Clock,
 ) -> Result<Rotation, ServiceError> {
     // Once the request is sent, finish handling its response before honoring stop.
     match connector.refresh(pairing).await {
@@ -114,20 +121,22 @@ async fn rotate(
 async fn run_attempt<C: Connector>(
     pairing: &Pairing,
     connector: &C,
-    random: &impl Random,
+    tasks: &Tasks,
     state: &State,
+    endpoint: &Endpoint,
 ) -> ServiceError {
-    let result = timeout(START_TIMEOUT, establish(pairing, connector, random)).await;
-    let mut link = match result {
+    let result = timeout(START_TIMEOUT, establish(pairing, connector, &*tasks.random)).await;
+    let (mut link, pending) = match result {
         Ok(Ok(link)) => link,
         Ok(Err(error)) => return error,
         Err(_) => return ServiceError::PeerUnavailable,
     };
+    let (commands, receiver) = mpsc::channel(16);
+    endpoint.send_replace(Some(commands));
     state.send_replace((ServiceState::Registered, None));
-    loop {
-        if let Err(error) = link.receive_control().await {
-            return error;
-        }
+    match link.registered(tasks, pairing, receiver, pending).await {
+        Err(error) => error,
+        Ok(()) => ServiceError::PeerUnavailable,
     }
 }
 
@@ -149,8 +158,8 @@ async fn connect<C: Connector>(pairing: &Pairing, connector: &C) -> Result<C::So
 async fn establish<C: Connector>(
     pairing: &Pairing,
     connector: &C,
-    random: &impl Random,
-) -> Result<ControlLink<C::Socket>, ServiceError> {
+    random: &dyn Random,
+) -> Result<(ControlLink<C::Socket>, Vec<serde_json::Value>), ServiceError> {
     let mut socket = connect(pairing, connector).await?;
     let mut bytes = [0; 32];
     random.fill(&mut bytes)?;
@@ -172,13 +181,8 @@ async fn establish<C: Connector>(
         .await
         .map_err(|_| ServiceError::PeerUnavailable)?;
     let mut link = ControlLink::open(socket, noise, pairing.node_id().expose()).await?;
-    loop {
-        match link.receive_control().await? {
-            Some(true) => return Ok(link),
-            Some(false) => return Err(ServiceError::NotReady),
-            None => {}
-        }
-    }
+    let pending = link.register().await?;
+    Ok((link, pending))
 }
 
 struct ControlLink<S> {
@@ -191,13 +195,10 @@ struct ControlLink<S> {
     assembler: Assembler,
 }
 
-use futures_util::{Sink, Stream};
-use tokio_tungstenite::tungstenite::Error;
+trait Socket: Sink<Message, Error = Error> + Stream<Item = Result<Message, Error>> + Unpin {}
+impl<S> Socket for S where S: Sink<Message, Error = Error> + Stream<Item = Result<Message, Error>> + Unpin {}
 
-impl<S> ControlLink<S>
-where
-    S: Sink<Message, Error = Error> + Stream<Item = Result<Message, Error>> + Unpin,
-{
+impl<S: Socket> ControlLink<S> {
     async fn open(socket: S, noise: Session, node_id: &str) -> Result<Self, ServiceError> {
         let mut mux = StreamMux::default();
         let open = mux
@@ -217,13 +218,107 @@ where
             assembler: Assembler::default(),
         };
         link.send(&open).await?;
-        let data = control::encode(&control::registration(node_id)).map_err(|_| ServiceError::UnsafePairing)?;
-        link.send(&Frame {
-            id: link.control_id,
+        link.send_control(&control::registration(node_id)).await?;
+        Ok(link)
+    }
+
+    async fn register(&mut self) -> Result<Vec<serde_json::Value>, ServiceError> {
+        loop {
+            let (_, body) = self.receive().await?;
+            let mut messages = self.decode_control(body)?.into_iter();
+            for message in &mut messages {
+                match control::register_ack(&message) {
+                    Some(true) => return Ok(messages.collect()),
+                    Some(false) => return Err(ServiceError::NotReady),
+                    None => {}
+                }
+            }
+        }
+    }
+
+    async fn registered(
+        &mut self,
+        tasks: &Tasks,
+        pairing: &Pairing,
+        mut commands: mpsc::Receiver<Command>,
+        pending: Vec<serde_json::Value>,
+    ) -> Result<(), ServiceError> {
+        let mut chats = Chats::default();
+        self.handle_control(tasks, &mut chats, pending).await?;
+        loop {
+            tokio::select! {
+                frame = self.receive() => {
+                    let (id, body) = frame?;
+                    if id == self.control_id {
+                        let messages = self.decode_control(body)?;
+                        self.handle_control(tasks, &mut chats, messages).await?;
+                    } else {
+                        chats.receive(self, tasks, id, body).await?;
+                    }
+                }
+                Some(command) = commands.recv() => chats.command(self, tasks, pairing.node_id(), command).await?,
+                () = Chats::wait(tasks, chats.deadline()) => chats.expire(self, tasks).await?,
+            }
+        }
+    }
+
+    async fn handle_control(
+        &mut self,
+        tasks: &Tasks,
+        chats: &mut Chats,
+        messages: Vec<serde_json::Value>,
+    ) -> Result<(), ServiceError> {
+        for mut message in messages {
+            if let Some((result, task)) = control::invoke(&mut message, tasks) {
+                self.send_control(&result).await?;
+                if let Some(id) = task {
+                    chats.end_task(self, &id).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn send_control(&mut self, value: &serde_json::Value) -> Result<(), ServiceError> {
+        let data = control::encode(value).map_err(|_| ServiceError::PeerUnavailable)?;
+        self.send(&Frame {
+            id: self.control_id,
             body: Body::Chunk { data, end_body: false },
         })
-        .await?;
-        Ok(link)
+        .await
+    }
+
+    async fn open_request(&mut self, mut request: Request) -> Result<i64, ServiceError> {
+        let mut upload = Vec::new();
+        if request.body.len() > 64 * 1024 {
+            upload = std::mem::take(&mut request.body);
+            request.end_body = false;
+        }
+        let frame = self.mux.open(request).map_err(|_| ServiceError::PeerUnavailable)?;
+        self.send(&frame).await?;
+        let mut chunks = upload.chunks(16 * 1024).peekable();
+        while let Some(chunk) = chunks.next() {
+            let body = Body::Chunk {
+                data: chunk.to_vec(),
+                end_body: chunks.peek().is_none(),
+            };
+            self.send(&Frame { id: frame.id, body }).await?;
+        }
+        Ok(frame.id)
+    }
+
+    async fn reset(&mut self, id: i64) -> Result<(), ServiceError> {
+        if self.mux.forget(id) {
+            self.send(&Frame {
+                id,
+                body: Body::Reset {
+                    code: 1,
+                    reason: "request ended".into(),
+                },
+            })
+            .await?;
+        }
+        Ok(())
     }
 
     async fn send(&mut self, frame: &Frame) -> Result<(), ServiceError> {
@@ -237,35 +332,36 @@ where
                 .send
                 .encrypt(&part, &[])
                 .map_err(|_| ServiceError::PeerUnavailable)?;
-            self.socket
-                .send(Message::binary(packet))
+            timeout(START_TIMEOUT, self.socket.send(Message::binary(packet)))
                 .await
+                .map_err(|_| ServiceError::PeerUnavailable)?
                 .map_err(|_| ServiceError::PeerUnavailable)?;
         }
         Ok(())
     }
 
-    async fn receive_control(&mut self) -> Result<Option<bool>, ServiceError> {
-        let packet = recv_binary(&mut self.socket).await?;
-        let chunk = self
-            .noise
-            .receive
-            .decrypt(packet, &[])
-            .map_err(|_| ServiceError::PeerUnavailable)?;
-        let Some(bytes) = self
-            .assembler
-            .push(&chunk, Instant::now())
-            .map_err(|_| ServiceError::PeerUnavailable)?
-        else {
-            return Ok(None);
-        };
-        let frame = decode_response(&bytes).map_err(|_| ServiceError::PeerUnavailable)?;
-        let Some((id, body)) = self.mux.accept(frame) else {
-            return Ok(None);
-        };
-        if id != self.control_id {
-            return Ok(None);
+    async fn receive(&mut self) -> Result<(i64, Result<Body, InvalidWire>), ServiceError> {
+        loop {
+            let packet = recv_binary(&mut self.socket).await?;
+            let chunk = self
+                .noise
+                .receive
+                .decrypt(packet, &[])
+                .map_err(|_| ServiceError::PeerUnavailable)?;
+            if let Some(bytes) = self
+                .assembler
+                .push(&chunk, Instant::now())
+                .map_err(|_| ServiceError::PeerUnavailable)?
+            {
+                let frame = decode_response(&bytes).map_err(|_| ServiceError::PeerUnavailable)?;
+                if let Some(incoming) = self.mux.accept(frame) {
+                    return Ok(incoming);
+                }
+            }
         }
+    }
+
+    fn decode_control(&mut self, body: Result<Body, InvalidWire>) -> Result<Vec<serde_json::Value>, ServiceError> {
         let body = body.map_err(|_| ServiceError::NotReady)?;
         let data = match body {
             Body::Response(response) if (200..300).contains(&response.status) && !response.end_body => response.body,
@@ -273,22 +369,19 @@ where
             _ => return Err(ServiceError::NotReady),
         };
         let mut data = data.as_slice();
-        let mut ack = None;
+        let mut messages = Vec::new();
         while let Some(value) = self
             .decoder
             .next(&mut data)
             .map_err(|_| ServiceError::PeerUnavailable)?
         {
-            ack = ack.or_else(|| control::register_ack(&value));
+            messages.push(value);
         }
-        Ok(ack)
+        Ok(messages)
     }
 }
 
-async fn recv_binary<S>(socket: &mut S) -> Result<Vec<u8>, ServiceError>
-where
-    S: Sink<Message, Error = Error> + Stream<Item = Result<Message, Error>> + Unpin,
-{
+async fn recv_binary(socket: &mut impl Socket) -> Result<Vec<u8>, ServiceError> {
     loop {
         match socket.next().await {
             Some(Ok(Message::Binary(bytes))) => return Ok(bytes.to_vec()),

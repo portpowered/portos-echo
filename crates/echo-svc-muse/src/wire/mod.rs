@@ -5,7 +5,7 @@ mod daemon;
 mod proto;
 
 pub(super) use chunk::{Assembler, Packetizer};
-pub(super) use daemon::{Body, Frame, Request, StreamMux, decode_response, encode_request};
+pub(super) use daemon::{Body, Frame, Header, Request, StreamMux, decode_response, encode_request};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct InvalidWire;

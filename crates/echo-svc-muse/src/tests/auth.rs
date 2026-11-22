@@ -8,55 +8,31 @@ use std::{
 
 use futures_util::FutureExt as _;
 use serde_json::{Value, json};
-use tokio::sync::{Notify, watch};
+use tokio::sync::Notify;
 use tokio_tungstenite::{WebSocketStream, tungstenite::http::StatusCode};
 
 use crate::{
     MuseLink, MuseService as _, ServiceError, ServiceState,
     api::{Connector, Lease, Network, RefreshError, UpgradeError},
-    clock::Clock,
     link::OsRandom,
     pairing::{Pairing, Tokens},
+    tasks::Tasks,
     trust,
 };
 
-use super::{Fake, Pki, assert_catalogue, fake::Vm, write_pairing};
+use super::{Fake, ManualClock, Pki, assert_catalogue, fake::Vm, write_pairing};
 
 const SAVED_AT: u64 = 1_700_000_000;
 const ROTATION_BOUNDARY: u64 = SAVED_AT + 10_800;
 
-#[derive(Clone)]
-struct ManualClock(watch::Sender<u64>);
-
-impl ManualClock {
-    fn new(now: u64) -> Self {
-        Self(watch::Sender::new(now))
-    }
-
-    fn set(&self, now: u64) {
-        self.0.send_replace(now);
-    }
-}
-
-impl Clock for ManualClock {
-    fn now(&self) -> u64 {
-        *self.0.borrow()
-    }
-
-    async fn wait_until(&self, deadline: u64) {
-        let _ = self.0.subscribe().wait_for(|now| *now >= deadline).await;
-    }
-}
-
-fn start(fake: &Fake, pki: &Pki, clock: &ManualClock) -> MuseLink {
+pub(super) fn start(fake: &Fake, pki: &Pki, clock: &ManualClock) -> MuseLink {
     let pairing = Pairing::open(&fake.pairing).unwrap();
     let connector = Network::new(trust::client_config(&pki.pem).unwrap()).unwrap();
     MuseLink::spawn(
         &tokio::runtime::Handle::current(),
         pairing,
         connector,
-        OsRandom::new(),
-        clock.clone(),
+        Tasks::open(&fake.task_path(), clock.clone(), OsRandom::new()).unwrap(),
     )
 }
 
@@ -93,7 +69,7 @@ async fn t3_stale_vm_lease_refetched_once() {
     let pki = Pki::new();
     for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
         let fake = Fake::new(&pki, &pki, "127.0.0.1").await;
-        let link = MuseLink::start(&fake.pairing, &pki.pem).unwrap();
+        let link = MuseLink::start(&fake.pairing, &fake.task_path(), &pki.pem).unwrap();
         fake.lookup().await;
         assert!(
             fake.upgrade("vm%201%26x", "synthetic-default", Some(status))
@@ -118,7 +94,7 @@ async fn t3_stale_vm_lease_refetched_once() {
 async fn t3_no_default_falls_back_and_empty_list_does_not_dial() {
     let pki = Pki::new();
     let fake = Fake::new(&pki, &pki, "127.0.0.1").await;
-    let link = MuseLink::start(&fake.pairing, &pki.pem).unwrap();
+    let link = MuseLink::start(&fake.pairing, &fake.task_path(), &pki.pem).unwrap();
     fake.leases(
         "synthetic-access",
         json!([
@@ -133,7 +109,7 @@ async fn t3_no_default_falls_back_and_empty_list_does_not_dial() {
     link.stop().await.unwrap();
 
     let empty = Fake::new(&pki, &pki, "127.0.0.1").await;
-    let link = MuseLink::start(&empty.pairing, &pki.pem).unwrap();
+    let link = MuseLink::start(&empty.pairing, &empty.task_path(), &pki.pem).unwrap();
     empty.leases("synthetic-access", json!([])).await;
     assert_eq!(link.wait_registered().await, Err(ServiceError::PeerUnavailable));
     assert_eq!(link.state(), ServiceState::Disconnected);
@@ -145,7 +121,7 @@ async fn t3_no_default_falls_back_and_empty_list_does_not_dial() {
 async fn t3_repeated_upgrade_rejection_stops_attempt() {
     let pki = Pki::new();
     let fake = Fake::new(&pki, &pki, "127.0.0.1").await;
-    let link = MuseLink::start(&fake.pairing, &pki.pem).unwrap();
+    let link = MuseLink::start(&fake.pairing, &fake.task_path(), &pki.pem).unwrap();
     for (id, status) in [("first", StatusCode::UNAUTHORIZED), ("second", StatusCode::FORBIDDEN)] {
         fake.leases("synthetic-access", fresh_lease(id, "synthetic-lease"))
             .await;
@@ -281,8 +257,12 @@ async fn t1_auth_single_refresh_owner_commits_before_stop_releases_pairing() {
         &tokio::runtime::Handle::current(),
         Pairing::open(&path).unwrap(),
         connector.clone(),
-        OsRandom::new(),
-        ManualClock::new(ROTATION_BOUNDARY),
+        Tasks::open(
+            &root.path().join("tasks.json"),
+            ManualClock::new(ROTATION_BOUNDARY),
+            OsRandom::new(),
+        )
+        .unwrap(),
     );
     connector.entered.notified().await;
     let mut stop = std::pin::pin!(link.stop());
