@@ -72,7 +72,7 @@ impl Pki {
 }
 
 pub(super) struct Fake {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     pub(super) pairing: PathBuf,
     pub(super) api: TcpListener,
     pub(super) vm_listener: TcpListener,
@@ -82,7 +82,7 @@ pub(super) struct Fake {
 
 impl Fake {
     pub(super) fn task_path(&self) -> PathBuf {
-        self._directory.path().join("tasks.json")
+        self.directory.path().join("tasks.json")
     }
 
     pub(super) async fn new(api: &Pki, vm: &Pki, api_name: &str) -> Self {
@@ -106,7 +106,7 @@ impl Fake {
         record["api_url_v2"] = json!(api_url.as_str());
         write_pairing(&pairing, &record);
         Self {
-            _directory: directory,
+            directory,
             pairing,
             api,
             vm_listener,
