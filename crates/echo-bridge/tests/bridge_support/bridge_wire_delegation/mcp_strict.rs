@@ -428,6 +428,7 @@ fn assert_replayed(h: &Harness) {
     }
 }
 // Wall time bounds observations even while the Tokio clock is frozen.
+#[allow(clippy::disallowed_methods, reason = "Paused test ceiling")]
 pub(super) async fn observe_restart<F: Future>(
     future: F,
     deadline: Instant,
@@ -449,6 +450,7 @@ pub(super) async fn observe_restart<F: Future>(
     })
     .await
 }
+#[allow(clippy::disallowed_methods, reason = "Paused test ceiling")]
 pub(super) async fn wait_probe(path: &Path, cursor: usize) {
     let deadline = Instant::now() + OBSERVATION_TIMEOUT;
     let mut checked = false;

@@ -322,6 +322,7 @@ fn probe_barrier_requires_fresh_complete_connection_record() {
 // T1: immediately-ready reads acknowledge each evaluated stage of the actual
 // recovery wait. No filesystem scheduling, socket, clock advance or sleep.
 #[tokio::test(start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "Paused test ceiling")]
 async fn reconnect_barrier_waits_for_complete_publication() {
     let probe =
         json!({"event":"wyoming.probe_ok","run_id":"connection-1","elapsed_ms":10,"provider_auth_mode":"api_key"});

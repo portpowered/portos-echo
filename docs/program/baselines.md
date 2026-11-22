@@ -17,15 +17,15 @@ factory payloads cite these instead of rediscovering them. Add a row whenever a 
 ## A1 direct clock calls (2026-11-22)
 
 This ratchet counts direct references to the standard clock methods, including
-aliased imports and test assertions. A1 routes four production wall reads
-through `Clock`. The new `SystemClock` definition has one call to each method.
+aliased imports and test assertions. A1 routes four wall reads through `Clock`,
+including the Codex lease test. The new `SystemClock` definition calls each method once.
 The legacy counts exclude those defining calls. Tokio time remains available
 for pauseable scheduling.
 
 | Standard method | Legacy production | Legacy test |
 | --- | ---: | ---: |
 | `SystemTime::now` | 18 | 19 |
-| `Instant::now` | 25 | 52 |
+| `Instant::now` | 25 | 55 |
 
 ## Development profile size (2026-11-17)
 
