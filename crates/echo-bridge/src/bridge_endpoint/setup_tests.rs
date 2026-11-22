@@ -75,6 +75,66 @@ async fn t3_endpoint_serves_while_route_discovery_lags() {
     .await;
 }
 
+/// T3: a state report sent before Port OS routes the device gets 404 and is
+/// not dropped. Discovery finding the route, and every gateway reconnect,
+/// report the full state again with no state change in between.
+#[tokio::test(start_paused = true)]
+async fn t3_endpoint_reports_full_state_once_the_route_is_found() {
+    bridge_mcp::bridge_component::drive(async {
+        let home = tempfile::tempdir().unwrap();
+        let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
+        mock.enable_endpoint_audience().unwrap();
+        // The route appears after the second read (5 s); the third read (35 s) finds it.
+        mock.state.lock().unwrap().endpoint.route_delay = 2;
+        let mut grant = registered(&mock, home.path()).await;
+        let mut gateway = Gateway::open(&mock).await;
+        let settings = Settings::open(home.path(), &mock, &gateway, grant.grant.clone()).await;
+        settings.save(true, "Hall Echo").await;
+        gateway.assert_upgrade(CLAIMED).await;
+        assert_eq!(state_reports(&mock, 1).await, [Some(404)]);
+        let found = Instant::now() + Duration::from_secs(40);
+        while route_reads(&mock) < 3 {
+            assert!(Instant::now() < found, "route discovery retries");
+            advance(Duration::from_millis(10)).await;
+        }
+        assert_eq!(state_reports(&mock, 2).await, [Some(404), Some(202)]);
+        gateway.cycle().await;
+        gateway.assert_disconnect().await;
+        gateway.assert_upgrade(CLAIMED).await;
+        assert_eq!(state_reports(&mock, 3).await, [Some(404), Some(202), Some(202)]);
+        assert_no_refusals(&mock);
+        settings.close().await;
+        grant.close().await;
+    })
+    .await;
+}
+
+/// The status of each plain state report once `count` were sent; each is the full idle state.
+async fn state_reports(mock: &Mock, count: usize) -> Vec<Option<u16>> {
+    loop {
+        let reports: Vec<_> = mock
+            .state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|request| request.path == "/messages")
+            .filter_map(|request| Some((request.status, request.json.clone()?)))
+            .filter(|(_, body)| body["payload"]["requestId"].is_null())
+            .collect();
+        if reports.len() >= count {
+            for (_, body) in &reports {
+                assert_eq!(body["header"]["name"], "report-state");
+                assert_eq!(body["payload"]["assistant"], json!({"state":"IDLE"}));
+                assert!(body["payload"]["sampledAtMs"].is_i64());
+            }
+            return reports.into_iter().map(|(status, _)| status).collect();
+        }
+        // Reports are paced 250 ms apart: drive the paused clock.
+        advance(Duration::from_millis(10)).await;
+    }
+}
+
 fn route_reads(mock: &Mock) -> usize {
     let state = mock.state.lock().unwrap();
     state
@@ -308,7 +368,7 @@ pub(super) fn lifecycle(home: &Path) -> Vec<Value> {
         .collect()
 }
 
-async fn wait_event(home: &Path, event: &str) -> Vec<Value> {
+pub(super) async fn wait_event(home: &Path, event: &str) -> Vec<Value> {
     for _ in 0..3_000 {
         let rows = lifecycle(home);
         if rows.iter().any(|row| row["event"] == event) {

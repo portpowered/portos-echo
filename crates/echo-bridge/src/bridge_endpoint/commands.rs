@@ -65,8 +65,15 @@ impl Command {
         let name = audit_name(&header);
         match (header.interface(), header.name.as_str()) {
             (Some("speaker"), "set-volume" | "adjust-volume" | "set-mute") => {
-                let accepted = super::speaker::command(&header.name, body, received).await;
-                audit(trace, name, if accepted { "OK" } else { "INVALID_REQUEST" }, received);
+                let code = match super::speaker::command(&header.name, body, received).await {
+                    super::speaker::Outcome::Sent => "OK",
+                    super::speaker::Outcome::Invalid => "INVALID_REQUEST",
+                    super::speaker::Outcome::Dropped(reason) => {
+                        super::note(trace, "endpoint.speaker_dropped", json!({ "reason": reason }));
+                        "DROPPED"
+                    }
+                };
+                audit(trace, name, code, received);
                 None
             }
             (Some("snapshot"), "get-snapshot") => {

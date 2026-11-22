@@ -109,19 +109,28 @@ inline base64 JPEG stamped with the capture time.
 
 Remote and wake sessions share one voice slot. A text start can speak a reply without opening
 device capture. Set `remote_mic = true` only for a Wyoming peer that acknowledges the correlated
-capture request. A mic-only start then waits up to two seconds for the peer. A text start that
+capture request. A mic-only start then waits up to two seconds for the peer and returns `NOT_READY`
+if it does not answer; without `remote_mic` it returns `NOT_SUPPORTED`. A text start that
 requests follow-up tries capture after its first reply has played. An explicit remote end cancels
 delegated work and closes playback and capture.
 
+The bridge reports full state after it finds its route and on every gateway connection. A state
+report that Port OS answers `NOT_FOUND`, before the route exists, is sent again once the route is
+found.
+
 Port OS speaker commands request absolute volume, a relative change from the last reported volume,
-or output mute. The current Wyoming peer does not acknowledge these controls, so the bridge replies
-`NOT_SUPPORTED`. Volume and output mute are unknown until the device reports them. Microphone
-privacy continues to control the assistant's muted state independently.
+or output mute. They get no reply. A command that reaches no device is traced as
+`endpoint.speaker_dropped` with a fixed `reason` (`volume_unknown` or `no_speaker_link`), and its
+audit row says `DROPPED`, not `OK`. Volume and output mute are unknown until the device reports
+them. Microphone privacy continues to control the assistant's muted state independently.
 
 Snapshot requests use the camera source's own shutter state. A closed shutter refuses capture,
 including if it closes during capture. A supported source returns one in-memory JPEG with its
-dimensions and sample time. The entire encoded reply is capped at 8 MiB. The bridge returns
-`NOT_SUPPORTED` until a camera source is installed.
+dimensions and sample time. The entire encoded reply is capped at 8 MiB. Without a camera source
+the bridge returns `NOT_SUPPORTED`. While the screen app has not attached its camera stream, it
+returns `NOT_READY`. The settings trace records each stream change as `endpoint.camera` with
+`session` (`attached` or `detached`) and the fixed reason of the latest refused attach in
+`refused` (`forbidden`, `unauthorized` or `conflict`).
 
 To downgrade, remove this section from the base file and Settings overlay.
 

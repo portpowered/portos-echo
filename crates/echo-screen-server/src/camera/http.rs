@@ -1,4 +1,4 @@
-use super::{Connection, Event, MAX_JPEG_BYTES, wire};
+use super::{Camera, Connection, Event, MAX_JPEG_BYTES, Refused, wire};
 use crate::{cancelled, draining, screen_http::HttpState};
 use axum::{
     body::to_bytes,
@@ -20,8 +20,18 @@ struct Stream {
 }
 
 pub(crate) async fn events(State(state): State<HttpState>, request: Request) -> Result<Response, StatusCode> {
-    let camera = state.camera.as_ref().ok_or(StatusCode::NOT_FOUND)?;
-    let (nonce, proof) = client(&state, &request)?;
+    let camera = state.camera.clone().ok_or(StatusCode::NOT_FOUND)?;
+    attach(&state, &camera, request).await.inspect_err(|status| {
+        camera.refused(match *status {
+            StatusCode::FORBIDDEN => Refused::Forbidden,
+            StatusCode::CONFLICT => Refused::Conflict,
+            _ => Refused::Unauthorized,
+        });
+    })
+}
+
+async fn attach(state: &HttpState, camera: &Camera, request: Request) -> Result<Response, StatusCode> {
+    let (nonce, proof) = client(state, &request)?;
     let core = state.core.lock().await;
     let key = core.camera_key().ok_or(StatusCode::UNAUTHORIZED)?;
     if !wire::verify(key, nonce, &proof, &["attach"]) {

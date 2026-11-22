@@ -1,6 +1,8 @@
 mod tls;
 mod uplink;
 
+use uplink::Delivery;
+
 use super::{Attempts, Status, commands::Receipts, note, snapshot::Camera, voice::Voice};
 use echo_contracts::endpoint::{Report, Uplink};
 use echo_mcp_auth::{EndpointTokenSource, new_request_id};
@@ -13,7 +15,7 @@ use std::{
 };
 use tokio::{
     net::TcpStream,
-    sync::mpsc,
+    sync::{mpsc, watch},
     time::{Instant, MissedTickBehavior, interval_at, timeout},
 };
 use tokio_tungstenite::{
@@ -54,6 +56,8 @@ pub(super) struct Transport {
     connector: Option<Connector>,
     pub(super) camera: Camera,
     pub(super) trace: Option<crate::bridge_trace::Trace>,
+    /// Bumped when route discovery finds this device's route.
+    routes: watch::Sender<()>,
 }
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -104,6 +108,7 @@ impl Transport {
             connector: trust.gateway,
             camera: Camera::default(),
             trace: None,
+            routes: watch::channel(()).0,
         })
     }
 
@@ -235,22 +240,31 @@ impl Transport {
         }
     }
 
-    /// Report state whenever it changes; each report is stamped when it is sent.
+    /// Port OS now routes this device: every live connection reports its full state again.
+    pub(super) fn route_found(&self) {
+        self.routes.send_replace(());
+    }
+
+    /// Report the full state on connect, whenever it changes and once the
+    /// route is found; each report is stamped when it is sent. A report Port
+    /// OS could not route yet is sent again with the next change or route.
     async fn report(&self, device_id: &str, tokens: &dyn EndpointTokenSource) {
         let voice = Voice::current().unwrap_or_default();
         let mut states = voice.subscribe();
+        let mut routes = self.routes.subscribe();
         let mut sent: Option<Report> = None;
         loop {
             let report = states.borrow_and_update().report();
             if sent.as_ref() != Some(&report) {
                 let mut stamped = report.clone();
                 stamped.sampled_at_ms = wall_ms();
-                sent = Some(report);
                 let body = serde_json::to_vec(&Uplink::report(device_id, stamped)).ok();
-                self.send(tokens, body, Instant::now() + REPLY_WINDOW).await;
+                let delivery = self.deliver(tokens, body, Instant::now() + REPLY_WINDOW).await;
+                sent = (delivery != Delivery::Unrouted).then_some(report);
             }
-            if states.changed().await.is_err() {
-                return;
+            tokio::select! {
+                changed = states.changed() => if changed.is_err() { return },
+                Ok(()) = routes.changed() => sent = None,
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }

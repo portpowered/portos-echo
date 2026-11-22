@@ -90,7 +90,7 @@ pub struct EndpointState {
     last_audience: Option<String>,
     /// The deviceId the pairing exchange named.
     pub device_id: Option<String>,
-    /// Route discovery lags pairing: this many `/routes` reads omit the Echo.
+    /// Route discovery lags pairing: this many `/routes` reads omit the Echo; its state reports get 404 until then.
     pub route_delay: usize,
     /// Other owner routes listed before the Echo's, to exercise pagination.
     pub route_padding: usize,

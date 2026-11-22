@@ -147,7 +147,9 @@ impl Runtime {
         current_grant: impl Fn() -> Option<Arc<Grant>>,
         trace: Option<crate::bridge_trace::Trace>,
     ) -> T {
-        let observed = observe(self.status.subscribe(), trace.clone());
+        let status = observe(self.status.subscribe(), trace.clone());
+        let camera = snapshot::observe(self.transport.camera.source.clone(), trace.clone());
+        let observed = async { tokio::join!(status, camera).0 };
         self.transport.trace = trace;
         let supervised = voice::CURRENT.scope(voice::Voice::default(), self.supervise(work, current_grant));
         tokio::pin!(supervised);
@@ -313,7 +315,8 @@ impl Runtime {
     }
 
     /// Read the paired route back for display and logs. Commands and reports
-    /// address the `deviceId`, so the bridge serves while discovery lags.
+    /// address the `deviceId`, so the bridge serves while discovery lags; a
+    /// found route makes the gateway report its full state again.
     async fn discover(
         &self,
         store: &EndpointRegistration,
@@ -325,6 +328,7 @@ impl Runtime {
             sleep(Duration::from_secs(delay)).await;
             match self.exchange.endpoint_id(tokens, device_id).await {
                 Ok(Some(endpoint_id)) => {
+                    self.transport.route_found();
                     let stored = store.remember_endpoint(auth_link_id, endpoint_id).await.is_ok();
                     self.discovered(if stored { "found" } else { "unsaved" });
                     return;

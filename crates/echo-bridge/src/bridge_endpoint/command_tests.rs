@@ -36,6 +36,7 @@ async fn t3_endpoint_command_replies_are_correlated_and_deduplicated_across_reco
         gateway.assert_upgrade(CLAIMED).await;
         send(&gateway, &start).await;
         assert_unsupported_command(&gateway, &mock).await;
+        assert_unlinked_speaker(&gateway, home.path()).await;
         assert_unknown_end(&gateway, &mock).await;
         assert_cycle(&mut gateway, &mock).await;
 
@@ -46,6 +47,37 @@ async fn t3_endpoint_command_replies_are_correlated_and_deduplicated_across_reco
         assert_no_refusals(&mock);
     })
     .await;
+}
+
+/// T3: a mic-only start on a Wyoming peer without correlated capture is not
+/// supported, rather than the transient `NOT_READY` agents read as offline.
+#[tokio::test(start_paused = true)]
+async fn t3_endpoint_mic_start_without_remote_capture_is_not_supported() {
+    tokio::task::LocalSet::new()
+        .run_until(Box::pin(bridge_mcp::bridge_component::drive(async {
+            let home = tempfile::tempdir().unwrap();
+            let mock = Mock::bind_at_epoch(EPOCH).await.unwrap();
+            mock.enable_endpoint_audience().unwrap();
+            let mut grant = registered(&mock, home.path()).await;
+            let mut gateway = Gateway::open(&mock).await;
+            let link = echo_link::fake::FakeConnector::new(echo_link::fake::Observer::default());
+            let (settings, _app, ready, _) =
+                voice_tests::fixture_with_link(home.path(), &mock, &gateway, grant.grant.clone(), link, None, false)
+                    .await;
+            ready.notified().await;
+            settings.save(true, "Hall Echo").await;
+            gateway.assert_upgrade(CLAIMED).await;
+            let opened = Instant::now();
+            let start = command("start-session", "mic-only", DEVICE, &json!({"reason":"synthetic"}));
+            send(&gateway, &start).await;
+            assert_reply(&mock, "mic-only", "NOT_SUPPORTED").await;
+            assert!(opened.elapsed() < Duration::from_secs(1));
+            assert_no_refusals(&mock);
+            settings.close().await;
+            gateway.assert_disconnect().await;
+            grant.close().await;
+        })))
+        .await;
 }
 
 /// Close 4000 ends the connection's hour: reconnect at once. The token
@@ -178,6 +210,22 @@ async fn assert_invalid_routing(gateway: &Gateway, mock: &Mock) {
 async fn assert_unsupported_command(gateway: &Gateway, mock: &Mock) {
     send(gateway, &command("future", "unknown", DEVICE, &json!({}))).await;
     assert_reply(mock, "unknown", "UNSUPPORTED_COMMAND").await;
+}
+
+/// Without a speaker link a control reaches no device: dropped, unanswered, never audited OK.
+async fn assert_unlinked_speaker(gateway: &Gateway, home: &Path) {
+    send(gateway, &command("set-mute", "unlinked", DEVICE, &json!({"mute":true}))).await;
+    let rows = setup_tests::wait_event(home, "endpoint.speaker_dropped").await;
+    let dropped: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "endpoint.speaker_dropped")
+        .collect();
+    assert_eq!(dropped.len(), 1);
+    assert_eq!(dropped[0]["reason"], "no_speaker_link");
+    assert!(
+        rows.iter()
+            .any(|row| { row["event"] == "endpoint.command" && row["name"] == "set-mute" && row["code"] == "DROPPED" })
+    );
 }
 
 async fn assert_unknown_end(gateway: &Gateway, mock: &Mock) {

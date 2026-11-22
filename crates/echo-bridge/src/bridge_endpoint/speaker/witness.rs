@@ -48,11 +48,37 @@ async fn t3_endpoint_speaker_controls_are_fire_and_forget() {
                 assert_eq!(report["assistant"], json!({"state":"IDLE"}));
             }
             assert_no_refusals(&mock);
+            assert_audited(home.path(), "volume_unknown");
             settings.close().await;
             gateway.assert_disconnect().await;
             grant.close().await;
         })))
         .await;
+}
+
+/// A control that reaches no device is traced as dropped, never audited OK.
+fn assert_audited(home: &Path, reason: &str) {
+    let rows = setup_tests::lifecycle(home);
+    let mut audits: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "endpoint.command")
+        .map(|row| format!("{} {}", row["name"].as_str().unwrap(), row["code"].as_str().unwrap()))
+        .collect();
+    audits.sort_unstable();
+    let expected = [
+        "adjust-volume DROPPED",
+        "set-mute OK",
+        "set-volume INVALID_REQUEST",
+        "set-volume INVALID_REQUEST",
+        "set-volume OK",
+    ];
+    assert_eq!(audits, expected);
+    let dropped: Vec<_> = rows
+        .iter()
+        .filter(|row| row["event"] == "endpoint.speaker_dropped")
+        .map(|row| row["reason"].clone())
+        .collect();
+    assert_eq!(dropped, [json!(reason)]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -72,6 +98,7 @@ async fn t3_endpoint_speaker_uses_reported_volume_and_independent_mic_privacy() 
                 grant.grant.clone(),
                 FakeConnector::new(observer.clone()),
                 None,
+                true,
             )
             .await;
             ready.notified().await;

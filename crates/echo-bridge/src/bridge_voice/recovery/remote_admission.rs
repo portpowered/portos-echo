@@ -113,7 +113,8 @@ pub(super) async fn prepare<L: EchoLink>(
         }));
     }
     if !options.remote_mic {
-        start.refuse(no_capture());
+        // The configured Wyoming peer has no correlated capture: not a transient state.
+        start.refuse(refusal("NOT_SUPPORTED"));
         return Ok(None);
     }
     let id = endpoint.begin_remote(AssistantState::Listening)?;

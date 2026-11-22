@@ -77,6 +77,10 @@ impl CameraSource for CameraPeer {
         self.exchange.as_ref().is_none_or(echo_screen_server::Camera::connected)
     }
 
+    fn link(&self) -> Option<watch::Receiver<echo_screen_server::CameraLink>> {
+        self.exchange.as_ref().map(echo_screen_server::Camera::link)
+    }
+
     fn shutter(&self) -> watch::Receiver<Shutter> {
         self.shutter.subscribe()
     }
