@@ -298,8 +298,7 @@ with tempfile.TemporaryDirectory(prefix='endpoint-peer-') as folder:
 
     def describe(self, host):
         with socket.create_connection(('127.0.0.1', host.port), timeout=2) as conn:
-            conn.sendall(b'{"type":"describe"}\n')
-            self.assertIn(b'"info"', conn.recv(65536))
+            self.assertEqual(wyoming_host.describe(conn)['satellite']['name'], 'Wyoming Test')
 
     def test_copy_and_fork_cannot_overlap_writable_executable(self):
         # Rendezvous, not load/timing: a sibling fork inherits A's open writer.

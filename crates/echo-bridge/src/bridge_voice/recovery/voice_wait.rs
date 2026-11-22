@@ -243,6 +243,17 @@ impl Delegation {
         finish
     }
 
+    /// An applied end owes nothing delegated any more. An utterance still
+    /// being spoken as the end's farewell is the answer: its own done ends the
+    /// reply, so a delegated turn completing first cannot cut its tail.
+    pub fn ended(&mut self, farewell: bool) {
+        let speaking = farewell && self.utterance != Utterance::None;
+        *self = Self::default();
+        if speaking {
+            self.utterance = Utterance::Answer;
+        }
+    }
+
     /// A filler done is holding the reply open for a delegated answer.
     #[must_use]
     pub fn held(&self) -> bool {

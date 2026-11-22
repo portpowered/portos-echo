@@ -230,8 +230,9 @@ impl Source {
             return Ok(false);
         }
         let held = self.delegation.held();
-        self.delegation = Delegation::default();
-        if self.controller.idle_deadline().is_some() {
+        let between = self.controller.idle_deadline().is_some();
+        self.delegation.ended(!between && self.reply.spoken());
+        if between {
             return Ok(false);
         }
         if self.reply.spoken() {
