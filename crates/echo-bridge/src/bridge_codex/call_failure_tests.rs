@@ -395,6 +395,12 @@ async fn call_profile_fields_are_independent_and_unset_request_is_unchanged() {
             let remote = async {
                 // start asserts the full realtime request, including the absence of profile/zone keys.
                 let params = start(&mut server).await;
+                // `web` is direct only while search is on.
+                let direct = if web_search == echo_config::WebSearch::Disabled {
+                    json!(["functions"])
+                } else {
+                    json!(["web", "functions"])
+                };
                 let mut expected = json!({
                     "ephemeral": true, "approvalPolicy": "never", "sandbox": "read-only",
                     "serviceTier": null,
@@ -405,7 +411,7 @@ async fn call_profile_fields_are_independent_and_unset_request_is_unchanged() {
                         "features.multi_agent": false, "features.multi_agent_v2": false, "agents.enabled": false,
                         "features.goals": false, "tools.experimental_request_user_input.enabled": false,
                         "tools.update_plan.enabled": false,
-                        "features.code_mode.direct_only_tool_namespaces": ["functions"],
+                        "features.code_mode.direct_only_tool_namespaces": direct,
                         "web_search": web_search.as_str(), "mcp_servers": {}, "skills.include_instructions": false
                     }
                 });
