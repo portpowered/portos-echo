@@ -1,69 +1,23 @@
+//! T3 component journeys through the shipped Muse service, with loopback peers.
+#![cfg(target_os = "linux")]
+
+#[path = "journeys/auth.rs"]
 mod auth;
-mod fake;
-mod lifecycle;
+#[path = "../src/noise/mod.rs"]
+mod noise;
+mod support;
+#[path = "journeys/task.rs"]
 mod task;
+#[path = "../src/wire/mod.rs"]
+mod wire;
 
-use std::{os::unix::fs::PermissionsExt, path::Path};
+use std::os::unix::fs::PermissionsExt as _;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use echo_agent_api::Task;
-use echo_contracts::ids::DelegationId;
+use echo_svc_muse::{MuseLink, MuseService as _, ServiceError, ServiceState};
 use futures_util::FutureExt as _;
-use serde_json::{Value, json};
-use tokio::sync::watch;
+use serde_json::json;
 
-use crate::{
-    MuseLink, MuseService as _, ServiceError, ServiceState,
-    clock::{Clock, Wait},
-};
-
-use self::fake::{Fake, Pki};
-
-async fn wait_state(link: &MuseLink, expected: ServiceState) {
-    let mut state = link.state.clone();
-    let _ = state.wait_for(|(state, _)| *state == expected).await.unwrap();
-}
-
-#[derive(Clone)]
-pub(super) struct ManualClock(watch::Sender<u64>);
-
-impl ManualClock {
-    pub(super) fn new(now: u64) -> Self {
-        Self(watch::Sender::new(now))
-    }
-
-    pub(super) fn set(&self, now: u64) {
-        self.0.send_replace(now);
-    }
-}
-
-impl Clock for ManualClock {
-    fn now(&self) -> u64 {
-        *self.0.borrow()
-    }
-
-    fn wait_until(&self, deadline: u64) -> Wait<'_> {
-        Box::pin(async move {
-            let _ = self.0.subscribe().wait_for(|now| *now >= deadline).await;
-        })
-    }
-}
-
-pub(super) fn pairing_record() -> Value {
-    json!({
-        "version": 1,
-        "node_id": "gadget-fixture",
-        "access_token": "synthetic-access",
-        "refresh_token": "synthetic-refresh",
-        "access_token_saved_at": 1700000000,
-        "noise_static_key": STANDARD.encode([7; 32]),
-    })
-}
-
-pub(super) fn write_pairing(path: &Path, value: &Value) {
-    std::fs::write(path, serde_json::to_vec(value).unwrap()).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-}
+use support::{Fake, Pki, assert_catalogue, demo_task};
 
 #[tokio::test]
 async fn t3_registers_only_echo_report_result() {
@@ -88,27 +42,6 @@ async fn t3_registers_only_echo_report_result() {
     assert_eq!(link.state(), ServiceState::Stopped);
     vm.expect_closed().await;
     assert!(fake.pairing.exists());
-}
-
-fn assert_catalogue(register: &Value) {
-    assert_eq!(register["type"], "req");
-    assert_eq!(register["method"], "link.register");
-    let params = &register["params"];
-    assert_eq!(params["node_id"], "gadget-fixture");
-    assert_eq!(params["device_family"], "gadget");
-    assert_eq!(params["platform"], "linux");
-    assert_eq!(params["model_id"], "portos-echo");
-    assert_eq!(params["is_wakeup_supported"], false);
-    let catalogue = params["commands_v2"].as_object().unwrap();
-    assert_eq!(catalogue.keys().collect::<Vec<_>>(), ["echo.report.result"]);
-    let report = &catalogue["echo.report.result"];
-    assert_eq!(report["timeout_ms"], 15000);
-    assert_eq!(report["optional"], json!({}));
-    let fields = report["required"].as_object().unwrap();
-    assert_eq!(fields.keys().collect::<Vec<_>>(), ["status", "summary", "task_id"]);
-    for field in fields.values() {
-        assert_eq!(field["type"], "string");
-    }
 }
 
 #[tokio::test]
@@ -136,7 +69,7 @@ async fn t3_tls_rejects_untrusted_peer_and_wrong_name() {
         assert_eq!(link.state(), ServiceState::Disconnected);
         assert!(fake.vm_listener.accept().now_or_never().is_none());
 
-        let fake = Fake::with_vm_name(&trusted, issuer, name).await;
+        let fake = Fake::with_names(&trusted, issuer, "127.0.0.1", name).await;
         let link = MuseLink::start(&fake.pairing, &fake.task_path(), &trusted.pem).unwrap();
         fake.lookup().await;
         assert!(fake.accept_vm().await.is_err());
@@ -166,12 +99,55 @@ async fn t3_registration_refusal_never_ready() {
     }
 }
 
-pub(super) fn demo_task() -> Task {
-    Task {
-        delegation_id: DelegationId::new("synthetic-delegation").unwrap(),
-        instructions: "Read the fixture".into(),
-        context: json!({}),
-        deadline_seconds: 2,
-        max_tool_calls: 1,
+#[tokio::test]
+async fn t3_final_control_chunk_unpairs_without_reconnect() {
+    let pki = Pki::new();
+    for event in ["link.unpaired", "node.unpaired"] {
+        let fake = Fake::new(&pki, &pki, "127.0.0.1").await;
+        let link = MuseLink::start(&fake.pairing, &fake.task_path(), &pki.pem).unwrap();
+        let (mut vm, stream) = support::connect(&fake, &link).await;
+        let bytes = support::encode_control(&json!({"type":"evt","event":event}));
+        let split = bytes.len() / 2;
+        vm.chunk(stream, bytes[..split].to_vec(), false).await;
+        vm.chunk(stream, bytes[split..].to_vec(), true).await;
+        assert_unpaired(&fake, &link, &mut vm).await;
     }
+}
+
+#[tokio::test]
+async fn t3_final_control_response_unpairs_before_registration() {
+    let pki = Pki::new();
+    for event in ["link.unpaired", "node.unpaired"] {
+        let fake = Fake::new(&pki, &pki, "127.0.0.1").await;
+        let link = MuseLink::start(&fake.pairing, &fake.task_path(), &pki.pem).unwrap();
+        fake.lookup().await;
+        let mut vm = fake.vm().await;
+        let stream = vm.read_control_request().await;
+        let _ = vm.read_register(stream).await;
+        let data = support::encode_control(&json!({"type":"evt","event":event}));
+        vm.send(&wire::Frame {
+            id: stream,
+            body: wire::Body::Response(wire::Response {
+                status: 200,
+                body: data,
+                end_body: true,
+                ..wire::Response::default()
+            }),
+        })
+        .await;
+        assert_unpaired(&fake, &link, &mut vm).await;
+    }
+}
+
+async fn assert_unpaired(fake: &Fake, link: &MuseLink, vm: &mut support::Vm) {
+    vm.expect_closed().await;
+    assert_eq!(link.state(), ServiceState::PairingRemoved);
+    assert!(!fake.pairing.exists());
+    assert_eq!(link.submit(demo_task()).await, Err(ServiceError::NotReady));
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(60)).await;
+    tokio::time::resume();
+    assert_eq!(link.state(), ServiceState::PairingRemoved);
+    fake.assert_idle();
+    assert_eq!(link.stop().await, Ok(()));
 }

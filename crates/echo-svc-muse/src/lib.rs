@@ -13,7 +13,8 @@ mod trust;
 mod wire;
 
 #[cfg(test)]
-mod tests;
+#[path = "../tests/support/mod.rs"]
+mod support;
 
 use std::{future::Future, path::Path, sync::Arc};
 

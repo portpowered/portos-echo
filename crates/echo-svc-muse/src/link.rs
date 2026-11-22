@@ -1,5 +1,8 @@
 mod chats;
 
+#[cfg(test)]
+mod tests;
+
 use std::time::Duration;
 
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
@@ -200,6 +203,11 @@ enum Registration {
     Removed,
 }
 
+struct ControlBody {
+    messages: Vec<serde_json::Value>,
+    end_body: bool,
+}
+
 trait Socket: Sink<Message, Error = Error> + Stream<Item = Result<Message, Error>> + Unpin {}
 impl<S> Socket for S where S: Sink<Message, Error = Error> + Stream<Item = Result<Message, Error>> + Unpin {}
 
@@ -231,11 +239,15 @@ impl<S: Socket> ControlLink<S> {
         loop {
             let (_, body) = self.receive().await?;
             // Removal applies even when the VM has not acknowledged registration yet.
-            let mut messages = self.decode_control(body)?.into_iter();
+            let ControlBody { messages, end_body } = self.decode_control(body)?;
+            if messages.iter().any(control::unpaired) {
+                return Ok(Registration::Removed);
+            }
+            if end_body {
+                return Err(ServiceError::NotReady);
+            }
+            let mut messages = messages.into_iter();
             for message in &mut messages {
-                if control::unpaired(&message) {
-                    return Ok(Registration::Removed);
-                }
                 match control::register_ack(&message) {
                     Some(true) => return Ok(Registration::Accepted(messages.collect())),
                     Some(false) => return Err(ServiceError::NotReady),
@@ -263,8 +275,7 @@ impl<S: Socket> ControlLink<S> {
                 frame = self.receive() => {
                     let (id, body) = frame?;
                     if id == self.control_id {
-                        let messages = self.decode_control(body)?;
-                        if self.handle_control(&mut invokes, messages).await? {
+                        if self.handle_control_body(&mut invokes, body).await? {
                             return Ok(());
                         }
                     } else {
@@ -273,15 +284,33 @@ impl<S: Socket> ControlLink<S> {
                 }
                 Some(command) = commands.recv() => chats.command(self, tasks, pairing.node_id(), command).await?,
                 () = Chats::wait(tasks, chats.deadline()) => chats.expire(self, tasks).await?,
-                reply = invokes.next() => {
-                    let data = control::encode_result(reply.message).map_err(|_| ServiceError::PeerUnavailable)?;
-                    self.send_control_data(data).await?;
-                    if let Some(task) = reply.task {
-                        chats.end_task(self, &task).await?;
-                    }
-                }
+                reply = invokes.next() => self.send_invoke_result(&mut chats, reply).await?,
             }
         }
+    }
+
+    async fn send_invoke_result(&mut self, chats: &mut Chats, reply: control::Reply) -> Result<(), ServiceError> {
+        let data = control::encode_result(reply.message).map_err(|_| ServiceError::PeerUnavailable)?;
+        self.send_control_data(data).await?;
+        if let Some(task) = reply.task {
+            chats.end_task(self, &task).await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_control_body(
+        &mut self,
+        invokes: &mut control::Invocations<'_>,
+        body: Result<Body, InvalidWire>,
+    ) -> Result<bool, ServiceError> {
+        let ControlBody { messages, end_body } = self.decode_control(body)?;
+        if self.handle_control(invokes, messages).await? {
+            return Ok(true);
+        }
+        if end_body {
+            return Err(ServiceError::NotReady);
+        }
+        Ok(false)
     }
 
     async fn handle_control(
@@ -394,11 +423,11 @@ impl<S: Socket> ControlLink<S> {
         }
     }
 
-    fn decode_control(&mut self, body: Result<Body, InvalidWire>) -> Result<Vec<serde_json::Value>, ServiceError> {
+    fn decode_control(&mut self, body: Result<Body, InvalidWire>) -> Result<ControlBody, ServiceError> {
         let body = body.map_err(|_| ServiceError::NotReady)?;
-        let data = match body {
-            Body::Response(response) if (200..300).contains(&response.status) && !response.end_body => response.body,
-            Body::Chunk { data, end_body: false } => data,
+        let (data, end_body) = match body {
+            Body::Response(response) if (200..300).contains(&response.status) => (response.body, response.end_body),
+            Body::Chunk { data, end_body } => (data, end_body),
             _ => return Err(ServiceError::NotReady),
         };
         let mut data = data.as_slice();
@@ -410,7 +439,7 @@ impl<S: Socket> ControlLink<S> {
         {
             messages.push(value);
         }
-        Ok(messages)
+        Ok(ControlBody { messages, end_body })
     }
 }
 

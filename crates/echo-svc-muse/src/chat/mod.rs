@@ -26,7 +26,7 @@ pub(crate) fn send(
     request(
         tasks,
         "/chat/stream",
-        json!({
+        &json!({
             "message": message,
             "device_id": node.expose(),
             "output_modality": "text",
@@ -36,12 +36,12 @@ pub(crate) fn send(
 }
 
 pub(crate) fn subscribe(tasks: &Tasks, session: &str) -> Result<Request, ServiceError> {
-    let mut request = request(tasks, "/chat/subscribe", json!({"session_id": session}))?;
+    let mut request = request(tasks, "/chat/subscribe", &json!({"session_id": session}))?;
     request.headers.push(header("Accept", "application/x-ndjson".into()));
     Ok(request)
 }
 
-fn request(tasks: &Tasks, path: &str, value: Value) -> Result<Request, ServiceError> {
+fn request(tasks: &Tasks, path: &str, value: &Value) -> Result<Request, ServiceError> {
     Ok(Request {
         verb: "POST".into(),
         path: path.into(),
@@ -50,7 +50,7 @@ fn request(tasks: &Tasks, path: &str, value: Value) -> Result<Request, ServiceEr
             header("x-request-id", tasks.uuid()?),
             header("x-app-id", "musegadget".into()),
         ],
-        body: serde_json::to_vec(&value).map_err(|_| ServiceError::PeerUnavailable)?,
+        body: serde_json::to_vec(value).map_err(|_| ServiceError::PeerUnavailable)?,
         end_body: true,
     })
 }

@@ -32,7 +32,8 @@ the 256 KiB control frame limit. This limit leaves the accepted task summary
 intact.
 
 Either `link.unpaired` or `node.unpaired` closes the connection, discards
-in-flight and waiting invocations, and removes the private pairing. The
+in-flight and waiting invocations, and removes the private pairing. A removal
+event in the final control-stream body takes effect before the stream closes. The
 instance stays in `PairingRemoved` and refuses submissions. If removal fails,
 `stop` reports a storage error. Operator stop also releases the connection
 and discards invocation work, and keeps the pairing available for a new

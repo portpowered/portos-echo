@@ -6,7 +6,7 @@ use crate::wire::InvalidWire;
 
 #[cfg(test)]
 pub(super) use invokes::HeldInvoke;
-pub(super) use invokes::{Handler, Invocations};
+pub(super) use invokes::{Handler, Invocations, Reply};
 
 const MAX_CONTROL: usize = 256 * 1024;
 const MAX_OUTPUT: usize = 96 * 1024;
@@ -128,5 +128,28 @@ impl Decoder {
         let (appended, rest) = source.split_at(count);
         self.pending.extend_from_slice(appended);
         *source = rest;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn t2_control_budget_and_fragmented_messages() {
+        let cap = 256 * 1024;
+        let short = encode(&json!({"a":1})).unwrap();
+        assert_eq!(short, b"\x07\x00\x00\x00{\"a\":1}");
+        let value = json!({"x": "a".repeat(cap - 12)});
+        let bytes = encode(&value).unwrap();
+        assert_eq!(bytes.len(), cap);
+        let mut decoder = Decoder::default();
+        let mut prefix = &bytes[..2];
+        assert_eq!(decoder.next(&mut prefix), Ok(None));
+        let mut tail = &bytes[2..];
+        assert_eq!(decoder.next(&mut tail), Ok(Some(value)));
+        assert_eq!(encode(&json!({"x": "a".repeat(cap - 11)})), Err(InvalidWire));
+        let oversize = u32::try_from(cap - 3).unwrap().to_le_bytes();
+        assert_eq!(decoder.next(&mut oversize.as_slice()), Err(InvalidWire));
     }
 }

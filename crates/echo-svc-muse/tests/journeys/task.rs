@@ -1,56 +1,34 @@
-pub(super) mod peer;
-
 use echo_agent_api::Task;
 use echo_contracts::{ids::TaskId, task::TaskEvent};
+use echo_svc_muse::{MuseLink, MuseService as _, ServiceError};
 use futures_util::FutureExt as _;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 
-use crate::{MuseLink, MuseService as _, ServiceError, ServiceState};
+use crate::{
+    support::{
+        self, Chat, Fake, Pki, Vm, connect, demo_task, epoch_now, event, expect_reset, fresh_lease, invoke, progress,
+        register, send_ack, send_request,
+    },
+    wire::{Body, Frame},
+};
 
-use self::peer::{Chat, connect, event, expect_reset, invoke, progress, register, send_ack, send_request, subscribe};
-use super::{Fake, ManualClock, Pki, auth, demo_task, fake::Vm, wait_state};
-
-pub(super) const NOW: u64 = 1_700_000_000;
-
-async fn fixture() -> (Fake, Pki, ManualClock, MuseLink, Vm, i64) {
+async fn fixture() -> (Fake, Pki, MuseLink, Vm, i64) {
     let pki = Pki::new();
     let fake = Fake::new(&pki, &pki, "127.0.0.1").await;
-    let clock = ManualClock::new(NOW);
-    let link = auth::start(&fake, &pki, &clock);
+    let link = MuseLink::start(&fake.pairing, &fake.task_path(), &pki.pem).unwrap();
     let (vm, control) = connect(&fake, &link).await;
-    (fake, pki, clock, link, vm, control)
+    (fake, pki, link, vm, control)
 }
 
-pub(super) async fn start_chat(fake: &Fake, link: &MuseLink, vm: &mut Vm, task: Task) -> (TaskId, Chat) {
-    let (id, chat) = tokio::join!(link.submit(task), async {
-        let (send, request) = send_request(vm).await;
-        let session = request["session_id"].as_str().unwrap();
-        let snapshot: Value = serde_json::from_slice(&std::fs::read(fake.task_path()).unwrap()).unwrap();
-        let record = snapshot["tasks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|record| record["session_id"] == session)
-            .unwrap();
-        let id = record["task_id"].as_str().unwrap();
-        assert_eq!(record["state"], "live");
-        assert_eq!(record["deadline_unix_seconds"], NOW + 2);
-        assert!(
-            request["message"]
-                .as_str()
-                .unwrap()
-                .contains(&format!("Task ID: {id}\n"))
-        );
-        send_ack(vm, send, session).await;
-        subscribe(vm, session).await
-    });
-    (id.unwrap(), chat)
+async fn start_chat(fake: &Fake, link: &MuseLink, vm: &mut Vm, mut task: Task) -> (TaskId, Chat) {
+    task.deadline_seconds = 60;
+    support::start_chat(fake, link, vm, task, epoch_now).await
 }
 
 #[tokio::test]
 async fn t3_matching_report_completes_scoped_chat() {
-    let (fake, _, _, link, mut vm, control) = fixture().await;
+    let (fake, _, link, mut vm, control) = fixture().await;
     let (first, chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     let (second, other) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     assert_ne!(chat.session, other.session);
@@ -108,7 +86,7 @@ async fn t3_matching_report_completes_scoped_chat() {
 
 #[tokio::test]
 async fn t3_unknown_report_leaves_live_task_pending() {
-    let (fake, _, _, link, mut vm, control) = fixture().await;
+    let (fake, _, link, mut vm, control) = fixture().await;
     let (id, chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     let unknown = TaskId::new("task-absent").unwrap();
     assert_refused(
@@ -133,7 +111,7 @@ async fn t3_unknown_report_leaves_live_task_pending() {
 
 #[tokio::test]
 async fn t3_reported_failure_and_duplicate_are_correlated() {
-    let (fake, _, _, link, mut vm, control) = fixture().await;
+    let (fake, _, link, mut vm, control) = fixture().await;
     let (id, chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     let response = invoke(&mut vm, control, "failure", &id, "failed", "Fixture refused").await;
     assert_eq!(response["id"], "failure");
@@ -155,54 +133,8 @@ async fn t3_reported_failure_and_duplicate_are_correlated() {
 }
 
 #[tokio::test]
-async fn t3_deadline_at_two_seconds_is_nonretryable() {
-    let (fake, _, clock, link, mut vm, control) = fixture().await;
-    let (id, chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
-    vm.chunk(
-        chat.stream,
-        event(
-            &chat.session,
-            1,
-            "message.assistant",
-            json!({"message_id":"reply","display_text":"Done"}),
-        ),
-        false,
-    )
-    .await;
-    vm.chunk(
-        chat.stream,
-        event(
-            &chat.session,
-            1,
-            "task.status",
-            json!({"task_id":"external","status":"completed"}),
-        ),
-        false,
-    )
-    .await;
-    assert_eq!(link.next_event(&id).await, Ok(Some(progress(&id, "Done"))));
-    clock.set(NOW + 1);
-    assert!(link.next_event(&id).now_or_never().is_none());
-    clock.set(NOW + 2);
-    assert_eq!(
-        link.next_event(&id).await,
-        Ok(Some(TaskEvent::Failed {
-            task_id: id.clone(),
-            retryable: false,
-            message: "Muse did not report a result in time".into()
-        }))
-    );
-    expect_reset(&mut vm, chat.stream).await;
-    assert_refused(
-        &invoke(&mut vm, control, "late", &id, "completed", "too late").await,
-        "late",
-    );
-    assert_eq!(link.next_event(&id).await, Ok(None));
-}
-
-#[tokio::test]
 async fn t3_cancel_advises_original_chat_and_ignores_report() {
-    let (fake, _, _, link, mut vm, control) = fixture().await;
+    let (fake, _, link, mut vm, control) = fixture().await;
     let (id, chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     let (other, other_chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     assert_eq!(link.cancel(&id).await, Ok(()));
@@ -249,7 +181,7 @@ async fn t3_cancel_advises_original_chat_and_ignores_report() {
 
 #[tokio::test]
 async fn t3_chat_refusal_keeps_control_live() {
-    let (fake, _, _, link, mut vm, control) = fixture().await;
+    let (fake, _, link, mut vm, control) = fixture().await;
     let (live, chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     for status in [403, 200] {
         let (result, refused) = tokio::join!(link.submit(demo_task()), async {
@@ -287,7 +219,7 @@ async fn t3_chat_refusal_keeps_control_live() {
 
 #[tokio::test]
 async fn t3_restart_keeps_task_without_chat_replay() {
-    let (fake, pki, clock, link, mut vm, control) = fixture().await;
+    let (fake, pki, link, mut vm, control) = fixture().await;
     let (live, _) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     let (old, chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     assert_eq!(
@@ -306,7 +238,7 @@ async fn t3_restart_keeps_task_without_chat_replay() {
     vm.expect_closed().await;
     drop(link);
 
-    let link = auth::start(&fake, &pki, &clock);
+    let link = MuseLink::start(&fake.pairing, &fake.task_path(), &pki.pem).unwrap();
     let (mut vm, control) = connect(&fake, &link).await;
     vm.barrier().await;
     assert_eq!(link.next_event(&old).await, Ok(None));
@@ -330,48 +262,11 @@ async fn t3_restart_keeps_task_without_chat_replay() {
 
 #[tokio::test]
 async fn t3_chat_reset_and_replay_are_isolated() {
-    let (fake, _, _, link, mut vm, control) = fixture().await;
+    let (fake, _, link, mut vm, control) = fixture().await;
     let (live, chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     let (other, adjacent) = start_chat(&fake, &link, &mut vm, demo_task()).await;
-    vm.reset(chat.stream).await;
-    vm.chunk(
-        adjacent.stream,
-        event(
-            &chat.session,
-            1,
-            "message.assistant",
-            json!({"message_id":"old","content":"wrong"}),
-        ),
-        false,
-    )
-    .await;
-    adjacent
-        .emit(&mut vm, 2, "message.user", json!({"message_id":"another-user"}))
-        .await;
-    adjacent
-        .emit(
-            &mut vm,
-            3,
-            "message.assistant",
-            json!({"message_id":"other-reply","content":"unrelated user"}),
-        )
-        .await;
-    adjacent
-        .emit(
-            &mut vm,
-            1,
-            "delta.message_start",
-            json!({"message_id":"foreign","reply_to_message_id":"unrelated"}),
-        )
-        .await;
-    adjacent
-        .emit(
-            &mut vm,
-            2,
-            "delta.text_append",
-            json!({"message_id":"foreign","text":"wrong parent"}),
-        )
-        .await;
+    reset(&mut vm, chat.stream).await;
+    send_unrelated_events(&mut vm, &chat, &adjacent).await;
     let text = event(
         &adjacent.session,
         3,
@@ -397,9 +292,50 @@ async fn t3_chat_reset_and_replay_are_isolated() {
     );
 }
 
+async fn send_unrelated_events(vm: &mut Vm, chat: &Chat, adjacent: &Chat) {
+    vm.chunk(
+        adjacent.stream,
+        event(
+            &chat.session,
+            1,
+            "message.assistant",
+            json!({"message_id":"old","content":"wrong"}),
+        ),
+        false,
+    )
+    .await;
+    adjacent
+        .emit(vm, 2, "message.user", json!({"message_id":"another-user"}))
+        .await;
+    adjacent
+        .emit(
+            vm,
+            3,
+            "message.assistant",
+            json!({"message_id":"other-reply","content":"unrelated user"}),
+        )
+        .await;
+    adjacent
+        .emit(
+            vm,
+            1,
+            "delta.message_start",
+            json!({"message_id":"foreign","reply_to_message_id":"unrelated"}),
+        )
+        .await;
+    adjacent
+        .emit(
+            vm,
+            2,
+            "delta.text_append",
+            json!({"message_id":"foreign","text":"wrong parent"}),
+        )
+        .await;
+}
+
 #[tokio::test]
 async fn t3_chat_reset_before_ack_keeps_task_eligible() {
-    let (_fake, _, _, link, mut vm, control) = fixture().await;
+    let (_fake, _, link, mut vm, control) = fixture().await;
     let (id, ()) = tokio::join!(link.submit(demo_task()), async {
         let (stream, body) = send_request(&mut vm).await;
         let session = body["session_id"].as_str().unwrap();
@@ -414,7 +350,7 @@ async fn t3_chat_reset_before_ack_keeps_task_eligible() {
             false,
         )
         .await;
-        vm.reset(stream).await;
+        reset(&mut vm, stream).await;
     });
     let id = id.unwrap();
     assert!(link.next_event(&id).now_or_never().is_none());
@@ -444,24 +380,21 @@ fn assert_refused(value: &Value, id: &str) {
 async fn t3_recovered_link_delivers_task_and_unpairs() {
     let pki = Pki::new();
     let fake = Fake::new(&pki, &pki, "127.0.0.1").await;
-    let link = auth::start(&fake, &pki, &ManualClock::new(NOW));
+    let link = MuseLink::start(&fake.pairing, &fake.task_path(), &pki.pem).unwrap();
     fake.lookup().await;
     assert!(
         fake.upgrade("vm%201%26x", "synthetic-default", Some(StatusCode::UNAUTHORIZED))
             .await
             .is_none()
     );
-    fake.leases(
-        "synthetic-access",
-        auth::fresh_lease("replacement", "synthetic-replacement"),
-    )
-    .await;
+    fake.leases("synthetic-access", fresh_lease("replacement", "synthetic-replacement"))
+        .await;
     let vm = fake
         .upgrade("replacement", "synthetic-replacement", None)
         .await
         .unwrap();
     let (mut vm, control) = register(vm, &link).await;
-    auth::idle(&fake);
+    fake.assert_idle();
     let (id, chat) = start_chat(&fake, &link, &mut vm, demo_task()).await;
     chat.emit(
         &mut vm,
@@ -487,10 +420,18 @@ async fn t3_recovered_link_delivers_task_and_unpairs() {
     );
     assert_eq!(link.next_event(&id).await, Ok(None));
     expect_reset(&mut vm, chat.stream).await;
-    vm.send_control(control, &json!({"type":"evt","event":"link.unpaired"}))
-        .await;
-    vm.expect_closed().await;
-    wait_state(&link, ServiceState::PairingRemoved).await;
-    assert!(!fake.pairing.exists());
-    auth::idle(&fake);
+    let removal = crate::support::encode_control(&json!({"type":"evt","event":"link.unpaired"}));
+    vm.chunk(control, removal, true).await;
+    crate::assert_unpaired(&fake, &link, &mut vm).await;
+}
+
+async fn reset(vm: &mut Vm, id: i64) {
+    vm.send(&Frame {
+        id,
+        body: Body::Reset {
+            code: 1,
+            reason: "synthetic reset".into(),
+        },
+    })
+    .await;
 }

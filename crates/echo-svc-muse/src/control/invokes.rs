@@ -33,7 +33,7 @@ impl Reply {
         }
     }
 
-    fn accepted(id: &str, payload: Value, task: Option<TaskId>) -> Self {
+    fn accepted(id: &str, payload: &Value, task: Option<TaskId>) -> Self {
         Self {
             message: json!({"method":"link.result", "id":id, "ok":true, "payload":payload}),
             task,
@@ -83,7 +83,7 @@ impl Handler {
                     return Reply::refused(&id, "command failed");
                 }
                 match output.await {
-                    Ok(Some(output)) => return Reply::accepted(&id, json!({"output":output}), None),
+                    Ok(Some(output)) => return Reply::accepted(&id, &json!({"output":output}), None),
                     Ok(None) => {}
                     Err(_) => return Reply::refused(&id, "command failed"),
                 }
@@ -100,7 +100,7 @@ impl Handler {
 fn report(tasks: &Tasks, id: &str, params: Report) -> Reply {
     let task = params.task_id.clone();
     match tasks.report(params) {
-        Ok(()) => Reply::accepted(id, json!({"accepted":true,"task_id":task}), Some(task)),
+        Ok(()) => Reply::accepted(id, &json!({"accepted":true,"task_id":task}), Some(task)),
         Err(ServiceError::UnknownTask) => Reply::refused(id, "unknown task_id"),
         Err(_) => Reply::refused(id, "task storage failed"),
     }

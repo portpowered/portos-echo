@@ -1,7 +1,7 @@
 use std::{io, path::PathBuf, sync::Arc};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use futures_util::{SinkExt as _, StreamExt as _};
+use futures_util::{FutureExt as _, SinkExt as _, StreamExt as _};
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use rustls::{ServerConfig, pki_types::PrivatePkcs8KeyDer};
 use serde_json::{Value, json};
@@ -15,28 +15,26 @@ use tokio_tungstenite::{
     WebSocketStream, accept_hdr_async,
     tungstenite::{
         Error, Message,
-        handshake::server::{Request as WsRequest, Response as WsResponse},
+        handshake::server::{Callback, ErrorResponse, Request as WsRequest, Response as WsResponse},
         http::StatusCode,
     },
 };
 use x25519_dalek::StaticSecret;
 
 use crate::{
-    clock::{Clock as _, EpochClock},
-    control,
     noise::{Session, responder::Responder},
     wire::{Assembler, Body, Frame, Packetizer, Request, Response, decode_request, encode_response},
 };
 
-use super::{pairing_record, write_pairing};
+use super::{encode_control, epoch_now, pairing_record, write_pairing};
 
-pub(super) struct Pki {
-    pub(super) pem: Vec<u8>,
+pub(crate) struct Pki {
+    pub(crate) pem: Vec<u8>,
     issuer: Issuer<'static, KeyPair>,
 }
 
 impl Pki {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut params = CertificateParams::default();
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         let key = KeyPair::generate().unwrap();
@@ -71,26 +69,26 @@ impl Pki {
     }
 }
 
-pub(super) struct Fake {
+pub(crate) struct Fake {
     directory: tempfile::TempDir,
-    pub(super) pairing: PathBuf,
-    pub(super) api: TcpListener,
-    pub(super) vm_listener: TcpListener,
+    pub(crate) pairing: PathBuf,
+    pub(crate) api: TcpListener,
+    pub(crate) vm_listener: TcpListener,
     api_tls: TlsAcceptor,
     vm_tls: TlsAcceptor,
 }
 
 impl Fake {
-    pub(super) fn task_path(&self) -> PathBuf {
+    pub(crate) fn task_path(&self) -> PathBuf {
         self.directory.path().join("tasks.json")
     }
 
-    pub(super) async fn new(api: &Pki, vm: &Pki, api_name: &str) -> Self {
-        Self::listeners(api.server(api_name), vm.server("127.0.0.1")).await
+    pub(crate) async fn new(api: &Pki, vm: &Pki, api_name: &str) -> Self {
+        Self::with_names(api, vm, api_name, "127.0.0.1").await
     }
 
-    pub(super) async fn with_vm_name(api: &Pki, vm: &Pki, vm_name: &str) -> Self {
-        Self::listeners(api.server("127.0.0.1"), vm.server(vm_name)).await
+    pub(crate) async fn with_names(api: &Pki, vm: &Pki, api_name: &str, vm_name: &str) -> Self {
+        Self::listeners(api.server(api_name), vm.server(vm_name)).await
     }
 
     async fn listeners(api_tls: TlsAcceptor, vm_tls: TlsAcceptor) -> Self {
@@ -99,7 +97,7 @@ impl Fake {
         let directory = tempfile::tempdir().unwrap();
         let pairing = directory.path().join("pairing.json");
         let mut record = pairing_record();
-        record["access_token_saved_at"] = json!(EpochClock.now());
+        record["access_token_saved_at"] = json!(epoch_now());
         record["noise_host"] = json!(vm_listener.local_addr().unwrap().to_string());
         let mut api_url = reqwest::Url::parse("https://127.0.0.1").unwrap();
         api_url.set_port(Some(api.local_addr().unwrap().port())).unwrap();
@@ -115,15 +113,20 @@ impl Fake {
         }
     }
 
-    pub(super) async fn accept_api(&self) -> io::Result<TlsStream<TcpStream>> {
+    pub(crate) fn assert_idle(&self) {
+        assert!(self.api.accept().now_or_never().is_none());
+        assert!(self.vm_listener.accept().now_or_never().is_none());
+    }
+
+    pub(crate) async fn accept_api(&self) -> io::Result<TlsStream<TcpStream>> {
         self.api_tls.accept(self.api.accept().await.unwrap().0).await
     }
 
-    pub(super) async fn accept_vm(&self) -> io::Result<TlsStream<TcpStream>> {
+    pub(crate) async fn accept_vm(&self) -> io::Result<TlsStream<TcpStream>> {
         self.vm_tls.accept(self.vm_listener.accept().await.unwrap().0).await
     }
 
-    pub(super) async fn lookup(&self) {
+    pub(crate) async fn lookup(&self) {
         self.leases(
             "synthetic-access",
             json!([
@@ -134,7 +137,7 @@ impl Fake {
         .await;
     }
 
-    pub(super) async fn leases(&self, token: &str, leases: Value) {
+    pub(crate) async fn leases(&self, token: &str, leases: Value) {
         let (socket, headers) = self.api_request("GET /fetch_vms", token).await;
         assert!(
             headers
@@ -144,7 +147,7 @@ impl Fake {
         api_reply(socket, 200, json!({"vm_list": leases})).await;
     }
 
-    pub(super) async fn refresh(&self, status: u16, body: Value) {
+    pub(crate) async fn refresh(&self, status: u16, body: Value) {
         let socket = self.read_refresh().await;
         api_reply(socket, status, body).await;
     }
@@ -182,32 +185,43 @@ impl Fake {
         (socket, headers)
     }
 
-    pub(super) async fn vm(&self) -> Vm {
+    pub(crate) async fn vm(&self) -> Vm {
         self.upgrade("vm%201%26x", "synthetic-default", None).await.unwrap()
     }
 
-    pub(super) async fn upgrade(&self, id: &str, token: &str, reject: Option<StatusCode>) -> Option<Vm> {
+    pub(crate) async fn upgrade(&self, id: &str, token: &str, reject: Option<StatusCode>) -> Option<Vm> {
         let socket = self.accept_vm().await.unwrap();
-        let ws = accept_hdr_async(socket, |request: &WsRequest, response: WsResponse| {
-            assert_eq!(
-                request.uri().path_and_query().unwrap().as_str(),
-                format!("/v1/noise?vm_id={id}")
-            );
-            assert_eq!(request.headers()["authorization"], format!("Bearer {token}"));
-            if let Some(status) = reject {
-                let mut response = tokio_tungstenite::tungstenite::handshake::server::ErrorResponse::new(None);
-                *response.status_mut() = status;
-                return Err(response);
-            }
-            Ok(response)
-        })
-        .await;
+        let ws = accept_hdr_async(socket, Upgrade { id, token, reject }).await;
         match reject {
             Some(status) => {
                 assert!(matches!(ws, Err(Error::Http(response)) if response.status() == status));
                 None
             }
             None => Some(Vm::handshake(ws.unwrap()).await),
+        }
+    }
+}
+
+struct Upgrade<'a> {
+    id: &'a str,
+    token: &'a str,
+    reject: Option<StatusCode>,
+}
+
+impl Callback for Upgrade<'_> {
+    fn on_request(self, request: &WsRequest, response: WsResponse) -> Result<WsResponse, ErrorResponse> {
+        assert_eq!(
+            request.uri().path_and_query().unwrap().as_str(),
+            format!("/v1/noise?vm_id={}", self.id)
+        );
+        assert_eq!(request.headers()["authorization"], format!("Bearer {}", self.token));
+        match self.reject {
+            Some(status) => {
+                let mut refusal = ErrorResponse::new(None);
+                *refusal.status_mut() = status;
+                Err(refusal)
+            }
+            None => Ok(response),
         }
     }
 }
@@ -233,7 +247,7 @@ async fn api_reply(mut socket: BufReader<TlsStream<TcpStream>>, status: u16, bod
 
 type Socket = WebSocketStream<TlsStream<TcpStream>>;
 
-pub(super) struct Vm {
+pub(crate) struct Vm {
     socket: Socket,
     noise: Session,
     assembler: Assembler,
@@ -263,7 +277,7 @@ impl Vm {
         }
     }
 
-    pub(in crate::tests) async fn next_frame(&mut self) -> Frame {
+    pub(crate) async fn next_frame(&mut self) -> Frame {
         loop {
             let packet = binary(&mut self.socket).await;
             let chunk = self.noise.receive.decrypt(packet, &[]).unwrap();
@@ -273,14 +287,14 @@ impl Vm {
         }
     }
 
-    pub(in crate::tests) async fn send(&mut self, frame: &Frame) {
+    pub(crate) async fn send(&mut self, frame: &Frame) {
         for chunk in self.packetizer.split(&encode_response(frame)).unwrap() {
             let data = self.noise.send.encrypt(&chunk, &[]).unwrap();
             self.socket.send(Message::binary(data)).await.unwrap();
         }
     }
 
-    pub(super) async fn read_control_request(&mut self) -> i64 {
+    pub(crate) async fn read_control_request(&mut self) -> i64 {
         let frame = self.next_frame().await;
         assert_eq!(frame.id, 1);
         assert_eq!(
@@ -294,7 +308,7 @@ impl Vm {
         frame.id
     }
 
-    pub(super) async fn control_response(&mut self, id: i64, status: i32) {
+    pub(crate) async fn control_response(&mut self, id: i64, status: i32) {
         self.send(&Frame {
             id,
             body: Body::Response(Response {
@@ -306,35 +320,39 @@ impl Vm {
         .await;
     }
 
-    pub(super) async fn read_register(&mut self, id: i64) -> Value {
+    pub(crate) async fn read_register(&mut self, id: i64) -> Value {
         self.read_control(id).await.0
     }
 
-    pub(super) async fn read_control(&mut self, id: i64) -> (Value, usize) {
+    pub(crate) async fn read_control(&mut self, id: i64) -> (Value, usize) {
         let frame = self.next_frame().await;
         assert_eq!(frame.id, id);
-        let Body::Chunk { data, end_body: false } = frame.body else {
-            panic!("invalid registration stream body");
-        };
-        let mut decoder = control::Decoder::default();
+        let (data, end_body) = match frame.body {
+            Body::Chunk { data, end_body } => Some((data, end_body)),
+            _ => None,
+        }
+        .expect("expected a control stream body chunk");
+        assert!(!end_body);
         let length = data.len();
-        let mut data = data.as_slice();
-        let message = decoder.next(&mut data).unwrap().unwrap();
-        assert!(data.is_empty());
+        let (prefix, payload) = data.split_at_checked(size_of::<u32>()).unwrap();
+        let length_prefix = u32::from_le_bytes(prefix.try_into().unwrap());
+        assert_eq!(usize::try_from(length_prefix).unwrap(), payload.len());
+        let message: Value = serde_json::from_slice(payload).unwrap();
+        assert!(message.is_object());
         (message, length)
     }
 
-    pub(super) async fn register_ack(&mut self, id: i64, request: &Value, ok: bool) {
+    pub(crate) async fn register_ack(&mut self, id: i64, request: &Value, ok: bool) {
         self.send_control(id, &json!({"type": "res", "id": request, "ok": ok}))
             .await;
     }
 
-    pub(super) async fn send_control(&mut self, id: i64, value: &Value) {
-        let data = control::encode(value).unwrap();
+    pub(crate) async fn send_control(&mut self, id: i64, value: &Value) {
+        let data = encode_control(value);
         self.control_bytes(id, data).await;
     }
 
-    pub(super) async fn control_bytes(&mut self, id: i64, data: Vec<u8>) {
+    pub(crate) async fn control_bytes(&mut self, id: i64, data: Vec<u8>) {
         self.send(&Frame {
             id,
             body: Body::Chunk { data, end_body: false },
@@ -342,13 +360,13 @@ impl Vm {
         .await;
     }
 
-    pub(super) async fn expect_closed(&mut self) {
+    pub(crate) async fn expect_closed(&mut self) {
         if let Some(Ok(message)) = self.socket.next().await {
             assert!(message.is_close());
         }
     }
 
-    pub(super) async fn barrier(&mut self) {
+    pub(crate) async fn barrier(&mut self) {
         self.socket
             .send(Message::Ping(b"ack barrier".as_slice().into()))
             .await

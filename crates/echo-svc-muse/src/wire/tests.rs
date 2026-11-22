@@ -4,7 +4,6 @@ use serde_json::json;
 use tokio::time::Instant;
 
 use super::*;
-use crate::control;
 
 #[test]
 fn t2_daemon_envelope_reference_bytes() {
@@ -79,24 +78,6 @@ fn t2_chunk_expiry_and_count_bound() {
 }
 
 #[test]
-fn t2_control_budget_and_fragmented_messages() {
-    let cap = 256 * 1024;
-    let short = control::encode(&json!({"a":1})).unwrap();
-    assert_eq!(short, b"\x07\x00\x00\x00{\"a\":1}");
-    let value = json!({"x": "a".repeat(cap - 12)});
-    let bytes = control::encode(&value).unwrap();
-    assert_eq!(bytes.len(), cap);
-    let mut decoder = control::Decoder::default();
-    let mut prefix = &bytes[..2];
-    assert_eq!(decoder.next(&mut prefix), Ok(None));
-    let mut tail = &bytes[2..];
-    assert_eq!(decoder.next(&mut tail), Ok(Some(value)));
-    assert_eq!(control::encode(&json!({"x": "a".repeat(cap - 11)})), Err(InvalidWire));
-    let oversize = u32::try_from(cap - 3).unwrap().to_le_bytes();
-    assert_eq!(decoder.next(&mut oversize.as_slice()), Err(InvalidWire));
-}
-
-#[test]
 fn t2_daemon_reset_isolated_from_other_streams() {
     let mut mux = StreamMux::default();
     let a = mux.open(Request::default()).unwrap().id;
@@ -123,6 +104,7 @@ fn t2_daemon_reset_isolated_from_other_streams() {
         ))
     );
     assert_eq!(mux.accept(response(a)), None);
+    assert!(!mux.forget(a));
     assert_eq!(mux.accept(response(b)), Some((b, Ok(response(b).body))));
     let final_body = || Body::Chunk {
         data: b"complete".to_vec(),

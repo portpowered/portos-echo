@@ -9,12 +9,9 @@ use crate::{
     pairing::Pairing,
 };
 
-use super::{
-    Fake, ManualClock, Pki, auth, demo_task,
-    fake::Vm,
-    task::{NOW, peer, start_chat},
-    wait_state,
-};
+use crate::support::{Fake, Pki, SAVED_AT, Vm, demo_task, expect_reset, register, start_chat};
+
+use super::{ManualClock, start_with, wait_state};
 
 const OUTPUT_LIMIT: usize = 96 * 1024;
 const CONTROL_LIMIT: usize = 256 * 1024;
@@ -32,11 +29,11 @@ impl Fixture {
     async fn open() -> Self {
         let pki = Pki::new();
         let fake = Fake::new(&pki, &pki, "127.0.0.1").await;
-        let clock = ManualClock::new(NOW);
+        let clock = ManualClock::new(SAVED_AT);
         let (send, held) = mpsc::channel(8);
-        let link = auth::start_with(&fake, &pki, &clock, Handler::holding(send));
+        let link = start_with(&fake, &pki, &clock, Handler::holding(send));
         fake.lookup().await;
-        let (vm, control) = peer::register(fake.vm().await, &link).await;
+        let (vm, control) = register(fake.vm().await, &link).await;
         Self {
             fake,
             clock,
@@ -115,7 +112,7 @@ async fn t3_invoke_output_is_clipped_to_96_kib() {
         assert_eq!(result["id"], id);
         assert_eq!(result["ok"], true);
         assert_eq!(result["payload"]["truncated"], true);
-        assert!(result["payload"]["output"].as_str() == Some(prefix.as_str()));
+        assert_eq!(result["payload"]["output"].as_str(), Some(prefix.as_str()));
         assert!(result["payload"]["output"].to_string().len() - 2 <= OUTPUT_LIMIT);
         assert!(size <= CONTROL_LIMIT);
     }
@@ -128,7 +125,7 @@ async fn t3_invoke_output_is_clipped_to_96_kib() {
         .send(Some("a".repeat(OUTPUT_LIMIT)))
         .unwrap();
     let (result, size) = fixture.vm.read_control(fixture.control).await;
-    assert!(result["id"].as_str() == Some(id.as_str()));
+    assert_eq!(result["id"].as_str(), Some(id.as_str()));
     assert_eq!(result["payload"]["truncated"], true);
     assert_eq!(size, CONTROL_LIMIT - 1);
 }
@@ -136,7 +133,7 @@ async fn t3_invoke_output_is_clipped_to_96_kib() {
 #[tokio::test]
 async fn t3_builtins_refused_without_effect() {
     let mut fixture = Fixture::open().await;
-    let (task, chat) = start_chat(&fixture.fake, &fixture.link, &mut fixture.vm, demo_task()).await;
+    let (task, chat) = start_chat(&fixture.fake, &fixture.link, &mut fixture.vm, demo_task(), || SAVED_AT).await;
     let legitimate = fixture.hold("callback", &task).await;
     for command in ["system.run", "file.read", "file.write", "device.health"] {
         let mut blocked = invoke(command, &task);
@@ -154,7 +151,7 @@ async fn t3_builtins_refused_without_effect() {
         fixture.vm.read_control(fixture.control).await.0,
         json!({"method":"link.result","id":"callback","ok":true,"payload":{"accepted":true,"task_id":task}})
     );
-    peer::expect_reset(&mut fixture.vm, chat.stream).await;
+    expect_reset(&mut fixture.vm, chat.stream).await;
     assert_eq!(
         fixture.link.next_event(&task).await,
         Ok(Some(TaskEvent::Completed {
@@ -168,7 +165,7 @@ async fn t3_builtins_refused_without_effect() {
 async fn t3_unpair_stops_and_removes_pairing() {
     for event in ["link.unpaired", "node.unpaired"] {
         let mut fixture = Fixture::open().await;
-        let (task, _) = start_chat(&fixture.fake, &fixture.link, &mut fixture.vm, demo_task()).await;
+        let (task, _) = start_chat(&fixture.fake, &fixture.link, &mut fixture.vm, demo_task(), || SAVED_AT).await;
         let mut held = Vec::new();
         for id in ["one", "two", "three", "four"] {
             held.push(fixture.hold(id, &task).await);
@@ -183,7 +180,7 @@ async fn t3_unpair_stops_and_removes_pairing() {
             .vm
             .send_control(fixture.control, &json!({"type":"evt","event":event}))
             .await;
-        wait_state(&fixture.link, ServiceState::PairingRemoved).await;
+        wait_state(&fixture.link, ServiceState::Registered, ServiceState::PairingRemoved).await;
         fixture.vm.expect_closed().await;
         assert!(held.iter().all(|call| call.finish.is_closed()));
         assert!(fixture.held.recv().await.is_none());
@@ -193,7 +190,7 @@ async fn t3_unpair_stops_and_removes_pairing() {
         ));
         assert_eq!(fixture.link.submit(demo_task()).await, Err(ServiceError::NotReady));
         assert!(fixture.link.next_event(&task).now_or_never().is_none());
-        fixture.clock.set(NOW + 2);
+        fixture.clock.set(SAVED_AT + 2);
         assert_eq!(
             fixture.link.next_event(&task).await,
             Ok(Some(TaskEvent::Failed {
@@ -204,7 +201,7 @@ async fn t3_unpair_stops_and_removes_pairing() {
         );
         assert_eq!(fixture.link.stop().await, Ok(()));
         assert_eq!(fixture.link.state(), ServiceState::PairingRemoved);
-        auth::idle(&fixture.fake);
+        fixture.fake.assert_idle();
     }
 }
 
@@ -218,18 +215,18 @@ async fn t3_unpair_stops_when_pairing_removal_fails() {
         .vm
         .send_control(fixture.control, &json!({"type":"evt","event":"link.unpaired"}))
         .await;
-    wait_state(&fixture.link, ServiceState::PairingRemoved).await;
+    wait_state(&fixture.link, ServiceState::Registered, ServiceState::PairingRemoved).await;
     fixture.vm.expect_closed().await;
     assert!(held.finish.is_closed());
     assert_eq!(fixture.link.stop().await, Err(ServiceError::Storage));
     assert_eq!(fixture.link.submit(demo_task()).await, Err(ServiceError::NotReady));
-    auth::idle(&fixture.fake);
+    fixture.fake.assert_idle();
 }
 
 #[tokio::test]
 async fn t3_stop_drains_without_removing_pairing() {
     let mut fixture = Fixture::open().await;
-    let (task, _) = start_chat(&fixture.fake, &fixture.link, &mut fixture.vm, demo_task()).await;
+    let (task, _) = start_chat(&fixture.fake, &fixture.link, &mut fixture.vm, demo_task(), || SAVED_AT).await;
     let held = fixture.hold("held", &task).await;
     let before = std::fs::read(&fixture.fake.pairing).unwrap();
     assert_eq!(fixture.link.stop().await, Ok(()));
@@ -241,7 +238,7 @@ async fn t3_stop_drains_without_removing_pairing() {
     assert!(fixture.link.next_event(&task).now_or_never().is_none());
     assert_eq!(std::fs::read(&fixture.fake.pairing).unwrap(), before);
     assert!(Pairing::open(&fixture.fake.pairing).is_ok());
-    auth::idle(&fixture.fake);
+    fixture.fake.assert_idle();
 }
 
 #[tokio::test]
@@ -250,7 +247,7 @@ async fn t3_oversize_control_fails_before_dispatch() {
     let oversized = u32::try_from(CONTROL_LIMIT + 1).unwrap().to_le_bytes();
     fixture.vm.control_bytes(fixture.control, oversized.to_vec()).await;
     fixture.vm.expect_closed().await;
-    wait_state(&fixture.link, ServiceState::Disconnected).await;
+    wait_state(&fixture.link, ServiceState::Registered, ServiceState::Disconnected).await;
     assert!(fixture.held.recv().now_or_never().is_none());
     fixture.link.stop().await.unwrap();
 
