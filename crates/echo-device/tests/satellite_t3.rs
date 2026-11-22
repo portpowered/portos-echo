@@ -121,17 +121,17 @@ fn t3_reconnect_after_frame_failure() {
 #[ignore = "T3 uses a prebuilt Linux bridge and a private loopback namespace"]
 fn t3_reconnect_after_write_failure() {
     isolated("t3_reconnect_after_write_failure", || {
-        // These TCP defaults apply only to this test's private namespace. They
-        // let microphone output fill the buffers before the duplex watchdog.
-        let settings = ["net.ipv4.tcp_wmem=4096 4096 4096", "net.ipv4.tcp_rmem=4096 4096 4096"];
-        assert!(
-            Command::new("sysctl")
-                .arg("-qw")
-                .args(settings)
-                .status()
-                .unwrap()
-                .success()
-        );
+        // A small MTU keeps Linux's MSS-based minimum buffers small enough
+        // for capture to fill them in this private namespace.
+        let mtu = Command::new("ip").args(["link", "set", "lo", "mtu", "1500"]).status();
+        assert!(mtu.unwrap().success(), "set private loopback MTU");
+        let settings = [
+            "-qw",
+            "net.ipv4.tcp_wmem=4096 4096 4096",
+            "net.ipv4.tcp_rmem=4096 4096 4096",
+        ];
+        let buffers = Command::new("sysctl").args(settings).status();
+        assert!(buffers.unwrap().success(), "set private TCP buffer sizes");
         let satellite = Satellite::start();
         let mut blocked = satellite.connect();
         blocked.arm();
@@ -139,12 +139,11 @@ fn t3_reconnect_after_write_failure() {
         blocked.expect("run-pipeline", START);
         blocked.read().assert_capture();
         let mut replacement = satellite.connect();
-        // The old peer sends no more input and stays open and unread. The
-        // listener can serve the replacement only after a failed publication
-        // wakes the old reader. Allow for the native five-second send timeout.
-        let stream = replacement.0.get_ref();
-        stream.set_read_timeout(Some(Duration::from_secs(12))).unwrap();
+        // The old peer stays open and unread through the native send timeout.
+        let deadline = Instant::now() + Duration::from_secs(12);
+        satellite.wait_for_log("client disconnected", deadline);
         replacement.expect_fresh_session();
+        assert!(Instant::now() < deadline, "replacement handshake exceeded 12 seconds");
         assert!(io::copy(&mut blocked.0, &mut io::sink()).unwrap() > 0);
     });
 }
@@ -180,7 +179,7 @@ fn t3_reconnect_fences_old_playback() {
         drop(playback);
         // The worker logs completion under core_lock immediately before the
         // played callback. The following pong is serialized behind both.
-        satellite.wait_for_log("duplex flush: receipt_ms=");
+        satellite.wait_for_log("duplex flush: receipt_ms=", Instant::now() + TIMEOUT);
         replacement.command("ping");
         replacement.expect("pong", "");
     });
@@ -307,19 +306,19 @@ impl Satellite {
             _keys: key_handle,
             logs,
         };
-        satellite.wait_for_log(&format!("wyoming on {port}, wake=local"));
+        satellite.wait_for_log(&format!("wyoming on {port}, wake=local"), Instant::now() + TIMEOUT);
         satellite
     }
 
-    fn wait_for_log(&self, marker: &str) {
-        let deadline = Instant::now() + TIMEOUT;
+    fn wait_for_log(&self, marker: &str, deadline: Instant) {
         let mut seen = Vec::new();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             let line = self
                 .logs
                 .recv_timeout(remaining)
-                .unwrap_or_else(|error| panic!("waiting for {marker:?}: {error}; satellite logs: {seen:?}"));
+                .map_err(|error| format!("waiting for {marker:?}: {error}; satellite logs: {seen:?}"))
+                .expect("satellite log checkpoint");
             if line.contains(marker) {
                 return;
             }
