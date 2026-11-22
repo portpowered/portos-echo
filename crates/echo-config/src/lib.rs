@@ -93,7 +93,20 @@ impl BridgeConfig {
             .map_err(|_| ConfigError::new("config", "cannot read UTF-8 configuration file"))?;
         Self::from_toml_str_with_warnings(&input)
     }
+
+    /// The model a delegated thread starts with: the configured one
+    /// ([`Self::codex_model`]), else [`DEFAULT_DELEGATE_MODEL`].
+    #[must_use]
+    pub fn delegate_model(&self) -> &str {
+        self.codex_model().unwrap_or(DEFAULT_DELEGATE_MODEL)
+    }
 }
+
+/// The delegated model when `[codex] delegate_model` and its aliases are unset.
+/// 2026-11-21: the app server's default, gpt-6.2-sol, reserves `web.run` and
+/// refuses the direct declaration that is the Echo's only search path (HTTP 400);
+/// gpt-6.1-sol accepts it and searches.
+pub const DEFAULT_DELEGATE_MODEL: &str = "gpt-6.1-sol";
 
 /// A fully validated result from a loader. Public fields may subsequently be mutated.
 #[derive(Debug, Clone, PartialEq, Eq)]

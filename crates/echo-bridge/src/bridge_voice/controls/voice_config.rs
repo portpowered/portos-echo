@@ -313,7 +313,7 @@ impl Configured {
                     voice: self.config.codex_voice(),
                     instructions: echo_config::RUNNER_INSTRUCTIONS,
                     prompt: echo_config::LIVE_INSTRUCTIONS,
-                    model: self.config.codex_model(),
+                    model: Some(self.config.delegate_model()),
                     effort: self.config.codex.delegate_effort.as_deref(),
                     fast: self.config.codex.delegate_fast,
                     time_zone: self.config.codex.time_zone.as_deref(),

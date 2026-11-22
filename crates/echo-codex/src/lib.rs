@@ -52,11 +52,12 @@ impl ThreadSettings {
                 "tools.experimental_request_user_input.enabled": false,
                 "tools.update_plan.enabled": false,
                 // Every catalog model is code-mode-only. `functions` is the pin's
-                // namespace for the caller's tools: declared directly they need no
-                // code-mode host, which the Echo's install does not have. `web` is
-                // never direct: the backend reserves `web.run` for these models and
-                // refuses a client declaration of it (HTTP 400).
-                "features.code_mode.direct_only_tool_namespaces": ["functions"],
+                // namespace for the caller's tools and `web` holds `web.run`, the
+                // only search path for these models: declared directly they need no
+                // code-mode host, which the Echo's install does not have. gpt-6.2-*
+                // reserve `web.run` and refuse a direct one (HTTP 400), so the
+                // bridge's default delegate model is gpt-6.1-sol.
+                "features.code_mode.direct_only_tool_namespaces": DIRECT_WITH_SEARCH,
                 "web_search": "live",
                 "mcp_servers": {},
                 "skills.include_instructions": false,
@@ -64,10 +65,25 @@ impl ThreadSettings {
         }
     }
     /// Adapt the caller's validated bridge mode without a config-crate dependency.
+    /// Disabled search also leaves `web` out of the direct namespaces.
     #[must_use]
     pub fn with_web_search(mut self, mode: &str) -> Self {
         self.config["web_search"] = mode.into();
+        self.config["features.code_mode.direct_only_tool_namespaces"] = direct_namespaces(mode).into();
         self
+    }
+}
+
+const DIRECT_WITH_SEARCH: [&str; 2] = ["web", "functions"];
+const DIRECT_WITHOUT_SEARCH: [&str; 1] = ["functions"];
+
+/// The code-mode namespaces declared directly for a web-search mode.
+#[must_use]
+pub fn direct_namespaces(mode: &str) -> Vec<&'static str> {
+    if mode == "disabled" {
+        DIRECT_WITHOUT_SEARCH.to_vec()
+    } else {
+        DIRECT_WITH_SEARCH.to_vec()
     }
 }
 
@@ -76,7 +92,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn web_search_changes_only_the_selected_config_field() {
+    fn web_search_changes_only_the_mode_and_its_direct_namespaces() {
         for mode in ["live", "cached", "disabled"] {
             let tool = DynamicTool {
                 name: "test_echo".into(),
@@ -86,6 +102,12 @@ mod tests {
             for tools in [vec![], vec![tool]] {
                 let mut expected = serde_json::to_value(ThreadSettings::new(tools.clone())).unwrap();
                 expected["config"]["web_search"] = mode.into();
+                let direct = if mode == "disabled" {
+                    json!(["functions"])
+                } else {
+                    json!(["web", "functions"])
+                };
+                expected["config"]["features.code_mode.direct_only_tool_namespaces"] = direct;
                 assert_eq!(
                     serde_json::to_value(ThreadSettings::new(tools).with_web_search(mode)).unwrap(),
                     expected
@@ -117,7 +139,7 @@ mod tests {
                 "features.goals": false,
                 "tools.experimental_request_user_input.enabled": false,
                 "tools.update_plan.enabled": false,
-                "features.code_mode.direct_only_tool_namespaces": ["functions"],
+                "features.code_mode.direct_only_tool_namespaces": ["web", "functions"],
                 "web_search": "live",
                 "mcp_servers": {},
                 "skills.include_instructions": false,

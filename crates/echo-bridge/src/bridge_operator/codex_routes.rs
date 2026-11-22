@@ -102,9 +102,11 @@ fn restrictions(config: &mut SupervisorConfig, web_search: echo_config::WebSearc
     ] {
         config.config_overrides.push((key.into(), "false".into()));
     }
+    // The same direct namespaces as the thread settings: `web` only while search is on.
+    let direct = json!(echo_codex::direct_namespaces(web_search.as_str())).to_string();
     for (key, value) in [
         ("features.skip_host_skill_discovery", "true"),
-        ("features.code_mode.direct_only_tool_namespaces", "[\"functions\"]"),
+        ("features.code_mode.direct_only_tool_namespaces", &direct),
         ("web_search", &format!("\"{}\"", web_search.as_str())),
         ("mcp_servers", "{}"),
         ("cli_auth_credentials_store", "\"file\""),
@@ -130,7 +132,11 @@ mod tests {
                 ("features.skip_host_skill_discovery".to_owned(), "true".to_owned()),
                 (
                     "features.code_mode.direct_only_tool_namespaces".into(),
-                    "[\"functions\"]".into(),
+                    if mode == echo_config::WebSearch::Disabled {
+                        "[\"functions\"]".into()
+                    } else {
+                        "[\"web\",\"functions\"]".into()
+                    },
                 ),
                 ("web_search".into(), format!("\"{}\"", mode.as_str())),
                 ("mcp_servers".into(), "{}".into()),

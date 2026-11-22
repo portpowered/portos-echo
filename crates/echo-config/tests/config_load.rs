@@ -178,12 +178,14 @@ fn codex_defaults_and_override_precedence_are_offline() {
     assert_eq!(original.codex, echo_config::CodexConfig::default());
     assert_eq!(original.codex_voice(), None);
     assert_eq!(original.codex_model(), None);
+    assert_eq!(original.delegate_model(), "gpt-6.1-sol");
     let input = MINIMAL
         .replace("[live]", "[live]\nvoice='cedar'")
         .replace("[agent]", "[agent]\nmodel='legacy-model'");
     let legacy = BridgeConfig::from_toml_str(&input).unwrap();
     assert_eq!(legacy.codex_voice(), Some("cedar"));
     assert_eq!(legacy.codex_model(), Some("legacy-model"));
+    assert_eq!(legacy.delegate_model(), "legacy-model");
     let input = format!(
         "{input}\n[home]\ndir='{}'\n[codex]\nhome='{}'\nbinary='{}'\nvoice='marin'\nmodel='thread-model'\n",
         home.display(),
