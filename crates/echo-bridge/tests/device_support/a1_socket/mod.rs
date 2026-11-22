@@ -51,6 +51,17 @@ async fn t3_a1_socket_unix_audio_and_precedence() {
 
 async fn observe_wire(setup: &mut Fixture, satellite: &fixture::Satellite) {
     let mut peer = Peer::new(UnixStream::connect(&setup.socket).await.unwrap());
+    describe_and_register(&mut peer).await;
+    satellite.signal("-USR1").await;
+    let wake = peer.next("run-pipeline").await;
+    assert_eq!(wake.data.unwrap()["wake_word_name"], "alexa");
+    let (audio, sample) = capture(&mut peer).await;
+    assert_capture_format(&audio);
+    assert_mute(setup, &mut peer).await;
+    writeln!(io::stdout(), "AF_UNIX speaker->info(name={NAME})->run-pipeline->audio-chunk header={:?} data={} s16le sample={sample:02x?}; muted=true then pong, zero intervening audio chunks", audio.header, audio.data.unwrap()).unwrap();
+}
+
+async fn describe_and_register(peer: &mut Peer<UnixStream>) {
     let speaker = peer.next("hassmic-speaker").await;
     assert_eq!(speaker.data, Some(json!({"volume":40,"muted":false})));
     peer.send("describe").await;
@@ -59,11 +70,10 @@ async fn observe_wire(setup: &mut Fixture, satellite: &fixture::Satellite) {
     peer.send("run-satellite").await;
     peer.send("ping").await;
     peer.next("pong").await;
-    satellite.signal("-USR1").await;
-    let wake = peer.next("run-pipeline").await;
-    assert_eq!(wake.data.unwrap()["wake_word_name"], "alexa");
-    let (audio, sample) = capture(&mut peer).await;
-    let format = audio.data.unwrap();
+}
+
+fn assert_capture_format(audio: &Event) {
+    let format = audio.data.as_ref().unwrap();
     assert_eq!(
         (
             format["rate"].as_u64(),
@@ -74,8 +84,6 @@ async fn observe_wire(setup: &mut Fixture, satellite: &fixture::Satellite) {
     );
     assert_eq!(audio.header.payload_length, audio.payload.len());
     assert_eq!(audio.payload.len() % 2, 0);
-    assert_mute(setup, &mut peer).await;
-    writeln!(io::stdout(), "AF_UNIX speaker->info(name={NAME})->run-pipeline->audio-chunk header={:?} data={format} s16le sample={sample:02x?}; muted=true then pong, zero intervening audio chunks", audio.header).unwrap();
 }
 
 async fn capture(peer: &mut Peer<UnixStream>) -> (Event, [u8; 4]) {
