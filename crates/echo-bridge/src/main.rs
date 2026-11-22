@@ -36,22 +36,24 @@ fn device(args: impl IntoIterator<Item = OsString>) -> ExitCode {
 fn bridge(args: &[String]) -> ExitCode {
     let lab = ["ECHO_LAB_WYOMING_ADDR", "ECHO_LAB_LIVE_URL", "ECHO_LAB_TRACE_PATH"].map(|key| std::env::var(key).ok());
     let lab_idle = std::env::var("ECHO_LAB_SESSION_IDLE_SECONDS").ok();
-    match bridge_mcp::parse(args, lab.iter().any(Option::is_some) || lab_idle.is_some()) {
+    let lab_socket = std::env::var_os("ECHO_LAB_WYOMING_SOCKET");
+    let lab_requested = lab.iter().any(Option::is_some) || lab_idle.is_some() || lab_socket.is_some();
+    match bridge_mcp::parse(args, lab_requested) {
         Ok(Some(command)) => return mcp_operator(command),
         Err(error) => return input_error(&error),
         Ok(None) => (),
     }
-    match clock_command::parse(args, lab.iter().any(Option::is_some) || lab_idle.is_some()) {
+    match clock_command::parse(args, lab_requested) {
         Ok(Some(command)) => return outcome(command.execute(&mut std::io::stdout())),
         Err(error) => return input_error(&error),
         Ok(None) => (),
     }
-    match bridge_operator::parse(args, lab.iter().any(Option::is_some) || lab_idle.is_some()) {
+    match bridge_operator::parse(args, lab_requested) {
         Ok(Some(command)) => return operator(command),
         Err(error) => return input_error(&error),
         Ok(None) => (),
     }
-    let settings = match bridge_input::parse(args, lab).and_then(|settings| {
+    let settings = match bridge_input::parse_with_lab_socket(args, lab, lab_socket).and_then(|settings| {
         settings
             .map(|mut settings| {
                 settings.lab_idle(lab_idle.as_deref())?;
@@ -78,7 +80,8 @@ fn bridge(args: &[String]) -> ExitCode {
     if bridge_runtime::configured(&settings) {
         return outcome(echo_bridge::bridge_voice::execute_process(settings));
     }
-    let connector = echo_wyoming::adapter::connector(settings.wyoming, echo_wyoming::ClientOptions::default());
+    let connector =
+        echo_wyoming::adapter::endpoint_connector(settings.wyoming.clone(), echo_wyoming::ClientOptions::default());
     outcome(runtime().and_then(|runtime| runtime.block_on(bridge_runtime::execute(settings, connector))))
 }
 

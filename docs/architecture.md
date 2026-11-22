@@ -105,8 +105,8 @@ the development/bench host. A cross-built artifact alone does not establish that
 
 Solid links describe implemented protocols. The screen link is a logical relationship: the current server
 accepts **loopback HTTP only**. Remote Echo access needs operator-provided forwarding; paired LAN TLS in
-plan section 6 remains a target. Wyoming is plaintext, unauthenticated TCP on the local network today;
-the fork's source restriction protects admission, not encryption. W4 makes that link local to the Echo.
+plan section 6 remains a target. The A1 device role serves Wyoming over a local Unix socket on the Echo.
+Explicit TCP deployments still use plaintext Wyoming and rely on the fork's source-address restriction.
 
 ```mermaid
 flowchart LR
@@ -148,7 +148,7 @@ flowchart LR
         D[Devices controlled by Port OS]
         MCP <-->|Port OS device integrations| D
     end
-    H <-->|Wyoming JSON framing and PCM over TCP| W
+    H <-->|Wyoming JSON framing and PCM over Unix or TCP| W
     UI <-->|HTTP assets and SSE ScreenFrame via forwarding| S
     UI -->|HTTP POST UiAction via forwarding| S
     M <-->|WebRTC Opus SRTP and SCTP oai-events| L
@@ -730,7 +730,7 @@ implementation boundary, rather than implying that a local test proves a physica
 
 #### What it is — Wyoming
 
-Wyoming is the Home Assistant voice satellite protocol. A TCP stream carries newline-terminated JSON
+Wyoming is the Home Assistant voice satellite protocol. A stream carries newline-terminated JSON
 headers, optional separate JSON data and length-delimited binary payloads, such as microphone PCM.
 
 #### How we use it — Wyoming
@@ -761,24 +761,21 @@ logic, letting the same bridge use the device or a pinned file-audio host in tes
 [event routing](../crates/echo-wyoming/src/wyoming_route.rs) and
 [playback controls](../crates/echo-wyoming/src/wyoming_session.rs) implement the adapter.
 [echo-link](../crates/echo-link/src/lib.rs) exposes protocol-neutral capture, wake, mute, acknowledged
-playback and cut operations. [ADR 0025](adr/0025-echo-link.md) explicitly makes it the seam for a future
-local transport adapter; it is not a new wire protocol or an implemented replacement for Wyoming.
+playback and cut operations. [ADR 0025](adr/0025-echo-link.md) defines the seam used for local transport.
 
-#### Limits and plans — Wyoming
+#### Local transport and rollback — Wyoming
 
-Today Wyoming is plaintext and unauthenticated across the LAN. The fork's source-address restriction
-limits who can connect; it does not encrypt microphone traffic. The [W4 plan](program/plan.md#12-phase-order-after-m0)
-moves the bridge onto the Echo and sets `LISTEN_FROM` to numeric loopback only. That removes LAN exposure
-but **keeps Wyoming**. No decision in [decisions.md](program/decisions.md) selects its replacement.
+The unchanged Android device launch selects `/data/misc/portos-echo-device/wyoming.sock`. The device creates
+its directory as `system:3990` with mode `0750` and its socket with mode `0660`. The bridge's launch as
+`nobody` with group `3990` supplies filesystem access. The existing Fire OS SELinux labels and access remain
+part of coordinator verification. [ADR 0034](adr/0034-vendored-device-satellite.md) records the launch assumptions
+and listener ownership rules.
 
-| Undecided options, not plans | Trade-off |
-| --- | --- |
-| Keep Wyoming on loopback | Cheapest reuse of the tested adapter; retains framing and a local TCP service |
-| Private local socket or IPC, through another echo-link adapter | Can use local access controls and avoid TCP; needs a matching hassmic implementation and compatibility tests |
-| Link the bridge audio path into the hassmic fork | Can remove the protocol boundary; couples languages, process lifetimes, releases and hardware ownership |
-
-Open owner question: after W4, should Wyoming remain local or be replaced, and which trade-off is acceptable?
-This documentation does not choose or implement an option.
+On Android, the configured address `127.0.0.1:16700` makes the bridge try the Unix socket on every connect and
+reconnect. Only a missing socket or a refused connection permits the one-release TCP rollback to the same
+loopback address. Permission and path errors keep retrying the local socket. Protocol errors use the same
+reconnect policy. Explicit TCP addresses and the default Linux host keep using TCP. `--wyoming-socket PATH`
+lets a host satellite listen on a diagnostic Unix path and suppresses its TCP discovery advertisement.
 
 ### Wake word
 

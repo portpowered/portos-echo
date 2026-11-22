@@ -72,10 +72,10 @@ async fn run(
     mut commands: mpsc::Receiver<Result<Option<Advance>, Error>>,
     context: receipt::Context,
 ) -> Result<(), Error> {
-    let proxy = proxy::Proxy::bind(settings.wyoming, context.clone()).await?;
-    settings.wyoming = proxy.address;
+    let proxy = proxy::Proxy::bind(settings.wyoming.tcp_addr(), context.clone()).await?;
+    settings.wyoming = proxy.address.into();
     let (stop, shutdown) = oneshot::channel();
-    let connector = echo_wyoming::adapter::connector(settings.wyoming, echo_wyoming::ClientOptions::default());
+    let connector = echo_wyoming::adapter::connector(proxy.address, echo_wyoming::ClientOptions::default());
     let work = bridge_runtime::execute_with_control(
         settings,
         Control {

@@ -16,7 +16,7 @@ use std::cell::Cell;
 /// Returns fixed admission, runtime, control and cleanup failures.
 pub fn execute_process(settings: Settings) -> Result<(), Error> {
     let image = ProcessImage::capture();
-    let address = settings.wyoming;
+    let endpoint = settings.wyoming.clone();
     let media = media_config(settings.model_url.is_some());
     let kill = settings
         .config
@@ -33,7 +33,7 @@ pub fn execute_process(settings: Settings) -> Result<(), Error> {
     }
     let mut retained = None;
     loop {
-        let completion = process_generation(&mut configured, address, &media, retained)?;
+        let completion = process_generation(&mut configured, endpoint.clone(), &media, retained)?;
         if !completion.restart_requested {
             return Ok(());
         }
@@ -57,7 +57,7 @@ pub fn execute_process(settings: Settings) -> Result<(), Error> {
 
 fn process_generation(
     configured: &mut Configured,
-    address: std::net::SocketAddr,
+    endpoint: echo_wyoming::Endpoint,
     media: &PeerConfig,
     retained: Option<Box<SettingsHost>>,
 ) -> Result<super::RuntimeCompletion, Error> {
@@ -70,7 +70,7 @@ fn process_generation(
         let shutdown = settings_process::shutdown()?;
         let clean_stop = Cell::new(true);
         let cancelled = async { clean_stop.set(matches!(shutdown.await, Ok(true))) };
-        let connector = echo_wyoming::adapter::connector(address, echo_wyoming::ClientOptions::default());
+        let connector = echo_wyoming::adapter::endpoint_connector(endpoint, echo_wyoming::ClientOptions::default());
         let result = configured
             .execute_generation(
                 connector,

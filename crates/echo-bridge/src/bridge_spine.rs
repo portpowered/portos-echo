@@ -129,7 +129,7 @@ fn bridge_spine_startup_rejects_partial_mixed_and_nonloopback_inputs_offline() {
         Some("unused".into()),
     ];
     let settings = parse(&[], lab.clone()).unwrap().unwrap();
-    assert_eq!(settings.wyoming.port(), 16700);
+    assert_eq!(settings.wyoming.tcp_addr().port(), 16700);
     assert_eq!(settings.health.port(), 0);
     assert!(settings.lab);
     for args in [
@@ -236,7 +236,7 @@ fn bridge_spine_configured_modes_preserve_paths_and_never_read_credentials_at_pa
         )
         .unwrap();
         let settings = parse(&args, [None, None, None]).unwrap().unwrap();
-        assert_eq!(settings.wyoming.to_string(), "127.0.0.1:16700");
+        assert_eq!(settings.wyoming.tcp_addr().to_string(), "127.0.0.1:16700");
         assert_eq!(settings.health.to_string(), "127.0.0.1:16901");
         assert_eq!(settings.trace, std::path::PathBuf::from("trace.jsonl"));
         assert_eq!(settings.voice, "default");

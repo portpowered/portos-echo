@@ -25,6 +25,30 @@ pub fn source(vendor: &Path, out: &Path) -> Result<PathBuf, Box<dyn Error>> {
         ("static int ota_port = 28929;", "static int ota_port = 0;"),
         ("int core_web_port = 28931;", "int core_web_port = 0;"),
         ("core_sendspin_port = 28928;", "core_sendspin_port = 0;"),
+        (
+            "    signal(SIGPIPE, SIG_IGN);",
+            "    int unix_listener = echo_hassmic_prepare_listener();\n    if (unix_listener == -1) return 1;\n    signal(SIGPIPE, SIG_IGN);",
+        ),
+        (
+            "    int ls = net_listen(core_port);",
+            "#ifdef __ANDROID__\n    int ls = unix_listener;\n#else\n    int ls = unix_listener >= 0 ? unix_listener : net_listen(core_port);\n#endif",
+        ),
+        (
+            "    fprintf(stderr, \"hassmic \" VERSION \" (\" BUILD \") %s on %d, wake=%s\\n\", proto->id, core_port, core_local_wake ? \"local\" : \"remote\");",
+            "    if (unix_listener >= 0) echo_hassmic_unix_ready();\n    else fprintf(stderr, \"hassmic \" VERSION \" (\" BUILD \") %s on %d, wake=%s\\n\", proto->id, core_port, core_local_wake ? \"local\" : \"remote\");",
+        ),
+        (
+            "        int c = net_accept(ls);",
+            "        int c = echo_hassmic_accept(ls, unix_listener >= 0);",
+        ),
+        (
+            "          setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv); setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);",
+            "          setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);\n          if (unix_listener < 0) { setsockopt(c, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on);",
+        ),
+        (
+            "setsockopt(c, IPPROTO_TCP, TCP_USER_TIMEOUT, &user_ms, sizeof user_ms); }",
+            "setsockopt(c, IPPROTO_TCP, TCP_USER_TIMEOUT, &user_ms, sizeof user_ms); } }",
+        ),
     ] {
         if source.matches(upstream).count() != 1 {
             return Err(format!("hassmic main no longer contains exactly one `{upstream}`").into());
@@ -38,6 +62,45 @@ pub fn source(vendor: &Path, out: &Path) -> Result<PathBuf, Box<dyn Error>> {
 }
 
 const REGISTRATION: &str = r#"
+#include <sys/un.h>
+extern int echo_hassmic_prepare_listener(void);
+extern void echo_hassmic_unix_ready(void);
+
+static int echo_hassmic_accept(int fd, int local)
+{
+#ifndef __ANDROID__
+    if (!local) return net_accept(fd);
+#else
+    (void)local;
+#endif
+    int client;
+    do client = accept4(fd, NULL, NULL, SOCK_CLOEXEC); while (client < 0 && errno == EINTR);
+    return client;
+}
+
+int echo_hassmic_probe_unix(const char *path)
+{
+    struct sockaddr_un addr = { .sun_family = AF_UNIX };
+    size_t len = strlen(path);
+    if (len >= sizeof addr.sun_path) return ENAMETOOLONG;
+    memcpy(addr.sun_path, path, len + 1);
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0) return errno;
+    int status = connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0 ? errno : 0;
+    close(fd);
+    return status;
+}
+
+int echo_hassmic_open_lease(const char *path)
+{
+    return open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
+}
+
+int echo_hassmic_on_stop(void (*notify)(int))
+{
+    return signal(SIGTERM, notify) == SIG_ERR || signal(SIGINT, notify) == SIG_ERR ? -1 : 0;
+}
+
 static struct proto echo_hassmic_wyoming = {
     .id = "wyoming", .port = 16700, .threaded = 0,
 };
