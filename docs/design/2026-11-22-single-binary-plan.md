@@ -224,6 +224,23 @@ browser tests, the screen packs' WebM clips and touch through the DOM. A tiny AP
 than the native renderer and still needs a renderer. Drawing the raw framebuffer fights SurfaceFlinger. So P6, if
 it ever runs, follows hassmic's method.
 
+### 5.1 Owner UX additions (2026-11-22)
+
+- **Browse and install packs on the Echo.** Pasting a URL and a SHA-256 stays as **Advanced**, but it is not the main
+  path. Each release publishes a `screenpacks.json` index with the name, version, asset URL, SHA-256, a preview
+  still and the licence of every pack. **Settings > Screen packs** fetches the index from the latest release and shows
+  a gallery with a search box. One tap downloads, checks the digest from the index and switches to the pack. The
+  index's own authenticity is an owner question (section 9): HTTPS to GitHub alone, or a signature by a release key
+  built into `echo-bridge`.
+- **Wi-Fi on the Echo.** hassmic's settings page owned "Switch network" (fork `scripts/device/wifi.sh` and
+  `wifictl.dex`, which calls Android 9's `IWifiManager` as uid 1000). When hassmic goes away, **Settings > Wi-Fi**
+  takes over: scan, join with a password, forget. The device role runs the same `IWifiManager` calls; whether it
+  does so through an embedded dex as uid 1000 or through the APK with permissions granted at install is decided in
+  P4. When the Echo has had no network for 30 s, the screen opens Wi-Fi setup by itself. That screen works offline,
+  because the page is served on the Echo. `echo-setup wifi` over USB is the fallback.
+- **Voice and prompts.** No change: **Settings > Conversation** picks the Live voice, and **Voice instructions**
+  and **Runner instructions** edit `home/prompts/voice.md` and `runner.md` ([configuration](../configuration.md)).
+
 ## 6. Installer
 
 `echo-setup install` (Windows and Linux) stays the one command, and `install.sh` and `install.ps1` stay its
@@ -238,8 +255,8 @@ bootstraps:
 4. Wait for "Computer" and print `tools: parity ok` from the doctor.
 
 `update` pushes `next`, and the boot role's tries counter rolls back a binary that fails three times. `rollback`
-and `uninstall` keep their meaning. Character packs stay as they are: **Settings > Load screen packs**, or
-`echo-setup pack push <dir>` in place of `scripts/echo-screen-pack.sh`.
+and `uninstall` keep their meaning. Character packs are browsed and installed on the Echo (section 5.1).
+`echo-setup pack push <dir>` replaces `scripts/echo-screen-pack.sh` for packs you build yourself.
 
 ## 7. Phases
 
@@ -251,8 +268,8 @@ Each phase ships on its own and ends with a T5 run by the coordinator. Workers s
 | **P1** Codex in-process | The bridge stops spawning the app server | T5: wake, a reply and a delegated web-search answer; `ps` on the Echo shows no `codex-app-server`; M2 and M4 pass with `--driver sim` | `bin/codex-app-server`, `codex.launch`, `codex.binary`, the stdio supervisor in `echo-codex`, the standalone path of `build-codex-armv7.sh` |
 | **P2** Tool parity | Codex's tools on, the exec role, the `External` profile, approval routing, `m8-tool-parity` | Every row of 4.1 passes on T3, then on T5 through the Ring bench; the `tools --json` diff is empty; the sandbox negative checks pass | `features.shell_tool=false` and the other off-switches; the "list must not widen" T3 assertion of 2026-11-17, replaced by the parity assertion |
 | **P3** Device role | `echo-device-sys` and `echo-device`; the fork's `main.sh` still boots, but starts `echo-bridge device` instead of hassmic | T5: wake on "Computer"; reply echo stays low (`reply.quality` echo_max in the same range as on 2026-11-20); barge-in; zero microphone frames while muted; `set-volume` acked with the reported state; ten restarts of each role recover; no hassmic process | The hassmic binary at runtime; TCP 16700 (Unix socket instead) |
-| **P4** Boot and supervision | `echo-bridge install` and `boot`; the APK as HOME; light band in the page | On an Echo rooted but without the fork's install: one `echo-setup install`, a reboot, a wake works; `iptables -S` shows the egress lock; Alexa packages disabled; a forced bad binary rolls back after three tries | Dependence on fork `install-system.sh`, `boot.sh`, `main.sh`, `bridge.sh`, `hassmic.rc`, `screen_home`, `org.hassmic.home` |
-| **P5** One-command install | The APK embedded; device scripts folded into `echo-bridge install`; the README becomes the target quick start | Someone follows only the quick start on a freshly rooted Echo and reaches step 5, time recorded; `doctor` prints `tools: parity ok` | `apk/echo-screen.apk` and `scripts/echo-install*.sh` as release assets, README step 1.4 |
+| **P4** Boot and supervision | `echo-bridge install` and `boot`; the APK as HOME; light band in the page; **Settings > Wi-Fi** and the offline Wi-Fi prompt (5.1) | On a new network with no saved one, the screen offers Wi-Fi setup within 30 s and a join from the screen brings the agent back; On an Echo rooted but without the fork's install: one `echo-setup install`, a reboot, a wake works; `iptables -S` shows the egress lock; Alexa packages disabled; a forced bad binary rolls back after three tries | Dependence on fork `install-system.sh`, `boot.sh`, `main.sh`, `bridge.sh`, `hassmic.rc`, `screen_home`, `org.hassmic.home` |
+| **P5** One-command install | The APK embedded; device scripts folded into `echo-bridge install`; `screenpacks.json` and the pack gallery (5.1); the README becomes the target quick start | A pack found by search in the gallery installs and shows in one tap, with a wrong digest refused; Someone follows only the quick start on a freshly rooted Echo and reaches step 5, time recorded; `doctor` prints `tools: parity ok` | `apk/echo-screen.apk` and `scripts/echo-install*.sh` as release assets, README step 1.4 |
 | **P6** Native renderer (optional) | Section 5 | Same screen goldens as the WebView; RAM saved recorded | The WebView APK |
 
 P1 and P3 are independent, and P2 needs P1. P4 needs P3, and P5 needs P4.
@@ -290,6 +307,9 @@ P1 and P3 are independent, and P2 needs P1. P4 needs P3, and P5 needs P4.
    camera? The 2026-11-18 decision chose no approval UI for notes.
 8. **Bridge notes tools.** Retire them once file tools work, or keep them as the safe default?
 9. **On-device updates.** Should the Echo fetch signed releases itself, or does `echo-setup update` stay the only path?
+
+Added 2026-11-22: should the pack index be trusted on HTTPS to GitHub alone, or signed by a release key built into
+`echo-bridge`?
 
 ## 10. Evaluation against the owner's architecture draft
 

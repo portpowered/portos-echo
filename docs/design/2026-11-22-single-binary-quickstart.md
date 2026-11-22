@@ -71,21 +71,16 @@ Chromium and Node, which we do not ship on the Echo's 32-bit ARM. The agent call
 ## Addendum A: screen packs
 
 A screen pack is a layout and an animated character for the Echo's screen. The default pack comes with the install.
-The release publishes more as `<name>-<version>.screenpack.tar.gz` assets, with their SHA-256 in `SHA256SUMS`.
 
-**Install one from the Echo (no PC).** Open **Settings > Load screen packs**. Under **Add from URL**, enter the
-asset's URL (`https://github.com/portpowered/portos-echo/releases/download/<tag>/<asset>`) and its SHA-256, then
-choose **Download pack**. Choose **Refresh packs** until it shows as installed, select it, choose **Use screen pack**
-and **Back**. The Echo checks the digest before it unpacks anything. **Disable screen packs** goes back to the
-built-in screen.
+**Install one from the Echo.** Open **Settings > Screen packs**. The Echo lists the packs published with the latest
+release, with a preview of each. Search by name, tap a pack, then tap **Install**. The Echo downloads it, checks its
+SHA-256 against the release index and switches to it. **Disable screen packs** goes back to the built-in screen.
+Under **Advanced** you can still add a pack from any URL with its SHA-256.
 
-**Install one from a Linux PC.** Unpack the archive into a directory named `<name>@<version>` and push it, then
-select it on the Echo as above:
+**Install your own from a PC.** Unpack or build the pack into a directory named `<name>@<version>` and push it:
 
 ```sh
-mkdir orange-kitten@0.1.0
-tar -xzf orange-kitten-0.1.0.screenpack.tar.gz -C orange-kitten@0.1.0
-sh scripts/echo-screen-pack.sh push orange-kitten@0.1.0   # prints "screen-pack: pushed orange-kitten@0.1.0"
+echo-setup pack push my-pack@0.1.0   # validates first, then prints "screen-pack: pushed my-pack@0.1.0"
 ```
 
 **Build your own.** A pack is a directory with a `pack.json` (`format: 1`, `name`, `version`, and a `layout`, a
@@ -98,8 +93,43 @@ push it. The push validates the pack first and refuses anything outside the form
 ```sh
 sh scripts/make-template-screenpack.sh --version 0.1.0 --out ./generated   # needs Python 3 and ffmpeg
 cp -r ./generated/template@0.1.0 ./my-pack@0.1.0                          # then edit pack.json and the art
-sh scripts/echo-screen-pack.sh push ./my-pack@0.1.0
+echo-setup pack push ./my-pack@0.1.0
 ```
 
 The full format, the validation rules and the companion pack's generator are in
 [screen packs](../screen-packs.md).
+
+## Addendum B: Wi-Fi in a new place
+
+The Echo remembers the networks it has joined. In a new place:
+
+1. Plug the Echo in. If it finds no saved network for 30 seconds, the screen opens **Wi-Fi** by itself. Otherwise
+   open **Settings > Wi-Fi**.
+2. Tap your network, enter its password and tap **Join**. The status line shows **Connected** and the agent comes
+   back on its own; you don't need to sign in again.
+3. To remove a network you no longer use, tap it and choose **Forget**.
+
+No screen, or a hidden network? Connect the Echo over USB and run:
+
+```sh
+echo-setup wifi join "Network name"   # asks for the password; it is never shown or stored on the PC
+echo-setup wifi status                # prints the network name and "connected"
+```
+
+## Addendum C: voice and prompt
+
+All of these apply from the next conversation; nothing needs a restart.
+
+- **Voice.** **Settings > Conversation > Live voice** lists every voice the bundled Codex release offers. Pick one
+  and choose **Save settings**. `default` uses the service's own default voice.
+- **How it talks.** **Settings > Voice instructions** is the prompt for the voice conversation: its personality,
+  how long its answers are, which language it speaks. Edit it and choose **Save voice.md**.
+- **How it works on tasks.** **Settings > Runner instructions** is the prompt for the agent that runs tools for it.
+  Edit it and choose **Save runner.md**.
+- **By voice.** Ask it, for example: "From now on, keep your answers short." The agent can edit its own voice
+  instructions (the `prompts` tool group, on by default).
+- **From a PC.** The same prompts are the files `home/prompts/voice.md` and `home/prompts/runner.md` under
+  `/data/local/echo` on the Echo. A prompt that can't be read keeps the last good one.
+
+The other settings (listening time, the daily request cap, the delegated model) are in
+[configuration](../configuration.md).
