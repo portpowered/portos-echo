@@ -330,15 +330,23 @@ enum InstallStatus {
     Succeeded,
 }
 
-/// One `GET /routes?owner=~caller` page. Only the fields the bridge reads.
+/// One `GET /routes?owner=~caller` page (`EnumerateRoutesResponse`). Only the
+/// fields the bridge reads. The cursor is nested:
+/// `{"results":[..],"paginationContext":{"nextToken":".."}}`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutePage {
     #[serde(default)]
     pub results: Vec<RouteRecord>,
-    /// The opaque continuation, passed back unchanged; absent on the last page.
     #[serde(default)]
-    pub next_token: Option<String>,
+    pagination_context: Option<PaginationContext>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PaginationContext {
+    #[serde(default)]
+    next_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -351,6 +359,16 @@ pub struct RouteRecord {
 }
 
 impl RoutePage {
+    /// The opaque `paginationContext.nextToken`, passed back unchanged as the
+    /// `nextToken` query parameter. `None` (absent or empty) on the last page.
+    #[must_use]
+    pub fn next_token(&self) -> Option<&str> {
+        self.pagination_context
+            .as_ref()
+            .and_then(|context| context.next_token.as_deref())
+            .filter(|token| !token.is_empty())
+    }
+
     /// The endpoint id of the route whose plugin route id is this device. Never derived.
     #[must_use]
     pub fn endpoint_for(&self, device_id: &str) -> Option<&str> {

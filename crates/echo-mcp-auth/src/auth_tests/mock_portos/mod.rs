@@ -207,7 +207,8 @@ fn exchange(request: &Request, state: &mut State) -> (u16, Value) {
 }
 
 /// One page of the caller's routes: `maxResults` (default 10, at most 100)
-/// and an opaque `nextToken` that must come back unchanged.
+/// and an opaque `paginationContext.nextToken` that must come back unchanged
+/// as the `nextToken` query parameter.
 fn routes(request: &Request, state: &mut State) -> (u16, Value) {
     if request.query.get("owner").map(String::as_str) != Some("~caller") {
         return (400, json!({}));
@@ -232,7 +233,7 @@ fn routes(request: &Request, state: &mut State) -> (u16, Value) {
     let results = all.get(start..end).unwrap_or_default();
     let mut page = json!({"results":results});
     if end < all.len() {
-        page["nextToken"] = json!(format!("{ROUTE_TOKEN}{end}"));
+        page["paginationContext"] = json!({"nextToken":format!("{ROUTE_TOKEN}{end}")});
     }
     (200, page)
 }

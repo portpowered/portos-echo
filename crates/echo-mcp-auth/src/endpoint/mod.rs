@@ -279,7 +279,8 @@ impl EndpointExchange {
 impl EndpointExchange {
     /// Read back the caller's routes and return the endpoint id of the one
     /// whose plugin route id is this `deviceId`. `None` while discovery lags.
-    /// Pages follow `nextToken` until it is absent or the route is found.
+    /// Pages follow `paginationContext.nextToken` until it is absent or the
+    /// route is found.
     /// The id is for display and logs; nothing is derived from it.
     ///
     /// # Errors
@@ -321,10 +322,10 @@ impl EndpointExchange {
             if let Some(endpoint) = page.endpoint_for(device_id) {
                 return Ok(Some(endpoint.to_owned()));
             }
-            match page.next_token.filter(|token| !token.is_empty()) {
+            match page.next_token() {
                 None => return Ok(None),
-                Some(token) if next.as_ref() == Some(&token) => return Err(ExchangeError::Protocol),
-                Some(token) => next = Some(token),
+                Some(token) if next.as_deref() == Some(token) => return Err(ExchangeError::Protocol),
+                Some(token) => next = Some(token.to_owned()),
             }
         }
         Err(ExchangeError::Protocol)

@@ -306,3 +306,19 @@ fn endpoint_pairing_uses_the_published_plugin_id() {
     assert_ne!(ECHO_PLUGIN_ID, REPORT_NAMESPACE);
     assert_eq!(install["principalId"], "~self");
 }
+
+#[test]
+fn endpoint_route_pages_read_the_nested_pagination_context() {
+    use echo_contracts::endpoint::RoutePage;
+    let page = |body: Value| serde_json::from_value::<RoutePage>(body).unwrap();
+    let route = json!({"associatedPluginRouteId":"synthetic-device","associatedEndpointId":"synthetic-endpoint"});
+    let nested = page(json!({"results":[route],"paginationContext":{"nextToken":"abc123"}}));
+    assert_eq!(nested.next_token(), Some("abc123"));
+    assert_eq!(nested.endpoint_for("synthetic-device"), Some("synthetic-endpoint"));
+    // Port OS nests the cursor: a top-level `nextToken` is not read.
+    assert_eq!(page(json!({"results":[],"nextToken":"abc123"})).next_token(), None);
+    let empty = json!({"results":[],"paginationContext":{"nextToken":""}});
+    assert_eq!(page(empty).next_token(), None);
+    assert_eq!(page(json!({"results":[],"paginationContext":{}})).next_token(), None);
+    assert_eq!(page(json!({"results":[],"paginationContext":null})).next_token(), None);
+}
