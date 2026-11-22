@@ -329,7 +329,23 @@ It holds `capsrc.c`, `audio_android.c`, `wake_pryon.c`, `buttons.c`, `spkgain.c`
 upstream's notice and exposes a small C API. A Rust crate, `echo-device`, puts the Wyoming subset on top. This
 gives parity first, with source 7, the ASP index sent before the first open, after each reopen and every 60 s,
 the `capture_source` rollback and `hassmic-speaker` reports. Rewriting the C in Rust is optional later work. We
-drop hassmic's Home Assistant, ESPHome, Music Assistant, Sendspin, BLE, Drop In, mDNS and settings-page duties.
+drop hassmic's Home Assistant, ESPHome, Music Assistant, Sendspin, BLE, A2DP, Drop In, mDNS and settings-page
+duties.
+
+**A1 lands in two steps (coordinator, 2026-11-22).** The Rust Wyoming layer above is where A1 ends, not where it
+starts:
+
+- **A1a** vendors the whole satellite, its C `proto_wyoming` included, and runs it unchanged as
+  `echo-bridge device` through one C entry point. The simulator and every T3 suite then run our vendored copy
+  instead of the fork's build, and nothing above the wire changes.
+- **A1b** replaces the vendored `proto_wyoming` with the Rust Wyoming subset in `echo-device`, on top of the small
+  C API, behind the same wire. The A1a suites are its regression check, and the Unix socket follows.
+
+Nothing under a copyleft licence is vendored or compiled. In the fork, A2DP's aptX codec (`a2dp_codecs.c`, which
+calls the LGPL `freeaptx.c`) is the only such code on the satellite's path. We drop A2DP, so A1a leaves out
+`freeaptx.c` and, where the satellite still calls A2DP, links a stub of ours that reports the codec as
+unavailable. `echo-bridge notices` then lists only permissive notices, and a check fails on any vendored file
+whose licence header is GPL or LGPL.
 
 ### 2.3 Codex as libraries
 
