@@ -2,7 +2,7 @@
 author: Port OS Team
 owner: Port OS Team
 last modified: 2026, november, 22
-status: proposed; needs the owner's answers in section 9 before phase P1
+status: proposed; needs the owner's answers in section 9 before phase B1
 ---
 
 # One binary on the Echo: plan
@@ -317,7 +317,7 @@ prepared copy, and each one goes upstream as a pull request.
 | `codex-v8-poc` | V8 experiment |
 | `codex-cli`, `codex-tui`, `codex-exec`, `codex-voice-host`, `codex-app-server-daemon` | Binaries for other surfaces |
 | `codex-linux-sandbox`, `bwrap`, `windows-sandbox-rs` | Other platforms. Landlock and seccomp are behind `cfg(target_os = "linux")` (`linux-sandbox/Cargo.toml`), and Android is a different `target_os` |
-| `ollama`, `lmstudio`, `cloud-tasks*`, `responses-api-proxy` | Only if they do not come in with `codex-core` anyway; measured in P0 |
+| `ollama`, `lmstudio`, `cloud-tasks*`, `responses-api-proxy` | Only if they do not come in with `codex-core` anyway; measured in B0 |
 
 Code mode is gated at three levels. There is no cargo feature: `codex-app-server` declares none.
 
@@ -355,7 +355,7 @@ trace and, for speech, the Ring bench.
 | `apply_patch` and file writes | `codex-apply-patch`, `handlers/apply_patch.rs`, `runtimes/apply_patch.rs` | Yes | Auto-approved only inside `home/workspace`: `core/src/safety.rs` rejects a write without a sandbox unless the profile is `External` | "Create `hello.txt` saying hi" → the file exists, owned by the exec uid |
 | File read, list, search | No separate read tool at 0.171; reads go through `exec_command` and the exec-server file system API (`local_file_system*.rs`); `codex-file-search` | Yes | Same environment | "What does `hello.txt` say?" → "hi" |
 | Web search | `ext/web-search` (`web_search`, or `web.run` for Responses Lite models) | Yes, provider side | Unchanged, `[codex] web_search` | "What's the weather in Paris?" → trace `web.run`, a spoken answer |
-| Web fetch ("web view") | Provider-side page opening inside `web.run` (assumption, checked in P0) | Yes, provider side | If absent, `curl` through `exec_command` only when an egress rule allows it (9.6) | "Open example.com and read its heading" → trace shows an open action, heading spoken |
+| Web fetch ("web view") | Provider-side page opening inside `web.run` (assumption, checked in B0) | Yes, provider side | If absent, `curl` through `exec_command` only when an egress rule allows it (9.6) | "Open example.com and read its heading" → trace shows an open action, heading spoken |
 | Skills, discovery and loading | `codex-skills`, `ext/skills` (catalog, loader, `invocation.rs`) | Yes | Skill roots under `home/skills`; packs added like screen packs | A test skill with a marker phrase → trace shows the skill load, marker spoken |
 | Tool search and discovery | `tools/src/tool_search.rs`, `tool_discovery.rs`, `handlers/tool_search.rs` | Yes (not the code-mode variant) | Default config | With 40+ MCP tools → trace shows `tool_search` before the call |
 | MCP client and server config | `codex-mcp`, `codex-rmcp-client`, `ext/mcp`, `handlers/mcp.rs`, `mcp_resource.rs` | Yes for HTTP servers; a stdio server written for Node does not run | `mcp_servers` in the bridge-written `config.toml`; Port OS stays bridge-owned (9.5) | Spoof MCP over HTTP in `mcp_servers` → "call the test tool" → `tools/call` once |
@@ -371,7 +371,7 @@ trace and, for speech, the Ring bench.
 
 The bridge's own tools (Port OS, session controls, emotion, camera, notes, prompts) remain dynamic tools beside
 these. The parity oracle is `echo-bridge codex tools --json`. It prints the tool declarations core would send
-for a turn under the Echo configuration. P2 passes when that list, minus `exec` and `wait`, equals the same
+for a turn under the Echo configuration. B2 passes when that list, minus `exec` and `wait`, equals the same
 command's output on x86_64 Linux from the same release.
 
 ### 4.2 Shell and file sandbox on Android
@@ -399,11 +399,11 @@ The WebView app stays, as the owner directed. It needs only what the loss of has
 - **Disconnected fallback.** The app's own "Waiting for bridge" view replaces hassmic's native face.
 - **Install.** The boot role installs the embedded APK with `pm install -r` when its digest changes and launches it.
 
-Optional phase P6, only if P2's measurement shows memory pressure: a native renderer. hassmic already proves the
+Optional phase C2, only if B2's measurement shows memory pressure: a native renderer. hassmic already proves the
 method. It runs `app_process` with a generated dex and draws SurfaceFlinger layers through `ANativeWindow`, with
 Skia for text (fork `src/ui/android.c`). That would save the WebView's roughly 220 MB, but it costs the page's
 browser tests, the screen packs' WebM clips and touch through the DOM. A tiny APK with a frame protocol saves less
-than the native renderer and still needs a renderer. Drawing the raw framebuffer fights SurfaceFlinger. So P6, if
+than the native renderer and still needs a renderer. Drawing the raw framebuffer fights SurfaceFlinger. So C2, if
 it ever runs, follows hassmic's method.
 
 ### 5.1 Owner UX additions (2026-11-22)
@@ -418,7 +418,7 @@ it ever runs, follows hassmic's method.
   `wifictl.dex`, which calls Android 9's `IWifiManager` as uid 1000). When hassmic goes away, **Settings > Wi-Fi**
   takes over: scan, join with a password, forget. The device role runs the same `IWifiManager` calls; whether it
   does so through an embedded dex as uid 1000 or through the APK with permissions granted at install is decided in
-  P4. When the Echo has had no network for 30 s, the screen opens Wi-Fi setup by itself. That screen works offline,
+  A2. When the Echo has had no network for 30 s, the screen opens Wi-Fi setup by itself. That screen works offline,
   because the page is served on the Echo. `echo-setup wifi` over USB is the fallback.
 - **Voice and prompts.** No change: **Settings > Conversation** picks the Live voice, and **Voice instructions**
   and **Runner instructions** edit `home/prompts/voice.md` and `runner.md` ([configuration](../configuration.md)).
@@ -446,15 +446,27 @@ Each phase ships on its own and ends with a T5 run by the coordinator. Workers s
 
 | Phase | Delivers | Acceptance (observable) | Deletes |
 | --- | --- | --- | --- |
-| **P0** Measure and decide | `echo-codex-embed` builds for armv7 in CI with `codex-app-server` linked in-process; `echo-bridge codex tools --json`; size and RSS recorded in baselines; owner answers in section 9 | CI artifact is one stripped `echo-bridge`, size recorded; the tool list on host equals upstream's minus `exec` and `wait`; the T5 RSS of the bridge while idle and during a call is recorded | Nothing |
-| **P1** Codex in-process | The bridge stops spawning the app server | T5: wake, a reply and a delegated web-search answer; `ps` on the Echo shows no `codex-app-server`; M2 and M4 pass with `--driver sim` | `bin/codex-app-server`, `codex.launch`, `codex.binary`, the stdio supervisor in `echo-codex`, the standalone path of `build-codex-armv7.sh` |
-| **P2** Tool parity | Codex's tools on, the exec role, the `External` profile, `m8-tool-parity` | Every row of 4.1 passes on T3, then on T5 through the Ring bench; the `tools --json` diff is empty; the sandbox negative checks pass | `features.shell_tool=false` and the other off-switches; the "list must not widen" T3 assertion of 2026-11-17, replaced by the parity assertion |
-| **P3** Device role | `echo-device-sys` and `echo-device`; the fork's `main.sh` still boots, but starts `echo-bridge device` instead of hassmic | T5: wake on "Computer"; reply echo stays low (`reply.quality` echo_max in the same range as on 2026-11-20); barge-in; zero microphone frames while muted; `set-volume` acked with the reported state; ten restarts of each role recover; no hassmic process | The hassmic binary at runtime; TCP 16700 (Unix socket instead) |
-| **P4** Boot and supervision | `echo-bridge install` and `boot`; the APK as HOME; light band in the page; **Settings > Wi-Fi** and the offline Wi-Fi prompt (5.1) | On a new network with no saved one, the screen offers Wi-Fi setup within 30 s and a join from the screen brings the agent back; On an Echo rooted but without the fork's install: one `echo-setup install`, a reboot, a wake works; `iptables -S` shows the egress lock; Alexa packages disabled; a forced bad binary rolls back after three tries | Dependence on fork `install-system.sh`, `boot.sh`, `main.sh`, `bridge.sh`, `hassmic.rc`, `screen_home`, `org.hassmic.home` |
-| **P5** One-command install | The APK embedded; device scripts folded into `echo-bridge install`; `screenpacks.json` and the pack gallery (5.1); the README becomes the target quick start | A pack found by search in the gallery installs and shows in one tap, with a wrong digest refused; Someone follows only the quick start on a freshly rooted Echo and reaches step 5, time recorded; `doctor` prints `tools: parity ok` | `apk/echo-screen.apk` and `scripts/echo-install*.sh` as release assets, README step 1.4 |
-| **P6** Native renderer (optional) | Section 5 | Same screen goldens as the WebView; RAM saved recorded | The WebView APK |
+| **A1** Device role | `echo-device-sys` and `echo-device`; the fork's `main.sh` still boots, but starts `echo-bridge device` instead of hassmic | T5: wake on "Computer"; reply echo stays low (`reply.quality` echo_max in the same range as on 2026-11-20); barge-in; zero microphone frames while muted; `set-volume` acked with the reported state; ten restarts of each role recover; no hassmic process | The hassmic binary at runtime; TCP 16700 (Unix socket instead) |
+| **A2** Boot and supervision | `echo-bridge install` and `boot`; the APK as HOME; light band in the page; **Settings > Wi-Fi** and the offline Wi-Fi prompt (5.1) | On a new network with no saved one, the screen offers Wi-Fi setup within 30 s and a join from the screen brings the agent back; On an Echo rooted but without the fork's install: one `echo-setup install`, a reboot, a wake works; `iptables -S` shows the egress lock; Alexa packages disabled; a forced bad binary rolls back after three tries | Dependence on fork `install-system.sh`, `boot.sh`, `main.sh`, `bridge.sh`, `hassmic.rc`, `screen_home`, `org.hassmic.home` |
+| **B0** Measure and decide | `echo-codex-embed` builds for armv7 in CI with `codex-app-server` linked in-process; `echo-bridge codex tools --json`; size and RSS recorded in baselines; owner answers in section 9 | CI artifact is one stripped `echo-bridge`, size recorded; the tool list on host equals upstream's minus `exec` and `wait`; the T5 RSS of the bridge while idle and during a call is recorded | Nothing |
+| **B1** Codex in-process | The bridge stops spawning the app server | T5: wake, a reply and a delegated web-search answer; `ps` on the Echo shows no `codex-app-server`; M2 and M4 pass with `--driver sim` | `bin/codex-app-server`, `codex.launch`, `codex.binary`, the stdio supervisor in `echo-codex`, the standalone path of `build-codex-armv7.sh` |
+| **B2** Tool parity | Codex's tools on, the exec role, the `External` profile, `m8-tool-parity` | Every row of 4.1 passes on T3, then on T5 through the Ring bench; the `tools --json` diff is empty; the sandbox negative checks pass | `features.shell_tool=false` and the other off-switches; the "list must not widen" T3 assertion of 2026-11-17, replaced by the parity assertion |
+| **C1** One-command install | The APK embedded; device scripts folded into `echo-bridge install`; `screenpacks.json` and the pack gallery (5.1); the README becomes the target quick start | A pack found by search in the gallery installs and shows in one tap, with a wrong digest refused; Someone follows only the quick start on a freshly rooted Echo and reaches step 5, time recorded; `doctor` prints `tools: parity ok` | `apk/echo-screen.apk` and `scripts/echo-install*.sh` as release assets, README step 1.4 |
+| **C2** Native renderer (optional) | Section 5 | Same screen goldens as the WebView; RAM saved recorded | The WebView APK |
 
-P1 and P3 are independent, and P2 needs P1. P4 needs P3, and P5 needs P4.
+**Order of work (owner, 2026-11-22).** Iterate, never a total rip-out. First take out the hassmic components and
+collapse them into the bridge (A), then fold in the Codex instance (B), then the screen app (C). Within each track
+the phases run in order (A1 then A2, B0 then B1 then B2, C1 then C2), and each one keeps the previous path working
+until its replacement has passed on the Echo:
+
+- **A1** runs hassmic's audio, wake and controls as `echo-bridge device`, still started by the fork's `main.sh` and
+  still speaking the same Wyoming subset, so the core, the simulator and every T3 suite are unchanged.
+- **A2** moves boot and supervision to our own `.rc` only after A1 has run on the Echo.
+- **B0** links Codex behind an off-by-default feature, **B1** makes it the default and deletes the child, and
+  **B2** turns on the full tool surface.
+- **C1** embeds the screen APK and makes the README the quick start. **C2** stays optional.
+
+Technically B0 to B2 do not depend on A, but they start after A2 so that one track changes the Echo at a time.
 
 ## 8. Risks and unknowns
 
@@ -462,9 +474,9 @@ P1 and P3 are independent, and P2 needs P1. P4 needs P3, and P5 needs P4.
 | --- | --- | --- |
 | Root and SELinux | SELinux enforcing; the unlock leaves `su` permissive, and the fork adds init→`su` rules with `magiskpolicy32` ([baselines](../program/baselines.md#the-device), athena `sepolicy.rules`) | `echo-bridge install` applies the same rules. `magiskpolicy` is GPL, so it stays a separate download, never linked (9.4) |
 | HAL access without hassmic | The recorder needs uid `system`; source 7 is silent until the ASP index is sent; only one capture at a time | The device role keeps hassmic's uid, domain, ordering and resend timer (vendored C) |
-| Boot persistence | Android 9 has no `init.d`; the hook needs one `/system` write; boot waits for a HOME activity | A ten-line `.rc` and a HOME-capable APK; P4 proves it on a freshly rooted Echo |
+| Boot persistence | Android 9 has no `init.d`; the hook needs one `/system` write; boot waits for a HOME activity | A ten-line `.rc` and a HOME-capable APK; A2 proves it on a freshly rooted Echo |
 | Root code of ours | The program rule is "no code of ours runs as root" ([plan 3](../program/plan.md#3-the-bridge-runs-the-conversation-and-the-tools)) | `boot` is the only root role and stays small; owner decision 9.1 |
-| Binary size and RAM on armv7 | App server closure about 1,078 crates; 60–120 MB stripped was estimated, not measured ([spike](../spikes/codex-app-server.md)); 1.9 GB RAM; WebView about 220 MB | P0 measures; strip, LTO, `opt-level="z"` for cold crates; one TLS stack later |
+| Binary size and RAM on armv7 | App server closure about 1,078 crates; 60–120 MB stripped was estimated, not measured ([spike](../spikes/codex-app-server.md)); 1.9 GB RAM; WebView about 220 MB | B0 measures; strip, LTO, `opt-level="z"` for cold crates; one TLS stack later |
 | Codex churn, no pins | The owner tracks the newest release ([decision 2026-11-21](../program/decisions.md)); Rust APIs inside codex-rs promise no stability | One adapter crate; a weekly `codex-upstream` job builds against the newest release, like `hassmic-upstream`; Cargo.lock records what shipped |
 | Dependency rule | A new `Cargo.lock` package needs an ADR (el-f6); the closure adds about 1,000 | One ADR covering the Codex closure, with `cargo-deny` licence checks |
 | Licences | Codex Apache-2.0 with NOTICE; hassmic MIT; Pryon, libasp and OpenSL ES are firmware loaded from `/system`, never shipped; the CA bundle MPL-2.0 | Notices embedded and printed by `echo-bridge licenses`; no firmware file in the binary |
@@ -524,12 +536,12 @@ Ratings: **good**, **fair**, **weak**.
 | Boot persistence | Fork `.rc` and `bridge.sh` — **fair** | Not covered | Our `.rc` plus a HOME APK — **good**, needs root role (9.1) |
 | Observability | Bridge trace, hassmic `boot.log`, adb — **fair** | Not covered | One trace for all roles with draft state names; `doctor` parity line — **good** |
 | Security and sandbox | No shell tools; credentials private to `nobody` — **good** for today's surface | Confirmation off, kept off for now (owner) — **fair** for full tools | Separate exec uid, no egress, confined domain, limits (4.2); no confirmations for now — **fair**, the sandbox carries it all |
-| Size and memory on armv7 | Bridge plus a separate app server plus WebView — **fair** | Not covered | One binary, size unknown until P0 — **fair**, the main unknown |
+| Size and memory on armv7 | Bridge plus a separate app server plus WebView — **fair** | Not covered | One binary, size unknown until B0 — **fair**, the main unknown |
 | Testability T0–T4 | Simulator against `hassmic-host` over Wyoming — **good** | Not covered | Wyoming subset kept as the device seam; parity scenario added — **good** |
 | Upstream Codex churn | Wire-level coupling to a child binary — **good** | Not covered | Compile-time coupling through one adapter crate, weekly upstream build — **fair** |
 | Failure modes | A hassmic crash and a bridge crash are separate; app-server generations restart — **good** | One loop: a device crash ends the session — **fair** | Device and exec roles crash alone; core restarts the in-process app server generation — **good** |
 | Port OS | Bridge-owned grant, tools, endpoint — **good** | Hard-coded registration; dynamic MCP later — **fair** | Unchanged, plus dynamic servers through Codex's MCP client — **good** |
-| Future items | Timers and background work absent; gaze models chosen (on-device) — **fair** | Gaze, timers, background agent on the device, generative UI in the WebView, cloud agents — **good** | Timers and a background thread in the core on the Echo; generative UI as WebView content; gaze wake as a second wake source gated by the shutter GPIO; all follow P5 — **good** |
+| Future items | Timers and background work absent; gaze models chosen (on-device) — **fair** | Gaze, timers, background agent on the device, generative UI in the WebView, cloud agents — **good** | Timers and a background thread in the core on the Echo; generative UI as WebView content; gaze wake as a second wake source gated by the shutter GPIO; all follow C1 — **good** |
 
 ### 10.2 Where the recommendation differs from the draft, and why
 
@@ -539,13 +551,13 @@ Ratings: **good**, **fair**, **weak**.
 - **Core loop.** The owner wants it ticked and event-driven where possible (10.3, answer 1), and the recommendation
   now agrees. Today there is no tick, only events and re-armed deadlines (1.4, with the terms mapped in 1.4.7).
   Latency-sensitive work (barge-in, wake, a model event) is dispatched the moment its event arrives, so
-  no event waits for a tick. A low-rate core tick (start at 10 Hz, measured on the Echo in P3) covers what has no
+  no event waits for a tick. A low-rate core tick (start at 10 Hz, measured on the Echo in A1) covers what has no
   event of its own: buffer flushes, stale-data checks and timers. The tick runs under the paused test clock, as the
   deadline timers do. The renderer ticks at display rate.
 - **Session lifecycle.** Closing the Live call with each session costs a call setup on every wake. The current warm
   call keeps the conversation across wakes, and changing a prompt still ends it. Keep it as a substate.
 - **Security.** The owner keeps confirmations off for now (10.3, answer 4). With full Codex tools the sandbox
-  (separate uid, no egress, confined domain, limits) carries the whole boundary, so P2's negative checks are a gate,
+  (separate uid, no egress, confined domain, limits) carries the whole boundary, so B2's negative checks are a gate,
   not a nicety.
 - **Install, supervision, OTA, boot, size, churn.** The draft does not cover them. The recommendation fills them in
   (sections 2, 6, 7).
@@ -554,12 +566,12 @@ Ratings: **good**, **fair**, **weak**.
 
 | # | Question | Owner's answer | What the plan does |
 | --- | --- | --- | --- |
-| 1 | Event-driven, ticked or both? | Ticked and event-driven when possible; worried about data flushes with no matching event, and timers with no event | Event-first dispatch, plus a low-rate core tick that flushes buffers and fires event-less timers (10.2). Every flush and timer is either an event or on the tick, never neither; P3 adds a T3 test that a buffer with no event behind it is still flushed within one tick |
+| 1 | Event-driven, ticked or both? | Ticked and event-driven when possible; worried about data flushes with no matching event, and timers with no event | Event-first dispatch, plus a low-rate core tick that flushes buffers and fires event-less timers (10.2). Every flush and timer is either an event or on the tick, never neither; A1 adds a T3 test that a buffer with no event behind it is still flushed within one tick |
 | 2 | Who owns each buffer? | The game loop owns the buffers | The core loop owns capture, playback, transcript and presentation buffers. Subsystems (device role, Codex, renderer) send into and read from it through bounded channels and never hold a buffer past one call |
 | 3 | Keep the Live connection warm? | Keep it when appropriate, close it when needed | Warm across wakes by default. Close it on an explicit end, a prompt or voice change, a sign-in change, an idle limit, memory pressure, or a transport error |
 | 4 | Which actions need confirmation? | None for now | No confirmations (4.2). The sandbox is the boundary |
 | 5 | Timers and background agents: device or cloud? | On the device | A persistent timer store and a background (non-voice) Codex thread in the core on the Echo |
-| 6 | Generative UI: WebView or native? | A WebView | Generative UI is WebView content, which settles P6 as purely a memory question |
+| 6 | Generative UI: WebView or native? | A WebView | Generative UI is WebView content, which settles C2 as purely a memory question |
 | 7 | Gaze wake | It wakes a session like the wake word, and it checks the camera shutter's GPIO state | Gaze is a second wake source in the device role. It reads the shutter state from GPIO first, and when the shutter is closed the camera is not used and gaze cannot wake (the coordinator's reading of the owner's last, unfinished sentence) |
 
 Still open in the draft: its terminology notes, and which listeners stay up while dormant (wake, Port OS endpoint,
