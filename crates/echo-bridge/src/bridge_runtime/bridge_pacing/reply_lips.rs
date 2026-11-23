@@ -40,10 +40,10 @@ impl Lips {
         self.sink.wanted()
     }
 
-    pub(crate) fn send(&self, batch: PacerLipBatch) -> bool {
+    pub(crate) fn send(&self, batch: &PacerLipBatch) -> bool {
         let samples = batch
             .samples
-            .into_iter()
+            .iter()
             .flatten()
             .map(|sample| MouthSample {
                 at_ms: sample.at_ms,

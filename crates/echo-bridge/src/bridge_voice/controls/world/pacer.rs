@@ -53,7 +53,7 @@ impl PacerPort {
             && let Some(batch) = out.lips.take()
         {
             let taken = CURRENT
-                .try_with(|(_, lips)| lips.as_ref().is_some_and(|lips| lips.send(batch)))
+                .try_with(|(_, lips)| lips.as_ref().is_some_and(|lips| lips.send(&batch)))
                 .unwrap_or(false);
             self.dispatch(&mut PacerEvent::LipDelivered { taken });
         }
