@@ -197,6 +197,8 @@ umask 077
 log=$(mktemp) || fail 'private log creation failed'
 locked=false
 safe_paths=false
+# Sourced helpers call this once the owned paths are proven, enabling the exit cleanup.
+mark_paths_safe() { safe_paths=true; }
 starting=false
 device=/data/local/echo-bridge
 lock=/data/local/echo-bridge.lock

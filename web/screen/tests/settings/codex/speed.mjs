@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { response } from "./page.mjs";
-import { calls, open, section, v2Snapshot } from "./page-v2.mjs";
+import { response } from "../page.mjs";
+import { calls, open, section, v2Snapshot } from "../page-v2.mjs";
 
 test("settings V2 keeps an explicit standard-speed edit after a failed save", async (t) => {
     const data = v2Snapshot();
@@ -14,6 +14,7 @@ test("settings V2 keeps an explicit standard-speed edit after a failed save", as
     assert.equal(await fast.inputValue(), "fast");
     await fast.selectOption("standard");
     assert.equal(await fast.inputValue(), "standard");
+    await fast.scrollIntoViewIfNeeded();
     const box = await fast.boundingBox();
     assert.ok(box.width >= 64 && box.height >= 64 && box.y + box.height <= 600);
     await page.screenshot({

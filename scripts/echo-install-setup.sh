@@ -243,7 +243,7 @@ setup_api_key_arguments() {
 setup_api_key() {
   # The key moves from the root-only stage to the bridge user's private file.
   # Its bytes never reach argv, the log or any output.
-  safe_paths=true
+  mark_paths_safe
   run_adb shell "source='${api_key_source:?}' target='${api_key_file:?}' stage='${device:?}/private/.install-stage'
 test ! -L '${api_key_stage:?}' && test -d '${api_key_stage:?}' || exit 1
 test \"\$(stat -c %u:%a '${api_key_stage:?}')\" = 0:700 || exit 1

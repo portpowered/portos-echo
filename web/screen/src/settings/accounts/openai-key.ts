@@ -14,7 +14,7 @@ export function openAIKeyForm(
     saved: () => void,
 ) {
     const form = element("form");
-    form.setAttribute("aria-label", "OpenAI API key");
+    form.setAttribute("aria-label", "Key replacement");
     form.hidden = true;
     const key = element("input");
     key.type = "password";
