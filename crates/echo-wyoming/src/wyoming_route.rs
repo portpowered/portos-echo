@@ -1,6 +1,10 @@
+use crate::adapter::speaker_events;
+use crate::wyoming_client::device::Connection;
 use crate::wyoming_events;
 use crate::{Error, MicFrame, ReceivedEvent, Run, wyoming_queue::MicQueue};
 use echo_contracts::wyoming::{Event, WyomingEvent};
+use echo_core_api::DeviceEvent;
+use echo_link::SpeakerState;
 use std::sync::{Arc, Weak};
 use tokio::time::Instant;
 
@@ -9,19 +13,25 @@ pub(crate) struct Router {
     pub(crate) current: Option<Arc<MicQueue>>,
     pub(crate) events: wyoming_events::Sender,
     pub(crate) capacity: usize,
-    pub(crate) muted: bool,
+    pub(crate) device: Connection,
     remote: Option<(Weak<str>, Instant)>,
     stale_capture: bool,
 }
 
 impl Router {
+    #[cfg(test)]
     pub(crate) fn new(events: wyoming_events::Sender, capacity: usize) -> Self {
+        let control = Arc::new(crate::wyoming_client::device::Standalone::default());
+        Self::with_device(events, capacity, Connection::new(control))
+    }
+
+    pub(crate) fn with_device(events: wyoming_events::Sender, capacity: usize, device: Connection) -> Self {
         Self {
             generation: Arc::new(()),
             current: None,
             events,
             capacity,
-            muted: false,
+            device,
             remote: None,
             stale_capture: false,
         }
@@ -39,7 +49,7 @@ impl Router {
         let Some(request_id) = request_id else {
             return true;
         };
-        let matches = !self.muted
+        let matches = !self.device.view().privacy.mic_muted
             && self.remote.as_ref().is_some_and(|(expected, deadline)| {
                 Instant::now() < *deadline
                     && expected
@@ -52,26 +62,12 @@ impl Router {
         matches
     }
 
-    pub(crate) fn route(&mut self, mut frame: Event) -> Result<(WyomingEvent, bool), Error> {
+    pub(crate) fn route(&mut self, mut frame: Event) -> Result<WyomingEvent, Error> {
         let event = frame.typed().map_err(|_| Error::Protocol)?;
-        let mut run = None;
         let audio_count = u64::from(matches!(event, WyomingEvent::AudioChunk(_)));
-        match &event {
-            WyomingEvent::RunPipeline(pipeline) => {
-                self.stale_capture = !self.accepts_pipeline(pipeline.extra.get("requestId"));
-                if !self.stale_capture {
-                    self.end(Ok(()));
-                    let queue = Arc::new(MicQueue::new(self.capacity));
-                    if self.muted {
-                        queue.mute();
-                    }
-                    self.current = Some(queue.clone());
-                    run = Some(Run {
-                        pipeline: pipeline.clone(),
-                        queue,
-                    });
-                }
-            }
+        let speaker = self.observe_speaker(&event);
+        let run = match &event {
+            WyomingEvent::RunPipeline(pipeline) => self.open(pipeline),
             WyomingEvent::AudioChunk(data) if !self.stale_capture => {
                 if let Some(queue) = &self.current {
                     queue.push(MicFrame {
@@ -79,36 +75,72 @@ impl Router {
                         payload: std::mem::take(&mut frame.payload),
                     });
                 }
+                None
             }
             WyomingEvent::Other(name, data) if name == "hassmic-mute" => {
                 let muted = data["muted"].as_bool().ok_or(Error::Protocol)?;
-                self.muted = muted;
+                self.device.observe(DeviceEvent::MicMuteObserved { muted });
                 if muted {
                     self.clear_remote();
                     if let Some(queue) = &self.current {
                         queue.mute();
                     }
                 }
+                None
             }
-            WyomingEvent::AudioStop(_) if !self.stale_capture => self.end(Ok(())),
-            _ => {}
-        }
-        let opened = run.is_some();
+            WyomingEvent::AudioStop(_) if !self.stale_capture => {
+                self.end(Ok(()));
+                None
+            }
+            _ => None,
+        };
         self.events
             .try_send(ReceivedEvent {
                 generation: self.generation.clone(),
                 audio_count,
-                capture_active: self.current.is_some() && !self.stale_capture,
+                capture_active: self.device.view().capture_open && !self.stale_capture,
+                speaker,
                 event: event.clone(),
                 payload: if audio_count == 0 { frame.payload } else { vec![] },
                 run,
             })
             .map_err(|_| Error::Capacity)?;
-        Ok((event, opened))
+        Ok(event)
+    }
+
+    fn open(&mut self, pipeline: &echo_contracts::wyoming::RunPipelineData) -> Option<Run> {
+        self.stale_capture = !self.accepts_pipeline(pipeline.extra.get("requestId"));
+        if self.stale_capture {
+            return None;
+        }
+        self.end(Ok(()));
+        let view = self.device.observe(DeviceEvent::RunOpened);
+        let queue = Arc::new(MicQueue::new(self.capacity));
+        if !view.capture_open {
+            queue.mute();
+        }
+        self.current = Some(queue.clone());
+        Some(Run {
+            pipeline: pipeline.clone(),
+            queue,
+        })
+    }
+
+    fn observe_speaker(&mut self, event: &WyomingEvent) -> Option<SpeakerState> {
+        let report = speaker_events::parse(speaker_events::report_data(event)?)?;
+        let view = self.device.observe(DeviceEvent::SpeakerObserved {
+            volume: report.volume,
+            muted: report.muted,
+        });
+        Some(SpeakerState {
+            volume: view.speaker_volume,
+            muted: view.speaker_muted,
+        })
     }
 
     pub(crate) fn end(&mut self, result: Result<(), Error>) {
         if let Some(queue) = self.current.take() {
+            self.device.observe(DeviceEvent::CaptureChanged { open: false });
             queue.close(result);
         }
     }

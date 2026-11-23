@@ -55,6 +55,7 @@ impl Adb {
 }
 
 impl Shell for Adb {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     fn adb(&self, args: &[String]) -> Result<Vec<u8>, String> {
         // Polling loops own cancellation; cleanup must still reach the device.
         super::super::run_command::controlled(&self.0, args, std::time::Instant::now() + Duration::from_secs(20), None)

@@ -28,6 +28,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+const LIVE_IDLE_ADVANCE_MS: u64 = 120_000;
+
 #[derive(Default)]
 struct Case {
     earcon: bool,
@@ -92,7 +94,7 @@ impl Case {
             std::fs::write(path, text.replace("wake_earcon = true", "wake_earcon = false"))
                 .map_err(|_| "m2: cannot disable fixture earcon")?;
         }
-        self.bridge = Some(Process::start(&mut command)?);
+        self.bridge = Some(Process::start_bridge(&mut command, false)?);
         self.bridge
             .as_mut()
             .ok_or("m2: missing bridge")?
@@ -192,7 +194,7 @@ impl Case {
         // Keep the remote's socket alive but stop its RTP driver before closing
         // the production media owner. The pin's sideband stays until idle stop.
         self.provider.as_mut().ok_or("m2: missing provider")?.quiesce().await?;
-        advance(self.bridge.as_mut().ok_or("m2: missing bridge")?, 120_000).await?;
+        advance(self.bridge.as_mut().ok_or("m2: missing bridge")?, LIVE_IDLE_ADVANCE_MS).await?;
         self.bridge
             .as_mut()
             .ok_or("m2: missing bridge")?
@@ -258,7 +260,20 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
             std::fs::create_dir(&output).map_err(|_| "m2: cannot own case directory")?;
             state.trace_path = output.join("bridge.private.jsonl");
             state.start(options).await?;
-            state.exercise(utterance).await
+            state.exercise(utterance).await?;
+            if std::env::var(echo_bridge::world_witness::TRACE_TICK_ENV).as_deref() == Ok("1") {
+                let elapsed_ms = state.clock["epoch_ms"]
+                    .as_u64()
+                    .and_then(|epoch| epoch.checked_add(LIVE_IDLE_ADVANCE_MS))
+                    .ok_or("m2: missing idle trace epoch")?;
+                witness_trace_tick(
+                    state.bridge.as_mut().ok_or("m2: missing bridge")?,
+                    &state.trace_path,
+                    elapsed_ms,
+                )
+                .await?;
+            }
+            Ok(())
         },
         options.cancel.as_deref(),
         tokio::time::Instant::now() + DEADLINE,
@@ -285,6 +300,45 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
         .and(cleanup)
         .and_then(|()| oracle::check(&measured));
     (measured, result)
+}
+
+async fn witness_trace_tick(bridge: &mut Process, path: &Path, elapsed_ms: u64) -> Result<(), String> {
+    let expected = format!(
+        "{{\"corrected\":false,\"elapsed_ms\":{elapsed_ms},\"event\":\"clock.offset\",\"hosts\":0,\"provider_auth_mode\":\"api_key\",\"reason\":\"unreachable\",\"servers\":1,\"synced\":false}}\n"
+    );
+    let expected = expected.as_bytes();
+    let read = || std::fs::read(path).map_err(|_| "m2: missing trace tick file");
+    let before = read()?;
+    for held in [true, false] {
+        bridge
+            .send(&json!({"action":"trace_writer_fixture","held":held}))
+            .await?;
+        let observed = bridge.expect("bridge.trace_writer").await?;
+        if observed["held"] != held || read()? != before {
+            return Err("m2: trace changed before the tick".into());
+        }
+    }
+    if advance(bridge, 100).await? {
+        return Err("m2: unexpected run during the trace tick".into());
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let bytes = read()?;
+            let suffix = bytes
+                .strip_prefix(before.as_slice())
+                .ok_or("m2: prior trace bytes changed")?;
+            if suffix == expected {
+                read_trace(path)?;
+                return Ok(());
+            }
+            if !expected.starts_with(suffix) {
+                return Err("m2: trace tick wrote unexpected bytes".into());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| "m2: trace row did not flush on the first tick")?
 }
 
 fn read_trace(path: &Path) -> Result<Trace, String> {

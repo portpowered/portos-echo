@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 21
+last modified: 2026, november, 22
 status: active; measured facts, each with its date and source
 ---
 
@@ -13,6 +13,19 @@ Measurement values, dates and their original limitations are retained.
 
 Facts measured on the real device, bench and services. Each row has its date and how it was measured. Plans and
 factory payloads cite these instead of rediscovering them. Add a row whenever a measurement changes a decision.
+
+## A1 direct clock calls (2026-11-22)
+
+This ratchet counts direct references to the standard clock methods, including
+aliased imports and test assertions. A1 routes four wall reads through `Clock`,
+including the Codex lease test. The new `SystemClock` definition calls each method once.
+The legacy counts exclude those defining calls. Tokio time remains available
+for pauseable scheduling.
+
+| Standard method | Legacy production | Legacy test |
+| --- | ---: | ---: |
+| `SystemTime::now` | 18 | 19 |
+| `Instant::now` | 25 | 55 |
 
 ## Development profile size (2026-11-17)
 

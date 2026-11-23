@@ -120,6 +120,7 @@ impl Account {
         !stopping.get()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     async fn operate(&self, host: &HostOptions<'_>, cancelled: impl Future<Output = ()>) {
         let mut action = None;
         self.0.send_if_modified(|state| {

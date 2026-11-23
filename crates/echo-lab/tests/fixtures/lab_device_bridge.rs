@@ -57,6 +57,7 @@ pub fn adb(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::E
     Ok(0)
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 pub fn run(args: &[String], fixture: &Value) -> Result<u8, Box<dyn std::error::Error>> {
     if fixture["device_bridge_fault"] == "ring_replay" {
         return ring::run(args);

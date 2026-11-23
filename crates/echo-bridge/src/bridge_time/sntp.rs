@@ -33,6 +33,7 @@ pub enum Outcome {
 }
 
 /// The system clock as milliseconds since the Unix epoch.
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 pub(crate) fn system_ms() -> i64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(after) => i64::try_from(after.as_millis()).unwrap_or(i64::MAX),
@@ -177,6 +178,7 @@ async fn query(server: &str, timeout: Duration) -> Option<Sample> {
 }
 
 // The reply's arrival is timed on the monotonic clock: a clock set meanwhile cannot bend it.
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 async fn exchange(socket: &UdpSocket) -> Option<Sample> {
     let sent_ms = system_ms();
     let origin = stamp(sent_ms);

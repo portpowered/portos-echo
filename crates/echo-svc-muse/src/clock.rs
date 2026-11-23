@@ -31,6 +31,7 @@ impl Clock for EpochClock {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 fn since_epoch() -> Duration {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default()
 }

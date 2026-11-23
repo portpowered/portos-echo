@@ -51,6 +51,7 @@ fn reference_ms() -> Option<i64> {
 
 /// The current time for everything the model is told.
 #[must_use]
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 pub fn now() -> SystemTime {
     if let Ok(Some((epoch, start))) = SIM_TIME.try_with(|anchor| *anchor) {
         return epoch.checked_add(start.elapsed()).unwrap_or(epoch);
@@ -76,6 +77,15 @@ fn corrected(system: SystemTime, reference_ms: Option<i64>) -> SystemTime {
 /// Stops the periodic measurement when dropped.
 pub(crate) struct Watch(Option<tokio::task::JoinHandle<()>>);
 
+impl Watch {
+    pub(crate) async fn stop(mut self) {
+        if let Some(task) = self.0.take() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
 impl Drop for Watch {
     fn drop(&mut self) {
         if let Some(task) = &self.0 {
@@ -92,7 +102,8 @@ struct Reporter {
 
 impl Reporter {
     /// Adopt a good measurement, trace it, and say whether it was one.
-    fn observe(&mut self, outcome: Outcome) -> bool {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
+    fn observe(&mut self, outcome: Outcome, startup: bool) -> bool {
         let fields = match outcome {
             Outcome::Synced { offset_ms, hosts } => {
                 if let Ok(mut anchor) = ANCHOR.lock() {
@@ -112,7 +123,11 @@ impl Reporter {
             fields.insert("servers".into(), self.servers.into());
             fields.insert("corrected".into(), corrected.into());
             // The trace is evidence only: a full disk must not take the bridge down.
-            let _ = trace.record("clock.offset", None, fields.into());
+            if startup || !self.unsynced {
+                let _ = trace.record("clock.offset", None, fields.into());
+            } else {
+                let _ = trace.buffer_clock_offset(fields.into());
+            }
         }
         !self.unsynced
     }
@@ -135,11 +150,11 @@ pub(crate) async fn start(servers: Vec<String>, interval: Duration, trace: Optio
             reason: "timeout",
             answered: 0,
         });
-    let mut synced = reporter.observe(first);
+    let mut synced = reporter.observe(first, true);
     Watch(Some(tokio::spawn(async move {
         loop {
             tokio::time::sleep(if synced { interval } else { RETRY.min(interval) }).await;
-            synced = reporter.observe(sntp::measure(&servers, QUERY_TIMEOUT).await);
+            synced = reporter.observe(sntp::measure(&servers, QUERY_TIMEOUT).await, false);
         }
     })))
 }

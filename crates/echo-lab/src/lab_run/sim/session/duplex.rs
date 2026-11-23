@@ -48,7 +48,7 @@ impl World {
         let mut command = tokio::process::Command::new(bridge);
         crate::lab_run::sim::m3::configure(&mut command, &root.0, satellite.address.port(), &provider.origin)?;
         configure(&root.0)?;
-        let mut bridge = Process::start(&mut command)?;
+        let mut bridge = Process::start_bridge(&mut command, false)?;
         bridge.expect("bridge.ready").await?;
         let trace = read_trace(&root.0)?;
         let screen_address = trace

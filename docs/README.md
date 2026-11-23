@@ -96,6 +96,7 @@ Add each new tracked documentation page to this index in the same change.
 - [Correlated Muse core](adr/0020-muse-core.md)
 - [Authenticated Muse service](adr/0022-muse-service.md)
 - [Direct Muse gadget protocol](adr/0035-muse-direct-protocol.md)
+- [A1 World composition](adr/0036-a1-world.md)
 - [Maintained WebView screen client](adr/0023-echo-screen.md)
 - [Bridge audio orchestration](adr/0024-echo-bridge.md)
 

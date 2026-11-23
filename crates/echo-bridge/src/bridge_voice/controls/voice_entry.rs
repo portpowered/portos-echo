@@ -33,7 +33,7 @@ pub fn execute_process(settings: Settings) -> Result<(), Error> {
     }
     let mut retained = None;
     loop {
-        let completion = process_generation(&mut configured, endpoint.clone(), &media, retained)?;
+        let completion = process_generation(&mut configured, endpoint.clone(), &media, retained, local)?;
         if !completion.restart_requested {
             return Ok(());
         }
@@ -60,6 +60,7 @@ fn process_generation(
     endpoint: echo_wyoming::Endpoint,
     media: &PeerConfig,
     retained: Option<Box<SettingsHost>>,
+    local: bool,
 ) -> Result<super::RuntimeCompletion, Error> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -70,7 +71,8 @@ fn process_generation(
         let shutdown = settings_process::shutdown()?;
         let clean_stop = Cell::new(true);
         let cancelled = async { clean_stop.set(matches!(shutdown.await, Ok(true))) };
-        let connector = echo_wyoming::adapter::endpoint_connector(endpoint, echo_wyoming::ClientOptions::default());
+        let (connector, world) = crate::bridge_world::connector(endpoint, local)?;
+        configured.set_world(Some(world.clone()));
         let result = configured
             .execute_generation(
                 connector,
@@ -84,14 +86,25 @@ fn process_generation(
                 retained,
             )
             .await;
-        if clean_stop.get() { result } else { Err(Error::Control) }
+        let proof = world.publish();
+        if clean_stop.get() {
+            result.and_then(|completion| proof.map(|()| completion))
+        } else {
+            Err(Error::Control)
+        }
     })
 }
 
-pub(crate) async fn execute<C: LinkConnector>(settings: Settings, control: Control, connector: C) -> Result<(), Error> {
+pub(crate) async fn execute<C: LinkConnector>(
+    settings: Settings,
+    control: Control,
+    connector: C,
+    world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
+) -> Result<(), Error> {
     let local = settings.model_url.is_some();
     let settings_witness = settings.sim_epoch.is_some();
-    let configured = prepare(settings)?.with_clock(control.utc_day);
+    let mut configured = prepare(settings)?.with_clock(control.utc_day);
+    configured.set_world(world);
     let media = media_config(local);
     let clean_stop = Cell::new(true);
     let cancelled = async {

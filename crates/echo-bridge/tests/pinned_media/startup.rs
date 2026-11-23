@@ -24,6 +24,7 @@ fn rows(path: &Path) -> Vec<Value> {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
 }
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn event(path: &Path, name: &str) {
     let ceiling = std::time::Instant::now();
     while !rows(path).iter().any(|row| row["event"] == name) {

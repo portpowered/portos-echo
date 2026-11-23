@@ -288,6 +288,7 @@ async fn failure_public_state_and_cancelled_recv() {
     assert_eq!(receive.await, Ok(None));
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn controlled_offer(config: &PeerConfig) -> String {
     let (media, _) = crate::media_track::AudioTrack::new().unwrap();
     let mut core = rtc::peer_connection::RTCPeerConnectionBuilder::new()

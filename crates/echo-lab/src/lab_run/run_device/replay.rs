@@ -107,6 +107,7 @@ impl Device<'_> {
         second.map_err(|error| format!("attempt 1: {primary}; attempt 2: {error}"))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     fn say_once(
         &mut self,
         step: &Step,

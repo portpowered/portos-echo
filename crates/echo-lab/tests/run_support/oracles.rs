@@ -41,10 +41,7 @@ fn mcp_controls_fail(sim: bool) {
             String::from_utf8(output.stderr).unwrap(),
             format!("echo-lab: {message}\n")
         );
-        assert_eq!(
-            String::from_utf8(output.stdout).unwrap(),
-            format!("{}: fail\n", session.0.join("artifacts").display())
-        );
+        assert_mcp_failure_stdout(&output.stdout, &session, sim);
         assert_eq!(session.operations(), ["digest"]);
         let report = session.report();
         assert_eq!(report["result"], "fail");
@@ -68,6 +65,18 @@ fn mcp_controls_fail(sim: bool) {
             message.strip_prefix("one.yaml: step 0: ").unwrap_or(&message)
         );
     }
+}
+
+fn assert_mcp_failure_stdout(stdout: &[u8], session: &Session, sim: bool) {
+    let outcome = format!("{}: fail\n", session.0.join("artifacts").display());
+    let expected = if sim {
+        format!(
+            "world invariant scenario=fixture status=fail\nWorld diff: proof.availability: expected one result per bridge generation, actual missing\n{outcome}"
+        )
+    } else {
+        outcome
+    };
+    assert_eq!(std::str::from_utf8(stdout).unwrap(), expected);
 }
 
 fn b0(session: &Session, keep: bool) -> Output {

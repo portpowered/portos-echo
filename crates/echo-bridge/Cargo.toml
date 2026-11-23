@@ -9,6 +9,10 @@ publish = false
 workspace = true
 
 [dependencies]
+echo-core-api = { version = "0.1.0", path = "../echo-core-api" }
+echo-sub-device = { version = "0.1.0", path = "../echo-sub-device" }
+echo-sub-trace = { version = "0.1.0", path = "../echo-sub-trace" }
+echo-svc-trace = { version = "0.1.0", path = "../echo-svc-trace" }
 echo-codex = { version = "0.1.0", path = "../echo-codex" }
 echo-device = { version = "0.1.0", path = "../echo-device" }
 echo-media = { version = "0.1.0", path = "../echo-media" }
@@ -27,11 +31,12 @@ echo-screen-contract = { version = "0.1.0", path = "../echo-screen-contract" }
 echo-screen-server = { version = "0.1.0", path = "../echo-screen-server" }
 echo-signin = { version = "0.1.0", path = "../echo-signin" }
 echo-wyoming = { version = "0.1.0", path = "../echo-wyoming" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 thiserror = "2"
 tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "time", "macros", "io-util", "test-util"] }
-rustix = { version = "=1.1.6", features = ["fs", "time"] }
+rustix = { version = "=1.1.6", features = ["fs", "process", "time"] }
 base64 = "0.23"
 sha2 = "0.11"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }

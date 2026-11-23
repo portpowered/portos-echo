@@ -160,11 +160,7 @@ impl Case {
             origin,
         );
         command.arg("--sim-clock");
-        self.bridge = Some(if self.hold_model {
-            Process::start_observed(&mut command)?
-        } else {
-            Process::start(&mut command)?
-        });
+        self.bridge = Some(Process::start_bridge(&mut command, self.hold_model)?);
         self.bridge
             .as_mut()
             .ok_or("m4: missing bridge")?

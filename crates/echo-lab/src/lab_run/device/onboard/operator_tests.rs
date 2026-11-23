@@ -98,6 +98,7 @@ fn mcp_device_operator_maps_only_known_error_categories_without_provider_text() 
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn configured(world: &std::rc::Rc<std::cell::RefCell<super::super::tests::World>>) -> (Runtime, String) {
     let config = include_str!("../../../../../../examples/bridge.echo.toml").to_owned();
     let mut state = Runtime::default();
@@ -180,6 +181,7 @@ async fn linked_screen(seq: u64, code: Value) -> (Runtime, tokio::task::JoinHand
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn t3_on_device_mcp_screen_binds_pending_code_and_reports_only_safe_projection() {
     let root = tempfile::tempdir().unwrap();
     let mut artifacts = Artifacts::create(root.path().join("out")).unwrap();
@@ -227,6 +229,7 @@ async fn t3_on_device_mcp_screen_binds_pending_code_and_reports_only_safe_projec
 }
 
 #[tokio::test]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn t3_on_device_mcp_screen_refuses_stale_missing_pending_generation_and_expired_code() {
     let root = tempfile::tempdir().unwrap();
     let expiry = std::time::SystemTime::now()

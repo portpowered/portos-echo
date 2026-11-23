@@ -96,7 +96,7 @@ impl World {
             relay.address.port(),
             &self.live.as_ref().ok_or("M3: missing Live")?.origin,
         )?;
-        self.bridge = Some(Process::start(&mut command)?);
+        self.bridge = Some(Process::start_bridge(&mut command, false)?);
         self.bridge
             .as_mut()
             .ok_or("M3: missing bridge")?

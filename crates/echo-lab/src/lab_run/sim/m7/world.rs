@@ -64,8 +64,9 @@ impl World {
         self.provider = Some(Provider::start_muse(python, text).await?);
         self.configure()?;
         let origin = &self.provider.as_ref().ok_or("m7: missing provider")?.origin;
-        self.bridge = Some(Process::start(
+        self.bridge = Some(Process::start_bridge(
             world::command(root, bridge, origin, origin).arg("--sim-clock"),
+            false,
         )?);
         self.bridge
             .as_mut()

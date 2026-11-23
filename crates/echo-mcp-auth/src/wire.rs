@@ -3,7 +3,7 @@ use crate::{AuthError, proof, store::Grant};
 use echo_contracts::secret::Secret;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 pub(crate) const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
@@ -126,7 +126,8 @@ pub(crate) async fn post<T: serde::de::DeserializeOwned>(
 }
 
 pub(crate) fn unix_now() -> Result<u64, AuthError> {
-    SystemTime::now()
+    echo_core_api::Clock::now(&echo_core_api::SystemClock)
+        .wall
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .map_err(|_| AuthError::Protocol)

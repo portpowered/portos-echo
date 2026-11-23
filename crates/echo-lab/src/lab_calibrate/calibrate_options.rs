@@ -49,6 +49,7 @@ pub(super) struct Clock {
 }
 
 impl Clock {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub fn new(budget: Duration) -> Self {
         Self {
             start: Instant::now(),

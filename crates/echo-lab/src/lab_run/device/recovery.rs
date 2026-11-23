@@ -36,6 +36,7 @@ fn numeric(text: &str) -> Result<u32, String> {
 }
 
 impl Configured<'_> {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     fn adb(&self, args: &[String]) -> Result<Vec<u8>, String> {
         super::super::run_command::controlled(
             &self.options.adb,
@@ -74,6 +75,7 @@ impl Configured<'_> {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     fn replace(&mut self, process: &str, host: u32, artifacts: &mut Artifacts) -> Result<u128, String> {
         let began = std::time::Instant::now();
         if process == "bridge" {

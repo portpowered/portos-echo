@@ -63,8 +63,7 @@ pub(super) async fn fixture_with_camera(
     camera: Option<Arc<dyn snapshot::CameraSource>>,
 ) -> Fixture {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-    let connector =
-        echo_wyoming::adapter::connector(listener.local_addr().unwrap(), echo_wyoming::ClientOptions::default());
+    let (connector, _) = crate::bridge_world::connector(listener.local_addr().unwrap().into(), false).unwrap();
     let (settings, app, ready, stale) =
         fixture_with_link(home, mock, gateway, shared_grant, connector, camera, true).await;
     let (device, _) = listener.accept().await.unwrap();

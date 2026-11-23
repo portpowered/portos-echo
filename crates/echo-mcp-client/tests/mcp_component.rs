@@ -80,6 +80,7 @@ impl TokenProvider for Provider {
         std::future::ready(Ok(Secret::new(self.value.lock().unwrap().clone())))
     }
 }
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn synthetic() -> String {
     format!(
         "local-{}",

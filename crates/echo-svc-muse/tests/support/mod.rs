@@ -17,6 +17,7 @@ pub(crate) use task_peer::*;
 
 pub(crate) const SAVED_AT: u64 = 1_700_000_000;
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 pub(crate) fn epoch_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }

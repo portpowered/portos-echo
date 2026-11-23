@@ -12,6 +12,7 @@ fn label(notice: &ServeNotice) -> Option<&'static str> {
 }
 
 #[tokio::test(start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn kill_refuses_wake_then_stops_active_call_and_allows_fresh_call_on_clear() {
     let began = std::time::SystemTime::now();
     let directory = tempfile::tempdir().unwrap();
@@ -116,6 +117,7 @@ async fn exercise_clear_and_active_kill<F: Future>(
 }
 
 #[tokio::test(start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn kill_stop_without_acknowledgement_is_terminal_not_ready_or_retried() {
     let began = std::time::SystemTime::now();
     let directory = tempfile::tempdir().unwrap();
@@ -210,6 +212,7 @@ async fn malformed_kill_marker_fails_closed_before_peer_and_clear_is_observed_wi
 }
 
 #[tokio::test(start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn kill_during_ice_closes_generation_without_connected_or_readmission() {
     let began = std::time::SystemTime::now();
     let directory = tempfile::tempdir().unwrap();

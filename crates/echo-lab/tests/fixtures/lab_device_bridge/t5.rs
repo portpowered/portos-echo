@@ -98,6 +98,7 @@ fn present(socket: &mut std::net::TcpStream, fixture: &Value) -> io::Result<()> 
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 fn wait_for_play(fixture: &Value) -> io::Result<()> {
     let root = std::path::Path::new(
         fixture["launch_record"]

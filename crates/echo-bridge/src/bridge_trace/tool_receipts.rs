@@ -108,7 +108,7 @@ impl ToolTrace {
         if !valid(&turn.thread_id) || !valid(&turn.turn_id) {
             return Err(Error::Decode);
         }
-        let run = self.trace.active_run.lock().map_err(|_| Error::Trace)?.clone();
+        let run = self.trace.current_run()?;
         self.trace.record(
             event,
             run.as_deref(),
@@ -128,7 +128,7 @@ impl ToolTrace {
         {
             return Err(Error::Decode);
         }
-        let run = self.trace.active_run.lock().map_err(|_| Error::Trace)?.clone();
+        let run = self.trace.current_run()?;
         self.trace.record(
             "item/tool/call",
             run.as_deref(),
@@ -175,7 +175,7 @@ impl Trace {
     /// Local completion summary: callers supply only an authored tool/error
     /// and a validated path. Contents and rejected arguments never reach here.
     pub(crate) fn agent_tool(&mut self, tool: &str, path: Option<&str>, bytes: u64, result: &str) -> Result<(), Error> {
-        let run = self.active_run.lock().map_err(|_| Error::Trace)?.clone();
+        let run = self.current_run()?;
         self.record(
             "agent.tool",
             run.as_deref(),
@@ -191,7 +191,7 @@ impl Trace {
         bytes: u64,
         result: &str,
     ) -> Result<(), Error> {
-        let run = self.active_run.lock().map_err(|_| Error::Trace)?.clone();
+        let run = self.current_run()?;
         self.record(
             "agent.tool",
             run.as_deref(),
@@ -209,7 +209,7 @@ impl Trace {
         if !remaining.is_empty() || !valid(name) {
             return Err(Error::Trace);
         }
-        let run = self.active_run.lock().map_err(|_| Error::Trace)?.clone();
+        let run = self.current_run()?;
         self.record(
             "tools/call",
             run.as_deref(),

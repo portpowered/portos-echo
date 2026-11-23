@@ -27,7 +27,9 @@ fn run(session: &Session, seeded: bool) -> (Output, PathBuf, Value) {
         include_bytes!("../../../../../tests/fixtures/lab/w1-utterance.pcm"),
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_echo-lab"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_echo-lab"));
+    command.env("ECHO_LAB_TRACE_TICK", u8::from(!seeded).to_string());
+    let output = command
         .current_dir(&session.0)
         .env("TMP", &session.0)
         .env("TEMP", &session.0)
@@ -39,7 +41,16 @@ fn run(session: &Session, seeded: bool) -> (Output, PathBuf, Value) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(i32::from(seeded)), "{stdout}\n{stderr}");
     let result = if seeded { "fail" } else { "pass" };
-    let path = PathBuf::from(stdout.trim().strip_suffix(&format!(": {result}")).unwrap());
+    let mut lines = stdout.lines();
+    assert_eq!(
+        lines.next(),
+        Some("world invariant scenario=m2-live-connect status=pass")
+    );
+    if seeded {
+        assert_eq!(lines.next(), Some("World diff: none (invariants hold)"));
+    }
+    let path = PathBuf::from(lines.next().unwrap().strip_suffix(&format!(": {result}")).unwrap());
+    assert_eq!(lines.next(), None);
     assert!(path.starts_with(&session.0), "{}", path.display());
     let report: Value = serde_json::from_slice(&fs::read(path.join("report.json")).unwrap()).unwrap();
     let schema: Value = serde_json::from_str(include_str!("../../../../../schemas/report.schema.json")).unwrap();
@@ -115,7 +126,23 @@ fn m2_milestone_publishes_exact_success_invalid_and_expired_results() {
         report["evidence"],
         json!(["events.jsonl", "m2-success.json", "m2-invalid.json", "m2-expired.json"])
     );
-    for name in ["success", "invalid", "expired"] {
+    let success = case(&path, "success");
+    let clock_rows: Vec<_> = success["trace"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["event"] == "clock.offset")
+        .cloned()
+        .collect();
+    let elapsed_ms = success["playout_clock"]["epoch_ms"].as_u64().unwrap() + 120_000;
+    assert_eq!(
+        clock_rows,
+        [
+            json!({"event":"clock.offset","elapsed_ms":elapsed_ms,"provider_auth_mode":"api_key",
+        "synced":false,"reason":"unreachable","hosts":0,"servers":1,"corrected":false})
+        ]
+    );
+    for name in ["invalid", "expired"] {
         case(&path, name);
     }
 }

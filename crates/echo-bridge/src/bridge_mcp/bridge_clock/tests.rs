@@ -1,5 +1,5 @@
 use super::{
-    Advance, parse,
+    Action, Advance, parse,
     receipt::{self, Context},
 };
 use crate::Error;
@@ -43,10 +43,10 @@ async fn terminal_control_allows_cleanup_deadlines_without_another_clock_command
 fn playout_control_rejects_malformed_and_keeps_legacy_compatible() {
     assert_eq!(
         parse(br#"{"action":"advance_playout","milliseconds":20}"#),
-        Ok(Advance {
+        Ok(Action::Advance(Advance {
             milliseconds: 20,
             observed: true
-        })
+        }))
     );
     for text in [
         r#"{"action":"advance_playout","milliseconds":-1}"#,

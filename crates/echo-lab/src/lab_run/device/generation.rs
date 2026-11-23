@@ -87,6 +87,7 @@ impl Runtime {
 mod tests {
     use super::*;
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "Host time for test")]
     fn device_no_clip_summary_preserves_exact_serialization() {
         let root = tempfile::tempdir().unwrap();
         let mut artifacts = Artifacts::create(root.path().join("out")).unwrap();

@@ -290,6 +290,7 @@ impl Context {
 
 /// Paused Tokio deadlines cannot bound a missing clock-step acknowledgement.
 /// This watchdog never changes logical time and never converts timeout to success.
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 pub(super) async fn bounded<T>(future: impl Future<Output = Result<T, Error>>, limit: Duration) -> Result<T, Error> {
     let start = std::time::Instant::now();
     tokio::pin!(future);

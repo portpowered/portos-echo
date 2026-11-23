@@ -305,28 +305,51 @@ fn execute_with_errors(args: &[String], output: &mut impl Write, errors: &mut im
     let mut artifacts = Artifacts::create(root)?;
     artifacts.sim = options.sim;
     device::config::scenario::record(&options, configuration.as_deref(), &mut artifacts)?;
-    let mut driver = driver(&options, configuration, errors)?;
-    let result = dispatch(driver.as_mut(), &steps, &mut artifacts);
-    let cleanup = driver.close(&mut artifacts);
+    let result = if options.sim {
+        let scenario = crate::lab_validate::load(&options.scenarios[0])?;
+        let id = scenario["id"].as_str().ok_or("sim: missing scenario ID")?;
+        let root = artifacts.root.clone();
+        sim::process::witness::execute(id, &root, output, || {
+            let driver = driver(&options, configuration, errors)?;
+            let result = run_with_driver(driver, &steps, &mut artifacts);
+            Ok((result, !artifacts.blocked.is_empty()))
+        })?
+    } else {
+        run_with_driver(driver(&options, configuration, errors)?, &steps, &mut artifacts)
+    };
+    publish(&options, artifacts, &milestone, &tier, digest, result, output)
+}
+
+fn run_with_driver(mut driver: Box<dyn Driver + '_>, steps: &[Step], artifacts: &mut Artifacts) -> Result<(), String> {
+    let result = dispatch(driver.as_mut(), steps, artifacts);
+    let cleanup = driver.close(artifacts);
     let final_counts = artifacts.finalize_link_counts();
-    artifacts.checks.insert(
-        if options.sim {
-            "world_closed"
-        } else {
-            "session_released"
-        }
-        .into(),
-        cleanup.is_ok(),
-    );
-    let result = combine(result, combine(cleanup, final_counts));
+    let key = if artifacts.sim {
+        "world_closed"
+    } else {
+        "session_released"
+    };
+    artifacts.checks.insert(key.into(), cleanup.is_ok());
+    combine(result, combine(cleanup, final_counts))
+}
+
+fn publish(
+    options: &Options,
+    mut artifacts: Artifacts,
+    milestone: &str,
+    tier: &str,
+    digest: &str,
+    result: Result<(), String>,
+    output: &mut impl Write,
+) -> Result<(), String> {
     artifacts.event(
         if result.is_ok() { "run_completed" } else { "run_failed" },
         None,
         result.as_ref().err().map(String::as_str),
     )?;
     artifacts.publish(
-        &milestone,
-        &tier,
+        milestone,
+        tier,
         digest,
         result.as_ref().err().map(String::as_str),
         options.keep_audio,

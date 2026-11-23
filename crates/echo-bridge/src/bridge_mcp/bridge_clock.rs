@@ -22,6 +22,7 @@ use crate::{
     Error,
     bridge_input::Settings,
     bridge_runtime::{self, Control},
+    bridge_trace::tick_fixture,
 };
 use serde_json::{Value, json};
 use std::{
@@ -67,23 +68,47 @@ struct Advance {
     observed: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum Action {
+    Advance(Advance),
+    TraceWriter { held: bool },
+}
+
 async fn run(
     mut settings: Settings,
-    mut commands: mpsc::Receiver<Result<Option<Advance>, Error>>,
+    commands: mpsc::Receiver<Result<Option<Action>, Error>>,
     context: receipt::Context,
 ) -> Result<(), Error> {
     let proxy = proxy::Proxy::bind(settings.wyoming.tcp_addr(), context.clone()).await?;
     settings.wyoming = proxy.address.into();
     let (stop, shutdown) = oneshot::channel();
-    let connector = echo_wyoming::adapter::connector(proxy.address, echo_wyoming::ClientOptions::default());
-    let work = bridge_runtime::execute_with_control(
-        settings,
-        Control {
-            utc_day: std::sync::Arc::new(|| 0),
-            shutdown,
-        },
-        connector,
-    );
+    let (connector, world) = crate::bridge_world::connector(settings.wyoming.clone(), true)?;
+    let work = async {
+        let result = bridge_runtime::execute_with_world(
+            settings,
+            Control {
+                utc_day: std::sync::Arc::new(|| 0),
+                shutdown,
+            },
+            connector,
+            Some(world.clone()),
+        )
+        .await;
+        result.and(world.publish())
+    };
+    tick_fixture::scope(
+        world.has_witness(),
+        control_loop(Box::pin(work), stop, commands, &context),
+    )
+    .await
+}
+
+async fn control_loop(
+    work: impl Future<Output = Result<(), Error>>,
+    stop: oneshot::Sender<bool>,
+    mut commands: mpsc::Receiver<Result<Option<Action>, Error>>,
+    context: &receipt::Context,
+) -> Result<(), Error> {
     tokio::pin!(work);
     loop {
         tokio::select! {
@@ -91,7 +116,7 @@ async fn run(
             command = commands.recv() => match command {
                 Some(Ok(Some(command))) => tokio::select! {
                     result = &mut work => return result,
-                    result = advance_control(command, &context) => result?,
+                    result = apply_control(command, context) => result?,
                 },
                 Some(Ok(None)) => return finish(work, stop, Ok(())).await,
                 Some(Err(error)) => return finish(work, stop, Err(error)).await,
@@ -143,13 +168,20 @@ async fn advance_control(command: Advance, context: &receipt::Context) -> Result
     emit(&value)
 }
 
+async fn apply_control(command: Action, context: &receipt::Context) -> Result<(), Error> {
+    match command {
+        Action::Advance(command) => advance_control(command, context).await,
+        Action::TraceWriter { held } => emit(&tick_fixture::control(held)?),
+    }
+}
+
 fn emit(value: &Value) -> Result<(), Error> {
     writeln!(std::io::stdout(), "{value}")
         .and_then(|()| std::io::stdout().flush())
         .map_err(|_| Error::Control)
 }
 
-fn input() -> Result<mpsc::Receiver<Result<Option<Advance>, Error>>, Error> {
+fn input() -> Result<mpsc::Receiver<Result<Option<Action>, Error>>, Error> {
     let (send, receive) = mpsc::channel(1);
     std::thread::Builder::new()
         .name("bridge-sim-control".into())
@@ -181,17 +213,21 @@ fn line(input: &mut impl Read) -> Result<Option<Vec<u8>>, Error> {
     }
 }
 
-fn parse(bytes: &[u8]) -> Result<Advance, Error> {
+fn parse(bytes: &[u8]) -> Result<Action, Error> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| Error::Control)?;
-    if value.as_object().is_none_or(|object| object.len() != 2)
-        || !matches!(value["action"].as_str(), Some("advance_clock" | "advance_playout"))
-    {
+    if value.as_object().is_none_or(|object| object.len() != 2) {
         return Err(Error::Control);
     }
-    Ok(Advance {
-        milliseconds: value["milliseconds"].as_u64().ok_or(Error::Control)?,
-        observed: value["action"] == "advance_playout",
-    })
+    match value["action"].as_str() {
+        Some("advance_clock" | "advance_playout") => Ok(Action::Advance(Advance {
+            milliseconds: value["milliseconds"].as_u64().ok_or(Error::Control)?,
+            observed: value["action"] == "advance_playout",
+        })),
+        Some("trace_writer_fixture") => Ok(Action::TraceWriter {
+            held: value["held"].as_bool().ok_or(Error::Control)?,
+        }),
+        _ => Err(Error::Control),
+    }
 }
 
 #[cfg(test)]
@@ -202,10 +238,10 @@ mod tests {
     fn mcp_link_sim_clock_accepts_only_bounded_complete_unsigned_controls() {
         assert_eq!(
             parse(br#"{"action":"advance_clock","milliseconds":5000}"#),
-            Ok(Advance {
+            Ok(Action::Advance(Advance {
                 milliseconds: 5000,
                 observed: false
-            })
+            }))
         );
         for text in [
             r#"{"action":"advance_clock","milliseconds":-1}"#,

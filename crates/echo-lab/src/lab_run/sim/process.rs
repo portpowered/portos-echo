@@ -6,6 +6,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 mod diagnostic;
 mod line;
+pub(in crate::lab_run) mod witness;
 
 #[cfg(test)]
 pub(super) mod owners {
@@ -39,6 +40,7 @@ impl Process {
     pub(super) fn start_observed(command: &mut Command) -> Result<Self, String> {
         Self::launch(command, true)
     }
+
     fn launch(command: &mut Command, observed: bool) -> Result<Self, String> {
         let mut child = command
             .stdin(Stdio::piped())
@@ -107,6 +109,7 @@ impl Process {
         input.flush().await.map_err(|_| "process: cannot flush control".into())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub async fn close(&mut self) -> Result<(), String> {
         drop(self.input.take());
         let (_, deadline) = *self.stopping.get_or_insert_with(|| {

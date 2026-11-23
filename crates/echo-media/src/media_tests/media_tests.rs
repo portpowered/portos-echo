@@ -19,6 +19,7 @@ fn config() -> PeerConfig {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn pair() -> (Peer, Peer) {
     let a = Peer::create(config()).await.unwrap();
     let b = Peer::build(config(), true).await.unwrap();

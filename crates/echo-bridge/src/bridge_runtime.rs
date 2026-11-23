@@ -36,12 +36,29 @@ pub struct Control {
 
 /// # Errors
 /// All failures use fixed categories. EOF closes owned tasks and sockets.
+pub async fn execute_wyoming(settings: Settings) -> Result<(), Error> {
+    let local = settings.lab || settings.model_url.is_some();
+    let (connector, world) = crate::bridge_world::connector(settings.wyoming.clone(), local)?;
+    let result = execute_in(settings, connector, Some(world.clone())).await;
+    result.and(world.publish())
+}
+
+/// # Errors
+/// All failures use fixed categories. EOF closes owned tasks and sockets.
 pub async fn execute<C: LinkConnector>(settings: Settings, connector: C) -> Result<(), Error> {
+    execute_in(settings, connector, None).await
+}
+
+async fn execute_in<C: LinkConnector>(
+    settings: Settings,
+    connector: C,
+    world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
+) -> Result<(), Error> {
     let control = Control {
         utc_day: std::sync::Arc::new(utc_day),
         shutdown: crate::bridge_settings::settings_process::shutdown()?,
     };
-    execute_with_control(settings, control, connector).await
+    execute_with_world(settings, control, connector, world).await
 }
 
 /// Select the configured owner while preserving explicit clock/stop control.
@@ -52,10 +69,22 @@ pub async fn execute_with_control<C: LinkConnector>(
     control: Control,
     connector: C,
 ) -> Result<(), Error> {
+    execute_with_world(settings, control, connector, None).await
+}
+
+pub(crate) async fn execute_with_world<C: LinkConnector>(
+    settings: Settings,
+    control: Control,
+    connector: C,
+    world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
+) -> Result<(), Error> {
     if configured(&settings) {
-        return Box::pin(crate::bridge_voice::voice_entry::execute(settings, control, connector)).await;
+        return Box::pin(crate::bridge_voice::voice_entry::execute(
+            settings, control, connector, world,
+        ))
+        .await;
     }
-    Box::pin(execute_controlled(settings, control, connector)).await
+    Box::pin(execute_controlled_in(settings, control, connector, world)).await
 }
 
 /// Whether these inputs select the configured Codex owner.
@@ -70,7 +99,8 @@ pub fn configured(settings: &Settings) -> bool {
 }
 
 fn utc_day() -> u64 {
-    std::time::SystemTime::now()
+    echo_core_api::Clock::now(&echo_core_api::SystemClock)
+        .wall
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
@@ -98,20 +128,22 @@ fn validate_sim(settings: &Settings) -> Result<(), Error> {
 /// # Errors
 /// Returns the same fixed operational failures as `execute`.
 pub async fn execute_controlled<C: LinkConnector>(
-    mut settings: Settings,
+    settings: Settings,
     control: Control,
     connector: C,
 ) -> Result<(), Error> {
+    execute_controlled_in(settings, control, connector, None).await
+}
+
+async fn execute_controlled_in<C: LinkConnector>(
+    mut settings: Settings,
+    control: Control,
+    connector: C,
+    world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
+) -> Result<(), Error> {
     validate_sim(&settings)?;
     let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day);
-    let mut trace = Trace::open(
-        &settings.trace,
-        match settings.mode {
-            LiveAuthMode::Chatgpt => "chatgpt",
-            LiveAuthMode::ApiKey => "api_key",
-        },
-    )?
-    .with_payloads(settings.config.as_ref().is_none_or(|config| config.trace.payloads));
+    let mut trace = sim_trace(&settings, world)?;
     let mut screen = bridge_screen::Screen::bind(settings.screen.as_ref()).await?;
     screen.download_packs(settings.config.as_ref(), &trace);
     screen.settings_warning(settings.settings_warning.as_deref(), &mut trace)?;
@@ -161,7 +193,24 @@ pub async fn execute_controlled<C: LinkConnector>(
     });
     health.close().await;
     let cleanup = screen.close().await;
-    result.and(report).and(cleanup)
+    let drain = trace.finish();
+    result.and(report).and(cleanup).and(drain)
+}
+
+fn sim_trace(
+    settings: &Settings,
+    world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
+) -> Result<Trace, Error> {
+    let mode = match settings.mode {
+        LiveAuthMode::Chatgpt => "chatgpt",
+        LiveAuthMode::ApiKey => "api_key",
+    };
+    let trace = Trace::open_in(
+        &settings.trace,
+        mode,
+        world.unwrap_or_else(crate::bridge_world::Controller::new),
+    )?;
+    Ok(trace.with_payloads(settings.config.as_ref().is_none_or(|config| config.trace.payloads)))
 }
 
 async fn stop_link<L: EchoLink>(client: &L, screen: &bridge_screen::Screen) -> Result<(), Error> {

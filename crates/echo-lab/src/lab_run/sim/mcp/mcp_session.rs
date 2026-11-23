@@ -99,7 +99,7 @@ impl Session {
             "--sim-epoch",
             &EPOCH.to_string(),
         ]);
-        self.bridge = Some(Process::start_observed(&mut command)?);
+        self.bridge = Some(Process::start_bridge(&mut command, true)?);
         self.bridge
             .as_mut()
             .ok_or("M5: missing bridge")?

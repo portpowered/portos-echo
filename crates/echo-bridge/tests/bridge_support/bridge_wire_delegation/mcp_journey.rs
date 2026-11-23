@@ -58,6 +58,7 @@ pub(super) async fn failed_without_clock_advance(path: &Path) {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 async fn event_without_clock_advance(path: &Path, event: &str) -> Vec<Value> {
     let started = std::time::Instant::now();
     loop {
@@ -80,6 +81,7 @@ async fn event_without_clock_advance(path: &Path, event: &str) -> Vec<Value> {
 /// Closing stdin while that describe/info exchange is in flight leaves the
 /// info unread in the bridge's socket, so its exit resets the satellite
 /// instead of closing it. Finish only after the probe that follows `event`.
+#[allow(clippy::disallowed_methods, reason = "Host time for test")]
 pub(super) async fn finish_after_idle_probe(process: &mut Process, path: &Path, event: &str) {
     let started = std::time::Instant::now();
     let cursor = loop {
@@ -320,6 +322,7 @@ fn probe_barrier_requires_fresh_complete_connection_record() {
 // T1: immediately-ready reads acknowledge each evaluated stage of the actual
 // recovery wait. No filesystem scheduling, socket, clock advance or sleep.
 #[tokio::test(start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "Paused test ceiling")]
 async fn reconnect_barrier_waits_for_complete_publication() {
     let probe =
         json!({"event":"wyoming.probe_ok","run_id":"connection-1","elapsed_ms":10,"provider_auth_mode":"api_key"});

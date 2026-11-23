@@ -164,6 +164,7 @@ mod tests {
             generation: generation.clone(),
             audio_count: count,
             capture_active: false,
+            speaker: None,
             event: if count == 0 {
                 WyomingEvent::Ping(json!({}))
             } else {

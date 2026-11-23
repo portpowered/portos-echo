@@ -1,6 +1,6 @@
 //! Offline configuration admission, then explicitly nominated credential loading.
 use super::{HostOptions, RunnerSkills, RuntimeOptions, ServeOptions, SessionOptions};
-use crate::{Error, bridge_codex};
+use crate::{Error, bridge_codex, bridge_time::Watch, bridge_trace::Trace};
 use echo_codex::DynamicTool;
 use echo_config::{BridgeConfig, EffectiveConfig, LiveMode};
 use echo_contracts::secret::Secret;
@@ -24,6 +24,7 @@ pub struct Configured {
     startup: Option<Box<EffectiveConfig>>,
     settings_restart_allowed: bool,
     time_servers: Vec<String>,
+    world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
 }
 
 impl Configured {
@@ -57,6 +58,7 @@ impl Configured {
             settings_warning: None,
             startup: None,
             settings_restart_allowed: true,
+            world: None,
             utc_day: std::sync::Arc::new(|| {
                 crate::bridge_time::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -106,18 +108,28 @@ impl Configured {
     }
 
     // Held for a generation: the first measurement is in before the device is admitted.
-    async fn watch_time(&self) -> crate::bridge_time::Watch {
-        let mode = match self.config.live.mode {
-            LiveMode::Chatgpt => "chatgpt",
-            LiveMode::ApiKey => "api_key",
-        };
+    async fn watch_time(&self) -> (Watch, Option<Trace>) {
         let trace = if self.time_servers.is_empty() {
             None
         } else {
-            crate::bridge_trace::Trace::open(&self.trace, mode).ok()
+            self.open_trace().ok()
         };
         let interval = Duration::from_secs(u64::from(self.config.clock.interval_seconds));
-        crate::bridge_time::start(self.time_servers.clone(), interval, trace).await
+        let watch = crate::bridge_time::start(self.time_servers.clone(), interval, trace.clone()).await;
+        (watch, trace)
+    }
+
+    fn open_trace(&self) -> Result<Trace, Error> {
+        Trace::open_for_voice(
+            &self.trace,
+            self.config.live.mode,
+            self.world.clone(),
+            Some(&self.config),
+        )
+    }
+
+    fn voice_trace(&self, clock_trace: Option<Trace>) -> Result<Trace, Error> {
+        clock_trace.map_or_else(|| self.open_trace(), |trace| Ok(trace.with_new_origin()))
     }
 
     pub(crate) fn with_mcp_epoch(mut self, epoch: Option<u64>) -> Self {
@@ -130,6 +142,10 @@ impl Configured {
         self
     }
 
+    pub(super) fn set_world(&mut self, world: Option<std::sync::Arc<crate::bridge_world::Controller>>) {
+        self.world = world;
+    }
+
     /// Run configured voice ownership with caller-owned tools and media factory.
     /// The executable's connector/factory and controlled component ports share
     /// this boundary. Authentication always precedes device admission.
@@ -138,7 +154,7 @@ impl Configured {
     pub async fn execute<C: LinkConnector, P: MediaPeer>(
         self,
         connector: C,
-        peer: impl AsyncFnMut() -> Result<P, Error>,
+        mut peer: impl AsyncFnMut() -> Result<P, Error>,
         tools: Vec<DynamicTool>,
         cancelled: impl Future<Output = ()>,
     ) -> Result<(), Error> {
@@ -146,10 +162,19 @@ impl Configured {
             self.config.home.as_ref().map(|home| home.dir.as_path()),
             async {
                 let api_key = self.api_key()?;
-                let _time = self.watch_time().await;
+                let (time, clock_trace) = self.watch_time().await;
                 let options = self.options(api_key.as_ref(), tools);
-                super::voice_wait::run_marks::scope(self.knobs(), super::execute(options, connector, peer, cancelled))
+                let work = super::voice_runtime::execute_owned(
+                    options,
+                    connector,
+                    &mut peer,
+                    cancelled,
+                    None,
+                    (self.voice_trace(clock_trace)?, Some(time)),
+                );
+                super::voice_wait::run_marks::scope(self.knobs(), Box::pin(work))
                     .await
+                    .map(|_| ())
             },
         ))
         .await
@@ -181,7 +206,7 @@ impl Configured {
     pub async fn execute_generation<C: LinkConnector, P: MediaPeer>(
         &mut self,
         connector: C,
-        peer: impl AsyncFnMut() -> Result<P, Error>,
+        mut peer: impl AsyncFnMut() -> Result<P, Error>,
         tools: Vec<DynamicTool>,
         cancelled: impl Future<Output = ()>,
         retained: Option<Box<crate::bridge_settings::SettingsHost>>,
@@ -194,7 +219,7 @@ impl Configured {
             prompts,
             async {
                 let api_key = self.api_key()?;
-                let _time = self.watch_time().await;
+                let (time, clock_trace) = self.watch_time().await;
                 let settings = if let Some(host) = retained {
                     Some(crate::bridge_settings::SettingsService::resume(host))
                 } else {
@@ -203,28 +228,31 @@ impl Configured {
                             crate::bridge_settings::SettingsService::open(*startup, super::prompts::accepted()?)
                                 .map_err(|_| Error::Prompt("home.dir: settings unavailable"))
                         })
-                        .transpose()?
+                        .transpose()
+                        .inspect_err(|_| {
+                            if let Some(trace) = &clock_trace {
+                                let _ = trace.finish();
+                            }
+                        })?
                 };
                 let options = self.options(api_key.as_ref(), tools);
-                if let Some((service, send)) = settings {
+                let settings = settings.map(|(service, send)| {
                     let service = if self.settings_restart_allowed {
                         service
                     } else {
                         service.without_restart()
                     };
-                    Box::pin(super::execute_with_settings(
-                        options,
-                        connector,
-                        peer,
-                        cancelled,
-                        (service, send),
-                    ))
-                    .await
-                } else {
-                    Box::pin(super::execute(options, connector, peer, cancelled))
-                        .await
-                        .map(|()| super::RuntimeCompletion::default())
-                }
+                    (service, send)
+                });
+                Box::pin(super::voice_runtime::execute_owned(
+                    options,
+                    connector,
+                    &mut peer,
+                    cancelled,
+                    settings,
+                    (self.voice_trace(clock_trace)?, Some(time)),
+                ))
+                .await
             },
         ));
         super::voice_wait::run_marks::scope(knobs, generation).await

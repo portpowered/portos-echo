@@ -6,8 +6,9 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use echo_bridge::world_witness::HelperWorld;
 use echo_contracts::wyoming::{AudioFormat, WyomingEvent};
-use echo_wyoming::{ClientOptions, EventStream, PlayOutcome, Run, WyomingClient};
+use echo_wyoming::{EventStream, PlayOutcome, Run, WyomingClient};
 use tokio::sync::{mpsc, oneshot};
 
 use bridge_trace::Trace;
@@ -74,7 +75,7 @@ async fn drain(events: &mut EventStream) -> Result<(), String> {
     }
 }
 
-async fn observe(client: &WyomingClient, events: &mut EventStream, trace: &mut Trace) -> Result<(), String> {
+async fn observe(client: &WyomingClient, events: &mut EventStream, trace: &mut Trace<'_>) -> Result<(), String> {
     let mut sequence = 0_u64;
     loop {
         let event = events
@@ -101,11 +102,18 @@ async fn observe(client: &WyomingClient, events: &mut EventStream, trace: &mut T
 
 async fn execute() -> Result<(), String> {
     let addr = address(&std::env::var("ECHO_LAB_WYOMING_ADDR").map_err(|_| "bridge: missing Wyoming address")?)?;
+    let world = HelperWorld::new(addr).map_err(|_| "bridge: cannot prepare private World check")?;
+    let result = run(&world).await;
+    let proof = world
+        .publish()
+        .map_err(|_| "bridge: cannot publish private World check".to_owned());
+    result.and(proof)
+}
+
+async fn run(world: &HelperWorld) -> Result<(), String> {
     let path = std::env::var_os("ECHO_LAB_TRACE_PATH").ok_or("bridge: missing trace path")?;
-    let mut trace = Trace::create(std::path::Path::new(&path))?;
-    let mut client = WyomingClient::connect(addr, ClientOptions::default())
-        .await
-        .map_err(|_| "bridge: cannot connect Wyoming")?;
+    let mut trace = Trace::create(std::path::Path::new(&path), world)?;
+    let mut client = world.connect().await.map_err(|_| "bridge: cannot connect Wyoming")?;
     let mut events = client.events().map_err(|_| "bridge: cannot take Wyoming events")?;
     client
         .run_satellite()

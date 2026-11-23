@@ -41,6 +41,7 @@ fn consume(path: &Path) -> Result<(), String> {
     std::fs::remove_file(path).map_err(|_| FAILURE.into())
 }
 
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 pub fn wait(path: Option<&Path>, cancel: Option<&Path>, errors: &mut dyn Write) -> Result<u64, String> {
     if super::super::run_command::cancelled(cancel) {
         return Err("run cancelled".into());

@@ -1,9 +1,10 @@
 //! Presentation lifetime encloses authenticated device and conversation cleanup.
+mod lifecycle;
 use super::{
     HostOptions, ServeOptions,
     retained_link::Retained,
     voice_host::with_capture,
-    voice_recovery::{Round, Stage, supervise},
+    voice_recovery::{Round, Stage, stopped, supervise},
     voice_view::View,
 };
 use crate::bridge_settings::{
@@ -21,11 +22,9 @@ use echo_link::LinkConnector;
 use echo_media::MediaPeer;
 use echo_screen_contract::settings_v1::LinkStatusV1;
 use echo_screen_server::SettingsRequest;
+pub(super) use lifecycle::execute_owned;
 use std::{cell::Cell, future::Future, net::SocketAddr, path::Path, pin::Pin};
-use tokio::{
-    sync::{OnceCell, watch},
-    time::Instant,
-};
+use tokio::{sync::OnceCell, time::Instant};
 
 pub struct RuntimeOptions<'a> {
     pub runner_skills: Option<&'a super::RunnerSkills>,
@@ -183,9 +182,17 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
 ) -> Result<(), Error> {
-    Box::pin(execute_owned(options, connector, &mut peer, cancelled, None))
-        .await
-        .map(|_| ())
+    let trace = Trace::open_for_voice(options.trace, options.host.mode, None, options.delegation)?;
+    Box::pin(execute_owned(
+        options,
+        connector,
+        &mut peer,
+        cancelled,
+        None,
+        (trace, None),
+    ))
+    .await
+    .map(|_| ())
 }
 
 /// Mount the bounded authorized settings owner for this runtime generation.
@@ -204,24 +211,26 @@ pub async fn execute_with_settings<C: LinkConnector, P: MediaPeer>(
     cancelled: impl Future<Output = ()>,
     settings: (SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>),
 ) -> Result<RuntimeCompletion, Error> {
-    Box::pin(execute_owned(options, connector, &mut peer, cancelled, Some(settings))).await
+    let trace = Trace::open_for_voice(options.trace, options.host.mode, None, options.delegation)?;
+    Box::pin(execute_owned(
+        options,
+        connector,
+        &mut peer,
+        cancelled,
+        Some(settings),
+        (trace, None),
+    ))
+    .await
 }
 
-async fn execute_owned<C: LinkConnector, P: MediaPeer>(
+async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
     options: RuntimeOptions<'_>,
     connector: C,
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     settings: Option<(SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>)>,
+    mut trace: Trace,
 ) -> Result<RuntimeCompletion, Error> {
-    let mut trace = Trace::open(
-        options.trace,
-        match options.host.mode {
-            LiveMode::Chatgpt => "chatgpt",
-            LiveMode::ApiKey => "api_key",
-        },
-    )?
-    .with_payloads(options.delegation.is_none_or(|config| config.trace.payloads));
     super::prompts::publish(&mut trace)?;
     let (service, send) = settings.map_or((None, None), |(service, send)| (Some(service), Some(send)));
     let camera = cfg!(target_os = "android") && options.delegation.is_some_and(|config| config.camera.enabled);
@@ -480,14 +489,6 @@ fn progress(notice: &super::ServeNotice, ready: &Cell<Option<Instant>>, served: 
         ServeNotice::Ready if ready.get().is_none() => ready.set(Some(Instant::now())),
         ServeNotice::Session(SessionNotice::Connected | SessionNotice::Completed(_)) => served.set(true),
         _ => (),
-    }
-}
-
-async fn stopped(mut stopping: watch::Receiver<bool>) {
-    loop {
-        if *stopping.borrow_and_update() || stopping.changed().await.is_err() {
-            return;
-        }
     }
 }
 

@@ -63,8 +63,8 @@ async fn open(fake: &FakeLive, mode: LiveAuthMode) -> (LiveCall, Weak<UdpSocket>
     (call, socket)
 }
 
-// T3: sequential calls deliver with paused time held by a runnable observer.
 #[tokio::test(start_paused = true)]
+#[allow(clippy::disallowed_methods, reason = "Paused test ceiling")]
 async fn t3_sequential_calls_deliver_with_both_clocks_frozen() {
     let fake = FakeLive::bind(script()).await.unwrap();
     let tick = now();

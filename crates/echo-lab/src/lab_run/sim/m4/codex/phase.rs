@@ -92,6 +92,7 @@ pub(super) struct Measurement {
 }
 
 impl Measurement {
+    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
     pub(super) fn new(negative: bool, emotion: bool) -> Self {
         Self {
             start: Instant::now(),
