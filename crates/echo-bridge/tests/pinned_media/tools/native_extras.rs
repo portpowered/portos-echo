@@ -93,9 +93,11 @@ fn check_extras(value: &Value, target: &Path) {
         }
     }
     assert!(!target.exists(), "a native tool wrote a file");
+    let homes = ["home", "home-api-key"].map(|name| target.with_file_name(name));
+    assert!(homes.iter().all(|home| home.is_dir()));
     assert_eq!(
         std::fs::read_dir(target.parent().unwrap()).unwrap().count(),
-        1,
-        "only the Codex home"
+        homes.len(),
+        "only the configured home and API-key sibling"
     );
 }

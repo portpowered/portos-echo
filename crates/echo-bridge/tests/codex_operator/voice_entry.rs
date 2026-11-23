@@ -2,6 +2,8 @@
 use super::*;
 use tokio::net::TcpListener;
 
+mod auth_mode_isolation;
+
 pub(super) fn configure(fixture: &Fixture, port: u16) {
     let path = fixture.directory.path().join("bridge.toml");
     let text = std::fs::read_to_string(&path).unwrap();

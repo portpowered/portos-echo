@@ -200,6 +200,7 @@ async fn call_session(input: &mut ChildStdin, output: &mut Lines<BufReader<Child
 
 fn host_options<'a>(config: &'a CodexConfig, routes: &'a LocalRoutes, key: &'a Secret<String>) -> HostOptions<'a> {
     HostOptions {
+        credential_source: None,
         config,
         mode: LiveMode::ApiKey,
         api_key: Some(key),

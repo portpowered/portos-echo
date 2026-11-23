@@ -23,7 +23,9 @@ pub(crate) async fn screen_account(
     let supervisor = tokio::select! {
         biased;
         () = &mut cancelled => return Err(Error::Control),
-        result = tokio::time::timeout_at(deadline, codex_host::routed_supervisor(host.config, host.routes)) => {
+        result = tokio::time::timeout_at(deadline, codex_host::routed_supervisor(
+            host.config, host.mode, host.credential_source, host.routes,
+        )) => {
             result.map_err(|_| Error::Deadline)??
         }
     };
@@ -61,7 +63,9 @@ pub(super) async fn execute(
     if matches!(command.operation, OperatorCommand::Signin { .. }) && command.config.live.mode != LiveMode::Chatgpt {
         return Err(Error::Authorization);
     }
-    let supervisor = codex_host::supervisor(&command.config.codex).await?;
+    let live = &command.config.live;
+    let supervisor =
+        codex_host::routed_supervisor(&command.config.codex, live.mode, Some(&live.credential_file), None).await?;
     let mut screen =
         Screen::bind(matches!(command.operation, OperatorCommand::Signin { .. }).then_some(&command.config.screen))
             .await?;

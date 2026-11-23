@@ -1,11 +1,14 @@
 use super::*;
-use echo_codex::codex_supervisor::{Supervisor, SupervisorConfig};
+use echo_codex::codex_supervisor::{HomeMode, Supervisor, SupervisorConfig};
+use echo_config::LiveMode;
 use std::net::{Ipv4Addr, SocketAddr};
 
 pub(super) struct Fixture {
     pub directory: tempfile::TempDir,
     pub home: PathBuf,
+    pub configured_home: PathBuf,
     pub binary: PathBuf,
+    home_mode: HomeMode,
     lifetimes: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<tokio::net::TcpStream>>,
     lifetime_task: tokio::task::JoinHandle<()>,
     observed: std::sync::atomic::AtomicUsize,
@@ -13,6 +16,15 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub fn new(mode: &str) -> Self {
+        let live_mode = if mode == "api_key" {
+            LiveMode::ApiKey
+        } else {
+            LiveMode::Chatgpt
+        };
+        Self::with_live_mode(mode, live_mode)
+    }
+
+    pub fn with_live_mode(mode: &str, live_mode: LiveMode) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let binary = std::process::Command::new("python3")
             .args(["-c", "import sys; print(sys.executable)"])
@@ -20,8 +32,14 @@ impl Fixture {
             .unwrap();
         assert!(binary.status.success());
         let binary = PathBuf::from(String::from_utf8(binary.stdout).unwrap().trim());
-        let home = directory.path().join("home");
-        let owner = Supervisor::new(SupervisorConfig::new(binary.clone(), home.clone())).unwrap();
+        let configured_home = directory.path().join("home");
+        let (home, home_mode, config_mode) = match live_mode {
+            LiveMode::Chatgpt => (configured_home.clone(), HomeMode::Single, "chatgpt"),
+            LiveMode::ApiKey => (directory.path().join("home-api-key"), HomeMode::ApiKey, "api_key"),
+        };
+        let mut config = SupervisorConfig::new(binary.clone(), configured_home.clone());
+        config.home_mode = home_mode;
+        let owner = Supervisor::new(config).unwrap();
         std::fs::write(home.join("work/app-server"), include_str!("peer.py")).unwrap();
         std::fs::write(home.join("mode"), mode).unwrap();
         let lifetimes = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -36,12 +54,14 @@ impl Fixture {
         let fixture = Self {
             directory,
             home,
+            configured_home,
             binary,
+            home_mode,
             lifetimes: tokio::sync::Mutex::new(lifetimes),
             lifetime_task,
             observed: std::sync::atomic::AtomicUsize::new(0),
         };
-        fixture.configure(mode);
+        fixture.configure(config_mode);
         fixture
     }
 
@@ -57,7 +77,7 @@ impl Fixture {
             path.join("bridge.toml"),
             format!(
                 "{text}\n[codex]\nhome = '{}'\nbinary = '{}'\n",
-                self.home.display(),
+                self.configured_home.display(),
                 self.binary.display()
             ),
         )
@@ -65,7 +85,9 @@ impl Fixture {
     }
 
     pub fn owner(&self) -> Supervisor {
-        Supervisor::new(SupervisorConfig::new(self.binary.clone(), self.home.clone())).unwrap()
+        let mut config = SupervisorConfig::new(self.binary.clone(), self.configured_home.clone());
+        config.home_mode = self.home_mode;
+        Supervisor::new(config).unwrap()
     }
 
     pub async fn child_lifetime(&self) -> tokio::net::TcpStream {

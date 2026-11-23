@@ -9,7 +9,7 @@ use tokio::time::Instant;
 fn config(fixture: &Fixture) -> CodexConfig {
     CodexConfig {
         binary: Some(fixture.binary.clone()),
-        home: Some(fixture.home.clone()),
+        home: Some(fixture.configured_home.clone()),
         ..CodexConfig::default()
     }
 }
@@ -101,7 +101,7 @@ async fn codex_host_nominated_api_key_and_account_mode_gate_session_admission() 
         ("signed-out", LiveMode::Chatgpt, false, Err(Error::Authorization)),
         ("rejected-account", LiveMode::Chatgpt, false, Err(Error::Authorization)),
     ] {
-        let fixture = Fixture::new(peer_mode);
+        let fixture = Fixture::with_live_mode(peer_mode, mode);
         let key = key.then(|| Secret::new("synthetic-nominated-key".into()));
         let mut admissions = 0;
         let result = with_host(

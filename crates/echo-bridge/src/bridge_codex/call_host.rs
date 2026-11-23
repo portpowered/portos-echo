@@ -4,6 +4,7 @@ use echo_codex::codex_io::RpcIo;
 use echo_config::{CodexConfig, LiveMode};
 use echo_contracts::secret::Secret;
 use echo_signin::signin_codex::{self, AccountError};
+use std::path::Path;
 use tokio::{
     process::{ChildStdin, ChildStdout},
     time::{Instant, timeout_at},
@@ -67,6 +68,8 @@ pub(super) fn admitted_voice<'a>(
 pub struct HostOptions<'a> {
     pub config: &'a CodexConfig,
     pub mode: LiveMode,
+    /// On configured starts, the source file whose bytes must survive either mode.
+    pub credential_source: Option<&'a Path>,
     pub api_key: Option<&'a Secret<String>>,
     pub routes: Option<&'a crate::bridge_operator::LocalRoutes>,
     /// Absolute ceiling shared by process, account and device startup.
@@ -95,6 +98,7 @@ pub async fn with_host<T>(
         HostOptions {
             config,
             mode,
+            credential_source: None,
             api_key,
             routes: None,
             deadline,
@@ -116,6 +120,7 @@ pub async fn with_host_options<T>(
     let HostOptions {
         config,
         mode,
+        credential_source,
         api_key,
         routes,
         deadline,
@@ -126,7 +131,7 @@ pub async fn with_host_options<T>(
         () = &mut cancelled => return Err(Error::Control),
         result = timeout_at(deadline, async {
             if Instant::now() >= deadline { return Err(Error::Deadline); }
-            codex_host::routed_supervisor(config, routes).await
+            codex_host::routed_supervisor(config, mode, credential_source, routes).await
         }) => {
             result.map_err(|_| Error::Deadline)??
         },

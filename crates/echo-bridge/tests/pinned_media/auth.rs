@@ -1,7 +1,8 @@
 //! T3: real pinned auth manager, inert private store and refusing local refresh.
 use super::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use echo_codex::codex_supervisor::{Supervisor, SupervisorConfig};
+use echo_codex::codex_supervisor::{HomeMode, Supervisor, SupervisorConfig};
+use std::path::PathBuf;
 
 #[tokio::test]
 async fn t3_pinned_codex_invalid_and_expired_auth_use_only_local_refresh() {
@@ -10,8 +11,9 @@ async fn t3_pinned_codex_invalid_and_expired_auth_use_only_local_refresh() {
         .unwrap();
 }
 
-// No nominated API key means authenticate returns before issuing account RPCs.
-// The two refresh requests therefore originate during pinned-server startup.
+// Seed the selected home with an expired fixture. No nominated API key means
+// authenticate returns before issuing account RPCs, so both refresh requests
+// originate during pinned-server startup.
 #[tokio::test]
 async fn t3_pinned_startup_refreshes_before_bridge_account_authentication() {
     tokio::time::timeout(Duration::from_secs(25), rejection(true, LiveMode::ApiKey))
@@ -30,14 +32,9 @@ async fn exercise() {
 
 async fn rejection(expired: bool, mode: LiveMode) {
     let directory = tempfile::tempdir().unwrap();
-
-    let home = directory.path().join("home");
-    let config = CodexConfig {
-        binary: Some(binary()),
-        home: Some(home.clone()),
-        ..CodexConfig::default()
-    };
-    drop(Supervisor::new(SupervisorConfig::new(binary(), home.clone())).unwrap());
+    let config = pinned_config(directory.path());
+    let (home, owner) = reserve_home(&config, mode);
+    drop(owner);
     let auth = synthetic(expired);
     std::fs::write(home.join("auth.json"), &auth).unwrap();
     let (mut provider, mut input, mut output, origin) = provider().await;
@@ -45,6 +42,7 @@ async fn rejection(expired: bool, mode: LiveMode) {
     let mut admitted = false;
     let result = with_host_options(
         HostOptions {
+            credential_source: None,
             config: &config,
             mode,
             api_key: None,
@@ -72,7 +70,18 @@ async fn rejection(expired: bool, mode: LiveMode) {
     drop(input);
     assert!(provider.wait().await.unwrap().success());
     assert_eq!(std::fs::read(home.join("auth.json")).unwrap(), auth);
-    drop(Supervisor::new(SupervisorConfig::new(binary(), home)).unwrap());
+    drop(reserve_home(&config, mode).1);
+}
+
+fn reserve_home(config: &CodexConfig, mode: LiveMode) -> (PathBuf, Supervisor) {
+    let base = config.home.clone().unwrap();
+    let mut supervisor = SupervisorConfig::new(config.binary.clone().unwrap(), base.clone());
+    let (home, home_mode) = match mode {
+        LiveMode::Chatgpt => (base, HomeMode::Chatgpt),
+        LiveMode::ApiKey => (base.with_file_name("home-api-key"), HomeMode::ApiKey),
+    };
+    supervisor.home_mode = home_mode;
+    (home, Supervisor::new(supervisor).unwrap())
 }
 
 fn synthetic(expired: bool) -> Vec<u8> {

@@ -1,12 +1,14 @@
 //! Private child ownership. Restarts are explicit and never replay caller work.
 mod codex_config;
+mod codex_home;
 use crate::{
     codex_io::RpcIo,
     codex_protocol::initialize_params,
     codex_rpc::{RpcError, RpcState},
 };
-pub use codex_config::{Launch, SupervisorConfig};
-use std::{collections::VecDeque, fmt, fs::File, process::Stdio};
+pub use codex_config::{HomeMode, Launch, SupervisorConfig};
+use codex_home::ReservedHome;
+use std::{collections::VecDeque, fmt, process::Stdio};
 use tokio::{
     process::{Child, ChildStdin, ChildStdout, Command},
     time::{Instant, timeout},
@@ -35,7 +37,7 @@ impl From<RpcError> for ProcessError {
 }
 
 /// Owns one child and its IO. `start`/`restart` initialize before exposing IO.
-/// The home remains on disk for caller-controlled credential retention/cleanup.
+/// The home remains on disk between launches.
 /// Explicit `shutdown` awaits reaping; Drop kills, with Tokio's best-effort reap.
 pub struct Supervisor {
     config: SupervisorConfig,
@@ -45,19 +47,19 @@ pub struct Supervisor {
     launched: bool,
     ready: bool,
     environment: Vec<(String, String)>,
-    lease: File,
+    home: ReservedHome,
 }
 
 impl Supervisor {
-    /// Reserve a new, private external home and a separate empty working directory.
+    /// Reserve the private external home and prepare its working directory.
     /// # Errors
-    /// Reject invalid bounds, relative paths, existing homes and repository paths.
+    /// Reject invalid bounds, unsafe paths, unavailable leases or failed auth cleanup.
     pub fn new(config: SupervisorConfig) -> Result<Self, ProcessError> {
         RpcState::new(config.limits())?;
         if config.restart_window.is_zero() || !config.binary.is_absolute() {
             return Err(ProcessError::InvalidConfig);
         }
-        let lease = config.prepare()?;
+        let home = config.prepare()?;
         Ok(Self {
             config,
             child: None,
@@ -66,7 +68,7 @@ impl Supervisor {
             launched: false,
             ready: false,
             environment: Vec::new(),
-            lease,
+            home,
         })
     }
 
@@ -165,9 +167,9 @@ impl Supervisor {
             }
         }
         command.envs(self.environment.iter().map(|(k, v)| (k, v)));
-        command.env("CODEX_HOME", &self.config.codex_home);
-        command.env("HOME", &self.config.codex_home);
-        command.current_dir(self.config.cwd());
+        command.env("CODEX_HOME", &self.home.path);
+        command.env("HOME", &self.home.path);
+        command.current_dir(self.home.cwd());
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -233,7 +235,7 @@ impl Drop for Supervisor {
         });
         if reaped {
             // Unlock the shared open description before any inherited copy closes.
-            let _ = self.lease.unlock();
+            self.home.unlock();
         }
     }
 }
@@ -254,7 +256,7 @@ mod codex_restart_tests {
         let binary = std::env::current_exe()?;
         let config = || SupervisorConfig::new(binary.clone(), parent.join("home"));
         let owner = Supervisor::new(config())?;
-        let retained = owner.lease.try_clone()?;
+        let retained = owner.home.base_lease.try_clone()?;
         assert!(matches!(Supervisor::new(config()), Err(ProcessError::PrivateHome)));
         drop(owner);
         let next = Supervisor::new(config());
@@ -303,7 +305,7 @@ mod codex_restart_tests {
                 certificate.and_then(|(_, value)| value),
                 Some(std::ffi::OsStr::new("/synthetic/ca.pem"))
             );
-            let work = std::fs::metadata(owner.config.cwd())?;
+            let work = std::fs::metadata(owner.home.cwd())?;
             assert_eq!(work.permissions().mode() & 0o777, 0o700);
         }
         std::fs::remove_dir_all(parent)?;
