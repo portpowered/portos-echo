@@ -17,30 +17,80 @@ pub struct ToolCallHandle {
 }
 
 pub enum SessionEvent {
-    CallAdmitted,
-    CallCloseDue,
     Wake {
         session: SessionHandle,
-        epoch: Instant,
         opened: Instant,
-        max: Option<Duration>,
+        listen: Option<Duration>,
+        max: Duration,
+        response_due: Instant,
+        reuse_call: bool,
+    },
+    CallOpened {
+        session: SessionHandle,
+    },
+    CallCloseDue,
+    CaptureEnded {
+        session: SessionHandle,
+    },
+    ReplyStarted {
+        session: SessionHandle,
+    },
+    ReplyEnded {
+        session: SessionHandle,
+    },
+    ReplyPlayed {
+        session: SessionHandle,
+        output_stopped: bool,
+    },
+    ReplySettled {
+        session: SessionHandle,
+    },
+    Deadline {
+        session: SessionHandle,
+        timer: SessionTimer,
+    },
+    ExplicitEnd {
+        session: SessionHandle,
+    },
+    RunReleased {
+        session: SessionHandle,
+    },
+    Tool(SessionToolEvent),
+    Turn(SessionTurnEvent),
+    /// Additional playback observations available at the bridge's media fence.
+    TurnObserved {
+        turn: SessionTurnEvent,
+        context: SessionTurnContext,
     },
     Run {
         session: SessionHandle,
         change: SessionChange,
     },
-    Turn {
-        session: SessionHandle,
-        change: SessionTurnEvent,
-    },
     Configure(SessionKnobs),
-    Tool {
-        session: SessionHandle,
-        change: SessionToolEvent,
-    },
-    RunReleased {
-        session: SessionHandle,
-    },
+}
+
+impl SessionEvent {
+    #[must_use]
+    pub fn session(&self) -> Option<SessionHandle> {
+        match *self {
+            Self::Wake { session, .. }
+            | Self::CallOpened { session }
+            | Self::CaptureEnded { session }
+            | Self::ReplyStarted { session }
+            | Self::ReplyEnded { session }
+            | Self::ReplyPlayed { session, .. }
+            | Self::ReplySettled { session }
+            | Self::Deadline { session, .. }
+            | Self::ExplicitEnd { session }
+            | Self::RunReleased { session }
+            | Self::Run { session, .. }
+            | Self::Tool(SessionToolEvent::Started { session, .. } | SessionToolEvent::Ended { session, .. }) => {
+                Some(session)
+            }
+            Self::Turn(ref turn) | Self::TurnObserved { ref turn, .. } => Some(turn.session()),
+            Self::CallCloseDue | Self::Configure(_) => None,
+        }
+    }
 }
 
 pub const SPEECH_START_EXPIRY: Duration = Duration::from_secs(20);
@@ -61,40 +111,76 @@ impl Default for SessionKnobs {
 }
 
 pub enum SessionTurnEvent {
-    SpeechStarted,
+    SpeechStarted {
+        session: SessionHandle,
+    },
     SpeechStopped {
-        voiced: bool,
+        session: SessionHandle,
     },
     Transcript {
+        session: SessionHandle,
         text: String,
         whole: bool,
-        sounded: bool,
-        voiced: bool,
     },
-    AssistantStarted,
     AssistantAudio {
+        session: SessionHandle,
         audible: bool,
     },
     ReplyFrameHanded {
+        session: SessionHandle,
         voiced: bool,
     },
-    ReplyDone,
-    DispatchStarted,
-    DispatchCompleted {
-        answered: bool,
-        listening: bool,
+    DispatchStarted {
+        session: SessionHandle,
     },
-    DispatchWhileListening,
+    DispatchCompleted {
+        session: SessionHandle,
+        answered: bool,
+    },
+    DispatchWhileListening {
+        session: SessionHandle,
+    },
     EndDispatch {
+        session: SessionHandle,
         farewell: bool,
     },
     BargeDue {
+        session: SessionHandle,
         finished: bool,
     },
     ReplyMeasured {
+        session: SessionHandle,
         cut: bool,
     },
-    RunEnded,
+    RunEnded {
+        session: SessionHandle,
+    },
+}
+
+impl SessionTurnEvent {
+    fn session(&self) -> SessionHandle {
+        match *self {
+            Self::SpeechStarted { session }
+            | Self::SpeechStopped { session }
+            | Self::Transcript { session, .. }
+            | Self::AssistantAudio { session, .. }
+            | Self::ReplyFrameHanded { session, .. }
+            | Self::DispatchStarted { session }
+            | Self::DispatchCompleted { session, .. }
+            | Self::DispatchWhileListening { session }
+            | Self::EndDispatch { session, .. }
+            | Self::BargeDue { session, .. }
+            | Self::ReplyMeasured { session, .. }
+            | Self::RunEnded { session } => session,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct SessionTurnContext {
+    pub sounded: bool,
+    pub voiced: bool,
+    pub listening: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,12 +247,6 @@ pub enum SessionChange {
     AdmitResponse(Instant),
     ResponseDue(Instant),
     CaptureStarted,
-    CaptureEnded,
-    ReplyStarted,
-    ReplyPlayed {
-        output_stopped: bool,
-    },
-    ReplySettled,
     Resume {
         preserve_dispatch: bool,
     },
@@ -176,15 +256,10 @@ pub enum SessionChange {
         max: Duration,
     },
     RenewIdle,
-    RequestEnd,
     Cut,
     CutSettled,
     CutPlayed,
     Playback(SessionPlayback),
-    Deadline {
-        timer: SessionTimer,
-        due: Instant,
-    },
     WaitExpired {
         wait: SessionWait,
         due: Option<Instant>,
@@ -228,7 +303,9 @@ pub struct SessionView {
 
 #[derive(PartialEq, Eq)]
 pub enum SessionCommand {
-    OpenCall,
+    OpenCall {
+        session: SessionHandle,
+    },
     CloseCall,
     StartCapture {
         session: SessionHandle,
@@ -241,9 +318,9 @@ pub enum SessionCommand {
     },
     CutReply {
         session: SessionHandle,
-        trigger: BargeTrigger,
-        text: String,
+        trigger: Option<BargeTrigger>,
     },
+    Tool(SessionToolDecision),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,7 +336,6 @@ pub enum SessionOutcome {
     Applied,
     Played(bool),
     DeadlineReached(bool),
-    Tool(SessionToolDecision),
     Held,
     Released,
     FinishReply,
@@ -277,10 +353,12 @@ pub enum SessionToolAction {
 #[derive(Clone, Copy)]
 pub enum SessionToolEvent {
     Started {
+        session: SessionHandle,
         tool: ToolCallHandle,
         action: SessionToolAction,
     },
     Ended {
+        session: SessionHandle,
         tool: ToolCallHandle,
     },
 }
@@ -311,6 +389,14 @@ pub enum SessionToolRefusal {
 
 #[derive(Default)]
 pub struct SessionCommands {
-    pub effect: Option<SessionCommand>,
+    pub effects: [Option<SessionCommand>; 2],
+    pub cut_text: String,
     pub outcome: Option<Result<SessionOutcome, SessionError>>,
+}
+
+impl SessionCommands {
+    pub fn take_effect(&mut self) -> Option<SessionCommand> {
+        let next = self.effects[1].take();
+        std::mem::replace(&mut self.effects[0], next)
+    }
 }

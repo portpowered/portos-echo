@@ -59,11 +59,13 @@ mod tests {
     use std::time::Duration;
 
     fn started(source: &Source) {
-        source.controller.turn(SessionTurnEvent::DispatchStarted);
+        source
+            .controller
+            .turn(|session| SessionTurnEvent::DispatchStarted { session });
     }
 
     fn answered(source: &Source) -> bool {
-        source.controller.turn(SessionTurnEvent::ReplyDone).outcome == Some(Ok(SessionOutcome::FinishReply))
+        source.controller.reply_ended().outcome == Some(Ok(SessionOutcome::FinishReply))
     }
 
     fn reply(source: &Source, played: Option<Instant>) -> (Option<Instant>, Error) {

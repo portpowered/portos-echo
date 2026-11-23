@@ -62,6 +62,6 @@ pub(in crate::bridge_voice) fn run_ended(
     source: &mut Source,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    source.controller.turn(SessionTurnEvent::RunEnded);
+    source.controller.turn(|session| SessionTurnEvent::RunEnded { session });
     report(source, observe)
 }

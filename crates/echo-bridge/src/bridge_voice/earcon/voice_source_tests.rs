@@ -96,12 +96,14 @@ async fn acknowledgement_playout_returns_directly_to_screen_thinking() {
         screen.presentation = Presentation::new(Some(send));
         let mut view = View::new(&screen, &health, &mut trace);
         let mut source = Source::new(200, false).unwrap();
-        source.controller.turn(SessionTurnEvent::DispatchStarted);
+        source
+            .controller
+            .turn(|session| SessionTurnEvent::DispatchStarted { session });
         source.spoke();
         let mut mouth = ReplyAudio::mouth_fixture();
         mouth.test_handoff(&frame(1000));
         assert_eq!(
-            source.controller.turn(SessionTurnEvent::ReplyDone).outcome,
+            source.controller.reply_ended().outcome,
             Some(Ok(SessionOutcome::Applied))
         );
         // The acknowledgement's quiet lasts the gap hold: the mouth closes.
