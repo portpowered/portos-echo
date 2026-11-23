@@ -1,3 +1,4 @@
+#![cfg(test)]
 //! T3 allocation witness. Run this isolated binary with `make test-alloc`.
 use std::{future::Future, io::Write, sync::Arc, time::Duration};
 use tokio::runtime::Runtime;

@@ -53,17 +53,7 @@ async fn first_reconnected_wake_completes_with_lifecycle_consumer_held() {
             client.describe().await.unwrap(),
             WyomingEvent::Info(json!({"fresh":true}))
         );
-        assert_eq!(
-            run.stats(),
-            crate::RunStats {
-                received: 33,
-                dropped: 1
-            }
-        );
-        for index in 1..33 {
-            assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), vec![index; 2048]);
-        }
-        assert_eq!(run.recv().await.unwrap(), None);
+        assert_reconnected_frames(&mut run).await;
         assert_eq!(events.recv().await.unwrap().unwrap().audio_count, 33);
         assert!(matches!(
             events.recv().await.unwrap().unwrap().event,
@@ -72,6 +62,20 @@ async fn first_reconnected_wake_completes_with_lifecycle_consumer_held() {
         client.close().await.unwrap();
     };
     tokio::join!(caller, reconnected_microphone_peer(&mut fresh, pipeline));
+}
+
+async fn assert_reconnected_frames(run: &mut crate::Run) {
+    assert_eq!(
+        run.stats(),
+        crate::RunStats {
+            received: 33,
+            dropped: 1,
+        }
+    );
+    for index in 1..33 {
+        assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), &[index; 2048]);
+    }
+    assert_eq!(run.recv().await.unwrap(), None);
 }
 
 async fn reconnected_microphone_peer(fresh: &mut tokio::io::DuplexStream, pipeline: serde_json::Value) {

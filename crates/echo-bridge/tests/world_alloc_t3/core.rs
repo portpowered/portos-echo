@@ -242,7 +242,10 @@ impl Witness {
         if out.notification().is_none() {
             let delay = {
                 let core = self.core();
-                Pacer::next_deadline(&core.world.pacer.playback).unwrap() - core.world.clock.now().monotonic
+                Pacer::next_deadline(&core.world.pacer.playback)
+                    .unwrap()
+                    .checked_sub(core.world.clock.now().monotonic)
+                    .unwrap()
             };
             assert_eq!(delay, FRAME_TIME);
             self.advance(delay);
@@ -299,7 +302,7 @@ fn trace_tick(world: &Witness) {
     assert!(matches!(input, Event::TraceRow(None)));
     let deadline = core.world.trace_deadline().unwrap();
     let before = core.world.clock.now().monotonic;
-    core.world.clock.advance(deadline - before);
+    core.world.clock.advance(deadline.checked_sub(before).unwrap());
     assert!(core.count(World::tick_trace).take_trace_wake());
     let (through, row) = core.world.trace.next_row().unwrap();
     assert_eq!(row.row.event, "synthetic.audio");
@@ -333,7 +336,7 @@ pub(super) fn pacing(runtime: &Runtime, world: &Witness) -> ResultRow {
     pace(world, WARM);
     world.pacer(PacerEvent::ReplyOpened);
     measure(runtime, world, "pacing", "probe+trace-drain", async {
-        pace(world, FRAMES)
+        pace(world, FRAMES);
     })
 }
 
@@ -411,7 +414,7 @@ pub(super) fn barge(runtime: &Runtime, world: &Witness) -> ResultRow {
     barge_cycles(world, WARM);
     assert!(world.device_view().capture_open);
     let row = measure(runtime, world, "barge-in", "probe+session-mark-drain", async {
-        barge_cycles(world, FRAMES)
+        barge_cycles(world, FRAMES);
     });
     assert!(world.device_view().capture_open);
     row

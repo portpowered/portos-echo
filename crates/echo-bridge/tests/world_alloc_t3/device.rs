@@ -111,7 +111,7 @@ impl Device {
         );
         assert_eq!(run.stats().received, u64::try_from(WARM + FRAMES).unwrap());
         assert_eq!(run.stats().dropped, 0);
-        assert!(capture.finish().unwrap().is_empty());
+        assert_eq!(capture.finish().unwrap().len(), 0);
         assert_eq!(capture.tail_samples(), 0);
         let mute = wire("hassmic-mute", json!({"muted":true}), vec![]);
         let unmute = wire("hassmic-mute", json!({"muted":false}), vec![]);
@@ -132,23 +132,8 @@ impl Device {
     async fn mute_frames(&mut self, world: &Witness, mute: &[u8], unmute: &[u8], count: usize) {
         for _ in 0..count {
             let mut run = self.wake().await;
-            self.socket.get_mut().write_all(&self.capture).await.unwrap();
-            assert!(matches!(self.events.recv().await.unwrap(), Some(LinkEvent::Other)));
-            let (_, retained) = world.offer_uplink(&[4096; 320]);
-            assert_eq!(retained, [4096; 320]);
-            self.socket.get_mut().write_all(mute).await.unwrap();
-            let frame = MicrophoneRun::recv(&mut run).await.unwrap().unwrap();
-            assert_eq!(&*frame.payload, &self.pcm);
-            assert!(MicrophoneRun::recv(&mut run).await.unwrap().is_none());
-            assert!(matches!(self.events.recv().await.unwrap(), Some(LinkEvent::Mute(true))));
-            world.mute();
-            self.socket.get_mut().write_all(&self.capture).await.unwrap();
-            assert!(matches!(
-                self.events.recv().await.unwrap(),
-                Some(LinkEvent::MicrophoneDropped(1))
-            ));
-            assert!(MicrophoneRun::recv(&mut run).await.unwrap().is_none());
-            assert_eq!((run.stats().received, run.stats().dropped), (2, 1));
+            self.mute_with_pending(world, &mut run, mute).await;
+            self.assert_suppressed(&mut run).await;
             self.socket.get_mut().write_all(unmute).await.unwrap();
             assert!(matches!(
                 self.events.recv().await.unwrap(),
@@ -158,16 +143,39 @@ impl Device {
         }
     }
 
+    async fn mute_with_pending(&mut self, world: &Witness, run: &mut Run, mute: &[u8]) {
+        self.socket.get_mut().write_all(&self.capture).await.unwrap();
+        assert!(matches!(self.events.recv().await.unwrap(), Some(LinkEvent::Other)));
+        let (_, retained) = world.offer_uplink(&[4096; 320]);
+        assert_eq!(retained, [4096; 320]);
+        self.socket.get_mut().write_all(mute).await.unwrap();
+        let frame = MicrophoneRun::recv(run).await.unwrap().unwrap();
+        assert_eq!(&*frame.payload, &self.pcm);
+        assert_eq!(MicrophoneRun::recv(run).await.unwrap(), None);
+        assert!(matches!(self.events.recv().await.unwrap(), Some(LinkEvent::Mute(true))));
+        world.mute();
+    }
+
+    async fn assert_suppressed(&mut self, run: &mut Run) {
+        self.socket.get_mut().write_all(&self.capture).await.unwrap();
+        assert!(matches!(
+            self.events.recv().await.unwrap(),
+            Some(LinkEvent::MicrophoneDropped(1))
+        ));
+        assert_eq!(MicrophoneRun::recv(run).await.unwrap(), None);
+        assert_eq!((run.stats().received, run.stats().dropped), (2, 1));
+    }
+
     pub(super) fn playback_row(&mut self, runtime: &Runtime, world: &Witness, screen: &mut Screen) -> ResultRow {
         let sample = reply_sample();
         let fixture = PlaybackWire::new(&sample);
-        runtime.block_on(self.playback(world, screen, &fixture, sample, WARM));
+        runtime.block_on(self.playback(world, screen, &fixture, &sample, WARM));
         measure(
             runtime,
             world,
             "playback",
             "Wyoming+SSE+Tokio+playback-probe",
-            self.playback(world, screen, &fixture, sample, FRAMES),
+            self.playback(world, screen, &fixture, &sample, FRAMES),
         )
     }
 
@@ -176,7 +184,7 @@ impl Device {
         world: &Witness,
         screen: &mut Screen,
         wire: &PlaybackWire,
-        sample: ReplyFrame,
+        sample: &ReplyFrame,
         count: usize,
     ) {
         use super::core::RUN;
@@ -189,11 +197,11 @@ impl Device {
         let sink = async {
             let mut buff = [0; 1200];
             read_bytes(&mut self.socket, &wire.start, &mut buff).await;
-            let mut scratch = Box::new(sample);
+            let mut scratch = Box::new(*sample);
             let lips_before = screen.batches();
             for _ in 0..count {
                 let (frame, returned) = world.due_frame(scratch);
-                assert_eq!(frame, sample);
+                assert_eq!(&frame, sample);
                 scratch = returned;
                 send.send(frame.to_vec()).await.unwrap();
                 read_bytes(&mut self.socket, &wire.chunk, &mut buff).await;
