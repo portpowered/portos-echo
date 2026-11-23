@@ -290,9 +290,12 @@ database and working directory.
 
 To switch modes, stop the bridge, change `live.mode`, and start it again. On ChatGPT startup the bridge
 removes the app-server copy of the API key from the sibling's `auth.json`, if present. The nominated key
-file stays available for a later API-key start. An unsafe or busy sibling, or an auth file that cannot be
-safely removed, stops startup with `codex.home: private ownership unavailable`. Correct the path or
-stop the process holding the home before retrying.
+file stays available for a later API-key start. Both modes refuse startup if `live.credential_file` refers
+to the sibling's `auth.json`, directly or through a filesystem alias. Move the nominated key to its own
+private file and update the setting before retrying. An unsafe or busy sibling, an auth file that cannot
+be safely removed, or a credential path collision reports `codex.home: private ownership unavailable`.
+If the filesystem cannot represent the derived sibling name, ChatGPT can still use its existing home.
+Choose a shorter home name before using API-key mode.
 
 Existing ChatGPT sign-ins work in place. If an older API-key trial already replaced the ChatGPT auth file,
 stop the bridge, select `chatgpt`, and run `echo-bridge signin --config PATH` to restore the sign-in. Before

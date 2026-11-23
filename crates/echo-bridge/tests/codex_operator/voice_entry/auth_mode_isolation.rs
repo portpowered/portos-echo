@@ -1,7 +1,10 @@
 //! T3: restart the delivered bridge against the file-backed fake account process.
 use super::*;
 use echo_codex::codex_supervisor::{HomeMode, Supervisor, SupervisorConfig};
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::{
+    fs,
+    os::unix::fs::{PermissionsExt, symlink},
+};
 
 const KEY: &str = "synthetic-nominated-key";
 const KEY_FILE: &[u8] = b"synthetic-nominated-key\r\n";
@@ -83,16 +86,7 @@ async fn auth_mode_isolation_refuses_unsafe_cleanup_then_recovers() {
     fs::create_dir(&api_auth).unwrap();
     fs::write(api_auth.join("sentinel"), "keep").unwrap();
 
-    let mut process = Process::spawn(&mut command(&fixture));
-    process.collect(2).await;
-    process.assert_collected();
-    assert_eq!(
-        process.stderr().await,
-        "echo-bridge: codex.home: private ownership unavailable\n"
-    );
-    assert!(process.lines.next_line().await.unwrap().is_none());
-    assert!(!fixture.home.join("launches").exists());
-    assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(listener.poll_accept(cx).is_pending())).await);
+    assert_start_refused(&fixture, &listener).await;
     assert_eq!(read(&api_auth, "sentinel"), "keep");
     let rows = trace_if_present(&fixture.directory.path().join("trace"));
     assert_eq!(count(&rows, "bridge.ready"), 0);
@@ -109,6 +103,63 @@ async fn auth_mode_isolation_refuses_unsafe_cleanup_then_recovers() {
         "unsafe cleanup: exit=2, child starts=0, safe retry ready=1"
     )
     .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge and local Python"]
+async fn auth_mode_isolation_preserves_nominated_key_when_it_aliases_api_auth() {
+    let (fixture, listener) = installation().await;
+    let root = fixture.directory.path();
+    let api_home = root.join("home-api-key");
+    let api_auth = api_home.join("auth.json");
+    drop(api_owner(&fixture));
+    fs::write(&api_auth, KEY_FILE).unwrap();
+    symlink(&api_auth, root.join("key-link")).unwrap();
+    symlink(&api_home, root.join("directory-link")).unwrap();
+    fs::hard_link(&api_auth, root.join("hard-link")).unwrap();
+
+    let mut previous = "credential";
+    for source in [
+        "hard-link",
+        "home-api-key/auth.json",
+        "key-link",
+        "directory-link/auth.json",
+    ] {
+        replace_setting(&fixture, "credential_file", previous, source);
+        for (before, mode) in [("chatgpt", "api_key"), ("api_key", "chatgpt")] {
+            set_mode(&fixture, before, mode);
+            fixture
+                .invoke(&["status", "--config", "bridge.toml"], 2, "", PRIVATE_HOME_ERROR)
+                .await;
+            assert_start_refused(&fixture, &listener).await;
+            assert!(!api_home.join("launches").exists());
+            assert!(
+                fs::read(root.join(source)).unwrap() == KEY_FILE,
+                "nominated key changed"
+            );
+            assert_base_unchanged(&fixture);
+        }
+        if source == "hard-link" {
+            fs::remove_file(root.join(source)).unwrap();
+        }
+        previous = source;
+    }
+    replace_setting(&fixture, "credential_file", previous, "credential");
+    fs::rename(&api_auth, root.join("credential")).unwrap();
+    start_and_stop(&fixture, &listener, &fixture.home, "chatgpt").await;
+    assert!(fs::read(root.join("credential")).unwrap() == KEY_FILE);
+}
+
+const PRIVATE_HOME_ERROR: &str = "echo-bridge: codex.home: private ownership unavailable\n";
+
+async fn assert_start_refused(fixture: &Fixture, listener: &TcpListener) {
+    let mut process = Process::spawn(&mut command(fixture));
+    process.collect(2).await;
+    process.assert_collected();
+    assert_eq!(process.stderr().await, PRIVATE_HOME_ERROR);
+    assert!(process.lines.next_line().await.unwrap().is_none());
+    assert!(!fixture.home.join("launches").exists());
+    assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(listener.poll_accept(cx).is_pending())).await);
 }
 
 async fn installation() -> (Fixture, TcpListener) {
@@ -201,11 +252,15 @@ fn api_owner(fixture: &Fixture) -> Supervisor {
 }
 
 fn set_mode(fixture: &Fixture, previous: &str, next: &str) {
+    replace_setting(fixture, "mode", previous, next);
+}
+
+fn replace_setting(fixture: &Fixture, field: &str, previous: &str, next: &str) {
     let path = fixture.directory.path().join("bridge.toml");
     let text = fs::read_to_string(&path).unwrap();
-    let before = format!("mode = \"{previous}\"");
+    let before = format!("{field} = \"{previous}\"");
     assert_eq!(text.matches(&before).count(), 1);
-    fs::write(path, text.replace(&before, &format!("mode = \"{next}\""))).unwrap();
+    fs::write(path, text.replace(&before, &format!("{field} = \"{next}\""))).unwrap();
 }
 
 fn assert_chatgpt_state(fixture: &Fixture) {

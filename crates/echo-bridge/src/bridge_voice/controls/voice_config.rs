@@ -319,6 +319,7 @@ impl Configured {
             host: HostOptions {
                 config: &self.config.codex,
                 mode: self.config.live.mode,
+                credential_source: Some(&self.config.live.credential_file),
                 routes: self.routes.as_ref(),
                 api_key,
                 deadline: Instant::now() + Duration::from_secs(30),

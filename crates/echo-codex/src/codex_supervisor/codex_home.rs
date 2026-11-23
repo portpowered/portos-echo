@@ -15,7 +15,7 @@ pub(super) struct ReservedHome {
 }
 
 impl ReservedHome {
-    pub(super) fn prepare(base: &Path, mode: HomeMode) -> Result<Self, ProcessError> {
+    pub(super) fn prepare(base: &Path, mode: HomeMode, credential_source: Option<&Path>) -> Result<Self, ProcessError> {
         let base_lease = reserve(base, BASE_MARKER, API_MARKER, true)?.ok_or(ProcessError::PrivateHome)?;
         let mut home = Self {
             path: base.to_path_buf(),
@@ -27,7 +27,7 @@ impl ReservedHome {
             let api_mode = mode == HomeMode::ApiKey;
             home.api_lease = reserve(&api_path, API_MARKER, BASE_MARKER, api_mode)?;
             if home.api_lease.is_some() {
-                check_auth(&api_path, !api_mode)?;
+                check_auth(&api_path, credential_source, !api_mode)?;
             }
             if api_mode {
                 home.path = api_path;
@@ -54,10 +54,15 @@ fn api_path(base: &Path) -> Result<PathBuf, ProcessError> {
     Ok(base.with_file_name(name))
 }
 
-fn check_auth(home: &Path, clean: bool) -> Result<(), ProcessError> {
+fn check_auth(home: &Path, credential_source: Option<&Path>, clean: bool) -> Result<(), ProcessError> {
     let path = home.join("auth.json");
     if let Some(metadata) = entry(&path)? {
         if !unaliased_file(&metadata) {
+            return Err(ProcessError::PrivateHome);
+        }
+        if let Some(source) = credential_source
+            && credential_alias(source, &path, &metadata)?
+        {
             return Err(ProcessError::PrivateHome);
         }
         if clean {
@@ -67,9 +72,38 @@ fn check_auth(home: &Path, clean: bool) -> Result<(), ProcessError> {
     Ok(())
 }
 
+fn credential_alias(source: &Path, auth: &Path, metadata: &Metadata) -> Result<bool, ProcessError> {
+    if source == auth {
+        return Ok(true);
+    }
+    // Follow the same aliases as the credential loader, without reading the key.
+    #[cfg(unix)]
+    let result = source.metadata().map(|source| {
+        use std::os::unix::fs::MetadataExt;
+        source.dev() == metadata.dev() && source.ino() == metadata.ino()
+    });
+    #[cfg(not(unix))]
+    let result = {
+        let _ = metadata;
+        let auth = auth.canonicalize().map_err(|_| ProcessError::PrivateHome)?;
+        source.canonicalize().map(|source| source == auth)
+    };
+    match result {
+        Ok(alias) => Ok(alias),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(ProcessError::PrivateHome),
+    }
+}
+
 fn reserve(path: &Path, marker: &str, other_marker: &str, create: bool) -> Result<Option<File>, ProcessError> {
+    let fresh = match fs::symlink_metadata(path) {
+        Ok(_) => false,
+        Err(error) if error.kind() == ErrorKind::NotFound => true,
+        // ChatGPT can use a valid base whose derived sibling name cannot exist.
+        Err(error) if !create && error.kind() == ErrorKind::InvalidFilename => return Ok(None),
+        Err(_) => return Err(ProcessError::PrivateHome),
+    };
     validate_path(path)?;
-    let fresh = entry(path)?.is_none();
     if fresh && !create {
         return Ok(None);
     }

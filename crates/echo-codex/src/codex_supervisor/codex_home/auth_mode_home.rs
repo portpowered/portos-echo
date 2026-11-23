@@ -31,7 +31,11 @@ impl Install {
     }
 
     fn take(&self, mode: HomeMode) -> Result<Supervisor, ProcessError> {
-        let mut config = SupervisorConfig::new(self.binary.clone(), self.base());
+        self.take_at(self.base(), mode)
+    }
+
+    fn take_at(&self, base: PathBuf, mode: HomeMode) -> Result<Supervisor, ProcessError> {
+        let mut config = SupervisorConfig::new(self.binary.clone(), base);
         config.home_mode = mode;
         Supervisor::new(config)
     }
@@ -71,6 +75,30 @@ fn selects_custom_sibling_and_cleans_only_owned_auth() -> Result<(), Box<dyn std
         assert_eq!(fs::read(install.api().join("cache")).unwrap(), b"cached models");
         install.assert_chatgpt_preserved()?;
     }
+    Ok(())
+}
+
+#[test]
+fn chatgpt_uses_existing_home_when_sibling_name_exceeds_the_filesystem_limit() -> Result<(), Box<dyn std::error::Error>>
+{
+    let install = Install::new()?;
+    let base = install.root.join("h".repeat(248));
+    drop(install.take_at(base.clone(), HomeMode::Single)?);
+    let auth = base.join("auth.json");
+    fs::write(&auth, CHATGPT_AUTH)?;
+    let sibling = api_path(&base)?;
+    assert_eq!(
+        fs::symlink_metadata(sibling).unwrap_err().kind(),
+        ErrorKind::InvalidFilename
+    );
+    let chatgpt = install.take_at(base.clone(), HomeMode::Chatgpt)?;
+    assert_eq!(chatgpt.home.path, base);
+    drop(chatgpt);
+    assert!(matches!(
+        install.take_at(base, HomeMode::ApiKey),
+        Err(ProcessError::PrivateHome)
+    ));
+    assert!(fs::read(auth)? == CHATGPT_AUTH);
     Ok(())
 }
 

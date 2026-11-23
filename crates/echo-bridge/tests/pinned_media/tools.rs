@@ -283,6 +283,7 @@ async fn client(
     let key = Secret::new("dummy-local-only".to_owned());
     let result = with_host_options(
         HostOptions {
+            credential_source: None,
             config,
             mode: LiveMode::ApiKey,
             api_key: Some(&key),

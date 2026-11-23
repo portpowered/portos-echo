@@ -233,6 +233,7 @@ fn config(fixture: &Fixture) -> CodexConfig {
 
 fn options(config: &CodexConfig) -> HostOptions<'_> {
     HostOptions {
+        credential_source: None,
         routes: None,
         config,
         mode: LiveMode::Chatgpt,

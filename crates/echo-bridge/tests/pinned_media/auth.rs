@@ -42,6 +42,7 @@ async fn rejection(expired: bool, mode: LiveMode) {
     let mut admitted = false;
     let result = with_host_options(
         HostOptions {
+            credential_source: None,
             config: &config,
             mode,
             api_key: None,

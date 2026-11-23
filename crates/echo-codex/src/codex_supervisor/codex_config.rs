@@ -28,6 +28,8 @@ pub struct SupervisorConfig {
     pub launch: Launch,
     pub codex_home: PathBuf,
     pub home_mode: HomeMode,
+    /// Nominated key source to protect from the app server's sibling auth store.
+    pub credential_source: Option<PathBuf>,
     pub config_overrides: Vec<(String, String)>,
     pub request_timeout: Duration,
     pub max_line_bytes: usize,
@@ -46,6 +48,7 @@ impl SupervisorConfig {
             launch: Launch::default(),
             codex_home,
             home_mode: HomeMode::default(),
+            credential_source: None,
             config_overrides: Vec::new(),
             request_timeout: limits.request_timeout,
             max_line_bytes: limits.line_bytes,
@@ -66,6 +69,6 @@ impl SupervisorConfig {
     }
 
     pub(super) fn prepare(&self) -> Result<ReservedHome, ProcessError> {
-        ReservedHome::prepare(&self.codex_home, self.home_mode)
+        ReservedHome::prepare(&self.codex_home, self.home_mode, self.credential_source.as_deref())
     }
 }

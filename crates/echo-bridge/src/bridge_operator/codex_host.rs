@@ -45,13 +45,10 @@ pub(crate) fn process_error(error: ProcessError) -> Error {
     }
 }
 
-pub(crate) async fn supervisor(config: &CodexConfig, mode: LiveMode) -> Result<Supervisor, Error> {
-    routed_supervisor(config, mode, None).await
-}
-
 pub(crate) async fn routed_supervisor(
     config: &CodexConfig,
     mode: LiveMode,
+    credential_source: Option<&Path>,
     routes: Option<&super::LocalRoutes>,
 ) -> Result<Supervisor, Error> {
     let home = config.home.clone().ok_or(Error::CodexHomeRequired)?;
@@ -72,6 +69,7 @@ pub(crate) async fn routed_supervisor(
         LiveMode::Chatgpt => HomeMode::Chatgpt,
         LiveMode::ApiKey => HomeMode::ApiKey,
     };
+    config.credential_source = credential_source.map(Path::to_path_buf);
     if let Some(routes) = routes {
         routes.configure(&mut config, web_search);
     }
@@ -186,7 +184,7 @@ cat >/dev/null
         let home = config.home.clone().unwrap();
         let deadline = Instant::now() + Duration::from_secs(20);
         let started = run(
-            supervisor(&config, LiveMode::Chatgpt).await.unwrap(),
+            routed_supervisor(&config, LiveMode::Chatgpt, None, None).await.unwrap(),
             std::future::pending(),
             deadline,
             async |supervisor| Ok(supervisor.pid().is_some()),
@@ -210,7 +208,7 @@ cat >/dev/null
         for refused in [root.path().join("absent.pem"), root.path().join("private")] {
             config.ca_file = Some(refused);
             assert!(matches!(
-                supervisor(&config, LiveMode::Chatgpt).await,
+                routed_supervisor(&config, LiveMode::Chatgpt, None, None).await,
                 Err(Error::CodexCaFile)
             ));
         }

@@ -345,8 +345,10 @@ logs database and the `work/` directory.
 
 Both modes hold the configured home's installation lease. The supervisor also leases the sibling when it
 uses it or cleans it. At ChatGPT startup it removes the sibling's `auth.json` if present before spawning
-the child. If it cannot safely lease the sibling or remove the file, startup fails with the private-home
-error. The rest of the sibling's state stays available for the next API-key run.
+the child. Both modes refuse startup when the nominated credential resolves to that auth file. Startup
+also fails with the private-home error if the supervisor cannot safely lease an existing sibling or
+remove the stale copy. ChatGPT can still use an existing home when the filesystem cannot represent the
+derived sibling name. The rest of the sibling's state stays available for the next API-key run.
 
 The child exchanges newline-delimited JSON-RPC without a `jsonrpc` field: `initialize` enables the
 experimental API, then `initialized` completes the handshake. Account commands use `account/read` and
