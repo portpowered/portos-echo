@@ -64,11 +64,11 @@ impl Heard {
 async fn reply(pacer: &mut ReplyAudio, meter: &mut ReplyMeter, script: &[(u64, i16)]) -> Heard {
     let mut frames = Vec::new();
     let mut first = None;
-    let mut wrote = |pacer: &ReplyAudio, meter: &mut ReplyMeter, frame: ReplyFrame| {
+    let mut wrote = |pacer: &ReplyAudio, meter: &mut ReplyMeter, frame: &ReplyFrame| {
         let now = Instant::now();
         pacer.handed();
         meter.wrote(now);
-        frames.push(((now - *first.get_or_insert(now)).as_millis(), frame));
+        frames.push(((now - *first.get_or_insert(now)).as_millis(), *frame));
     };
     let mut arrival = Instant::now();
     for (gap, level) in script {
@@ -76,7 +76,7 @@ async fn reply(pacer: &mut ReplyAudio, meter: &mut ReplyMeter, script: &[(u64, i
         while pacer.has_frames() || pacer.stalled() {
             tokio::select! {
                 biased;
-                sent = pacer.stage(true) => if let Some(frame) = sent { wrote(pacer, meter, frame); },
+                sent = pacer.stage(true) => if let Some(frame) = sent { wrote(pacer, meter, &frame); },
                 () = tokio::time::sleep_until(arrival) => break,
             }
         }
@@ -87,7 +87,7 @@ async fn reply(pacer: &mut ReplyAudio, meter: &mut ReplyMeter, script: &[(u64, i
     }
     pacer.finish().unwrap();
     while let Some(frame) = pacer.stage(false).await {
-        wrote(pacer, meter, frame);
+        wrote(pacer, meter, &frame);
     }
     meter.paced(pacer.settle().playout);
     pacer.reset(false).unwrap();

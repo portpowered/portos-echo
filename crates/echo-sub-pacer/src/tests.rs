@@ -182,3 +182,24 @@ fn pacer_playout_prime_survives_reoffers_and_flushes_without_waiting() {
     assert_eq!(world.clock.now().monotonic, ms(1060));
     assert!(step(&mut world, PacerEvent::Played).finished);
 }
+
+#[test]
+fn pacer_playout_skips_one_silent_frame_to_reduce_excess_cushion() {
+    let mut world = world();
+    open(&mut world, 200, true);
+    for _ in 0..5 {
+        push(&mut world, Box::new(frame(8000)));
+    }
+    for _ in 0..5 {
+        assert_eq!(release(&mut world), frame(8000));
+    }
+    world.clock.advance(ms(120));
+    push(&mut world, Box::new(frame(0)));
+    for marker in 8001..=8007 {
+        push(&mut world, Box::new(frame(marker)));
+    }
+    assert_eq!(release(&mut world), frame(8001));
+    assert_eq!(world.pacer.status().view.depth, 6);
+    let playout = step(&mut world, PacerEvent::ReplySettled).playout;
+    assert_eq!((playout.reprimes, playout.drained), (1, 1));
+}

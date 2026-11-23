@@ -124,7 +124,7 @@ impl ClockPacer {
     pub(crate) fn offer(&mut self, queued: usize, flush: bool, allow_fade: bool, now: Duration) -> Option<Wait> {
         if queued == 0 {
             let end = self.started? + PERIOD * self.sent;
-            return (allow_fade && self.conceals(flush)).then(|| Wait::Fade {
+            return (allow_fade && self.conceals(flush)).then_some(Wait::Fade {
                 due: end.saturating_sub(PERIOD),
                 end,
             });

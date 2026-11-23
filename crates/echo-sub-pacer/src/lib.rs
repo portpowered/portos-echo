@@ -203,7 +203,7 @@ impl Subsystem for Pacer {
             PacerEvent::Played => {
                 out.finished = matches!(state.input, PacerInput::Finished | PacerInput::Cut)
                     && state.queue.len() == 0
-                    && state.staged.is_none()
+                    && state.staged.is_none();
             }
             PacerEvent::Cut => {
                 state.reset_reply(out);
