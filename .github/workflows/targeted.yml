@@ -47,7 +47,8 @@ jobs:
         id: selections
         shell: sh
         env:
-          TARGETED_FILTER: ${{ inputs.nextest_filter }}
+          ECHO_LAB_WORLD_SEED: "101"
+        TARGETED_FILTER: ${{ inputs.nextest_filter }}
           TARGETED_SCENARIOS: ${{ inputs.scenarios }}
           TARGETED_REPEAT: ${{ inputs.repeat }}
           TARGETED_IGNORED: ${{ inputs.ignored }}

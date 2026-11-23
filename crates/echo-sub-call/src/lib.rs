@@ -64,7 +64,7 @@ impl State {
             PeerFailed { call } | CloseRequested { call } if call == active => self.begin_close(call, out),
             PeerClosed { call } if call == active && self.view.phase == CallPhase::Closing => {
                 self.view.phase = CallPhase::Closed;
-                self.view.receive = CallReceive::Current;
+                self.view.receive = CallReceive::Resetting;
             }
             RetireReceive { call }
                 if call == active
