@@ -124,30 +124,24 @@ async fn setup_stages_share_epoch_and_keep_only_completed_private_boundaries() {
         .lines()
         .map(|row| serde_json::from_str(row).unwrap())
         .collect();
-    assert_eq!(
-        rows.iter()
-            .map(|row| row["event"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        [
-            "call.peer_created",
-            "call.offer_ready",
-            "call.realtime_start_sent",
-            "call.answer_received",
-            "call.answer_applied",
-            "call.ice_connected",
-            "call.data_channel_open",
-            "call.live_connected",
-        ]
-    );
-    assert_eq!(
-        rows.iter()
-            .map(|row| row["elapsed_ms"].as_u64().unwrap())
-            .collect::<Vec<_>>(),
-        [7, 7, 7, 7, 7, 10, 10, 10]
-    );
-    for row in rows {
-        assert_eq!(row.as_object().unwrap().len(), 3);
-        assert_eq!(row["provider_auth_mode"], "api_key");
+    let stages = [
+        ("call.peer_created", 7),
+        ("call.offer_ready", 7),
+        ("call.realtime_start_sent", 7),
+        ("call.answer_received", 7),
+        ("call.answer_applied", 7),
+        ("call.ice_connected", 10),
+        ("call.data_channel_open", 10),
+        ("call.live_connected", 10),
+    ];
+    assert_eq!(rows.len(), stages.len());
+    for (row, (event, elapsed_ms)) in rows.into_iter().zip(stages) {
+        let mut expected = json!({"elapsed_ms": elapsed_ms, "event": event, "provider_auth_mode": "api_key"});
+        if event == "call.realtime_start_sent" {
+            expected["voice"] = json!("alloy");
+            expected["voice_listed"] = json!(null);
+        }
+        assert_eq!(row, expected);
     }
     assert_eq!(state.closes.load(Ordering::SeqCst), 1);
 }
