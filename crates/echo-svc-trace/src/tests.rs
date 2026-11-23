@@ -12,16 +12,13 @@ impl TraceDrain for Source {
     }
 }
 
-fn row(fields: Value) -> TraceRow {
-    let Value::Object(fields) = fields else {
-        panic!("expected object fields");
-    };
+fn row(fields: &Value) -> TraceRow {
     TraceRow {
         event: "run.started".into(),
         elapsed_ms: 41,
         mode: "api_key",
         run: Some("run-1".into()),
-        fields,
+        fields: fields.as_object().unwrap().clone(),
         payload_fields: &[],
         limit: 4096,
     }
@@ -32,13 +29,13 @@ fn oversized_record_leaves_prior_bytes_and_the_sink_usable() {
     let mut sink = Vec::new();
     let expected =
         b"{\"elapsed_ms\":41,\"event\":\"run.started\",\"provider_auth_mode\":\"api_key\",\"run_id\":\"run-1\"}\n";
-    write_row(&mut sink, row(json!({}))).unwrap();
+    write_row(&mut sink, row(&json!({}))).unwrap();
     assert_eq!(
-        write_row(&mut sink, row(json!({"reason":"x".repeat(4096)}))),
+        write_row(&mut sink, row(&json!({"reason":"x".repeat(4096)}))),
         Err(TraceFailure)
     );
     assert_eq!(sink, expected);
-    write_row(&mut sink, row(json!({}))).unwrap();
+    write_row(&mut sink, row(&json!({}))).unwrap();
     assert_eq!(sink, expected.repeat(2));
 }
 
@@ -77,7 +74,7 @@ fn stalled_writer_keeps_receipt_pending_and_drains_later_accepted_rows() {
     )
     .unwrap();
     source.0.lock().unwrap().push_back(PendingTrace {
-        row: row(json!({"n":1})),
+        row: row(&json!({"n":1})),
         receipt: Some(receipt),
     });
     writer.wake();
@@ -87,7 +84,7 @@ fn stalled_writer_keeps_receipt_pending_and_drains_later_accepted_rows() {
         Err(std::sync::mpsc::TryRecvError::Empty)
     ));
     source.0.lock().unwrap().push_back(PendingTrace {
-        row: row(json!({"n":2})),
+        row: row(&json!({"n":2})),
         receipt: None,
     });
     unblock.send(()).unwrap();
