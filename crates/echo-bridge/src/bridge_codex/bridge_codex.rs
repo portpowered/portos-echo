@@ -76,7 +76,7 @@ pub struct Options<'a> {
     pub prompt: &'a str,
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
-    pub fast: bool,
+    pub speed: echo_config::DelegateSpeed,
     pub time_zone: Option<&'a str>,
     pub web_search: echo_config::WebSearch,
 }
@@ -193,7 +193,8 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             params["config"]["model_reasoning_effort"] = effort.into();
         }
         // Present null clears an inherited tier and explicitly selects standard routing.
-        params["serviceTier"] = json!(options.fast.then_some("priority"));
+        let requested = options.speed.service_tier();
+        params["serviceTier"] = json!(requested);
         let request = self.io.begin_request("thread/start", &params).map_err(rpc_error)?;
         let response: ThreadStartResult =
             serde_json::from_value(self.io.wait_reply(&request).await.map_err(rpc_error)?)
@@ -202,9 +203,30 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         if thread.is_empty() || thread.chars().any(char::is_control) {
             return Err(Error::Decode);
         }
+        self.record_tier(requested, response.service_tier.as_deref())?;
         self.thread = Some(thread);
         self.time_zone = options.time_zone.map(str::to_owned);
         Ok(())
+    }
+
+    /// The app server serves a tier the model or account cannot use as standard,
+    /// without an error. A faster request that comes back as another tier is kept
+    /// non-fatal and traced; an answer without the field says nothing.
+    fn record_tier(&mut self, requested: Option<&str>, effective: Option<&str>) -> Result<(), Error> {
+        let (Some(requested), Some(effective), Some(trace)) = (requested, effective, &mut self.setup_trace) else {
+            return Ok(());
+        };
+        if requested == effective {
+            return Ok(());
+        }
+        // A tier is a short lowercase name; anything else is reported only as its absence.
+        let effective = (effective.len() <= 32 && effective.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
+            .then_some(effective);
+        trace.record(
+            "call.service_tier_downgraded",
+            None,
+            json!({"requested": requested, "effective": effective}),
+        )
     }
 
     async fn negotiate(&mut self, options: &Options<'_>, offer: &str) -> Result<String, Error> {

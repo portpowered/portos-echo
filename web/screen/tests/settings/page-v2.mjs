@@ -42,7 +42,7 @@ export function v2Snapshot() {
                 web_search: "cached",
                 delegate_model: "synthetic-runner",
                 delegate_effort: "low",
-                delegate_fast: false,
+                delegate_speed: "standard",
             },
             agent: {
                 daily_request_cap: base.settings.agent.daily_request_cap,
@@ -247,8 +247,24 @@ test("settings V2 observes replacement without resending a successful save", asy
         await search.evaluate((node) => node === document.activeElement),
         true,
     );
-    const fast = page.getByRole("checkbox", { name: "Delegated fast mode" });
-    assert.equal(await fast.isChecked(), false);
+    const fast = page.getByRole("combobox", { name: "Delegated speed" });
+    assert.equal(await fast.inputValue(), "standard");
+    assert.deepEqual(
+        await fast
+            .locator("option")
+            .evaluateAll((options) =>
+                options.map((option) => [option.value, option.textContent]),
+            ),
+        [
+            ["standard", "Standard"],
+            ["fast", "Fast"],
+            ["ultrafast", "Ultrafast"],
+        ],
+    );
+    assert.equal(
+        await page.locator(".settings-hint").textContent(),
+        "Ultrafast needs GPT-6 Astra or GPT-6.1 Sol and costs more. Unsupported models run at standard.",
+    );
     const save = page.getByRole("button", {
         name: "Save settings",
         exact: true,
@@ -265,8 +281,8 @@ test("settings V2 observes replacement without resending a successful save", asy
     );
     const box = await fast.boundingBox();
     assert.ok(box.width >= 64 && box.height >= 64 && box.y + box.height <= 480);
-    await fast.press("Space");
-    assert.equal(await fast.isChecked(), true);
+    await fast.selectOption("ultrafast");
+    assert.equal(await fast.inputValue(), "ultrafast");
     await page.screenshot({
         path: "test-results/screenshots/settings-fast-on-960x480.png",
     });
@@ -277,7 +293,7 @@ test("settings V2 observes replacement without resending a successful save", asy
         "Saved. The bridge will restart after the current reply finishes.";
     await page.evaluate(() => {
         window.settingsV2Body.restart_pending = true;
-        window.settingsV2Body.settings.codex.delegate_fast = true;
+        window.settingsV2Body.settings.codex.delegate_speed = "ultrafast";
     });
     await page.clock.runFor(500);
     assert.equal(await status.textContent(), saved);
@@ -303,12 +319,12 @@ test("settings V2 observes replacement without resending a successful save", asy
     );
     await page.clock.runFor(1);
     assert.equal(await status.textContent(), "");
-    assert.equal(await fast.isChecked(), true);
+    assert.equal(await fast.inputValue(), "ultrafast");
     assert.deepEqual(
         JSON.parse(
             (await calls(page)).find(({ method }) => method === "PATCH").body,
         ),
-        { version: 2, settings: { codex: { delegate_fast: true } } },
+        { version: 2, settings: { codex: { delegate_speed: "ultrafast" } } },
     );
     assert.deepEqual(
         (await calls(page)).map(({ method }) => method),
@@ -316,17 +332,17 @@ test("settings V2 observes replacement without resending a successful save", asy
     );
 });
 
-test("settings V2 keeps an explicit fast-mode off edit after a failed save", async (t) => {
+test("settings V2 keeps an explicit standard-speed edit after a failed save", async (t) => {
     const data = v2Snapshot();
-    data.settings.codex.delegate_fast = true;
+    data.settings.codex.delegate_speed = "fast";
     const page = await open(t, data, 200, {
         context: { viewport: { width: 960, height: 600 } },
     });
     await section(page, "OpenAI").tap();
-    const fast = page.getByRole("checkbox", { name: "Delegated fast mode" });
-    assert.equal(await fast.isChecked(), true);
-    await fast.press("Space");
-    assert.equal(await fast.isChecked(), false);
+    const fast = page.getByRole("combobox", { name: "Delegated speed" });
+    assert.equal(await fast.inputValue(), "fast");
+    await fast.selectOption("standard");
+    assert.equal(await fast.inputValue(), "standard");
     const box = await fast.boundingBox();
     assert.ok(box.width >= 64 && box.height >= 64 && box.y + box.height <= 600);
     await page.screenshot({
@@ -341,7 +357,7 @@ test("settings V2 keeps an explicit fast-mode off edit after a failed save", asy
     await response(page, { version: 2, message: error }, 500);
     await save.tap();
     assert.equal(await status.textContent(), error);
-    assert.equal(await fast.isChecked(), false);
+    assert.equal(await fast.inputValue(), "standard");
     await response(page, { version: 2, restart_pending: true });
     await save.tap();
     assert.equal(
@@ -354,20 +370,24 @@ test("settings V2 keeps an explicit fast-mode off edit after a failed save", asy
             .map(({ body }) => JSON.parse(body)),
         Array.from({ length: 2 }, () => ({
             version: 2,
-            settings: { codex: { delegate_fast: false } },
+            settings: { codex: { delegate_speed: "standard" } },
         })),
     );
 });
 
 test("settings V2 refuses invalid and unauthorized replies without falling back", async (t) => {
     const missingFast = v2Snapshot();
-    delete missingFast.settings.codex.delegate_fast;
+    delete missingFast.settings.codex.delegate_speed;
     const invalidFast = v2Snapshot();
-    invalidFast.settings.codex.delegate_fast = "false";
+    invalidFast.settings.codex.delegate_speed = "priority";
+    const legacyFast = v2Snapshot();
+    delete legacyFast.settings.codex.delegate_speed;
+    legacyFast.settings.codex.delegate_fast = false;
     for (const [status, body, message] of [
         [200, snapshot, "Settings response could not be read"],
         [200, missingFast, "Settings response could not be read"],
         [200, invalidFast, "Settings response could not be read"],
+        [200, legacyFast, "Settings response could not be read"],
         [
             200,
             { ...v2Snapshot(), extra: true },
@@ -399,7 +419,7 @@ test("settings V2 refuses invalid and unauthorized replies without falling back"
 test("settings V2 leaves a failed replacement pending when Settings reopens", async (t) => {
     const data = v2Snapshot();
     data.restart_pending = true;
-    data.settings.codex.delegate_fast = true;
+    data.settings.codex.delegate_speed = "fast";
     data.warnings = ["Could not restart bridge; saved settings remain pending"];
     const page = await open(t, data);
     assert.equal(

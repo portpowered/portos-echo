@@ -1,5 +1,7 @@
 //! The screen's sparse, non-secret overlay. Never rewrites the operator's base.
-use crate::{AgentTools, BridgeConfig, ConfigError, McpAuth, SettingsEndpoint, WebSearch, config_decode::Fields};
+use crate::{
+    AgentTools, BridgeConfig, ConfigError, DelegateSpeed, McpAuth, SettingsEndpoint, WebSearch, config_decode::Fields,
+};
 #[path = "config_settings/settings_muse.rs"]
 mod settings_muse;
 pub use settings_muse::SettingsMuse;
@@ -28,7 +30,7 @@ pub struct SettingsOptions {
     pub web_search: Option<WebSearch>,
     pub delegate_model: Option<String>,
     pub delegate_effort: Option<String>,
-    pub delegate_fast: Option<bool>,
+    pub delegate_speed: Option<DelegateSpeed>,
     pub agent_tools: Option<Vec<String>>,
     pub scopes: Option<Vec<String>>,
     pub server: Option<SettingsServerTools>,
@@ -143,7 +145,9 @@ impl SettingsOverlay {
             result.options.web_search = codex.optional("web_search")?;
             result.options.delegate_model = codex.optional("delegate_model")?;
             result.options.delegate_effort = codex.optional("delegate_effort")?;
-            result.options.delegate_fast = codex.optional("delegate_fast")?;
+            // A legacy stored `delegate_fast` still loads; the next save writes `delegate_speed`.
+            result.options.delegate_speed =
+                DelegateSpeed::resolve(codex.optional("delegate_speed")?, codex.optional("delegate_fast")?)?;
             codex.finish()?;
         }
         if let Some(mut agent) = fields.section("agent")? {
@@ -329,8 +333,8 @@ impl SettingsOptions {
         if let Some(effort) = &self.delegate_effort {
             config.codex.delegate_effort = nonempty_override(effort);
         }
-        if let Some(fast) = self.delegate_fast {
-            config.codex.delegate_fast = fast;
+        if let Some(speed) = self.delegate_speed {
+            config.codex.delegate_speed = speed;
         }
         if let Some(groups) = &self.agent_tools {
             let home = config
@@ -369,7 +373,7 @@ impl SettingsOptions {
             web_search: patch.web_search.or(self.web_search),
             delegate_model: patch.delegate_model.clone().or_else(|| self.delegate_model.clone()),
             delegate_effort: patch.delegate_effort.clone().or_else(|| self.delegate_effort.clone()),
-            delegate_fast: patch.delegate_fast.or(self.delegate_fast),
+            delegate_speed: patch.delegate_speed.or(self.delegate_speed),
             agent_tools: patch.agent_tools.clone().or_else(|| self.agent_tools.clone()),
             scopes: patch.scopes.clone().or_else(|| self.scopes.clone()),
             server: patch.server.clone().or_else(|| self.server.clone()),
@@ -385,7 +389,11 @@ impl SettingsOptions {
         leaf("codex", "web_search", self.web_search.map(|mode| mode.as_str().into()));
         leaf("codex", "delegate_model", self.delegate_model.clone().map(Into::into));
         leaf("codex", "delegate_effort", self.delegate_effort.clone().map(Into::into));
-        leaf("codex", "delegate_fast", self.delegate_fast.map(Into::into));
+        leaf(
+            "codex",
+            "delegate_speed",
+            self.delegate_speed.map(|speed| speed.as_str().into()),
+        );
         leaf("home", "agent_tools", self.agent_tools.clone().map(toml_array));
         leaf("mcp", "scopes", self.scopes.clone().map(toml_array));
         if let Some(server) = &self.server {

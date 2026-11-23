@@ -136,6 +136,7 @@ function options(value: unknown, choices: readonly string[]) {
 }
 
 export const searchModes = ["live", "cached", "disabled"] as const;
+export const speeds = ["standard", "fast", "ultrafast"] as const;
 export const groups = ["notes", "prompts"] as const;
 
 function decodeV2(value: unknown): SnapshotV2 {
@@ -149,7 +150,7 @@ function decodeV2(value: unknown): SnapshotV2 {
         "voice",
         "delegate_model",
         "delegate_effort",
-        "delegate_fast",
+        "delegate_speed",
         "web_search",
     ]);
     assertShape(agent, ["daily_request_cap"]);
@@ -158,7 +159,7 @@ function decodeV2(value: unknown): SnapshotV2 {
         data.version !== 2 ||
         typeof codex.delegate_model !== "string" ||
         typeof codex.delegate_effort !== "string" ||
-        typeof codex.delegate_fast !== "boolean" ||
+        !speeds.some((speed) => speed === codex.delegate_speed) ||
         !searchModes.some((mode) => mode === codex.web_search)
     )
         invalid();

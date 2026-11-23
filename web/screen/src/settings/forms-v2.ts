@@ -1,4 +1,4 @@
-import { groups, searchModes } from "./api-v2";
+import { groups, searchModes, speeds } from "./api-v2";
 import { actions, element, field } from "./forms";
 import type { Save, Track } from "./forms";
 import type { PatchV2, SnapshotV2 } from "./api";
@@ -32,6 +32,14 @@ function choices<T extends string>(
     };
 }
 
+const speedLabels = {
+    standard: "Standard",
+    fast: "Fast",
+    ultrafast: "Ultrafast",
+} as const;
+const SPEED_HINT =
+    "Ultrafast needs GPT-6 Astra or GPT-6.1 Sol and costs more. Unsupported models run at standard.";
+
 export function openAIOptions(settings: SnapshotV2["settings"]) {
     const { codex, home } = settings;
     const search = element("select");
@@ -43,9 +51,15 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
     const effort = element("input");
     effort.value = codex.delegate_effort;
     effort.placeholder = "Pin default";
-    const fast = element("input");
-    fast.type = "checkbox";
-    fast.checked = codex.delegate_fast;
+    const speed = element("select");
+    for (const tier of speeds) {
+        const option = element("option", speedLabels[tier]);
+        option.value = tier;
+        speed.append(option);
+    }
+    speed.value = codex.delegate_speed;
+    const speedHint = element("p", SPEED_HINT);
+    speedHint.className = "settings-hint";
     const local =
         home && choices("Local agent tools", groups, home.agent_tools);
     return {
@@ -53,7 +67,8 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
             field("Web search", search),
             field("Delegated model", model),
             field("Delegated reasoning effort", effort),
-            field("Delegated fast mode", fast),
+            field("Delegated speed", speed),
+            speedHint,
             local?.fieldset ?? element("p", "Local agent tools unavailable"),
         ],
         addPatch(patch: PatchV2) {
@@ -64,8 +79,9 @@ export function openAIOptions(settings: SnapshotV2["settings"]) {
                 (patch.codex ??= {}).delegate_model = model.value;
             if (effort.value !== codex.delegate_effort)
                 (patch.codex ??= {}).delegate_effort = effort.value;
-            if (fast.checked !== codex.delegate_fast)
-                (patch.codex ??= {}).delegate_fast = fast.checked;
+            const tier = speeds.find((tier) => tier === speed.value);
+            if (tier && tier !== codex.delegate_speed)
+                (patch.codex ??= {}).delegate_speed = tier;
             if (local?.changed())
                 patch.home = { agent_tools: local.selected() };
         },

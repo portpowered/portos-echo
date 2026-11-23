@@ -2,8 +2,11 @@
 use super::settings_v1::{DailyCapV1, PromptTextsV1, VoicePatchV1, VoiceValuesV1, present};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
+#[path = "screen_settings_codex.rs"]
+mod codex;
 #[path = "screen_settings_muse.rs"]
 mod muse;
+pub use codex::{CodexPatchV2, CodexValuesV2, DelegateSpeedV2};
 pub use muse::{
     MusePatchV2, MuseProbeReasonV2, MuseProbeRequestV2, MuseProbeResultV2, MuseReachabilityV2, MuseStatusV2,
 };
@@ -171,27 +174,6 @@ impl PortosToolV2 {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("minProperties" = 1))]
-pub struct CodexPatchV2 {
-    #[schemars(with = "String")]
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
-    pub voice: Option<String>,
-    #[schemars(with = "WebSearchV2")]
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
-    pub web_search: Option<WebSearchV2>,
-    #[schemars(with = "String")]
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
-    pub delegate_model: Option<String>,
-    #[schemars(with = "String")]
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
-    pub delegate_effort: Option<String>,
-    #[schemars(with = "bool")]
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
-    pub delegate_fast: Option<bool>,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(extend("minProperties" = 1))]
 pub struct AgentPatchV2 {
     #[schemars(with = "DailyCapV1")]
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
@@ -300,16 +282,6 @@ fn distinct<T: PartialEq>(items: &[T]) -> bool {
 pub struct SettingsPatchV2 {
     pub version: SettingsVersionV2,
     pub settings: SettingsFieldsV2,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct CodexValuesV2 {
-    pub voice: String,
-    pub web_search: WebSearchV2,
-    pub delegate_model: String,
-    pub delegate_effort: String,
-    pub delegate_fast: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

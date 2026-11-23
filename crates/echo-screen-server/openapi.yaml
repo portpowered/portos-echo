@@ -231,7 +231,7 @@ paths:
           in: query
           required: false
           schema: { type: boolean, default: false }
-      description: Accepted non-secret settings plus a passive Port OS projection and pending restart state. With include_muse=true, includes a passive Muse status projection. settings.codex.delegate_fast is the accepted runner fast-mode boolean. Success is no-store.
+      description: Accepted non-secret settings plus a passive Port OS projection and pending restart state. With include_muse=true, includes a passive Muse status projection. settings.codex.delegate_speed is the accepted runner tier: standard, fast or ultrafast. Success is no-store.
       responses:
         '200':
           description: Version 2 settings snapshot without the retired delegated-task limits
@@ -243,7 +243,7 @@ paths:
         '503': { description: Settings host absent, stopping or saturated; empty body }
     patch:
       security: [{ pairingToken: [] }]
-      description: Sparse save with auth checked before decoding and again at commit. Successful permission withdrawals apply before the receipt. Uses the existing atomic 0600 settings.toml writer and idle restart gate for effective changes. Legacy agent.max_tool_calls and agent.task_deadline_seconds are accepted and ignored. A patch containing only those fields returns the normal save receipt without writing settings.toml. An optional settings.codex.delegate_fast boolean selects runner fast mode at that boundary. An optional settings.muse section saves a configured origin and private inputs or clears Muse.
+      description: Sparse save with auth checked before decoding and again at commit. Successful permission withdrawals apply before the receipt. Uses the existing atomic 0600 settings.toml writer and idle restart gate for effective changes. Legacy agent.max_tool_calls and agent.task_deadline_seconds are accepted and ignored. A patch containing only those fields returns the normal save receipt without writing settings.toml. An optional settings.codex.delegate_speed (standard, fast or ultrafast) selects the runner tier at that boundary. The deprecated settings.codex.delegate_fast boolean is still accepted (true is fast, false is standard); naming a different tier in both is a 422. An optional settings.muse section saves a configured origin and private inputs or clears Muse.
       requestBody:
         required: true
         content:

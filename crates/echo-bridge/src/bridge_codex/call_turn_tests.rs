@@ -13,6 +13,7 @@ async fn pending<T>(future: std::pin::Pin<&mut impl Future<Output = T>>) {
     .await;
 }
 
+mod service_tier_tests;
 mod trace_tests;
 
 #[tokio::test(start_paused = true)]
@@ -329,62 +330,4 @@ async fn voice_listen_projects_each_current_thread_handoff_once_whatever_the_use
         stop(&mut server).await;
     };
     tokio::join!(client, remote);
-}
-
-#[tokio::test(start_paused = true)]
-async fn runner_fast_mode_does_not_change_live_request() {
-    let ((mut standard, live_standard), (mut fast, live_fast)) =
-        tokio::join!(fast_mode_requests(false), fast_mode_requests(true));
-    assert_eq!(
-        standard["params"].as_object_mut().unwrap().remove("serviceTier"),
-        Some(Value::Null)
-    );
-    assert_eq!(
-        fast["params"].as_object_mut().unwrap().remove("serviceTier"),
-        Some(json!("priority"))
-    );
-    assert_eq!(standard, fast);
-    assert_eq!(live_standard, live_fast);
-    assert_eq!(live_fast["method"], "thread/realtime/start");
-    writeln!(
-        std::io::stdout(),
-        "Fixed-input signaling: runner priority versus present null, complete Live request equal"
-    )
-    .unwrap();
-}
-
-async fn fast_mode_requests(fast: bool) -> (Value, Value) {
-    let (mut io, mut server) = fixture();
-    let client = async {
-        let options = Options {
-            fast,
-            effort: Some("low"),
-            ..options()
-        };
-        Call::new(&mut io)
-            .start(&options, vec![], "fixture-offer", deadline())
-            .await
-            .unwrap()
-    };
-    let peer = async {
-        let runner = read(&mut server).await;
-        assert_eq!(runner["method"], "thread/start");
-        write(
-            &mut server,
-            json!({"id":runner["id"],"result":{"thread":{"id":"fixture-thread"}}}),
-        )
-        .await;
-        let live = read(&mut server).await;
-        write(&mut server, json!({"id":live["id"],"result":{}})).await;
-        notification(
-            &mut server,
-            "thread/realtime/sdp",
-            json!({"threadId":"fixture-thread","sdp":"fixture-answer"}),
-        )
-        .await;
-        (runner, live)
-    };
-    let (answer, requests) = tokio::join!(client, peer);
-    assert_eq!(answer, "fixture-answer");
-    requests
 }

@@ -24,7 +24,7 @@ pub(super) fn options() -> Options<'static> {
         prompt: "Live prompt",
         model: Some("fixture-model"),
         effort: None,
-        fast: false,
+        speed: echo_config::DelegateSpeed::Standard,
         time_zone: None,
         web_search: echo_config::WebSearch::default(),
     }
@@ -347,7 +347,7 @@ async fn call_start_deadline_includes_sdp_wait_and_prevents_generation_reuse() {
             call.start(
                 &Options {
                     effort: Some("low"),
-                    fast: false,
+                    speed: echo_config::DelegateSpeed::Standard,
                     ..options()
                 },
                 vec![],
