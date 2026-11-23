@@ -223,11 +223,26 @@ fn pacer_playout_restarts_a_dry_speaker_immediately_with_a_full_cushion() {
 }
 
 #[test]
+fn pacer_playout_primes_the_native_cushion_on_first_arrival() {
+    let mut world = world();
+    open(&mut world, 200, true);
+    step(&mut world, PacerEvent::PeerFrameArrived { audible: true });
+    push(&mut world, Box::new(frame(1)));
+    assert_eq!(world.pacer.target(), ms(300));
+    assert!(offer(&mut world).take_frame().is_none());
+    assert_eq!(Pacer::next_deadline(&world.pacer), Some(ms(300)));
+    assert_eq!(release(&mut world), frame(1));
+    assert_eq!(world.clock.now().monotonic, ms(300));
+}
+
+#[test]
 fn pacer_playout_retargets_a_lead_bounded_floor_after_late_arrival() {
     let mut world = world();
     open(&mut world, 60, true);
-    // A smooth arrival keeps the lead-bounded floor. 160 ms of lateness
-    // plus the 40 ms margin then lifts the target to 200 ms.
+    step(&mut world, PacerEvent::PeerFrameArrived { audible: false });
+    world.clock.advance(Duration::from_secs(180));
+    // After the startup estimate decays, a smooth arrival keeps the lead-bounded
+    // floor. 160 ms of lateness plus the 40 ms margin lifts the target to 200 ms.
     step(&mut world, PacerEvent::PeerFrameArrived { audible: false });
     assert_eq!(world.pacer.target(), ms(60));
     world.clock.advance(ms(180));

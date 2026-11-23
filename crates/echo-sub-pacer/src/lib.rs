@@ -135,11 +135,6 @@ impl State {
         self.lips.as_mut().map_or_else(LipStats::default, Lips::take_stats)
     }
 
-    /// Seed a new native call with the cushion measured on the device.
-    pub fn expect_jitter(&mut self) {
-        self.jitter = Jitter::expecting(EXPECTED_MS);
-    }
-
     /// A discarded frame breaks the arrival chain and retains learned jitter.
     pub fn break_arrival_chain(&mut self) {
         self.jitter.rest();
@@ -243,6 +238,8 @@ impl Subsystem for Pacer {
                 state.lead_ms = *lead_ms;
                 state.adaptive = *adaptive;
                 state.close_run();
+                // The first arrival starts with the cushion measured on the Echo.
+                state.jitter = Jitter::expecting(EXPECTED_MS);
                 state.input = Input::Open;
             }
             PacerEvent::ReplyOpened => state.reset_reply(),

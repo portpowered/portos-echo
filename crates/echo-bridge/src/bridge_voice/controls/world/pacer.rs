@@ -1,6 +1,6 @@
 use super::Controller;
 use crate::bridge_runtime::bridge_pacing::reply_lips::Lips;
-use echo_core_api::{Clock, Command, Commands, Event, PacerCommand, PacerCommands, PacerEvent, Subsystem};
+use echo_core_api::{Command, Commands, Event, PacerCommand, PacerCommands, PacerEvent, Subsystem};
 use echo_sub_pacer::{LipStats, Pacer, State};
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::time::Instant;
@@ -37,10 +37,6 @@ impl PacerPort {
             .unwrap_or_else(|_| Controller::new());
         let port = Self(world);
         port.send(PacerEvent::RunOpened { lead_ms, adaptive });
-        // The native call starts with the cushion measured on the Echo.
-        // Component fixtures supply their own deterministic arrival schedules.
-        #[cfg(not(test))]
-        port.expect_jitter();
         port
     }
 
@@ -65,10 +61,6 @@ impl PacerPort {
         read(&self.0.state().world.pacer)
     }
 
-    pub(crate) fn expect_jitter(&self) {
-        self.0.state().world.pacer.expect_jitter();
-    }
-
     pub(crate) fn discarded(&self) {
         self.0.state().world.pacer.break_arrival_chain();
     }
@@ -89,9 +81,8 @@ impl PacerPort {
 
     pub(crate) fn mouth_change(&self) -> Option<bool> {
         let mut state = self.0.state();
-        let now = state.world.clock.now();
         let mut out = Commands::default();
-        Pacer::on_tick(&mut state.world.pacer, now, &mut out);
+        state.world.tick_pacer(&mut out);
         self.0.check_step(&mut state);
         match out.take_pacer().notification() {
             Some(Command::Pacer(PacerCommand::MouthChanged(open))) => Some(open),

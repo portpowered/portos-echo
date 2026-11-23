@@ -317,11 +317,6 @@ impl ReplyAudio {
     }
 
     #[cfg(test)]
-    pub(crate) fn expect_jitter(&self) {
-        self.port.expect_jitter();
-    }
-
-    #[cfg(test)]
     pub(crate) fn push_pcm(&mut self, frame: &ReplyFrame) {
         **self.scratch.as_mut().unwrap() = *frame;
         push_frame(&self.port, &mut self.scratch);
