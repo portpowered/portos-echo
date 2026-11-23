@@ -271,6 +271,9 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
         "provider_wire":provider::valid(&observed), "refreshes":0, "provider":observed,
         "frames":state.frames.lock().ok().map(|f| f.clone()), "trace":state.trace.records,
         "reply_pcm":state.playback, "playout_clock":state.clock});
+    let captured = std::fs::copy(&state.trace_path, root.join("trace-golden.jsonl"))
+        .and_then(|_| std::fs::rename(output.join("trace-inputs.jsonl"), root.join("trace-inputs.jsonl")))
+        .map_err(|_| "m2: cannot capture trace witness".to_owned());
     let cleanup = if state.trace_path.is_file() {
         std::fs::remove_file(&state.trace_path)
             .and_then(|()| std::fs::remove_dir(&output))
@@ -283,6 +286,7 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
     let result = result
         .and(closed.map(|_| ()))
         .and(cleanup)
+        .and(captured)
         .and_then(|()| oracle::check(&measured));
     (measured, result)
 }

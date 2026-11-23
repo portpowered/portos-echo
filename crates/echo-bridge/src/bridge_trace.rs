@@ -61,6 +61,7 @@ pub struct Trace {
     mode: &'static str,
     active_run: Arc<Mutex<Option<String>>>,
     payloads: bool,
+    witness: Option<std::path::PathBuf>,
 }
 
 impl Trace {
@@ -77,6 +78,8 @@ impl Trace {
             mode,
             active_run: Arc::default(),
             payloads: true,
+            witness: (path.file_name().and_then(|name| name.to_str()) == Some("bridge.private.jsonl"))
+                .then(|| path.with_file_name("trace-inputs.jsonl")),
         })
     }
 
@@ -102,12 +105,8 @@ impl Trace {
         let mut writer = self.writer.lock().map_err(|_| Error::Trace)?;
         let mut entry = Map::new();
         entry.insert("event".into(), event.into());
-        entry.insert(
-            "elapsed_ms".into(),
-            u64::try_from(self.started.elapsed().as_millis())
-                .unwrap_or(u64::MAX)
-                .into(),
-        );
+        let elapsed_ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        entry.insert("elapsed_ms".into(), elapsed_ms.into());
         entry.insert("provider_auth_mode".into(), self.mode.into());
         if let Some(run) = run {
             entry.insert("run_id".into(), run.into());
@@ -118,6 +117,13 @@ impl Trace {
                     &mut fields,
                     self.payloads && !crate::bridge_endpoint::remote_start::remote(),
                 )?;
+            }
+            if let Some(path) = &self.witness {
+                let mut output = std::fs::OpenOptions::new().create(true).append(true).open(path)
+                    .map_err(|_| Error::Trace)?;
+                let input = serde_json::json!({"event":event,"elapsed_ms":elapsed_ms,"mode":self.mode,
+                    "run":run,"fields":fields});
+                writeln!(output, "{input}").map_err(|_| Error::Trace)?;
             }
             entry.extend(fields);
         }
@@ -214,6 +220,7 @@ mod bridge_spine_tests {
             mode: "chatgpt",
             active_run: Arc::default(),
             payloads: true,
+            witness: None,
         };
         let error = trace.record("run.started", Some("run-1"), json!({})).unwrap_err();
         assert_eq!(error, Error::Trace);
