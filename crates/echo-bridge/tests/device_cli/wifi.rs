@@ -41,7 +41,7 @@ async fn t3_device_wifi_and_legacy_wyoming_run_concurrently() -> Result {
     )
     .await?;
     let client = reqwest::Client::builder().no_proxy().build()?;
-    let origin = format!("http://{}", screen.bound_addr);
+    let origin = format!("http://127.0.0.1:{}", screen.bound_addr.port());
     for (op, response) in [
         ("status", json!({"ssid":"Fixture A","reachable":true})),
         (
@@ -93,7 +93,7 @@ async fn t3_device_wifi_busy_and_disconnected_client_reconcile_once() -> Result 
         Some(relay(Some(&path))),
     )
     .await?;
-    let origin = format!("http://{}", screen.bound_addr);
+    let origin = format!("http://127.0.0.1:{}", screen.bound_addr.port());
     let client = reqwest::Client::builder().no_proxy().build()?;
     let input = ["incorrect", "gate"].join("-");
     let join = tokio::spawn(request(
