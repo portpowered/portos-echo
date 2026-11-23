@@ -4,20 +4,25 @@ on:
 permissions:
   contents: read
 jobs:
-  paired:
+  screen-schema:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 6e13e7661d01cc48bf79a4135741051d3a9776ac
           persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: test-sim-suites
-          sim: 'true'
-      - name: Paired Relink acceptance
+      - name: Regenerate screen contracts
         run: |
-          git rev-parse HEAD
-          make sim-prereqs
-          cargo nextest run --locked -p echo-bridge --test bridge_t3 --run-ignored only             --config-file .github/nextest.toml --profile ci --success-output immediate --no-fail-fast             -E 'test(t3_bridge_screen_signin) | test(t3_settings_account_changes_reuse_the_credential_owners)'
+          UPDATE_SCHEMAS=1 cargo test --locked -p echo-screen-contract --test screen_schema schema_snapshots -- --exact
+          cd web/screen
+          npm ci --offline=false
+          npm run generate:schema
+          npm run check:schema
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: bridge-screen-signin-schemas
+          path: |
+            schemas/screen/ui_state.json
+            schemas/screen/ui_action.json
+            schemas/screen/screen_frame.json
+            web/screen/src/model.ts

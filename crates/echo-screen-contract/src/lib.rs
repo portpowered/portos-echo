@@ -52,9 +52,13 @@ pub enum UiState {
     },
     /// Failure presentation, optionally offering relinking.
     Error { message: String, relink: bool },
-    /// An explicit OpenAI recovery is available or preparing a challenge.
-    OpenAiRelink { message: String, starting: bool, muted: bool },
-    /// The current ChatGPT device-code challenge.
+    /// Sign-in is available or preparing a challenge.
+    OpenAiRelink {
+        message: String,
+        starting: bool,
+        muted: bool,
+    },
+    /// The current device-code challenge.
     OpenAiSignin {
         attempt_id: String,
         user_code: String,
