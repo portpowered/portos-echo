@@ -3,6 +3,8 @@ use std::{ffi::OsString, io::Write, process::ExitCode};
 
 #[path = "boot/mod.rs"]
 mod boot;
+#[path = "install/mod.rs"]
+mod install;
 
 fn main() -> ExitCode {
     let mut args = std::env::args_os();
@@ -13,6 +15,7 @@ fn main() -> ExitCode {
     match args.peek().and_then(|arg| arg.to_str()) {
         Some("device") => return device(args.skip(1)),
         Some("boot") => return boot::dispatch(args.skip(1)),
+        Some("install") => return install::dispatch(args.skip(1)),
         #[cfg(any(target_os = "android", target_os = "linux"))]
         Some("__boot-launch") if cfg!(target_os = "android") => return boot::launch(args.skip(1)),
         Some("notices") => {
