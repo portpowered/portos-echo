@@ -308,7 +308,10 @@ mod tests {
         assert!(barge.pending());
         let due = start + FRAME * 5 + BARGE_QUIET;
         assert_eq!(barge.due(start, false), Some(due));
-        assert_eq!(barge.fire(due - Duration::from_millis(1), false), None);
+        assert_eq!(
+            barge.fire(due.checked_sub(Duration::from_millis(1)).unwrap(), false),
+            None
+        );
         assert_eq!(barge.fire(due, false), Some(BargeTrigger::SpeechStarted));
         assert_eq!((barge.due(due, false), barge.fire(due, false)), (None, None));
         assert_eq!(
@@ -323,7 +326,7 @@ mod tests {
         let start = Duration::ZERO;
         let mut barge = Barge::default();
         barge.arm(start, BargeTrigger::UserTranscript);
-        let last = start + BARGE_WINDOW - FRAME;
+        let last = (start + BARGE_WINDOW).checked_sub(FRAME).unwrap();
         barge.heard(last, true);
         barge.heard(start + BARGE_WINDOW, false);
         assert_eq!(
