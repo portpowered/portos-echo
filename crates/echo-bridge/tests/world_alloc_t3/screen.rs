@@ -29,11 +29,14 @@ impl Screen {
             .flush(tokio::time::Instant::now() + Duration::from_secs(1))
             .await
             .unwrap();
+        let mut events_url = reqwest::Url::parse("http://127.0.0.1/events").unwrap();
+        events_url.set_port(Some(server.bound_addr.port())).unwrap();
         let response = reqwest::Client::builder()
             .no_proxy()
             .build()
             .unwrap()
-            .get(format!("http://{}/events?token={TOKEN}&mouth=1", server.bound_addr))
+            .get(events_url)
+            .query(&[("token", TOKEN), ("mouth", "1")])
             .send()
             .await
             .unwrap();
