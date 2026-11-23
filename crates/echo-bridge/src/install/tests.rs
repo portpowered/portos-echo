@@ -118,7 +118,12 @@ impl Fixture {
     }
 
     fn call(&mut self, reboot: bool) -> Result<&'static str> {
+        self.call_staged(reboot, false)
+    }
+
+    fn call_staged(&mut self, reboot: bool, host_stage: bool) -> Result<&'static str> {
         let input = Install {
+            host_stage,
             magiskpolicy: "/data/local/stage/magiskpolicy".into(),
             stage: Some("/data/local/stage".into()),
             reboot,
@@ -359,6 +364,26 @@ fn t3_a2_device_install_bare_root_prepares_confined_wake() {
         b"verified bridge"
     );
     check_metadata(&fixture);
+}
+
+#[test]
+fn t3_a2_device_install_stages_verified_host_candidate_under_lock_and_restores_next() {
+    let mut fixture = Fixture::new(false);
+    let next = fixture.path(format!("{START}/bin/next"));
+    let candidate = fixture.path("data/local/stage/bin/echo-bridge");
+    fs::rename(&next, &candidate).unwrap();
+    let before = snapshot(fixture.root.path());
+    fixture.host.fail = Some(Step::InitHook);
+    assert_eq!(fixture.call_staged(false, true), Err("seeded install failure"));
+    assert_eq!(snapshot(fixture.root.path()), before);
+    fixture.host.fail = None;
+    assert_eq!(fixture.call_staged(false, true), Ok("installed"));
+    assert!(!next.exists());
+    assert_eq!(
+        fs::read(fixture.path(format!("{START}/bin/current"))).unwrap(),
+        b"verified bridge"
+    );
+    assert_eq!(fs::read(&candidate).unwrap(), b"verified bridge");
 }
 
 #[test]

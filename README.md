@@ -160,6 +160,13 @@ Afterwards, `echo-setup status --json` shows what is installed and `doctor` runs
 `update --version VERSION`, `rollback` and `uninstall` (add `--purge` to delete credentials too) maintain the
 installation. Settings such as voice, listening window and daily cap are on the Echo screen under **Settings**.
 
+**A2 rooted Athena path.** A release built with the A2 installer can use
+`echo-setup install --install-path a2` on an already rooted Echo Show 8 (2nd gen) with root adb.
+The installer verifies the release and downloads the pinned Magisk policy tool separately, then installs the A2
+boot hook and guides account linking and wake confirmation after reboot. Fresh installs continue to use the
+fork-managed path by default before A2 device validation. Use `--install-path legacy` to select that path
+explicitly. Running `echo-setup install` again resumes a verified A2 installation.
+
 ## 3. Sign in to ChatGPT
 
 The voice conversation and the delegated agent share one ChatGPT sign-in, held by the Codex app server on the Echo.

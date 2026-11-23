@@ -6,12 +6,13 @@ use std::path::PathBuf;
 
 pub const VERSION: &str = env!("ECHO_SETUP_RELEASE_VERSION");
 pub const HELP: &str = "echo-setup --help | --version
-echo-setup install [--version VERSION | --from-dir DIR] [--config FILE [--force]] [--openai-api-key-file FILE] [OPTIONS]
+echo-setup install [--install-path a2|legacy] [--version VERSION | --from-dir DIR] [--config FILE [--force]] [--openai-api-key-file FILE] [OPTIONS]
 echo-setup update [--version VERSION | --from-dir DIR] [--config FILE] [--openai-api-key-file FILE] [OPTIONS]
 echo-setup status|rollback|doctor [OPTIONS]
 echo-setup uninstall [--purge] [OPTIONS]
 OPTIONS: --adb PATH --serial DEVICE --json --timeout-seconds N --release-base URL
 Default release matches this executable; never latest. Versions omit leading v.
+A2 requires an already rooted Athena. Fresh installs default to legacy unless --install-path a2 is given.
 Install --force requires a readable --config FILE and replaces only the base config.
 --openai-api-key-file writes the key to live.credential_file and skips ChatGPT sign-in;
 the installed config must set [live] mode = api_key. The key is never printed.
@@ -28,9 +29,16 @@ Doctor: read-only checks, at most 15 seconds; clock within 300 seconds of host,
 256 MiB free on data, TCP 443 egress as nobody (device nc required).
 ";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum InstallPath {
+    A2,
+    Legacy,
+}
+
 pub struct Options {
     pub command: String,
-    pub version: String,
+    pub(crate) requested_version: Option<String>,
+    pub install_path: Option<InstallPath>,
     pub from_dir: Option<PathBuf>,
     pub config: Option<PathBuf>,
     pub force: bool,
@@ -87,7 +95,8 @@ impl Options {
     fn defaults(command: String) -> Self {
         Self {
             command,
-            version: VERSION.to_owned(),
+            requested_version: None,
+            install_path: None,
             from_dir: None,
             config: None,
             force: false,
@@ -111,7 +120,16 @@ impl Options {
             "--config" => self.config = Some(value.into()),
             "--openai-api-key-file" => self.openai_api_key_file = Some(value.into()),
             "--from-dir" => self.from_dir = Some(value.into()),
-            "--version" => self.version = version(value.to_str().ok_or(Failure("usage"))?)?,
+            "--version" => {
+                self.requested_version = Some(version(value.to_str().ok_or(Failure("usage"))?)?);
+            }
+            "--install-path" => {
+                self.install_path = match value.to_str() {
+                    Some("a2") => Some(InstallPath::A2),
+                    Some("legacy") => Some(InstallPath::Legacy),
+                    _ => return Err(Failure("usage")),
+                };
+            }
             "--release-base" => self.release_base = value.into_string().map_err(|_| Failure("usage"))?,
             "--timeout-seconds" => {
                 self.timeout_seconds = value
@@ -125,9 +143,14 @@ impl Options {
         Ok(())
     }
 
+    pub(crate) fn version(&self) -> &str {
+        self.requested_version.as_deref().unwrap_or(VERSION)
+    }
+
     fn validate(&self, seen: &BTreeSet<String>) -> Result<()> {
         let install = matches!(self.command.as_str(), "install" | "update");
         if (self.purge && self.command != "uninstall")
+            || (self.install_path.is_some() && self.command != "install")
             || (self.force && (self.command != "install" || self.config.is_none()))
             || (!install
                 && [
@@ -165,9 +188,9 @@ mod tests {
 
     #[test]
     fn default_is_embedded_and_version_normalizes_once() -> Result<()> {
-        assert_eq!(parse(&["install"])?.version, VERSION);
+        assert_eq!(parse(&["install"])?.version(), VERSION);
         assert!(!parse(&["install"])?.force);
-        assert_eq!(parse(&["install", "--version", "v1.2.3-rc.1"])?.version, "1.2.3-rc.1");
+        assert_eq!(parse(&["install", "--version", "v1.2.3-rc.1"])?.version(), "1.2.3-rc.1");
         for invalid in ["vv1.2.3", "../1.2.3", "1.2", "01.2.3", "1.2.3-", "1.2.3-01", "1.2.3\n"] {
             assert_eq!(version(invalid), Err(Failure("invalid_version")));
         }

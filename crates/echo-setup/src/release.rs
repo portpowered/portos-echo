@@ -5,6 +5,7 @@ use reqwest::{Client, Url};
 use std::time::Duration;
 
 pub struct Release {
+    pub version: String,
     pub bytes: Vec<u8>,
     pub digest: String,
 }
@@ -25,7 +26,7 @@ fn allowed(url: &Url, local: bool) -> bool {
         && (url.scheme() == "https" || (local && url.scheme() == "http" && url.host_str() == Some("127.0.0.1")))
 }
 
-async fn download(client: &Client, mut url: Url, local: bool, limit: usize) -> Result<Vec<u8>> {
+pub(crate) async fn download(client: &Client, mut url: Url, local: bool, limit: usize) -> Result<Vec<u8>> {
     for _ in 0..=10 {
         if !allowed(&url, local) {
             return Err(Failure("https_required"));
@@ -88,6 +89,7 @@ pub async fn fetch(base: &str, version: &str) -> Result<Release> {
         return Err(Failure("checksum_mismatch"));
     }
     Ok(Release {
+        version,
         bytes,
         digest: expected,
     })

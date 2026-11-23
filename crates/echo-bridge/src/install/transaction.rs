@@ -174,17 +174,37 @@ pub(super) fn run(files: &Files<'_>, ops: &mut impl System, input: &Install) -> 
         }
     }
     if files::exists(&paths.work)? {
-        return verify_active(files, &paths);
+        return read_active(files, &paths).map(|_| "unchanged");
     }
     let stage = input.stage.as_ref().ok_or("fresh install requires --stage")?;
     let tool = files.path(input.magiskpolicy.to_str().ok_or("invalid policy tool path")?);
     ops.verify_policy_tool(files, &tool)?;
-    let release = Release::verify(
-        files,
-        &files.path(stage.to_str().ok_or("invalid stage path")?),
-        &paths.bin.join(layout::NEXT),
-    )?;
-    let plan = Plan::inspect(files, ops, &paths, release)?;
+    let stage = files.path(stage.to_str().ok_or("invalid stage path")?);
+    let next = paths.bin.join(layout::NEXT);
+    let candidate = if input.host_stage {
+        stage.join("bin/echo-bridge")
+    } else {
+        next.clone()
+    };
+    let plan = Plan::inspect(files, ops, &paths, Release::verify(files, &stage, &candidate)?)?;
+    if input.host_stage {
+        effects::stage_candidate(files, &candidate, &next)?;
+    }
+    let result = activate(files, ops, &paths, &plan, &tool, input.reboot);
+    if input.host_stage && result.is_err() && !files::exists(&paths.work)? {
+        files::remove(&next)?;
+    }
+    result
+}
+
+fn activate(
+    files: &Files<'_>,
+    ops: &mut impl System,
+    paths: &Paths,
+    plan: &Plan,
+    tool: &Path,
+    reboot: bool,
+) -> Result<&'static str> {
     let mut receipt = Receipt {
         version: 1,
         phase: Phase::Applying,
@@ -195,17 +215,17 @@ pub(super) fn run(files: &Files<'_>, ops: &mut impl System, input: &Install) -> 
         previous_release: None,
         fork: plan.fork,
     };
-    let outcome = apply(files, ops, &paths, &plan, &mut receipt, &tool);
+    let outcome = apply(files, ops, paths, plan, &mut receipt, tool);
     if let Err(failed) = outcome {
-        if undo(files, ops, &paths, &plan, &mut receipt).is_err() {
+        if undo(files, ops, paths, plan, &mut receipt).is_err() {
             return Err("install restoration incomplete; retain installer recovery record");
         }
         return Err(failed);
     }
-    if input.reboot {
+    if reboot {
         match ops.reboot() {
             Err(RebootFailure::Rejected(failed)) => {
-                undo(files, ops, &paths, &plan, &mut receipt)
+                undo(files, ops, paths, plan, &mut receipt)
                     .map_err(|_| "install restoration incomplete; retain installer recovery record")?;
                 return Err(failed);
             }
@@ -435,7 +455,12 @@ fn save(files: &Files<'_>, p: &Paths, receipt: &Receipt) -> Result<()> {
     files::rename(&temporary, &p.work.join("receipt.json"))
 }
 
-fn verify_active(files: &Files<'_>, p: &Paths) -> Result<&'static str> {
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+pub(super) fn active_release(files: &Files<'_>) -> Result<String> {
+    read_active(files, &Paths::new(files))
+}
+
+fn read_active(files: &Files<'_>, p: &Paths) -> Result<String> {
     if files::mode(
         &files
             .protected(&p.work)?
@@ -470,5 +495,5 @@ fn verify_active(files: &Files<'_>, p: &Paths) -> Result<&'static str> {
     {
         return Err("conflicting active install ownership");
     }
-    Ok("unchanged")
+    receipt.current_release.ok_or("missing active release")
 }

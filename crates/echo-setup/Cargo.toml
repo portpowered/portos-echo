@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 echo-contracts = { version = "0.1.0", path = "../echo-contracts" }
 echo-screen-contract = { version = "0.1.0", path = "../echo-screen-contract" }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

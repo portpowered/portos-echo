@@ -13,6 +13,9 @@ use std::thread;
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[path = "a2/install.rs"]
+mod a2_install;
+
 #[path = "support/api_key.rs"]
 mod api_key;
 #[path = "support/force_config.rs"]
@@ -336,7 +339,7 @@ fn t3_prerequisites_refuse_without_push_and_never_print_external_data() -> Resul
     let output = fixture.install().arg("--from-dir").arg(bundle).output()?;
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(private_output(&output)?["error"], "hassmic_required");
-    assert_eq!(fixture.ledger()?.len(), 2);
+    assert_eq!(fixture.ledger()?.len(), 3);
     Ok(())
 }
 #[test]

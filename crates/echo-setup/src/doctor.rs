@@ -36,24 +36,36 @@ pub async fn execute(options: &Options) -> Value {
     json!({"type":"result", "command":"doctor", "ok":passed.iter().all(|ok| *ok), "checks":checks, "auth_mode":auth_mode})
 }
 
-#[allow(clippy::disallowed_methods, reason = "Existing host time")]
 async fn observe(options: &Options, passed: &mut [bool; 7], auth_mode: &mut &'static str) -> crate::Result<()> {
     let mut adb = Adb::discover(options.adb.as_deref())?;
     passed[0] = true;
     adb.select_ready(options.serial.as_deref()).await?;
     passed[1] = true;
-    let (success, output) = adb.script("doctor").await?;
-    if success {
+    adb.installed_owner().await?;
+    let (probes, mode) = selected(&adb).await?;
+    passed[2..].copy_from_slice(&probes);
+    *auth_mode = mode;
+    Ok(())
+}
+
+#[allow(clippy::disallowed_methods, reason = "Existing host time")]
+pub(crate) async fn selected(adb: &Adb) -> crate::Result<([bool; 5], &'static str)> {
+    let ceiling = Duration::from_secs(15);
+    tokio::time::timeout(ceiling, async {
+        let (success, output) = adb.script("doctor").await?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .ok()
             .map(|time| time.as_secs());
-        if let Some(probes) = probes(&output, now) {
-            passed[2..].copy_from_slice(&probes);
-        }
-    }
-    *auth_mode = crate::setup::installed_auth_mode(&adb).await;
-    Ok(())
+        let checks = if success {
+            probes(&output, now).unwrap_or_default()
+        } else {
+            [false; 5]
+        };
+        Ok((checks, crate::setup::installed_auth_mode(adb).await))
+    })
+    .await
+    .map_err(|_| crate::Failure("doctor_timeout"))?
 }
 
 fn probes(output: &str, now: Option<u64>) -> Option<[bool; 5]> {

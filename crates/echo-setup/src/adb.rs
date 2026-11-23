@@ -1,4 +1,5 @@
 //! A bounded native process boundary; never forward adb output to diagnostics.
+use crate::cli::InstallPath;
 use crate::{Failure, Result};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use tokio::process::Command;
 pub struct Adb {
     executable: PathBuf,
     serial: Option<OsString>,
+    owner: InstallPath,
 }
 
 impl Adb {
@@ -24,15 +26,49 @@ impl Adb {
         Ok(Self {
             executable,
             serial: None,
+            owner: InstallPath::Legacy,
         })
     }
 
     pub async fn select(&mut self, requested: Option<&OsStr>) -> Result<()> {
         self.select_ready(requested).await?;
+        self.require_legacy().await
+    }
+
+    pub async fn require_legacy(&self) -> Result<()> {
         self.shell("test -x /data/local/hassmic/runas")
             .await
             .map_err(|_| Failure("hassmic_required"))?;
         Ok(())
+    }
+
+    pub(crate) fn owner(&self) -> InstallPath {
+        self.owner
+    }
+
+    pub(crate) fn set_a2(&mut self) {
+        self.owner = InstallPath::A2;
+    }
+
+    pub(crate) async fn installed_owner(&mut self) -> Result<InstallPath> {
+        const PROBE: &str = "for p in /data/local/echo/bin/.install /data/local/echo/bin/boot /data/local/echo/bin/current /data/local/echo/bin/previous /system/etc/init/portos-echo.rc; do if test -e \"$p\" || test -L \"$p\"; then echo a2; exit; fi; done; echo legacy";
+        match self.shell(PROBE).await?.as_str() {
+            "legacy\n" => Ok(InstallPath::Legacy),
+            "a2\n" => {
+                self.set_a2();
+                self.script("owner")
+                    .await
+                    .and_then(|(ok, _)| {
+                        if ok {
+                            Ok(InstallPath::A2)
+                        } else {
+                            Err(Failure("a2_owner_unverified"))
+                        }
+                    })
+                    .map_err(|_| Failure("a2_owner_unverified"))
+            }
+            _ => Err(Failure("a2_owner_unverified")),
+        }
     }
 
     pub async fn select_ready(&mut self, requested: Option<&OsStr>) -> Result<()> {
@@ -117,6 +153,15 @@ impl Adb {
 
     // Streaming avoids host command-line limits and never places a host path on Android.
     pub async fn script(&self, operation: &str) -> Result<(bool, String)> {
+        if self.owner == InstallPath::A2 {
+            return self
+                .execute(
+                    &[OsString::from("shell"), OsString::from(a2_command(operation))],
+                    None,
+                    Duration::from_secs(600),
+                )
+                .await;
+        }
         self.execute(
             &[
                 OsString::from("shell"),
@@ -152,6 +197,16 @@ impl Adb {
             .await
             .map_err(|_| Failure("adb_timeout"))?
     }
+}
+
+pub(crate) fn a2_command(operation: &str) -> String {
+    const BOOT: &str = "/data/local/echo/bin/boot";
+    format!(
+        "for p in /data/local/echo /data/local/echo/bin; do test ! -L \"$p\" && test -d \"$p\" \
+        && test \"$(stat -c %u:%g:%a \"$p\")\" = 0:0:755 || exit 1; done; \
+        test ! -L {BOOT} && test -f {BOOT} && test \"$(stat -c %u:%g:%h:%a {BOOT})\" = 0:0:1:755 \
+        && exec {BOOT} install --host {operation}"
+    )
 }
 
 async fn write_input(stdin: Option<tokio::process::ChildStdin>, input: Option<&[u8]>) -> Result<()> {

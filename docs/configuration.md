@@ -273,6 +273,11 @@ it as `live.credential_file` owned by the bridge user with mode 0600. It then sk
 continues with Port OS. `echo-setup status --json` and `doctor` report `auth_mode` (`api_key`, `chatgpt` or
 `unavailable`), never the key.
 
+With `echo-setup install --install-path a2`, the retained config and credentials live under
+`/data/local/echo/private/`. The installer translates the release example's built-in legacy paths to that
+root. Keep any custom key file directly in A2's private directory. A2 downloads and verifies a separate Magisk
+policy asset on explicit selection, including when `--from-dir` supplies the verified product bundle.
+
 To replace the key later, open **Settings > Accounts > OpenAI (GPT Live)** on the Echo screen. In `api_key` mode it
 shows whether a key is set, and a **Save key** field in place of Link and Remove. The bridge applies the same rule
 as the installer, keeps the replaced key beside the new one as `<live.credential_file>.previous` (mode 0600), and

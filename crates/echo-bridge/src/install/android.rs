@@ -60,7 +60,7 @@ pub(super) fn run(input: Install) -> Result<&'static str> {
     transaction::run(&files, &mut android, &input)
 }
 
-fn set_owner(file: &File, Owner(uid, gid): Owner) -> Result<()> {
+pub(super) fn set_owner(file: &File, Owner(uid, gid): Owner) -> Result<()> {
     fchown(file, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid))).map_err(|_| "set install ownership")
 }
 

@@ -18,7 +18,7 @@ pub use http::{Health, ScreenEvents, health, link_required};
 pub use prompt::{Prompt, Provider};
 pub use wake::{WakeAttempt, WakeEvidence};
 
-use crate::{Failure, Result};
+use crate::{Failure, Result, adb::Adb, cli::InstallPath};
 use std::time::Duration;
 
 impl InstalledConnection {
@@ -78,10 +78,16 @@ impl InstalledConnection {
         if !self.runtime(cancelled).await?.runtime_ready() {
             return Err(Failure("setup_relink_required"));
         }
+        let a2 = self.adb.owner() == InstallPath::A2;
+        if a2 {
+            ask_wake()?;
+        }
         let wake = cancelled
             .until(WakeConfirmation::selected(self.adb.clone(), self.deadline))
             .await?;
-        ask_wake()?;
+        if !a2 {
+            ask_wake()?;
+        }
         cancelled.until(wake.wait()).await?;
         Ok(())
     }
@@ -97,14 +103,7 @@ impl InstalledConnection {
         // bypass it with a new lifecycle operation or a replacement connection.
         self.recover_account().await?;
         cancelled.until(async { Ok(()) }).await?;
-        wake::bounded(self.deadline, async {
-            let (success, output) = self.adb.script("stop").await?;
-            if !success || output != "echo-install: stopped\n" {
-                return Err(Failure("stop_failed"));
-            }
-            Ok(())
-        })
-        .await?;
+        self.stop().await?;
         account::guide(self, command, self.deadline, now_unix, present, cancelled)
             .await
             .map_err(|error| command.context(error))?;
@@ -135,17 +134,16 @@ impl InstalledConnection {
     async fn verify_api_key(&self, cancelled: &crate::Cancellation) -> Result<()> {
         self.recover_account().await?;
         cancelled.until(async { Ok(()) }).await?;
-        wake::bounded(self.deadline, async {
-            let (success, output) = self.adb.script("stop").await?;
-            if !success || output != "echo-install: stopped\n" {
-                return Err(Failure("stop_failed"));
+        self.stop().await?;
+        let result = cancelled.until(self.account(AccountCommand::ApiKeyStatus)).await;
+        self.recover_account().await?;
+        result.map_err(|error| {
+            if error == Failure("setup_cancelled") {
+                error
+            } else {
+                Failure("setup_api_key_unconfirmed")
             }
-            Ok(())
-        })
-        .await?;
-        self.account(AccountCommand::ApiKeyStatus)
-            .await
-            .map_err(|_| Failure("setup_api_key_unconfirmed"))?;
+        })?;
         cancelled.until(async { Ok(()) }).await?;
         self.start().await
     }
@@ -170,6 +168,21 @@ impl InstalledConnection {
         // its terminal result; never remove unrelated forwards or raw logs.
         forwards.close().await.and(result)
     }
+
+    pub(crate) async fn stop(&self) -> Result<()> {
+        stop(&self.adb, self.deadline).await
+    }
+}
+
+pub(crate) async fn stop(adb: &Adb, deadline: tokio::time::Instant) -> Result<()> {
+    wake::bounded(deadline, async {
+        let (success, output) = adb.script("stop").await?;
+        if !success || output != "echo-install: stopped\n" {
+            return Err(Failure("stop_failed"));
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[cfg(test)]

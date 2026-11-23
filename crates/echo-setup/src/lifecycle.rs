@@ -1,6 +1,6 @@
 //! Project authored shell observations into a fixed, private-data-free result.
 use crate::adb::Adb;
-use crate::cli::Options;
+use crate::cli::{InstallPath, Options};
 use crate::{Failure, Result};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -9,7 +9,12 @@ use std::collections::BTreeMap;
 /// Returns fixed prerequisite, transport or malformed-observation categories.
 pub async fn execute(options: &Options) -> Result<Value> {
     let mut adb = Adb::discover(options.adb.as_deref())?;
-    adb.select(options.serial.as_deref()).await?;
+    adb.select_ready(options.serial.as_deref()).await?;
+    if adb.installed_owner().await? == InstallPath::Legacy {
+        adb.require_legacy().await?;
+    } else if options.command != "status" {
+        return Err(Failure("command_not_implemented"));
+    }
     let operation = match options.command.as_str() {
         "status" => "status",
         "rollback" => "rollback",
@@ -50,6 +55,12 @@ pub(crate) async fn require_started(adb: &Adb, version: Option<&str>) -> Result<
     let observed = status(&output).map_err(|_| Failure("start_failed"))?;
     if observed["process"] == "running" && observed["process_user"] != "nobody" {
         return Err(Failure("unsafe_process_user"));
+    }
+    if adb.owner() == InstallPath::A2
+        && observed["process"] == "running"
+        && version.is_some_and(|version| observed["versions"]["current"] != version)
+    {
+        return Err(Failure("a2_version_mismatch"));
     }
     if !success
         || observed["process"] != "running"

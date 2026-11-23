@@ -4,6 +4,9 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 
+#[path = "../a2/adb.rs"]
+mod a2;
+
 fn main() -> io::Result<()> {
     if let Some(root) = std::env::var_os("ECHO_SETUP_TEST_BOOTSTRAP") {
         return bootstrap_child(Path::new(&root));
@@ -49,7 +52,9 @@ fn main() -> io::Result<()> {
             .get(1)
             .ok_or_else(|| io::Error::other("missing shell"))?
             .to_string_lossy();
-        shell(&root, &command)?;
+        if !a2::shell(&root, &command)? {
+            shell(&root, &command)?;
+        }
     } else if args.first().is_some_and(|v| v == "forward") {
         forward(&root, &args[1..])?;
     } else if args.first().is_some_and(|v| v == "push") {

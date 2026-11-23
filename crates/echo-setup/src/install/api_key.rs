@@ -97,8 +97,16 @@ pub fn parse(bytes: &[u8]) -> Result<Secret<String>> {
 /// # Errors
 /// `api_key_path_unsupported` for any other configured path.
 pub fn target(credential_file: Option<&str>) -> Result<&str> {
+    owned_target(credential_file, crate::cli::InstallPath::Legacy)
+}
+
+pub(crate) fn owned_target(credential_file: Option<&str>, owner: crate::cli::InstallPath) -> Result<&str> {
     let path = credential_file.ok_or(Failure("api_key_path_unsupported"))?;
-    let leaf = path.strip_prefix(PRIVATE).ok_or(Failure("api_key_path_unsupported"))?;
+    let prefix = match owner {
+        crate::cli::InstallPath::A2 => "/data/local/echo/private/",
+        crate::cli::InstallPath::Legacy => PRIVATE,
+    };
+    let leaf = path.strip_prefix(prefix).ok_or(Failure("api_key_path_unsupported"))?;
     if leaf.is_empty()
         || leaf.len() > 64
         || leaf.starts_with('.')
@@ -118,6 +126,17 @@ pub fn target(credential_file: Option<&str>) -> Result<&str> {
 /// `api_key_install_failed`, never adb output.
 pub async fn deliver(adb: &Adb, stage: &str, key: &Secret<String>, target: &str) -> Result<()> {
     const FAILED: Failure = Failure("api_key_install_failed");
+    if adb.owner() == crate::cli::InstallPath::A2 {
+        let target = owned_target(Some(target), crate::cli::InstallPath::A2)?;
+        let leaf = target.rsplit('/').next().ok_or(FAILED)?;
+        return adb
+            .shell_input(
+                &crate::adb::a2_command(&format!("api-key-write '{leaf}'")),
+                key.expose().as_bytes(),
+            )
+            .await
+            .map_err(|_| FAILED);
+    }
     let source = format!("{stage}/api-key");
     adb.shell_input(&format!("umask 077 && cat > '{source}'"), key.expose().as_bytes())
         .await

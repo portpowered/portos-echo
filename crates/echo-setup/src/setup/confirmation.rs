@@ -1,6 +1,10 @@
 //! Paired fresh log evidence, without exposing either log or cursor.
 use super::wake::{bounded, valid_cursor};
-use crate::{Failure, Result, adb::Adb, cli::Options};
+use crate::{
+    Failure, Result,
+    adb::Adb,
+    cli::{InstallPath, Options},
+};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -24,7 +28,7 @@ impl ConfirmationEvidence {
 /// Both cursors and every later read use the same selected device and deadline.
 pub struct WakeConfirmation {
     adb: Adb,
-    cursors: [String; 2],
+    cursors: Vec<String>,
     deadline: Instant,
 }
 
@@ -46,9 +50,10 @@ impl WakeConfirmation {
             if !success {
                 return Err(Failure("setup_wake_unavailable"));
             }
+            let count = if adb.owner() == InstallPath::A2 { 1 } else { 2 };
             Ok(Self {
                 adb,
-                cursors: cursors(&output)?,
+                cursors: cursors(&output, count)?,
                 deadline,
             })
         })
@@ -60,7 +65,11 @@ impl WakeConfirmation {
     /// Fixed observation/deadline categories; never logs or identifiers.
     pub async fn observe(&self) -> Result<ConfirmationEvidence> {
         bounded(self.deadline, async {
-            let operation = format!("confirm-check '{}' '{}'", self.cursors[0], self.cursors[1]);
+            let mut operation = String::from("confirm-check");
+            for cursor in &self.cursors {
+                use std::fmt::Write as _;
+                write!(operation, " '{cursor}'").map_err(|_| Failure("setup_wake_unavailable"))?;
+            }
             let (success, output) = self.adb.script(&operation).await?;
             if !success {
                 return Err(Failure("setup_wake_unavailable"));
@@ -86,12 +95,12 @@ impl WakeConfirmation {
     }
 }
 
-fn cursors(output: &str) -> Result<[String; 2]> {
+fn cursors(output: &str, count: usize) -> Result<Vec<String>> {
     let lines: Vec<_> = output.split_inclusive('\n').collect();
-    if lines.len() != 2 || !lines.iter().all(|line| valid_cursor(line)) {
+    if lines.len() != count || !lines.iter().all(|line| valid_cursor(line)) {
         return Err(Failure("setup_wake_unavailable"));
     }
-    Ok([lines[0].trim_end().into(), lines[1].trim_end().into()])
+    Ok(lines.into_iter().map(|line| line.trim_end().to_owned()).collect())
 }
 
 fn evidence(output: &str) -> Result<ConfirmationEvidence> {
@@ -139,13 +148,13 @@ mod tests {
             assert_eq!(evidence(raw), Err(Failure("setup_wake_unavailable")));
         }
         let cursor = format!("1:2:3:{}\n", "a".repeat(64));
-        assert!(cursors(&format!("{cursor}{cursor}")).is_ok());
+        assert!(cursors(&format!("{cursor}{cursor}"), 2).is_ok());
         for raw in [
             cursor.clone(),
             format!("{cursor}{cursor}{cursor}"),
             format!("{cursor}';id\n"),
         ] {
-            assert_eq!(cursors(&raw), Err(Failure("setup_wake_unavailable")));
+            assert_eq!(cursors(&raw, 2), Err(Failure("setup_wake_unavailable")));
         }
         Ok(())
     }

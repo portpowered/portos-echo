@@ -120,3 +120,13 @@ pub(super) fn set_fork(ops: &mut impl System, initial: Services, restoring: bool
     }
     Ok(())
 }
+pub(super) fn stage_candidate(files: &Files<'_>, candidate: &Path, next: &Path) -> Result<()> {
+    if files::exists(next)? {
+        return Err("a staged candidate already exists");
+    }
+    if let Err(error) = files.copy(files.trusted_file(candidate)?, next, ROOT, 0o755) {
+        files::remove(next)?;
+        return Err(error);
+    }
+    Ok(())
+}

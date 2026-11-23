@@ -37,7 +37,7 @@ impl Files<'_> {
         let relative = path.strip_prefix(self.root).map_err(|_| "path outside device root")?;
         let mut dir = open_dir(self.root)?;
         self.check_root_dir(&dir)?;
-        for segment in relative.components() {
+        for (index, segment) in relative.components().enumerate() {
             let segment = match segment {
                 std::path::Component::Normal(segment) => segment,
                 _ => return Err("untrusted directory"),
@@ -45,6 +45,9 @@ impl Files<'_> {
             dir = unix::openat(&dir, segment, OPEN | OFlags::RDONLY | OFlags::DIRECTORY, Mode::empty())
                 .map(File::from)
                 .map_err(|_| "untrusted directory")?;
+            if index == 0 && segment == "data" && android_data(&dir)? {
+                continue;
+            }
             self.check_root_dir(&dir)?;
         }
         Ok(dir)
@@ -101,6 +104,22 @@ impl Files<'_> {
         (self.set_owner)(file, owner)?;
         unix::fchmod(file, Mode::from_bits_truncate(mode)).map_err(|_| "set install permissions")
     }
+}
+
+fn android_data(file: &File) -> Result<bool> {
+    if !cfg!(target_os = "android") {
+        return Ok(false);
+    }
+    // Android init owns this mount through system:system. Every descendant
+    // of it still passes the installer policy for a root-owned directory.
+    let meta = file.metadata().map_err(|_| "inspect Android data mount")?;
+    if (meta.uid(), meta.gid(), mode(&meta)) != (1000, 1000, 0o771) {
+        return Ok(false);
+    }
+    let mounts = fs::read_to_string("/proc/self/mountinfo").map_err(|_| "inspect Android mounts")?;
+    Ok(mounts
+        .lines()
+        .any(|line| line.split_ascii_whitespace().nth(4) == Some("/data")))
 }
 
 pub(super) fn exists(path: &Path) -> Result<bool> {

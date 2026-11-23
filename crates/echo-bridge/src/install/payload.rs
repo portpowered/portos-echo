@@ -103,10 +103,12 @@ pub(super) fn prepare_private(files: &Files<'_>, release: &Release, work: &Path,
     if let Some(source) = &source {
         migrate_private(files, source, &private)?;
     }
+    let staged_config = release.stage.join(".host-config");
     let config = match &source {
         Some(source) if present(source, Path::new(layout::CONFIG))? => {
             read_text(read_at(source, Path::new(layout::CONFIG))?, CONFIG_LIMIT)?
         }
+        _ if files::exists(&staged_config)? => read_text(files.trusted_file(&staged_config)?, CONFIG_LIMIT)?,
         _ => release.default_config(files)?,
     };
     files.write(
@@ -199,7 +201,7 @@ fn present(dir: &File, name: &Path) -> Result<bool> {
     }
 }
 
-fn migrate_config(source: &str) -> Result<String> {
+pub(super) fn migrate_config(source: &str) -> Result<String> {
     let mut table: toml::Table = source.parse().map_err(|_| "invalid install configuration")?;
     for (section, key, path) in [
         ("live", "credential_file", "private/live.json"),

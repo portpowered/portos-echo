@@ -1129,6 +1129,7 @@ version = "0.2.0"
 dependencies = [
  "echo-contracts",
  "echo-screen-contract",
+ "flate2",
  "reqwest",
  "serde",
  "serde_json",

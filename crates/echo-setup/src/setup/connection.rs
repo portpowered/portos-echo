@@ -14,7 +14,8 @@ pub struct InstalledConnection {
     screen: u16,
     pub(super) deadline: Instant,
     account: super::account::AccountOwner,
-    launch: Option<(String, String)>,
+    launch: Option<String>,
+    version: Option<String>,
     /// Installed `live.mode` and `live.credential_file`; never the credential.
     live: (AuthMode, Option<String>),
 }
@@ -27,20 +28,27 @@ impl InstalledConnection {
         bounded(deadline, async {
             let mut adb = Adb::discover(options.adb.as_deref())?;
             adb.select(options.serial.as_deref()).await?;
-            Self::selected(adb, deadline, None).await
+            Self::selected(adb, deadline, None, None).await
         })
         .await
     }
 
-    pub(crate) async fn selected(adb: Adb, deadline: Instant, launch: Option<(String, String)>) -> Result<Self> {
+    pub(crate) async fn selected(
+        adb: Adb,
+        deadline: Instant,
+        launch: Option<String>,
+        version: Option<String>,
+    ) -> Result<Self> {
         bounded(deadline, async {
             let raw = private_read(&adb, "setup-config").await?;
+            let a2 = adb.owner() == crate::cli::InstallPath::A2;
             Ok(Self {
                 adb,
-                screen: screen_port(raw.expose())?,
+                screen: screen_port(raw.expose(), a2)?,
                 deadline,
                 account: super::account::AccountOwner::default(),
                 launch,
+                version,
                 live: api_key::project(raw.expose())?,
             })
         })
@@ -60,22 +68,22 @@ impl InstalledConnection {
         if self.live.0 != AuthMode::ApiKey {
             return Err(Failure("api_key_mode_required"));
         }
-        let target = api_key::target(self.live.1.as_deref())?;
+        let target = api_key::owned_target(self.live.1.as_deref(), self.adb.owner())?;
         bounded(self.deadline, api_key::deliver(&self.adb, stage, key, target)).await
     }
 
     pub(super) async fn start(&self) -> Result<()> {
         bounded(self.deadline, async {
-            let version = if let Some((command, version)) = &self.launch {
+            if let Some(command) = &self.launch {
                 self.adb.shell(command).await.map_err(|_| Failure("start_failed"))?;
-                Some(version.as_str())
-            } else {
-                if !self.adb.script("start").await?.0 {
-                    return Err(Failure("start_failed"));
-                }
-                None
-            };
-            crate::lifecycle::require_started(&self.adb, version).await
+            } else if !self.adb.script("start").await?.0 {
+                return Err(Failure("start_failed"));
+            }
+            if self.adb.owner() == crate::cli::InstallPath::A2 {
+                let expected = self.version.as_deref().ok_or(Failure("a2_owner_unverified"))?;
+                return crate::install::a2::started(&self.adb, expected, self.deadline).await;
+            }
+            crate::lifecycle::require_started(&self.adb, self.version.as_deref()).await
         })
         .await
     }
@@ -192,14 +200,19 @@ async fn private_read(adb: &Adb, operation: &str) -> Result<Secret<String>> {
     Ok(Secret::new(output))
 }
 
-fn screen_port(raw: &str) -> Result<u16> {
+fn screen_port(raw: &str, a2: bool) -> Result<u16> {
     // Reuse the bridge's locked TOML decoder, but never run its host-native
     // Path::is_absolute checks against Android paths on a Windows computer.
     // This is a screen projection, not validation of the full runtime config.
     let config: Config = toml::from_str(raw).map_err(|_| Failure("setup_config_invalid"))?;
+    let pairing = if a2 {
+        "/data/local/echo/private/screen-pairing.txt"
+    } else {
+        "/data/local/echo-bridge/private/screen-pairing.txt"
+    };
     if config.screen.listen.ip() != std::net::Ipv4Addr::LOCALHOST
         || config.screen.listen.port() == 0
-        || config.screen.pairing_token_file != "/data/local/echo-bridge/private/screen-pairing.txt"
+        || config.screen.pairing_token_file != pairing
     {
         return Err(Failure("setup_config_invalid"));
     }
@@ -236,8 +249,8 @@ mod tests {
     #[test]
     fn installed_config_projects_only_loopback_screen_and_fixed_pairing() {
         let base = include_str!("../../../../examples/bridge.echo.toml");
-        assert_eq!(screen_port(base), Ok(16900));
-        assert_eq!(screen_port(&base.replace("16900", "17300")), Ok(17300));
+        assert_eq!(screen_port(base, false), Ok(16900));
+        assert_eq!(screen_port(&base.replace("16900", "17300"), false), Ok(17300));
         for raw in [
             base.replace("127.0.0.1:16900", "0.0.0.0:16900"), // lint-rules: allow-literal inert rejected config fixture
             base.replace("127.0.0.1:16900", "127.0.0.1:0"),
@@ -246,7 +259,7 @@ mod tests {
             format!("{base}\nSYNTHETIC-PRIVATE-PATH"),
             base.replace("listen =", "token = 'SYNTHETIC-TOKEN'\nlisten ="),
         ] {
-            assert_eq!(screen_port(&raw), Err(Failure("setup_config_invalid")));
+            assert_eq!(screen_port(&raw, false), Err(Failure("setup_config_invalid")));
         }
     }
 }

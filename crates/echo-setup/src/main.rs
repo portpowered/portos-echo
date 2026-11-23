@@ -29,7 +29,9 @@ async fn run() -> i32 {
     });
     let result: Result<serde_json::Value> = match options.command.as_str() {
         "install" | "update" => echo_setup::install::install(
-            &options, |prompt| present(&options, prompt), || instruct(&options), &cancelled,
+            &options, |prompt| present(&options, prompt),
+            || instruct(&options, "Say Computer near the Echo. Waiting for a fresh wake and bridge run."),
+            |message| instruct(&options, message), &cancelled,
         ).await.map(|version| {
             serde_json::json!({"type":"result", "command":options.command, "ok":true, "version":version, "setup":"complete"})
         }),
@@ -55,6 +57,7 @@ fn exit_code(event: &serde_json::Value) -> i32 {
         event["error"].as_str(),
         Some(
             "setup_timeout"
+                | "a2_boot_timeout"
                 | "setup_chatgpt_timeout"
                 | "setup_portos_timeout"
                 | "setup_chatgpt_code_expired"
@@ -85,9 +88,8 @@ fn present(options: &cli::Options, prompt: &echo_setup::setup::Prompt) -> Result
     .map_err(|_| Failure("output_failed"))
 }
 
-fn instruct(options: &cli::Options) -> Result<()> {
+fn instruct(options: &cli::Options, message: &str) -> Result<()> {
     let mut output = io::stdout().lock();
-    let message = "Say Computer near the Echo. Waiting for a fresh wake and bridge run.";
     if options.json {
         let event = serde_json::json!({"type":"instruction", "message":message});
         writeln!(output, "{event}")
@@ -197,6 +199,19 @@ fn fix(error: &str) -> &'static str {
             "The bridge could not authenticate with the API key. Run install again with --openai-api-key-file and a valid key."
         }
         "command_not_implemented" => "This installer command is still under development.",
+        _ => a2_fix(error),
+    }
+}
+
+fn a2_fix(error: &str) -> &'static str {
+    match error {
+        "magiskpolicy_checksum_mismatch" => echo_setup::install::POLICY_CHECKSUM_FIX,
+        "a2_root_required" => "Select an already rooted Athena with root adb.",
+        "a2_owner_active" => "Roll back or uninstall the active A2 installation before selecting legacy.",
+        "a2_owner_unverified" => "Inspect the A2 installer recovery record before retrying.",
+        "a2_version_mismatch" => "The running or installed A2 release differs from the requested version.",
+        "a2_boot_timeout" => "A2 startup timed out. Run status and doctor before resuming setup.",
+        "a2_doctor_failed" => "Run doctor for the failed device checks, then run install again to resume.",
         _ => "Check device connectivity and prerequisites, then run install again.",
     }
 }
