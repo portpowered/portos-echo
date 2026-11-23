@@ -28,7 +28,7 @@ fn run(session: &Session, seeded: bool) -> (Output, PathBuf, Value) {
     )
     .unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_echo-lab"));
-    command.env("ECHO_LAB_TRACE_TICK", if seeded { "0" } else { "1" });
+    command.env("ECHO_LAB_TRACE_TICK", u8::from(!seeded).to_string());
     let output = command
         .current_dir(&session.0)
         .env("TMP", &session.0)
