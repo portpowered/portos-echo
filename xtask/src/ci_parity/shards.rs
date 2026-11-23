@@ -18,7 +18,7 @@ const PYTHON: &str = "      - uses: actions/setup-python@a26af69be951a213d495a4c
 
 // The Make target of each split gate must be exactly its parts, so `make <gate>` runs what the
 // parts run in CI. The *_SHARD and part variables are empty unless a part names its partition.
-pub(super) const MAKE_SPLITS: [&str; 9] = [
+pub(super) const MAKE_SPLITS: [&str; 10] = [
     "NEXTEST_SHARD = $(if $(NEXTEST_PARTITION),--partition $(NEXTEST_PARTITION) --no-tests=pass)\n",
     "SCENARIO_SHARD = $(if $(SCENARIO_PARTITION),--partition $(SCENARIO_PARTITION))\n",
     "test-unit: test-unit-rust test-unit-python test-unit-screen\n",
