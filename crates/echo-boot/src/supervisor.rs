@@ -1,0 +1,261 @@
+use std::time::Duration;
+
+use crate::{Digest, Identity, Result, Role, Selection, Slot};
+
+const POLL: Duration = Duration::from_millis(100);
+const STABLE: Duration = Duration::from_secs(60);
+const RESTART: Duration = Duration::from_secs(3);
+const MAX_BACKOFF: Duration = Duration::from_secs(300);
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ChildStatus {
+    Running { ready_at: Option<Duration> },
+    Exited,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Stop {
+    Exited,
+    Timeout,
+    Requested,
+    SwitchSlot,
+    Shutdown,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum Log<'a> {
+    Start(Role, Slot),
+    Exit(Role, Stop, &'a str),
+    Fallback { current: &'a Digest, previous: &'a Digest },
+}
+
+/// Owns the environmental effects and the live child handles for the boot roles.
+pub trait HostOps {
+    fn now(&self) -> Duration;
+    fn sleep(&mut self, duration: Duration);
+    fn shutdown(&self) -> bool;
+    fn stop_marker(&mut self) -> Result<bool>;
+    fn acknowledge(&mut self, finished: bool) -> Result<()>;
+    fn candidate(&mut self, slot: Slot) -> Result<Digest>;
+    fn load_selection(&mut self) -> Result<Option<Selection>>;
+    fn save_selection(&mut self, selection: &Selection) -> Result<()>;
+    fn spawn(&mut self, role: Role, slot: Slot, identity: Identity) -> Result<()>;
+    fn observe(&mut self, role: Role) -> Result<ChildStatus>;
+    /// Finishes cleanup and reaps the process before returning its status.
+    fn stop(&mut self, role: Role, why: Stop) -> Result<String>;
+    fn log(&mut self, entry: Log<'_>);
+}
+
+/// Runs one supervisor, including reconciliation of a previously interrupted attempt.
+///
+/// # Errors
+/// Returns a stage error from the host on a failed layout, launch or cleanup operation.
+pub fn supervise(host: &mut impl HostOps) -> Result<()> {
+    let mut supervisor = Supervisor::default();
+    let outcome = supervisor.run(host);
+    let cleanup = supervisor.stop_all(host, Stop::Shutdown);
+    cleanup.and(outcome)
+}
+
+#[derive(Default)]
+struct Supervisor {
+    device: Lifecycle,
+    core: Lifecycle,
+    selection: Option<Selection>,
+    parked: bool,
+}
+
+#[derive(Default)]
+struct Lifecycle {
+    started: Option<Duration>,
+    restart_at: Duration,
+    backoff: Option<Duration>,
+    stable: bool,
+}
+
+impl Lifecycle {
+    fn start(&mut self, now: Duration) {
+        self.started = Some(now);
+        self.stable = false;
+    }
+
+    fn retry(&mut self, now: Duration, elapsed: Duration) {
+        let delay = if elapsed < STABLE {
+            self.backoff.map_or(RESTART, |last| (last * 2).min(MAX_BACKOFF))
+        } else {
+            RESTART
+        };
+        self.backoff = (elapsed < STABLE).then_some(delay);
+        self.restart_at = now + delay;
+    }
+}
+
+impl Supervisor {
+    fn run(&mut self, host: &mut impl HostOps) -> Result<()> {
+        while !host.shutdown() {
+            if host.stop_marker()? {
+                self.park(host)?;
+            } else {
+                if self.parked || self.selection.is_none() {
+                    self.resume(host)?;
+                }
+                self.observe(host, Role::Core)?;
+                self.observe(host, Role::Device)?;
+                self.start_due(host, Role::Device)?;
+                self.start_due(host, Role::Core)?;
+            }
+            host.sleep(POLL);
+        }
+        Ok(())
+    }
+
+    fn park(&mut self, host: &mut impl HostOps) -> Result<()> {
+        if self.parked {
+            return Ok(());
+        }
+        if let Some(ref mut selection) = self.selection {
+            selection.cancel();
+            host.save_selection(selection)?;
+        } else if let Some(mut selection) = host.load_selection()? {
+            selection.cancel();
+            host.save_selection(&selection)?;
+        }
+        self.stop_all(host, Stop::Requested)?;
+        host.acknowledge(true)?;
+        self.parked = true;
+        Ok(())
+    }
+
+    fn resume(&mut self, host: &mut impl HostOps) -> Result<()> {
+        host.acknowledge(false)?;
+        let current = host.candidate(Slot::Current)?;
+        let stored = host.load_selection()?;
+        let mut selection = stored
+            .filter(|state| *state.current() == current)
+            .unwrap_or_else(|| Selection::new(current));
+        selection.fail();
+        host.save_selection(&selection)?;
+        if selection.slot() == Slot::Previous {
+            host.candidate(Slot::Previous)?;
+        }
+        self.selection = Some(selection);
+        self.switch_if_needed(host)?;
+        self.device = Lifecycle::default();
+        self.core = Lifecycle::default();
+        self.parked = false;
+        Ok(())
+    }
+
+    fn selection(&mut self) -> Result<&mut Selection> {
+        self.selection.as_mut().ok_or("selection unavailable")
+    }
+
+    fn life(&mut self, role: Role) -> &mut Lifecycle {
+        match role {
+            Role::Device => &mut self.device,
+            Role::Core => &mut self.core,
+        }
+    }
+
+    fn start_due(&mut self, host: &mut impl HostOps, role: Role) -> Result<()> {
+        let life = self.life(role);
+        if life.started.is_some() || host.now() < life.restart_at {
+            return Ok(());
+        }
+        let selection = self.selection()?;
+        if role == Role::Core {
+            selection.attempt();
+            host.save_selection(selection)?;
+        }
+        let slot = selection.slot();
+        host.log(Log::Start(role, slot));
+        if let Err(error) = host.spawn(role, slot, role.identity()) {
+            host.log(Log::Exit(role, Stop::Shutdown, error));
+            if role == Role::Core {
+                let selection = self.selection()?;
+                selection.fail();
+                host.save_selection(selection)?;
+            }
+            return Err(error);
+        }
+        self.life(role).start(host.now());
+        Ok(())
+    }
+
+    fn observe(&mut self, host: &mut impl HostOps, role: Role) -> Result<()> {
+        let Some(started) = self.life(role).started else {
+            return Ok(());
+        };
+        let now = host.now();
+        let elapsed = now.saturating_sub(started);
+        match host.observe(role)? {
+            ChildStatus::Exited => self.failure(host, role, Stop::Exited, now, elapsed),
+            ChildStatus::Running { ready_at } if role == Role::Core && elapsed >= STABLE => {
+                if !ready_at.is_some_and(|at| at <= started + STABLE) {
+                    return self.failure(host, role, Stop::Timeout, now, elapsed);
+                }
+                if !self.core.stable {
+                    let selection = self.selection()?;
+                    selection.stabilize();
+                    host.save_selection(selection)?;
+                    self.core.stable = true;
+                }
+                Ok(())
+            }
+            ChildStatus::Running { .. } => Ok(()),
+        }
+    }
+
+    fn failure(
+        &mut self,
+        host: &mut impl HostOps,
+        role: Role,
+        why: Stop,
+        now: Duration,
+        elapsed: Duration,
+    ) -> Result<()> {
+        self.finish(host, role, why)?;
+        self.life(role).retry(now, elapsed);
+        if role == Role::Core {
+            let selection = self.selection()?;
+            selection.fail();
+            host.save_selection(selection)?;
+            self.switch_if_needed(host)?;
+        }
+        Ok(())
+    }
+
+    fn switch_if_needed(&mut self, host: &mut impl HostOps) -> Result<()> {
+        if !self.selection()?.needs_fallback() {
+            return Ok(());
+        }
+        self.stop_all(host, Stop::SwitchSlot)?;
+        let previous = host.candidate(Slot::Previous)?;
+        let selection = self.selection()?;
+        selection.fallback();
+        host.save_selection(selection)?;
+        host.log(Log::Fallback {
+            current: selection.current(),
+            previous: &previous,
+        });
+        self.device = Lifecycle {
+            restart_at: self.core.restart_at,
+            ..Lifecycle::default()
+        };
+        Ok(())
+    }
+
+    fn stop_all(&mut self, host: &mut impl HostOps, why: Stop) -> Result<()> {
+        let [core, device] = [Role::Core, Role::Device].map(|role| self.finish(host, role, why));
+        core.and(device)
+    }
+
+    fn finish(&mut self, host: &mut impl HostOps, role: Role, why: Stop) -> Result<()> {
+        if self.life(role).started.is_some() {
+            let status = host.stop(role, why)?;
+            self.life(role).started = None;
+            host.log(Log::Exit(role, why, &status));
+        }
+        Ok(())
+    }
+}

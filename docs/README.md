@@ -99,6 +99,7 @@ Add each new tracked documentation page to this index in the same change.
 - [A1 World composition](adr/0036-a1-world.md)
 - [A2 live call subsystem](adr/0037-a2-live-call.md)
 - [A2 audio allocation boundaries](adr/0038-a2-audio-allocation.md)
+- [A2 boot supervision](adr/0037-a2-boot-supervision.md)
 - [Maintained WebView screen client](adr/0023-echo-screen.md)
 - [Bridge audio orchestration](adr/0024-echo-bridge.md)
 

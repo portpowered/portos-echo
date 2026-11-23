@@ -141,6 +141,11 @@ path = "crates/echo-media"
 kind = "lib"
 
 [[crate]]
+name = "echo-boot"
+path = "crates/echo-boot"
+kind = "lib"
+
+[[crate]]
 name = "echo-core-api"
 path = "crates/echo-core-api"
 kind = "lib"
