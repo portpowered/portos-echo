@@ -12,7 +12,7 @@ export async function startScreenFixture(wifi = false) {
     const fixture = spawn(fileURLToPath(executable), [], {
         stdio: ["pipe", "pipe", "pipe"],
     });
-    const exited = once(fixture, "exit");
+    const exited = once(fixture, "close");
     const output = [];
     const waiters = [];
     let diagnostic = "";

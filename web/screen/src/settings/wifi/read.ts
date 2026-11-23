@@ -26,7 +26,7 @@ const mutationErrors = new Map([
     ["wifi-busy", "Wi-Fi is busy. Try again."],
 ]);
 
-export function mountWifi(actions: string) {
+export function mountWifi(request: WifiExchange) {
     const section = element("details");
     section.className = "settings-section wifi-settings";
     section.hidden = true;
@@ -67,11 +67,7 @@ export function mountWifi(actions: string) {
 
     async function observe() {
         try {
-            const status = await wifiRequest(
-                actions,
-                { op: "status" },
-                controller.signal,
-            );
+            const status = await request({ op: "status" }, controller.signal);
             if (!status.ok && status.error === "wifi-unsupported") return false;
             if (status.ok !== true || !showStatus(status))
                 throw new Error(unavailable);
@@ -89,11 +85,7 @@ export function mountWifi(actions: string) {
         retry.disabled = true;
         try {
             if (refreshStatus) await observe();
-            const reply = await wifiRequest(
-                actions,
-                { op: "scan" },
-                controller.signal,
-            );
+            const reply = await request({ op: "scan" }, controller.signal);
             if (!reply.ok || !Array.isArray(reply.networks))
                 throw new Error(unavailable);
             const rows = reply.networks.filter(isNetwork);
@@ -168,7 +160,7 @@ export function mountWifi(actions: string) {
             frame.op === "join" ? "Joining Wi-Fi…" : "Forgetting network…";
         let refresh = false;
         try {
-            const result = await wifiRequest(actions, frame, controller.signal);
+            const result = await request(frame, controller.signal);
             const observed = showStatus(result);
             if (result.ok === true && observed) {
                 mutationFeedback.textContent =
@@ -234,7 +226,22 @@ function isNetwork(value: unknown): value is Network {
     );
 }
 
-export async function wifiRequest(
+export type WifiExchange = ReturnType<typeof wifiExchange>;
+
+export function wifiExchange(actions: string) {
+    let pending = Promise.resolve();
+    return (data: WifiRequest, signal: AbortSignal) => {
+        // The device serializes all radio work, including status reads.
+        const reply = pending.then(() => wifiRequest(actions, data, signal));
+        pending = reply.then(
+            () => {},
+            () => {},
+        );
+        return reply;
+    };
+}
+
+async function wifiRequest(
     actions: string,
     data: WifiRequest,
     signal: AbortSignal,

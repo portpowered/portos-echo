@@ -22,7 +22,7 @@ import { mountPortos, portosEndpointForm } from "./accounts/portos";
 import { mountOpenAI } from "./accounts/openai";
 import { accountRow } from "./accounts/account-buttons";
 import { museForm } from "./muse/form";
-import { mountWifi } from "./wifi/read";
+import { mountWifi, wifiExchange } from "./wifi/read";
 import { watchWifi } from "./wifi/offline";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
@@ -81,9 +81,11 @@ export function mountSettings(
     panel.append(header, muted, status, fields);
     root.append(gear, panel);
     const keyboard = mountKeyboard(panel, fields);
-    const wifiEnabled = !!document.querySelector(
+    const exchangeWifi = document.querySelector(
         'meta[name="echo-wifi"][content="v1"]',
-    );
+    )
+        ? wifiExchange(actions)
+        : undefined;
     let wifi: ReturnType<typeof mountWifi> | undefined;
     // Set by Relink until the bridge answers with its relink error frame.
     let relinkAsked = false;
@@ -415,8 +417,8 @@ export function mountSettings(
         gear.hidden = true;
         gear.setAttribute("aria-expanded", "true");
         fields.replaceChildren();
-        if (wifiEnabled) {
-            wifi = mountWifi(actions);
+        if (exchangeWifi) {
+            wifi = mountWifi(exchangeWifi);
             fields.append(wifi.element);
         }
         sections.length = 0;
@@ -437,8 +439,8 @@ export function mountSettings(
             true,
         );
     }
-    const stopWatching = wifiEnabled
-        ? watchWifi(actions, () => {
+    const stopWatching = exchangeWifi
+        ? watchWifi(exchangeWifi, () => {
               if (panel.hidden) open(true);
               else wifi?.open(false);
           })

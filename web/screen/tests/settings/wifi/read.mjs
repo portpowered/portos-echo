@@ -30,6 +30,8 @@ async function wifiPage(t, status, scan, openSettings = true) {
                         frame,
                     });
                     const op = frame.data.op;
+                    if (op === "join" && window.deferWifiJoin)
+                        return window.deferWifiJoin.promise;
                     return Promise.resolve({
                         ok: true,
                         json: async () => ({
@@ -229,6 +231,53 @@ test("S05 a legacy endpoint keeps Settings usable without a Wi-Fi scan", async (
         ),
         ["status", "status"],
     );
+});
+
+test("the offline status poll does not compete with a pending join", async (t) => {
+    const page = await wifiPage(
+        t,
+        { ok: true, ssid: "Fixture A", reachable: true },
+        {
+            ok: true,
+            networks: [
+                {
+                    ssid: "Fixture B",
+                    signalDbm: -42,
+                    secured: false,
+                    networkId: null,
+                },
+            ],
+        },
+    );
+    await page.getByText("Wi-Fi", { exact: true }).click();
+    await page.getByRole("button", { name: "Join Fixture B" }).click();
+    await page.evaluate(() => {
+        window.deferWifiJoin = Promise.withResolvers();
+        window.wifiCalls.length = 0;
+    });
+    await page.getByRole("button", { name: "Join Fixture B" }).first().click();
+    await page.clock.runFor(1000);
+    const calls = () =>
+        page.evaluate(() => window.wifiCalls.map((call) => call.frame.data.op));
+    assert.deepEqual(await calls(), ["join"]);
+    await page.evaluate(() =>
+        window.deferWifiJoin.resolve({
+            ok: true,
+            json: async () => ({
+                type: "wifi-result",
+                data: {
+                    version: 1,
+                    op: "join",
+                    ok: true,
+                    ssid: "Fixture B",
+                    reachable: true,
+                },
+            }),
+        }),
+    );
+    await page.getByText("Connected to Fixture B").waitFor();
+    await page.getByRole("button", { name: "Join Fixture B" }).waitFor();
+    assert.deepEqual(await calls(), ["join", "status", "scan"]);
 });
 
 test("Wi-Fi opens at 30 seconds of confirmed loss and stays dismissed until recovery", async (t) => {

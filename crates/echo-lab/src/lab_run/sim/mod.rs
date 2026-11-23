@@ -306,7 +306,8 @@ impl Driver for Sim<'_> {
                 .checks
                 .insert("wifi_password_matches".into(), matches == Some(0));
             if let Some(matches) = matches
-                && let Err(error) = artifacts.measurement(json!({"event":"wifi.privacy", "password_matches":matches}))
+                && let Err(error) =
+                    production::wifi::record(artifacts, "wifi-privacy", json!({"password_matches":matches}))
             {
                 failures.push(error);
             }

@@ -1,9 +1,9 @@
-import { wifiRequest } from "./read";
+import type { WifiExchange } from "./read";
 
 const pollMs = 1000;
 const outageMs = 30000;
 
-export function watchWifi(actions: string, open: () => void): () => void {
+export function watchWifi(request: WifiExchange, open: () => void): () => void {
     const lifetime = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let deadline: number | undefined;
@@ -14,11 +14,9 @@ export function watchWifi(actions: string, open: () => void): () => void {
             lifetime.signal,
             AbortSignal.timeout(5000),
         ]);
-        const status = await wifiRequest(
-            actions,
-            { op: "status" },
-            signal,
-        ).catch(() => undefined);
+        const status = await request({ op: "status" }, signal).catch(
+            () => undefined,
+        );
         if (lifetime.signal.aborted) return;
         const now = performance.now();
         if (
