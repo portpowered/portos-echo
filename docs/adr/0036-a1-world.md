@@ -99,6 +99,8 @@ to these three inputs. [Coordinator ruling](https://github.com/portpowered/porto
 
 ## A2 session lifecycle
 
+`echo-sub-session` depends only on `echo-core-api`.
+
 The controller steps device, session, pacer and trace in that order. It
 allocates one voice run slot and passes a generational handle to the reducer.
 Release invalidates the handle after the run's cleanup. A reused slot rejects
