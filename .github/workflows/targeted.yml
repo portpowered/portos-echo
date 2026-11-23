@@ -4,25 +4,37 @@ on:
 permissions:
   contents: read
 jobs:
-  screen-schema:
+  paired:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: a8d7f87e8cc7c7d3d67a349df7ec872eec15e57d
           persist-credentials: false
-      - name: Regenerate screen contracts
-        run: |
-          UPDATE_SCHEMAS=1 cargo test --locked -p echo-screen-contract --test screen_schema schema_snapshots -- --exact
-          cd web/screen
-          npm ci --offline=false
-          npm run generate:schema
-          npm run check:schema
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: ./.github/actions/setup
         with:
-          name: bridge-screen-signin-schemas
-          path: |
-            schemas/screen/ui_state.json
-            schemas/screen/ui_action.json
-            schemas/screen/screen_frame.json
-            web/screen/src/model.ts
+          target: test-sim-suites
+          sim: 'true'
+      - name: Paired Relink acceptance
+        run: |
+          git rev-parse HEAD
+          make sim-prereqs
+          cargo nextest run --locked -p echo-bridge --test bridge_t3 --run-ignored only             --config-file .github/nextest.toml --profile ci --success-output immediate --no-fail-fast             -E 'test(t3_bridge_screen_signin) | test(t3_settings_account_changes_reuse_the_credential_owners)'
+  bridge-rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: a8d7f87e8cc7c7d3d67a349df7ec872eec15e57d
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: lint-rust
+      - run: git rev-parse HEAD
+      - run: cargo fmt --all --check
+      - run: cargo xtask lint-shape
+      - run: cargo xtask lint-rules
+      - run: cargo clippy --locked -p echo-bridge --lib --test bridge_t3 -- -D warnings
