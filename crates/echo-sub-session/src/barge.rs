@@ -1,6 +1,6 @@
 //! A barge-in silences the reply at once and cuts it once the model yields.
 use echo_core_api::BargeTrigger;
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 /// How long a sign of user speech from the Live session keeps a barge-in
 /// pending. Each further sign renews it.
@@ -35,11 +35,21 @@ struct Armed {
 /// dropped and the held audio plays, late but whole.
 /// A model that has ended its turn has said so itself: there is no stretch to
 /// wait out, and a pending barge-in fires at once.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct Barge {
     armed: Option<Armed>,
     /// The user's transcript since the pending barge-in was armed.
     said: String,
+}
+
+impl fmt::Debug for Barge {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Playback failure diagnostics may print the World state.
+        formatter
+            .debug_struct("Barge")
+            .field("armed", &self.armed)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Barge {
@@ -253,6 +263,7 @@ mod tests {
         assert!(barge.arm(start, BargeTrigger::UserTranscript));
         barge.transcribed("Sto", false);
         barge.transcribed("p it", false);
+        assert!(!format!("{barge:?}").contains("Stop it"));
         assert_eq!(barge.fire(start, true), Some(BargeTrigger::UserTranscript));
         assert_eq!((barge.said().as_str(), barge.said().as_str()), ("Stop it", ""));
         barge.arm(start, BargeTrigger::UserTranscript);

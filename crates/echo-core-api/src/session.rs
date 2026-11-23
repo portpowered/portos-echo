@@ -226,7 +226,7 @@ pub struct SessionView {
     pub next_deadline: Option<(Instant, SessionTimer)>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub enum SessionCommand {
     OpenCall,
     CloseCall,
