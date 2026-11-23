@@ -161,11 +161,11 @@ async fn audio_round_trip<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWr
         let bytes: Vec<_> = (0..320).flat_map(|n| waveform[n % 16].to_le_bytes()).collect();
         for chunk in bytes.chunks(146) {
             for frame in capture.process(&format, chunk).unwrap() {
-                call.send(frame).unwrap();
+                call.send(*frame).unwrap();
             }
         }
     }
-    assert_eq!(capture.finish().unwrap(), Vec::<echo_media::PcmFrame>::new());
+    assert_eq!(capture.finish().unwrap(), &[]);
     assert_eq!(capture.tail_samples(), 0);
     let mut reply = ReplyAudio::new(200).unwrap();
     let mut samples = Vec::new();

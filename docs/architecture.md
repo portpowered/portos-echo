@@ -1332,7 +1332,7 @@ in a crate do not imply the configured voice owner calls them.
 | echo-screen-server | [Loopback HTTP/SSE and actions](../crates/echo-screen-server/src/lib.rs), [0016](adr/0016-screen-server.md) | Within bridge process | contracts, screen-contract |
 | echo-signin | [Writer-based commands and Codex account adapter](../crates/echo-signin/src/lib.rs), [0018](adr/0018-signin.md), [0026](adr/0026-codex-client.md) | Bridge/operator command process | codex, live, agent-loop, contracts, config, chatgpt-auth |
 | echo-spoof-mcp | [Deterministic MCP library/executable](../crates/echo-spoof-mcp/src/lib.rs), [0014](adr/0014-mcp-http.md) | Local tests/CI | contracts |
-| echo-sub-call | [Call phase, setup stage and receive-generation reducer](../crates/echo-sub-call/src/lib.rs), [0037](adr/0037-a2-live-call.md) | Bridge session controller | core-api |
+| echo-sub-call | [Call phase, receive generation and fixed uplink backlog](../crates/echo-sub-call/src/lib.rs), [0037](adr/0037-a2-live-call.md) | Bridge session controller | core-api |
 | echo-sub-device | [Device reducer and World invariants](../crates/echo-sub-device/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-sub-pacer | [Fixed reply ring, paced playout and mouth timing](../crates/echo-sub-pacer/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api, audio |
 | echo-sub-session | [Run lifetime, turn and cut policy, deadlines, session-tool grants and playback settlement](../crates/echo-sub-session/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |

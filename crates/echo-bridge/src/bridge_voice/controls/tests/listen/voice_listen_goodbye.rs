@@ -99,7 +99,7 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) -> usize {
     };
     let started = Instant::now();
     let answer = goodbye_run(
-        replies(
+        Box::pin(replies(
             &client,
             (&mut events, &mut microphone),
             &mut port,
@@ -107,7 +107,7 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) -> usize {
             &options,
             std::future::pending(),
             &mut observe,
-        ),
+        )),
         &device,
         &stopped,
         goodbye_inputs(&device, &tx, (&stopped, &played), (end, answer), steps),

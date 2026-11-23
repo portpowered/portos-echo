@@ -47,7 +47,7 @@ impl CallPort {
     }
 }
 
-fn step(world: &Controller, state: &mut State, event: CallEvent<'_>) -> CallCommands {
+pub(super) fn step(world: &Controller, state: &mut State, event: CallEvent<'_>) -> CallCommands {
     let mut out = Commands::default();
     state.world.step(&mut Event::Call(event), &mut out);
     world.check_step(state);

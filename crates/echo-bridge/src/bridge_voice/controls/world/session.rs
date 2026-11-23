@@ -1,10 +1,11 @@
-use super::{Controller, State, pacer};
+use super::{Controller, State, call, pacer};
 use crate::Error;
 #[cfg(test)]
 use echo_core_api::SessionTimer;
 use echo_core_api::{
-    Commands, Event, FollowUp, SessionChange, SessionCommand, SessionCommands, SessionError, SessionEvent,
-    SessionHandle, SessionOutcome, SessionToolAction, SessionToolDecision, SessionToolEvent, SessionView,
+    CallCommands, CallEvent, Commands, Event, FollowUp, SessionChange, SessionCommand, SessionCommands, SessionError,
+    SessionEvent, SessionHandle, SessionOutcome, SessionToolAction, SessionToolDecision, SessionToolEvent, SessionView,
+    UplinkEvent,
 };
 use std::{fmt, future::Future, sync::Arc, time::Duration};
 use tokio::time::Instant;
@@ -66,6 +67,14 @@ impl Controller {
             state.runs.remove(index, generation);
             return Err(session_error(result.outcome));
         }
+        call::step(
+            &self,
+            &mut state,
+            CallEvent::Uplink {
+                run: session,
+                event: UplinkEvent::CaptureOpened,
+            },
+        );
         drop(state);
         Ok(SessionPort {
             world: self,
@@ -167,6 +176,22 @@ impl SessionPort {
 
     pub(crate) fn token(&self) -> &Arc<()> {
         &self.token
+    }
+
+    pub(crate) fn uplink(&self, event: UplinkEvent<'_>) -> CallCommands {
+        call::step(
+            &self.world,
+            &mut self.world.state(),
+            CallEvent::Uplink {
+                run: self.handle,
+                event,
+            },
+        )
+    }
+
+    pub(crate) fn uplink_pending(&self) -> bool {
+        let view = self.world.state().world.pacer.call.view();
+        view.uplink_run == Some(self.handle) && view.backlog_depth != 0
     }
 
     pub(crate) fn answer_tool(
@@ -378,6 +403,14 @@ impl Drop for SessionPort {
             .world
             .session_step(&mut state, SessionEvent::RunReleased { session });
         if out.effects[0] == Some(SessionCommand::StopCapture { session }) {
+            call::step(
+                &self.world,
+                &mut state,
+                CallEvent::Uplink {
+                    run: session,
+                    event: UplinkEvent::CaptureClosed,
+                },
+            );
             state.tools.clear();
             state.runs.remove(session.index, session.generation);
         }

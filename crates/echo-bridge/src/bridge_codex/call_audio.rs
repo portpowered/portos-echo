@@ -8,6 +8,11 @@ use echo_sub_pacer::{Heard, LipStats, Playout, State};
 use std::time::Duration;
 use tokio::time::Instant;
 
+const CAPTURE_BYTES: usize = 8192;
+// A maximum-size mono chunk, one buffered 20 ms block (at most 960 input
+// samples), the 128-tap filter and a partial output frame. Capture never upsamples.
+const CAPTURE_FRAMES: usize = (CAPTURE_BYTES / 2 + 960 + 128 + 319).div_ceil(320);
+
 struct Converter {
     resampler: PcmResampler,
     scratch: Vec<i16>,
@@ -55,6 +60,8 @@ pub struct CaptureAudio {
     format: PcmFormat,
     converter: Converter,
     pending: Vec<i16>,
+    samples: Box<[i16]>,
+    frames: Vec<PcmFrame>,
     finished: bool,
 }
 
@@ -66,39 +73,40 @@ impl CaptureAudio {
             format,
             converter: Converter::new(format, 16_000)?,
             pending: Vec::with_capacity(320),
+            samples: vec![0; CAPTURE_BYTES / 2].into_boxed_slice(),
+            frames: Vec::with_capacity(CAPTURE_FRAMES),
             finished: false,
         })
     }
 
     /// # Errors
     /// Reject format changes, oversized/noninterleaved chunks and post-finish input.
-    pub fn process(&mut self, format: &PcmFormat, bytes: &[u8]) -> Result<Vec<PcmFrame>, Error> {
+    pub fn process(&mut self, format: &PcmFormat, bytes: &[u8]) -> Result<&[PcmFrame], Error> {
         let stride = 2 * usize::from(self.format.channels);
-        if self.finished || format != &self.format || bytes.len() > 8192 || !bytes.len().is_multiple_of(stride) {
+        if self.finished || format != &self.format || bytes.len() > CAPTURE_BYTES || !bytes.len().is_multiple_of(stride)
+        {
             return Err(Error::Audio);
         }
-        let samples: Vec<_> = bytes
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|b| i16::from_le_bytes([b[0], b[1]]))
-            .collect();
-        let mut frames = Vec::new();
-        let pending = &mut self.pending;
+        let samples = &mut self.samples[..bytes.len() / 2];
+        for (sample, &bytes) in samples.iter_mut().zip(bytes.as_chunks::<2>().0) {
+            *sample = i16::from_le_bytes(bytes);
+        }
+        self.frames.clear();
+        let (pending, frames) = (&mut self.pending, &mut self.frames);
         self.converter
-            .process(&samples, |samples| frame_capture(pending, samples, &mut frames))?;
+            .process(samples, |samples| frame_capture(pending, samples, frames))?;
         Ok(frames)
     }
 
     /// Drain filter delay, keeping an incomplete 20 ms tail unpadded and unsent.
     /// # Errors
     /// Returns a fixed conversion error. Repeated finish emits no additional frames.
-    pub fn finish(&mut self) -> Result<Vec<PcmFrame>, Error> {
-        let mut frames = Vec::new();
+    pub fn finish(&mut self) -> Result<&[PcmFrame], Error> {
+        self.frames.clear();
         self.finished = true;
-        let pending = &mut self.pending;
+        let (pending, frames) = (&mut self.pending, &mut self.frames);
         self.converter
-            .finish(|samples| frame_capture(pending, samples, &mut frames))?;
+            .finish(|samples| frame_capture(pending, samples, frames))?;
         Ok(frames)
     }
 

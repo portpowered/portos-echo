@@ -1,3 +1,4 @@
+use crate::SessionHandle;
 use std::num::NonZeroU64;
 
 pub type CallPcmFrame = [i16; 320];
@@ -48,6 +49,10 @@ impl CallSetupStage {
 
 #[derive(Clone, Copy)]
 pub enum CallEvent<'a> {
+    Uplink {
+        run: SessionHandle,
+        event: UplinkEvent<'a>,
+    },
     PeerAttached,
     OpenRequested {
         call: CallHandle,
@@ -85,18 +90,38 @@ pub enum CallEvent<'a> {
     },
 }
 
+#[derive(Clone, Copy)]
+pub enum UplinkEvent<'a> {
+    CaptureOpened,
+    MicFrame(&'a CallPcmFrame),
+    Writable,
+    Result { attempt: u64, receipt: UplinkReceipt },
+    DropBacklog,
+    CaptureClosed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UplinkReceipt {
+    Accepted,
+    Full,
+    Failed,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallCommand {
     OpenPeer(CallHandle),
     ClosePeer(CallHandle),
     ResetReceive { call: CallHandle, generation: u64 },
     DeliverRemoteAudio { call: CallHandle, generation: u64 },
+    SendUplinkFrame { run: SessionHandle, attempt: u64 },
+    DropBacklog(SessionHandle),
 }
 
 #[derive(Default)]
 pub struct CallCommands {
     action: Option<CallCommand>,
     frame: Option<CallPcmFrame>,
+    pub uplink_evicted: bool,
 }
 
 impl CallCommands {
@@ -118,4 +143,7 @@ pub struct CallView {
     pub setup_stage: CallSetupStage,
     pub receive: CallReceive,
     pub receive_generation: u64,
+    pub uplink_run: Option<SessionHandle>,
+    pub backlog_depth: usize,
+    pub uplink_dropped: u64,
 }

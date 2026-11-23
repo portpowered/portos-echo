@@ -1,4 +1,6 @@
-//! Live call lifecycle and receive-generation policy.
+//! Live call lifecycle, receive-generation policy and run uplink.
+mod uplink;
+
 use echo_core_api::{
     Broken, CallCommand, CallCommands, CallEvent, CallHandle, CallPhase, CallReceive, CallSetupStage, CallView,
     CommandKind, Commands, Event, EventKind, Now, Subsystem,
@@ -10,12 +12,18 @@ pub struct LiveCall;
 #[derive(Default)]
 pub struct State {
     view: CallView,
+    uplink: uplink::Backlog,
 }
 
 impl State {
     #[must_use]
     pub fn view(&self) -> CallView {
-        self.view
+        CallView {
+            uplink_run: self.uplink.run(),
+            backlog_depth: self.uplink.depth(),
+            uplink_dropped: self.uplink.dropped(),
+            ..self.view
+        }
     }
 
     fn attach(&mut self) {
@@ -38,6 +46,10 @@ impl State {
             BumpReceiveGeneration, CloseRequested, OpenRequested, PeerAttached, PeerClosed, PeerConnected, PeerFailed,
             ReceiveReset, RemoteAudioFrame, RetireReceive, SetupStage,
         };
+        if let CallEvent::Uplink { run, event } = event {
+            self.uplink.apply(run, event, out);
+            return;
+        }
         let Some(active) = self.view.handle else {
             if matches!(event, PeerAttached) {
                 self.attach();
@@ -146,6 +158,8 @@ impl Subsystem for LiveCall {
         CommandKind::ClosePeer,
         CommandKind::ResetReceive,
         CommandKind::DeliverRemoteAudio,
+        CommandKind::SendUplinkFrame,
+        CommandKind::DropBacklog,
     ];
 
     fn on_event(state: &mut State, event: &mut Event<'_>, _now: Now, out: &mut Commands) {
@@ -166,7 +180,7 @@ impl Subsystem for LiveCall {
                 actual: "reset pending",
             });
         }
-        Ok(())
+        state.uplink.check()
     }
 }
 

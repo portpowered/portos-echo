@@ -64,6 +64,8 @@ pub enum CommandKind {
     ClosePeer,
     ResetReceive,
     DeliverRemoteAudio,
+    SendUplinkFrame,
+    DropBacklog,
 }
 
 #[derive(Default)]

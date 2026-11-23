@@ -33,6 +33,8 @@ impl Subsystem for VoiceReducers {
         CommandKind::ClosePeer,
         CommandKind::ResetReceive,
         CommandKind::DeliverRemoteAudio,
+        CommandKind::SendUplinkFrame,
+        CommandKind::DropBacklog,
     ];
 
     fn on_event(state: &mut State, event: &mut Event, now: Now, out: &mut Commands) {

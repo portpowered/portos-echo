@@ -25,10 +25,21 @@ late retired audio for its existing discard accounting. A complete frame is
 passed inline as 320 samples. The private World report uses its existing
 schema and accepts the fixed diagnostic for a closed call with a pending reset.
 
+World allocates 1,500 inline PCM slots for the uplink ring at construction.
+The current session handle owns the backlog. An offer keeps its head until
+the peer's non-blocking send accepts it. Full and failed sends leave the head
+pending. A matching run and offer are required for each receipt. Overflow
+evicts the oldest unsent frame. Mute and capture release clear unsent speech,
+including when the peer stays open for the next wake.
+
+Capture decodes into reused sample storage and collects complete frames in
+reused output storage. Invalid chunks consume no converter input and the
+incomplete tail stays unsent. Mute discards the converter with its filter
+history as before.
+
 ## Deferred
 
-- The run's 1,500-frame backlog and capture chunk scratch move in story 002.
-  The separate WebRTC transport queue retains its capacity and notifications.
+- The separate WebRTC transport queue retains its capacity and notifications.
 - The reply pacer's microphone meter reuses its existing event buffer.
-- The global inbox, deterministic replay and whole-core allocation proof
+- The global inbox, deterministic replay, Opus packet buffer reuse and whole-core allocation proof
   remain with their existing plan gates.
