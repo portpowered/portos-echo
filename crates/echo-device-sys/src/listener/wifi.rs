@@ -62,7 +62,7 @@ fn exchange(stream: &mut UnixStream, path: &Path, handler: WifiHandler) -> io::R
     let deadline = (handler.monotonic)() + IO_TIMEOUT;
     let mut frame = Vec::new();
     let request = loop {
-        let left = deadline.saturating_duration_since((handler.monotonic)());
+        let left = deadline.saturating_sub((handler.monotonic)());
         if left.is_zero() {
             return Err(io::ErrorKind::TimedOut.into());
         }
