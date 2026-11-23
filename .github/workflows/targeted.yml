@@ -1,168 +1,84 @@
 name: Targeted
-on:
-  workflow_dispatch:
-    inputs:
-      nextest_filter:
-        description: Optional nextest -E expression
-        type: string
-        required: false
-        default: ''
-      scenarios:
-        description: Optional space-separated scenario stems or .yaml filenames
-        type: string
-        required: false
-        default: ''
-      repeat:
-        description: Number of executions, integer 1-10
-        type: number
-        required: false
-        default: 1
-      ignored:
-        description: Include ignored tests in the filter selection
-        type: boolean
-        required: false
-        default: true
-      release_bundle:
-        description: Build and verify the distributable release bundle
-        type: boolean
-        required: false
-        default: false
+on: workflow_dispatch
 permissions:
   contents: read
+  actions: read
 jobs:
-  targeted:
-    if: ${{ !inputs.release_bundle || inputs.nextest_filter != '' || inputs.scenarios != '' }}
+  witness:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
           target: test-sim
           sim: 'true'
-      - name: Execute requested selections
-        id: selections
-        shell: sh
-        env:
-          TARGETED_FILTER: ${{ inputs.nextest_filter }}
-          TARGETED_SCENARIOS: ${{ inputs.scenarios }}
-          TARGETED_REPEAT: ${{ inputs.repeat }}
-          TARGETED_IGNORED: ${{ inputs.ignored }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: targeted-reports-45086408167-1
+          path: ${{ runner.temp }}/a1-baseline
+          run-id: 45086408167
+          github-token: ${{ github.token }}
+      - name: Paused public M2 run with a lone row
+        shell: bash
         run: |
-          python - <<'PY'
-          import os
-          import re
-          import subprocess
-          import tempfile
+          make sim-prereqs
+          out="$(mktemp -d)/m2"
+          ECHO_LAB_TRACE_TICK=1 target/debug/echo-lab run tests/scenarios/m2-live-connect.yaml --driver sim --out "$out"
+          python - "$out" <<'PY'
+          import json
+          import sys
           from pathlib import Path
-          selection = os.environ["TARGETED_FILTER"].strip()
-          names = os.environ["TARGETED_SCENARIOS"].split()
-          count = os.environ["TARGETED_REPEAT"]
-          ignored = os.environ["TARGETED_IGNORED"]
-          if not re.fullmatch(r"(?:[1-9]|10)", count) or ignored not in ("true", "false"):
-              raise SystemExit("targeted: repeat must be 1-10 and ignored must be boolean")
-          if not selection and not names:
-              raise SystemExit("targeted: provide nextest_filter or scenarios")
-          paths = []
-          for name in names:
-              if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\.yaml)?", name):
-                  raise SystemExit("targeted: use scenario names within tests/scenarios")
-              path = Path("tests/scenarios") / (name if name.endswith(".yaml") else name + ".yaml")
-              if not path.is_file() or path.resolve().parent != Path("tests/scenarios").resolve():
-                  raise SystemExit("targeted: missing or unsafe scenario")
-              paths.append(path)
-          subprocess.run(["cargo", "build", "--locked", "-p", "echo-lab", "-p", "echo-bridge",
-                          "-p", "echo-muse-bridge", "--bins"], check=True)
-          report_root = Path(tempfile.mkdtemp(prefix="targeted-reports-", dir=os.environ["RUNNER_TEMP"])).resolve()
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              print(f"report_root={report_root}", file=output)
-          failed = False
-          for number in range(1, int(count) + 1):
-              code = 0
-              if selection:
-                  command = ["cargo", "nextest", "run", "--locked", "--workspace", "--all-targets",
-                             "--config-file", ".github/nextest.toml", "--profile", "ci",
-                             "--no-tests", "fail", "-E", selection]
-                  if ignored == "true":
-                      command += ["--run-ignored", "all"]
-                  code = subprocess.run(command).returncode
-              for index, path in enumerate(paths):
-                  parent = report_root / ("repeat-" + str(number))
-                  parent.mkdir(parents=True, exist_ok=True)
-                  destination = parent / (str(index) + "-" + path.stem)
-                  result = subprocess.run(["target/debug/echo-lab", "run", str(path),
-                                           "--driver", "sim", "--out", str(destination)]).returncode
-                  if result and not code:
-                      code = result
-              print(f"TARGETED_RESULT repeat={number} exit={code}", flush=True)
-              failed = failed or code != 0
-          raise SystemExit(1 if failed else 0)
+          out = Path(sys.argv[1])
+          report = json.loads((out / "report.json").read_text())
+          case = json.loads((out / "m2-success.json").read_text())
+          rows = [row for row in case["trace"] if row["event"] == "clock.offset"]
+          assert report["result"] == "pass" and all(report["checks"].values())
+          assert len(rows) == 1 and case["calls"] == 1 and case["provider_wire"] is True
+          assert case["reply_pcm"]["pcm_bytes"] == 9600
+          print("A1_TICK virtual_ms=100 rows=1 provider_calls=1 reply_pcm_bytes=9600")
+          print(json.dumps(rows[0], sort_keys=True, separators=(",", ":")))
           PY
-      - name: Upload echo-lab reports
-        if: always() && steps.selections.outputs.report_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-reports-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.selections.outputs.report_root }}
-          if-no-files-found: ignore
-          retention-days: 3
-  release-bundle:
-    if: ${{ inputs.release_bundle }}
-    runs-on: ubuntu-24.04
-    # Existing standalone Codex job allows 180 minutes for a cold build.
-    timeout-minutes: 240
-    env:
-      CARGO_BUILD_JOBS: '4'
-      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Focused wrapper and packaging tests
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          python3 tests/test_release_kit.py
-          python3 tests/test_release_redirects.py
-      - uses: ./.github/actions/setup
-        with:
-          target: build-echo
-      - name: Provision release tools
-        shell: sh
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3 gcc-mingw-w64-x86-64-posix
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "platforms;android-34" "build-tools;35.0.0"
-          rustup target add --toolchain 1.100.0 armv7-linux-androideabi x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: Cheap release checks
+      - name: Compare the correction writer with the original M2 byte golden
         env:
-          GH_TOKEN: ${{ github.token }}
+          A1_GOLDEN: ${{ runner.temp }}/a1-baseline/repeat-1
+        shell: bash
         run: |
-          actionlint .github/workflows/release.yml .github/workflows/targeted.yml
-          python3 tests/test_release_kit.py --configure-native
-      - name: Build and verify release bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
+          git fetch origin scratch/sb-a1-trace-golden-candidate
+          file=crates/echo-bridge/src/bridge_trace.rs
+          trap 'git restore -- "$file"' EXIT
+          git show FETCH_HEAD:"$file" | sed -n '/^async fn bridge_trace_m2_golden_witness()/,$p' | sed '/^}/q' > "$RUNNER_TEMP/golden-test.rs"
+          test -s "$RUNNER_TEMP/golden-test.rs"
+          printf '\n#[cfg(test)]\n#[tokio::test(start_paused = true)]\n' >> "$file"
+          cat "$RUNNER_TEMP/golden-test.rs" >> "$file"
+          cargo test --locked -p echo-bridge --lib bridge_trace_m2_golden_witness
+          cmp "$A1_GOLDEN/0-m2-live-connect/trace-golden.jsonl" "$A1_GOLDEN/candidate.jsonl"
+          wc -cl "$A1_GOLDEN/candidate.jsonl"
+          sha256sum "$A1_GOLDEN/candidate.jsonl"
+          echo 'TRACE_GOLDEN_CMP candidate_exit=0'
+      - name: Seed the released screen port race
+        shell: bash
         run: |
-          make dist
-          python3 tests/test_release_kit.py --assets dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-release-${{ github.sha }}
-          path: |
-            dist/echo-*-armv7.tar.gz
-            dist/default-*.screenpack.tar.gz
-            dist/companion-0.2.2.screenpack.tar.gz
-            dist/echo-setup-*-linux-x86_64
-            dist/echo-setup-*-windows-x86_64.exe
-            dist/install.sh
-            dist/install.ps1
-            dist/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 7
+          file=crates/echo-bridge/tests/codex_operator/voice_entry.rs
+          trap 'git restore -- "$file"' EXIT
+          python - "$file" <<'PY'
+          import sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          source = path.read_text()
+          choose = '.replace(&fixture.screen.to_string(), "127.0.0.1:0")'
+          assert source.count(choose) == 1
+          path.write_text(source.replace(choose, '.replace(&fixture.screen.to_string(), &listener.local_addr().unwrap().to_string())'))
+          PY
+          set +e
+          cargo nextest run --locked -p echo-bridge --test bridge_t3 --run-ignored only --config-file .github/nextest.toml --profile ci -E 'test(codex_voice_entry_binary_missing_configuration_never_dials_wyoming)' > "$RUNNER_TEMP/seeded-screen.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/seeded-screen.log"
+          test "$status" -ne 0
+          grep -F 'failed: echo-bridge: screen' "$RUNNER_TEMP/seeded-screen.log"
+          grep -F 'left: Some(1)' "$RUNNER_TEMP/seeded-screen.log"
+          grep -F 'right: Some(2)' "$RUNNER_TEMP/seeded-screen.log"
+          echo "A1_SCREEN_OCCUPIED expected_code=2 actual_code=1"
