@@ -12,6 +12,7 @@ use tokio::time::Instant;
 mod pacer;
 mod session;
 mod slots;
+mod tools;
 mod voice_reducers;
 pub mod witness;
 pub(crate) use pacer::{PacerPort, scope};
@@ -57,6 +58,7 @@ type SessionWorld = World<Device, VoiceReducers, echo_sub_trace::Trace, BridgeCl
 struct State {
     world: SessionWorld,
     runs: Slots<()>,
+    tools: tools::ToolSlots,
     first_violation: Option<Broken>,
     trace_held: bool,
 }
@@ -93,6 +95,7 @@ impl Controller {
                     rng: seed.map_or(SessionRng::Os(OsRng), |seed| SessionRng::Seeded(SeededRng::new(seed))),
                 },
                 runs: Slots::new(1),
+                tools: tools::ToolSlots::new(),
                 first_violation: None,
                 trace_held: false,
             }),

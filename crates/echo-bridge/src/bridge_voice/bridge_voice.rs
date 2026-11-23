@@ -189,10 +189,11 @@ async fn run_opened<L: EchoLink>(
         return Err(Error::Deadline);
     }
     let mut source = Source::with_session(options.reply_lead_ms, options.muted, opened, Some(options.session_max))?;
-    source.session = session_tools::Grants::new(options.listen_timeout, options.session_max);
-    port.bind_session(Some(source.session.run.clone()));
-    port.start_muse_run(source.controller.run_ceiling().ok_or(Error::Deadline)?)?;
-    source.controller.admit_response(options.response_deadline)?;
+    let controller = &source.controller;
+    controller.configure_tools(options.listen_timeout, options.session_max)?;
+    port.bind_session(Some(controller.token().clone()));
+    port.start_muse_run(controller.run_ceiling().ok_or(Error::Deadline)?)?;
+    controller.admit_response(options.response_deadline)?;
     // A cut replaces playback, while the run still owns pending clock receipts.
     let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
         .map(|clock| clock.voice())
@@ -490,7 +491,7 @@ async fn media(
             Ok(())
         }
         MediaEvent::Control(Event::Session(request)) => {
-            session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
+            session_tools::answer(request, &source.controller, observe)?;
             voice_listen::end_if_ended(port, source).await
         }
         MediaEvent::Control(Event::Other | Event::ReplyHandoff(_)) => Ok(()),

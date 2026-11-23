@@ -1,5 +1,4 @@
 //! T1: idle capture/control boundaries with staged memory-only input.
-use super::super::super::session_tools::Grants;
 use super::*;
 use echo_link::{MicFrame, MicrophoneRun, RunStats};
 
@@ -84,7 +83,10 @@ async fn voice_listen_mute_discards_mic_during_farewell_without_touching_playbac
     let (_tx, rx) = mpsc::channel(1);
     let mut port = Port(rx, std::rc::Rc::default());
     let mut source = Source::new(200, false).unwrap();
-    source.session = Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
+    source
+        .controller
+        .configure_tools(Some(Duration::from_secs(3)), Duration::from_secs(12))
+        .unwrap();
     source.spoke();
     source.audio(&[5000; 320]).unwrap();
     let muted = Cell::new(false);
@@ -115,7 +117,7 @@ async fn voice_listen_mute_discards_mic_during_farewell_without_touching_playbac
     assert!(source.reply.finished());
     assert!(!source.controller.cutting());
     assert_eq!(source.stats.reply_received, 1);
-    assert!(!source.session.ending());
+    assert!(!source.controller.ending());
 }
 
 #[tokio::test(start_paused = true)]

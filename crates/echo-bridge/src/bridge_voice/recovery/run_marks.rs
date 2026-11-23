@@ -216,8 +216,7 @@ impl Source {
         {
             return None;
         }
-        let window = Instant::now().checked_add(self.session.listen()?)?;
-        let window = self.session.granted().map_or(window, |granted| window.max(granted));
+        let window = self.controller.projected_listen()?;
         Some(window.min(due))
     }
 

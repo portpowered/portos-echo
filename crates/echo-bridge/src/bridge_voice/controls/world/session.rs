@@ -2,7 +2,7 @@ use super::{Controller, State, pacer};
 use crate::Error;
 use echo_core_api::{
     Commands, Event, FollowUp, SessionChange, SessionCommand, SessionCommands, SessionError, SessionEvent,
-    SessionHandle, SessionOutcome, SessionTimer, SessionView,
+    SessionHandle, SessionOutcome, SessionTimer, SessionToolAction, SessionToolDecision, SessionToolEvent, SessionView,
 };
 use std::{fmt, future::Future, sync::Arc, time::Duration};
 use tokio::time::Instant;
@@ -12,6 +12,7 @@ use tokio::time::Instant;
 pub(crate) struct SessionPort {
     world: Arc<Controller>,
     handle: SessionHandle,
+    token: Arc<()>,
 }
 
 impl fmt::Debug for SessionPort {
@@ -47,6 +48,7 @@ impl Controller {
         Ok(SessionPort {
             world: self,
             handle: session,
+            token: Arc::new(()),
         })
     }
 }
@@ -97,6 +99,75 @@ impl SessionPort {
 
     fn view(&self) -> SessionView {
         self.read(echo_sub_session::State::view)
+    }
+
+    pub(crate) fn token(&self) -> &Arc<()> {
+        &self.token
+    }
+
+    pub(crate) fn answer_tool(
+        &self,
+        key: String,
+        action: SessionToolAction,
+    ) -> Result<(SessionToolDecision, bool), Error> {
+        let mut state = self.world.state();
+        let session = self.handle;
+        if state.runs.get(session.index, session.generation).is_none() {
+            return Err(Error::Control);
+        }
+        if let Some(cached) = state.tools.replay(&key) {
+            return Ok((cached, true));
+        }
+        let tool = state.tools.start(key).ok_or(Error::Control)?;
+        let start = SessionEvent::Tool {
+            session,
+            change: SessionToolEvent::Started { tool, action },
+        };
+        let decision = match self.world.session_step(&mut state, start).outcome {
+            Some(Ok(SessionOutcome::Tool(decision))) => decision,
+            outcome => {
+                state.tools.remove(tool);
+                return Err(session_error(outcome));
+            }
+        };
+        let end = SessionEvent::Tool {
+            session,
+            change: SessionToolEvent::Ended { tool },
+        };
+        let outcome = self.world.session_step(&mut state, end).outcome;
+        if outcome != Some(Ok(SessionOutcome::Applied)) {
+            state.tools.remove(tool);
+            return Err(session_error(outcome));
+        }
+        state.tools.retain(tool, decision).ok_or(Error::Control)?;
+        Ok((decision, false))
+    }
+
+    pub(crate) fn configure_tools(&self, listen: Option<Duration>, max: Duration) -> Result<(), Error> {
+        self.apply(SessionChange::ConfigureTools { listen, max })
+    }
+
+    pub(crate) fn ending(&self) -> bool {
+        self.read(echo_sub_session::State::ending)
+    }
+
+    pub(crate) fn request_end(&self) {
+        self.dispatch(SessionChange::RequestEnd);
+    }
+
+    pub(crate) fn projected_listen(&self) -> Option<Instant> {
+        self.read(|state| state.projected_listen(Instant::now().into_std()))
+            .map(Instant::from_std)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn granted(&self) -> Option<Instant> {
+        self.read(echo_sub_session::State::granted).map(Instant::from_std)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn answered_count(&self) -> usize {
+        self.world.state().tools.len()
     }
 
     pub(crate) fn idle_deadline(&self) -> Option<Instant> {
@@ -154,8 +225,8 @@ impl SessionPort {
         self.apply(SessionChange::Resume)
     }
 
-    pub(crate) fn extend_idle(&self, deadline: Instant) {
-        self.dispatch(SessionChange::ExtendIdle(deadline.into_std()));
+    pub(crate) fn renew_idle(&self) {
+        self.dispatch(SessionChange::RenewIdle);
     }
 
     pub(crate) fn begin_close(&self, mouth_drained: bool) -> Result<(), Error> {
@@ -255,6 +326,7 @@ impl Drop for SessionPort {
             .world
             .session_step(&mut state, SessionEvent::RunReleased { session });
         if out.effect == Some(SessionCommand::StopCapture { session }) {
+            state.tools.clear();
             state.runs.remove(session.index, session.generation);
         }
     }
@@ -279,6 +351,43 @@ fn map_error(error: SessionError) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn session_slots_release_invalidates_retained_tool_results() {
+        let world = Controller::new();
+        let run = world.clone().admit(Instant::now(), None).unwrap();
+        run.configure_tools(Some(Duration::from_secs(3)), Duration::from_secs(12))
+            .unwrap();
+        let (decision, cached) = run.answer_tool("key".into(), SessionToolAction::End).unwrap();
+        let SessionToolDecision::Ending {
+            tool: old,
+            duplicate: false,
+        } = decision
+        else {
+            unreachable!()
+        };
+        assert!(!cached);
+        drop(run);
+
+        let run = world.admit(Instant::now(), None).unwrap();
+        run.configure_tools(Some(Duration::from_secs(3)), Duration::from_secs(12))
+            .unwrap();
+        let (decision, cached) = run
+            .answer_tool("key".into(), SessionToolAction::Extend { seconds: 2 })
+            .unwrap();
+        let SessionToolDecision::Extended {
+            tool: new,
+            deadline_ms: 5000,
+            capped: false,
+        } = decision
+        else {
+            unreachable!()
+        };
+        assert!(!cached);
+        assert_eq!(new.index, old.index);
+        assert_ne!(new.generation, old.generation);
+        assert!(!run.ending());
+    }
 
     #[tokio::test(start_paused = true)]
     async fn session_slots_release_clears_quiet_deadline() {

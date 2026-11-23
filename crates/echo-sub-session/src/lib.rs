@@ -48,6 +48,10 @@ impl Subsystem for Session {
                 let time = run.epoch.checked_add(now.monotonic).ok_or(SessionError::Deadline)?;
                 run.apply(change, time, out)
             }),
+            SessionEvent::Tool { session, change } => state.active(session).and_then(|run| {
+                let time = run.epoch.checked_add(now.monotonic).ok_or(SessionError::Deadline)?;
+                run.tool_event(change, time)
+            }),
             SessionEvent::RunReleased { session } if state.is_active(session) => {
                 state.run = None;
                 out.effect = Some(SessionCommand::StopCapture { session });
@@ -79,6 +83,21 @@ impl Subsystem for Session {
 }
 
 impl State {
+    #[must_use]
+    pub fn ending(&self) -> bool {
+        self.run.as_ref().is_some_and(Run::ending)
+    }
+
+    #[must_use]
+    pub fn granted(&self) -> Option<Instant> {
+        self.run.as_ref().and_then(Run::granted)
+    }
+
+    #[must_use]
+    pub fn projected_listen(&self, now: Instant) -> Option<Instant> {
+        self.run.as_ref()?.projected_listen(now)
+    }
+
     fn wake(
         &mut self,
         session: SessionHandle,
@@ -204,7 +223,9 @@ impl Run {
             SessionChange::ReplySettled => self.follow_up = FollowUp::Replied,
             SessionChange::Resume => self.resume()?,
             SessionChange::Listen(timeout) => self.listen_after_reply(timeout, now)?,
-            SessionChange::ExtendIdle(due) => self.extend_idle(due),
+            SessionChange::ConfigureTools { listen, max } => self.configure_tools(listen, max, now),
+            SessionChange::RenewIdle => self.renew_idle(now),
+            SessionChange::RequestEnd => self.request_end(),
             SessionChange::Cut => self.cut(),
             SessionChange::CutSettled => self.cut_settled(),
             SessionChange::CutPlayed => self.cut_played(),

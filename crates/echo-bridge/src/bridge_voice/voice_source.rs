@@ -49,7 +49,6 @@ pub(super) struct Source {
     pub delegation: Delegation,
     pub meter: ReplyMeter,
     pub stats: Stats,
-    pub session: super::session_tools::Grants,
     /// Speech the bounded media sender has not taken yet, oldest first.
     uplink: VecDeque<PcmFrame>,
     /// The device was told a dispatch is running in silence.
@@ -119,10 +118,7 @@ impl Source {
 
     /// Give the configured listen window from now.
     pub fn renew_idle(&mut self) {
-        let listen = self.session.listen();
-        if let Some(deadline) = listen.and_then(|listen| Instant::now().checked_add(listen)) {
-            self.controller.extend_idle(deadline);
-        }
+        self.controller.renew_idle();
     }
 
     /// Close the reply's quality window. `lost` is the call's cumulative RTP loss.
@@ -199,7 +195,6 @@ impl Source {
             marks: super::voice_wait::Marks::default(),
             meter: ReplyMeter::default(),
             stats: Stats::default(),
-            session: super::session_tools::Grants::default(),
             uplink: VecDeque::new(),
             barge: Barge::default(),
             stale: false,
@@ -215,7 +210,7 @@ impl Source {
     /// at its playback boundary. Between replies there is nothing to stop.
     /// True when that farewell is done and only held for the delegated answer.
     pub fn end_if_ended(&mut self, port: &mut impl VoicePort) -> Result<bool, Error> {
-        if !self.session.ending() || self.controller.cutting() || self.controller.closing() {
+        if !self.controller.ending() || self.controller.cutting() || self.controller.closing() {
             return Ok(false);
         }
         let held = self.delegation.held();

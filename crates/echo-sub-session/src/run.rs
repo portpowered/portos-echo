@@ -1,4 +1,7 @@
-use echo_core_api::{FollowUp, SessionError as Error, SessionHandle, SessionTimer};
+use echo_core_api::{
+    FollowUp, SessionError as Error, SessionHandle, SessionOutcome, SessionTimer, SessionToolAction,
+    SessionToolDecision, SessionToolEvent, SessionToolRefusal, ToolCallHandle,
+};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -28,6 +31,17 @@ pub(crate) struct Run {
     microphone_finished: bool,
     response_window: Option<Duration>,
     idle_deadline: Option<Instant>,
+    tools: Option<ToolWindow>,
+    active_tool: Option<ToolCallHandle>,
+    granted: Option<Instant>,
+    ending: bool,
+}
+
+#[derive(Debug)]
+struct ToolWindow {
+    opened: Instant,
+    listen: Duration,
+    max: Duration,
 }
 
 impl Run {
@@ -45,6 +59,10 @@ impl Run {
             microphone_finished: false,
             response_window: None,
             idle_deadline: None,
+            tools: None,
+            active_tool: None,
+            granted: None,
+            ending: false,
         }
     }
 
@@ -53,7 +71,8 @@ impl Run {
         if timeout.is_zero() || !self.ready_to_close(true, true) {
             return Err(Error::Input);
         }
-        self.idle_deadline = Some(now.checked_add(timeout).ok_or(Error::Input)?);
+        let deadline = now.checked_add(timeout).ok_or(Error::Input)?;
+        self.idle_deadline = Some(self.granted.map_or(deadline, |grant| deadline.max(grant)));
         self.state = Phase::Listening;
         Ok(())
     }
@@ -63,7 +82,7 @@ impl Run {
     }
 
     /// A granted deadline can only lengthen an armed listen interval.
-    pub(crate) fn extend_idle(&mut self, deadline: Instant) {
+    fn extend_idle(&mut self, deadline: Instant) {
         if let Some(current) = &mut self.idle_deadline {
             *current = (*current).max(deadline);
         }
@@ -209,6 +228,89 @@ impl Run {
 
     fn playback_settled(&self, stopped: bool, mouth_drained: bool) -> bool {
         !self.cutting() && self.played && (stopped || self.unanswered) && mouth_drained
+    }
+}
+
+impl Run {
+    pub(crate) fn configure_tools(&mut self, listen: Option<Duration>, max: Duration, now: Instant) {
+        self.tools = listen.map(|listen| ToolWindow {
+            opened: now,
+            listen,
+            max,
+        });
+    }
+
+    pub(crate) fn ending(&self) -> bool {
+        self.ending
+    }
+
+    pub(crate) fn request_end(&mut self) {
+        self.ending = true;
+    }
+
+    pub(crate) fn granted(&self) -> Option<Instant> {
+        self.granted
+    }
+
+    pub(crate) fn renew_idle(&mut self, now: Instant) {
+        if let Some(deadline) = self.tools.as_ref().and_then(|tools| now.checked_add(tools.listen)) {
+            self.extend_idle(deadline);
+        }
+    }
+
+    pub(crate) fn projected_listen(&self, now: Instant) -> Option<Instant> {
+        let window = now.checked_add(self.tools.as_ref()?.listen)?;
+        Some(self.granted.map_or(window, |grant| window.max(grant)))
+    }
+
+    pub(crate) fn tool_event(&mut self, event: SessionToolEvent, now: Instant) -> Result<SessionOutcome, Error> {
+        match event {
+            SessionToolEvent::Started { tool, action } if self.active_tool.is_none() => {
+                self.active_tool = Some(tool);
+                Ok(SessionOutcome::Tool(self.decide_tool(tool, action, now)))
+            }
+            SessionToolEvent::Ended { tool } if self.active_tool == Some(tool) => {
+                self.active_tool = None;
+                Ok(SessionOutcome::Applied)
+            }
+            _ => Err(Error::Control),
+        }
+    }
+
+    fn decide_tool(&mut self, tool: ToolCallHandle, action: SessionToolAction, now: Instant) -> SessionToolDecision {
+        let refuse = |reason| SessionToolDecision::Refused { tool, reason };
+        let Some(window) = &self.tools else {
+            return refuse(SessionToolRefusal::Inactive);
+        };
+        if self.closing() {
+            return refuse(SessionToolRefusal::Closing);
+        }
+        match action {
+            SessionToolAction::Invalid => refuse(SessionToolRefusal::InvalidArguments),
+            SessionToolAction::End => {
+                let duplicate = self.ending();
+                self.request_end();
+                SessionToolDecision::Ending { tool, duplicate }
+            }
+            SessionToolAction::Extend { .. } if self.ending() => refuse(SessionToolRefusal::Closing),
+            SessionToolAction::Extend { seconds } => {
+                let current = self.idle_deadline.or_else(|| now.checked_add(window.listen));
+                let base = [current, self.granted].into_iter().flatten().fold(now, Instant::max);
+                let cap = window.opened.checked_add(window.max).unwrap_or(base);
+                let wanted = base.checked_add(Duration::from_secs(seconds));
+                let capped = wanted.is_none_or(|wanted| wanted > cap);
+                let deadline = wanted.map_or(cap, |wanted| wanted.min(cap));
+                let deadline_ms =
+                    u64::try_from(deadline.saturating_duration_since(window.opened).as_millis()).unwrap_or(u64::MAX);
+                self.granted = Some(deadline);
+                self.extend_idle(deadline);
+                SessionToolDecision::Extended {
+                    tool,
+                    deadline_ms,
+                    capped,
+                }
+            }
+        }
     }
 }
 

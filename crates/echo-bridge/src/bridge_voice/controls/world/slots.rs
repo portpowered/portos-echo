@@ -35,6 +35,11 @@ impl<T> Slots<T> {
         (slot.generation == generation).then_some(slot.value.as_ref()).flatten()
     }
 
+    pub(super) fn get_mut(&mut self, index: usize, generation: NonZeroU64) -> Option<&mut T> {
+        let slot = self.entries.get_mut(index)?;
+        (slot.generation == generation).then_some(slot.value.as_mut()).flatten()
+    }
+
     pub(super) fn remove(&mut self, index: usize, generation: NonZeroU64) -> Option<T> {
         let slot = self.entries.get_mut(index)?;
         if slot.generation != generation {
@@ -53,17 +58,17 @@ impl<T> Slots<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use echo_core_api::ToolHandle;
+    use echo_core_api::ToolCallHandle;
     use std::io::Write;
 
     #[test]
     fn session_slots_reject_stale_tool_handle_after_reuse() {
         let mut slots = Slots::new(1);
         let (index, generation) = slots.insert("first").unwrap();
-        let first = ToolHandle { index, generation };
+        let first = ToolCallHandle { index, generation };
         assert_eq!(slots.remove(first.index, first.generation), Some("first"));
         let (index, generation) = slots.insert("second").unwrap();
-        let second = ToolHandle { index, generation };
+        let second = ToolCallHandle { index, generation };
         assert_eq!(first.index, second.index);
         assert_ne!(first.generation, second.generation);
         assert_eq!(slots.get(first.index, first.generation), None);

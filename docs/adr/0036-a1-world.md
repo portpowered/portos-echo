@@ -114,12 +114,19 @@ The service awaits existing device writes, playback, and capture at their
 original boundaries. It also consumes the call open and close commands at
 the existing call setup and teardown boundaries.
 
+World also owns the run's tool grant and pending-end policy. The controller
+maps the compatibility token and request key to the current run and a typed
+tool handle. Its 64-entry retention window replays settled decisions and
+evicts in insertion order, returning slots with a new generation. The bridge
+still records the existing receipt before releasing the tool result. A
+pending end keeps the current immediate and audible-farewell boundaries.
+
 ## Deferred
 
 - The device step receives wake and mute events. Wyoming has no separate
   button report in the current wire contract.
-- Within this lane, the next two stories move run grants and tool slots,
-  then barge, floor and the remaining speech and hand-back policy.
+- Within this lane, the next story moves barge, floor and the remaining
+  speech and hand-back policy.
 - A2 owns the Wyoming service rename, call reducer and phase-wide allocation
   proof. The call reducer steps after pacer and before trace when introduced.
   The retained-call policy and native goodbye path keep their current rules.

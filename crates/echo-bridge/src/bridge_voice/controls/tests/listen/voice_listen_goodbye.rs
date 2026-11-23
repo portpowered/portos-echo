@@ -1,6 +1,5 @@
 //! T1: an applied `end_session` during a delegated hand-off, with memory-only
 //! device and media and paused time.
-use super::super::super::session_tools::Grants;
 use super::*;
 use crate::bridge_codex::SessionCommand;
 
@@ -88,9 +87,12 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) -> usize {
         reply_lead_ms: 200,
         muted: false,
     };
-    source.session = Grants::new(options.listen_timeout, options.session_max);
+    source
+        .controller
+        .configure_tools(options.listen_timeout, options.session_max)
+        .unwrap();
     source.controller.admit_response(options.response_deadline).unwrap();
-    let (end, answer) = session_request(SessionCommand::End, &source.session.run, "farewell");
+    let (end, answer) = session_request(SessionCommand::End, source.controller.token(), "farewell");
     let played = tokio::sync::Notify::new();
     let stopped = tokio::sync::Notify::new();
     let mut receipts = Vec::new();

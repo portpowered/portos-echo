@@ -11,7 +11,7 @@ pub struct SessionHandle {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ToolHandle {
+pub struct ToolCallHandle {
     pub index: usize,
     pub generation: NonZeroU64,
 }
@@ -30,6 +30,10 @@ pub enum SessionEvent {
         session: SessionHandle,
         change: SessionChange,
     },
+    Tool {
+        session: SessionHandle,
+        change: SessionToolEvent,
+    },
     RunReleased {
         session: SessionHandle,
     },
@@ -46,7 +50,9 @@ pub enum SessionChange {
     ReplySettled,
     Resume,
     Listen(Duration),
-    ExtendIdle(Instant),
+    ConfigureTools { listen: Option<Duration>, max: Duration },
+    RenewIdle,
+    RequestEnd,
     Cut,
     CutSettled,
     CutPlayed,
@@ -103,6 +109,49 @@ pub enum SessionOutcome {
     Applied,
     Played(bool),
     DeadlineReached(bool),
+    Tool(SessionToolDecision),
+}
+
+#[derive(Clone, Copy)]
+pub enum SessionToolAction {
+    Extend { seconds: u64 },
+    End,
+    Invalid,
+}
+
+#[derive(Clone, Copy)]
+pub enum SessionToolEvent {
+    Started {
+        tool: ToolCallHandle,
+        action: SessionToolAction,
+    },
+    Ended {
+        tool: ToolCallHandle,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionToolDecision {
+    Extended {
+        tool: ToolCallHandle,
+        deadline_ms: u64,
+        capped: bool,
+    },
+    Ending {
+        tool: ToolCallHandle,
+        duplicate: bool,
+    },
+    Refused {
+        tool: ToolCallHandle,
+        reason: SessionToolRefusal,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionToolRefusal {
+    InvalidArguments,
+    Inactive,
+    Closing,
 }
 
 #[derive(Default)]

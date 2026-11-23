@@ -13,7 +13,7 @@ pub(super) async fn until(deadline: Option<Instant>) {
 }
 
 pub(super) fn remote_cut(port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
-    source.session.request_end();
+    source.controller.request_end();
     source.controller.cut();
     port.retire_audio();
     source.reply.discard_output();
@@ -77,7 +77,7 @@ async fn reply_loop<L: EchoLink>(
         .await;
         if result == Err(Error::Control) && source.controller.cutting() {
             // An applied end cut the reply: it settles and the run closes.
-            let ending = source.session.ending();
+            let ending = source.controller.ending();
             if !settle_cut(source, options.listen_timeout.is_some() || ending, observe)? {
                 generation_options.response_deadline = source.controller.replacement_deadline()?;
                 source.controller.set_response_due(generation_options.response_deadline);
@@ -108,7 +108,7 @@ async fn reply_loop<L: EchoLink>(
         generation_options.response_deadline = source.controller.replacement_deadline()?;
         source.controller.set_response_due(generation_options.response_deadline);
     }
-    if source.session.ending() {
+    if source.controller.ending() {
         tokio::time::timeout(options.played_timeout, flush_end(port))
             .await
             .map_err(|_| Error::Deadline)??;
@@ -153,7 +153,7 @@ async fn after_reply<L: EchoLink>(
 ) -> Result<bool, Error> {
     tokio::pin!(cancelled);
     // A granted end closes at the settled reply boundary.
-    if source.session.ending() {
+    if source.controller.ending() {
         return Ok(false);
     }
     let mut followup = options.listen_timeout.is_some();
@@ -172,7 +172,7 @@ async fn after_reply<L: EchoLink>(
             followup = false;
         }
         if crate::bridge_endpoint::voice::close_requested() {
-            source.session.request_end();
+            source.controller.request_end();
             return Ok(false);
         }
     }
@@ -180,9 +180,6 @@ async fn after_reply<L: EchoLink>(
         return Ok(false);
     }
     source.controller.listen_after_reply(window(source, options)?)?;
-    if let Some(granted) = source.session.granted() {
-        source.controller.extend_idle(granted);
-    }
     think(client, source, observe).await?;
     listen(
         (events, microphone),
@@ -202,7 +199,7 @@ async fn after_reply<L: EchoLink>(
 pub(super) async fn complete_turn(answered: bool, port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
     source.delegation.completed();
     let silent = !answered && !source.delegation.in_flight();
-    if silent && source.session.ending() && source.delegation.released() {
+    if silent && source.controller.ending() && source.delegation.released() {
         close_reply(port, source).await?;
     }
     Ok(())
@@ -324,14 +321,14 @@ async fn listen<E: LinkEvents>(
         let idle = source.controller.idle_deadline().ok_or(Error::Input)?;
         let delegated = source.delegation.waiting();
         let (deadline, expiry) = super::voice_wait::listening(source, idle);
-        if source.session.ending() || (!followup && !delegated) {
+        if source.controller.ending() || (!followup && !delegated) {
             return Ok(false);
         }
         tokio::select! {
             biased;
             () = cancelled.as_mut() => return Err(Error::Control),
             () = crate::bridge_endpoint::voice::ending() => {
-                source.session.request_end();
+                source.controller.request_end();
                 port.retire_audio();
                 return Ok(false);
             }
@@ -401,7 +398,7 @@ async fn listening_step<E: LinkEvents>(
             }
             match event {
                 MediaEvent::Control(Event::Session(request)) => {
-                    super::session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
+                    super::session_tools::answer(request, &source.controller, observe)?;
                     end_if_ended(port, source).await?;
                 }
                 MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
