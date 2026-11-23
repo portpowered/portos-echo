@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write as _,
     fs::{self, File, Metadata},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     os::unix::fs::{FileTypeExt, MetadataExt},
@@ -85,11 +86,30 @@ fn role(path: &Path) -> Option<(Role, bool)> {
         _ => return None,
     };
     let status = fs::read_to_string(path.join("status")).ok()?;
-    let uid = role.identity().uid;
-    let correct = status
-        .lines()
-        .find_map(|line| line.strip_prefix("Uid:"))
-        .is_some_and(|line| line.split_ascii_whitespace().map(str::parse::<u32>).eq([Ok(uid); 4]));
+    let identity = role.identity();
+    let ids = |name: &str| -> Option<Vec<u32>> {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(name))?
+            .split_ascii_whitespace()
+            .map(|value| value.parse().ok())
+            .collect()
+    };
+    let gids = [
+        identity.real_gid,
+        identity.effective_gid,
+        identity.effective_gid,
+        identity.effective_gid,
+    ];
+    let mut groups = identity.groups.to_vec();
+    groups.sort_unstable();
+    let correct = ids("Uid:").as_deref() == Some(&[identity.uid; 4])
+        && ids("Gid:").as_deref() == Some(&gids)
+        && ids("Groups:").as_deref() == Some(&groups)
+        && identity.domain.is_none_or(|expected| {
+            fs::read_to_string(path.join("attr/current"))
+                .is_ok_and(|context| context.trim_end_matches(['\0', '\n']) == expected)
+        });
     Some((role, correct))
 }
 
@@ -180,7 +200,11 @@ fn prefix(source: &mut File, length: u64) -> Result<String> {
     if reader.into_inner().limit() != 0 || (length != 0 && last != Some(b'\n')) {
         return Err("incomplete wake trace");
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    let mut digest = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        write!(digest, "{byte:02x}").map_err(|_| "encode wake digest")?;
+    }
+    Ok(digest)
 }
 
 #[derive(Deserialize)]
@@ -190,24 +214,72 @@ struct Run<'a> {
     provider_auth_mode: Option<&'a str>,
 }
 
-fn run_evidence(trace: File) -> Result<bool> {
+impl Run<'_> {
+    fn sequence(&self) -> Option<u64> {
+        self.run_id?
+            .strip_prefix("run-")?
+            .parse::<u64>()
+            .ok()
+            .filter(|id| *id != 0)
+    }
+}
+
+fn run_evidence(trace: impl Read) -> Result<bool> {
     let mut reader = BufReader::new(trace.take(1024 * 1024));
     let mut frame = Vec::new();
+    let mut observing = None;
     let mut found = false;
     while reader.read_until(b'\n', &mut frame).map_err(|_| "read wake trace")? != 0 {
         if !frame.ends_with(b"\n") {
             return Ok(false);
         }
-        found |= serde_json::from_slice::<Run<'_>>(&frame).is_ok_and(|run| {
-            run.event == "wyoming.run_started"
-                && run
-                    .run_id
-                    .and_then(|id| id.strip_prefix("run-"))
-                    .and_then(|id| id.parse::<u64>().ok())
-                    .is_some_and(|id| id != 0)
-                && matches!(run.provider_auth_mode, Some("chatgpt" | "api_key"))
-        });
+        if let Ok(run) = serde_json::from_slice::<Run<'_>>(&frame)
+            && let Some(id) = run.sequence()
+            && matches!(run.provider_auth_mode, Some("chatgpt" | "api_key"))
+        {
+            match run.event {
+                "wyoming.run_started" => observing = Some(id),
+                "run.started" => (),
+                // This event follows both run-start frames for endpoint sessions.
+                "endpoint.session_started" if observing == Some(id) => observing = None,
+                _ if observing == Some(id) => found = true,
+                _ => (),
+            }
+        }
         frame.clear();
     }
     Ok(found && reader.into_inner().limit() != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_evidence;
+    use std::fmt::Write as _;
+
+    #[test]
+    fn a2_wake_requires_a_complete_local_run_and_rejects_remote_or_stale_runs() {
+        let mut trace = String::new();
+        let record = |trace: &mut String, event: &str, id: u8| {
+            writeln!(
+                trace,
+                r#"{{"event":"{event}","run_id":"run-{id}","provider_auth_mode":"chatgpt"}}"#
+            )
+            .unwrap();
+        };
+        record(&mut trace, "wyoming.run_started", 1);
+        record(&mut trace, "run.started", 1);
+        assert_eq!(run_evidence(trace.as_bytes()), Ok(false));
+        record(&mut trace, "endpoint.session_started", 1);
+        record(&mut trace, "mic.completed", 1);
+        assert_eq!(run_evidence(trace.as_bytes()), Ok(false));
+        let baseline = trace.len();
+        record(&mut trace, "mic.completed", 2);
+        assert_eq!(run_evidence(&trace.as_bytes()[baseline..]), Ok(false));
+        record(&mut trace, "wyoming.run_started", 3);
+        record(&mut trace, "run.started", 3);
+        record(&mut trace, "mic.completed", 3);
+        assert_eq!(run_evidence(&trace.as_bytes()[baseline..]), Ok(true));
+        trace.push('{');
+        assert_eq!(run_evidence(&trace.as_bytes()[baseline..]), Ok(false));
+    }
 }

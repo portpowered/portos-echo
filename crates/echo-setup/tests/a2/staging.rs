@@ -125,3 +125,34 @@ async fn t3_a2_install_rejects_both_policy_digests_before_any_adb_invocation() -
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn t3_a2_install_failed_transaction_cleans_staging_without_reboot_or_account() -> Test {
+    let (root, options) = fixture(&[])?;
+    fs::write(root.0.join("a2-install-failed"), b"")?;
+    let result = install_with_policy(
+        &options,
+        |_| Err(Failure("unexpected_prompt")),
+        || Err(Failure("unexpected_wake")),
+        |_| Ok(()),
+        &crate::Cancellation::default(),
+        async { policy::tests::fixture(true, true) },
+    )
+    .await;
+    assert_eq!(result, Err(Failure("a2_install_failed")));
+    assert!(!root.0.join("a2-installed").exists());
+    assert!(!root.0.join("rebooted").exists());
+    let calls: Vec<Vec<String>> = fs::read_to_string(root.0.join("ledger"))?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<_, _>>()?;
+    let commands: Vec<_> = calls.iter().filter_map(|call| call.last()).collect();
+    assert!(commands.iter().any(|cmd| cmd.contains("install --magiskpolicy")));
+    assert!(
+        commands
+            .last()
+            .is_some_and(|cmd| cmd.starts_with("rm -rf '/data/local/echo-setup-"))
+    );
+    assert!(!commands.iter().any(|cmd| cmd.contains("install --host ")));
+    Ok(())
+}

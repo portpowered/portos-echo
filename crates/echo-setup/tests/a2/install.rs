@@ -201,3 +201,46 @@ fn t3_a2_install_explicit_legacy_keeps_the_existing_bundle_dispatch() -> Result 
     );
     Ok(())
 }
+
+#[test]
+fn t3_a2_install_refuses_wrong_running_identity_or_release_before_signin() -> Result {
+    for (user, version, error) in [
+        ("root", "0.2.0", "unsafe_process_user"),
+        ("nobody", "0.1.0", "a2_version_mismatch"),
+    ] {
+        let fixture = retained()?;
+        fs::write(
+            fixture.0.join("status"),
+            format!(
+                "process=running\nprocess_user={user}\nuptime_seconds=0\nhassmic_link=unavailable\nversion_current={version}\nversion_previous=null\n"
+            ),
+        )?;
+        let output = fixture.install().arg("--from-dir").arg(fixture.bundle()?).output()?;
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(private_output(&output)?["error"], error);
+        assert!(!fs::read_to_string(fixture.0.join("ledger"))?.contains("--host ensure-signin"));
+    }
+    Ok(())
+}
+
+#[test]
+fn t3_a2_install_incomplete_wake_exits_three_and_keeps_the_retained_install() -> Result {
+    let fixture = retained()?;
+    fs::write(
+        fixture.0.join("confirm-evidence"),
+        "wake=pending\nlink=pending\nrun=pending\n",
+    )?;
+    let output = fixture
+        .install()
+        .args(["--timeout-seconds", "3", "--from-dir"])
+        .arg(fixture.bundle()?)
+        .output()?;
+    assert_eq!(output.status.code(), Some(3), "{}", private_output(&output)?);
+    assert_eq!(private_output(&output)?["error"], "setup_timeout");
+    assert_eq!(fs::read_to_string(fixture.0.join("a2-installed"))?, "0.2.0\n");
+    assert_eq!(fs::read_to_string(fixture.0.join("forwards.json"))?, "[]");
+    let calls = fs::read_to_string(fixture.0.join("ledger"))?;
+    assert!(calls.contains("--host confirm-check"));
+    assert!(!calls.contains("--host doctor"));
+    Ok(())
+}
