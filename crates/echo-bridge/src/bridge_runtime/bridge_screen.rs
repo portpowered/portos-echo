@@ -266,16 +266,26 @@ impl Screen {
                 if !muted && approvals.answer(&action).is_err() {
                     break;
                 }
-                if action == echo_screen_contract::UiAction::Relink {
-                    let result = match &account {
-                        Some(account) if account.relink_start() => Ok(()),
-                        None if muted => Ok(()),
-                        None if health.borrow().relink_required => presentation.publish(failure_state(true)),
-                        _ => presentation.refresh(),
-                    };
-                    if result.is_err() {
-                        break;
+                use echo_screen_contract::UiAction;
+                let result = match (&action, &account) {
+                    (UiAction::CancelOpenAiSignin { attempt_id }, Some(account)) => {
+                        account.stop_recovery(attempt_id, false);
+                        Ok(())
                     }
+                    (UiAction::RenewOpenAiSignin { attempt_id }, Some(account)) => {
+                        account.stop_recovery(attempt_id, true);
+                        Ok(())
+                    }
+                    (UiAction::Relink, Some(account)) if account.relink_start() => Ok(()),
+                    (UiAction::Relink, None) if muted => Ok(()),
+                    (UiAction::Relink, None) if health.borrow().relink_required => {
+                        presentation.publish(failure_state(true))
+                    }
+                    (UiAction::Relink, _) => presentation.refresh(),
+                    _ => Ok(()),
+                };
+                if result.is_err() {
+                    break;
                 }
             }
         }));

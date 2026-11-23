@@ -112,7 +112,7 @@ impl<'a> SettingsLink<'a> {
         };
         let runtime = self
             .retained
-            .get_or_try_init(|| view.open_portos(config, options.mcp_epoch))
+            .get_or_try_init(|| view.open_portos(config, options.mcp_epoch, self.account.clone()))
             .await?;
         let grant = runtime.as_ref().map(|runtime| runtime.grant.clone());
         self.health.set_mcp(grant.clone())?;

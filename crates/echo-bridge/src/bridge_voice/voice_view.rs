@@ -58,8 +58,9 @@ impl<'a> View<'a> {
         &mut self,
         config: &echo_config::BridgeConfig,
         epoch: Option<u64>,
+        account: Option<Account>,
     ) -> Result<Option<crate::bridge_mcp::Runtime>, Error> {
-        super::voice_tools::open_portos(config, self.screen, self.trace, epoch).await
+        super::voice_tools::open_portos(config, self.screen, self.trace, epoch, account).await
     }
 
     pub fn startup(&mut self) -> Result<(), Error> {

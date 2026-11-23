@@ -12,8 +12,9 @@ use echo_screen_contract::settings_v2::{
 };
 use echo_screen_server::SettingsReply;
 use echo_signin::{OperatorCommand, signin_codex::AccountError};
+use serde_json::{Value, json};
 use std::{cell::Cell, future::Future, pin::Pin, time::SystemTime};
-use tokio::sync::watch;
+use tokio::{sync::watch, time::Instant};
 
 struct State {
     snapshot: OpenAiAccountV2,
@@ -24,6 +25,14 @@ struct State {
     voices: Option<Vec<String>>,
     recovery: Option<Recovery>,
     attempt: u64,
+    deadline: Option<Instant>,
+    stop: Option<Stop>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stop {
+    Cancel,
+    Renew,
 }
 
 struct Recovery {
@@ -58,6 +67,8 @@ impl Account {
                 voices: None,
                 recovery: None,
                 attempt: 0,
+                deadline: None,
+                stop: None,
             })
             .0,
             presentation,
@@ -96,6 +107,52 @@ impl Account {
 
     pub(crate) fn relink_start(&self) -> bool {
         self.enqueue(Action::Link, true)
+    }
+
+    pub(crate) fn recovery_status(&self) -> Value {
+        let state = self.0.borrow();
+        let status = if state.api_key {
+            "unavailable"
+        } else if let Some(recovery) = &state.recovery {
+            if recovery.checking {
+                "checking"
+            } else if state.snapshot.operation_state == OperationState::Linking {
+                if let Some(challenge) = &state.snapshot.challenge
+                    && state.deadline.is_some_and(|deadline| Instant::now() < deadline)
+                {
+                    return json!({
+                        "state": "pending",
+                        "verification_uri": challenge.verification_uri,
+                        "user_code": challenge.user_code,
+                        "expires_at_unix": challenge.expires_at_unix,
+                    });
+                }
+                "starting"
+            } else {
+                "relink_required"
+            }
+        } else if state.snapshot.link_status == LinkStatus::Linked {
+            "ready"
+        } else {
+            "unavailable"
+        };
+        json!({ "state": status })
+    }
+
+    pub(crate) fn stop_recovery(&self, attempt_id: &str, renew: bool) {
+        self.0.send_if_modified(|state| {
+            if state.recovery.is_none()
+                || state.snapshot.challenge.is_none()
+                || state.deadline.is_none_or(|deadline| Instant::now() >= deadline)
+                || attempt_id != format!("attempt-{}", state.attempt)
+            {
+                return false;
+            }
+            state.stop = Some(if renew { Stop::Renew } else { Stop::Cancel });
+            state.snapshot.challenge = None;
+            let _ = self.project(state);
+            true
+        });
     }
 
     fn enqueue(&self, action: Action, recovery_only: bool) -> bool {
@@ -161,7 +218,9 @@ impl Account {
                 }
             } else {
                 let linking = state.snapshot.operation_state == OperationState::Linking;
-                let message = if linking {
+                let message = if state.stop == Some(Stop::Cancel) {
+                    "Cancelling ChatGPT sign-in…"
+                } else if linking {
                     "Getting a ChatGPT sign-in code…"
                 } else if recovery.checking {
                     "Checking ChatGPT sign-in…"
@@ -231,7 +290,14 @@ impl Account {
         if action == Action::Link {
             self.event("auth.signin_started", None);
         }
-        let result = screen_account(host, command, cancelled, |prompt, remaining| {
+        let stopping = async {
+            tokio::select! {
+                biased;
+                () = cancelled => (),
+                _ = async { self.0.subscribe().wait_for(|state| state.stop.is_some()).await.map(|_| ()) } => (),
+            }
+        };
+        let result = screen_account(host, command, stopping, |prompt, remaining| {
             let code = prompt.code.as_ref().ok_or(AccountError::InvalidResponse)?;
             let expires_at_unix = crate::bridge_time::now()
                 .checked_add(remaining)
@@ -240,6 +306,7 @@ impl Account {
                 .map_err(|_| AccountError::Output)?
                 .as_secs();
             self.0.send_modify(|state| {
+                state.deadline = Some(Instant::now() + remaining);
                 state.snapshot.challenge = Some(PortosChallengeV2 {
                     verification_uri: prompt.url.clone(),
                     user_code: code.clone(),
@@ -255,8 +322,18 @@ impl Account {
 
     fn settle(&self, action: Action, result: &Result<(), Error>) -> bool {
         let mut readmit = true;
+        let mut cancelled = false;
         self.0.send_modify(|state| {
             state.snapshot.challenge = None;
+            state.deadline = None;
+            if let Some(stop) = state.stop.take()
+                && *result != Err(Error::Unavailable)
+            {
+                cancelled = true;
+                readmit = false;
+                self.settle_stopped(state, stop);
+                return;
+            }
             if let Some(recovery) = &mut state.recovery {
                 recovery.checking = result.is_ok();
                 recovery.message = match result {
@@ -282,7 +359,7 @@ impl Account {
             let _ = self.project(state);
         });
         if action == Action::Link {
-            match result {
+            match if cancelled { &Err(Error::Control) } else { result } {
                 Ok(()) => self.event("auth.signin_completed", None),
                 Err(Error::Deadline) => self.event("auth.signin_expired", None),
                 Err(Error::Authorization) => self.event("auth.signin_failed", Some("authorization")),
@@ -291,6 +368,21 @@ impl Account {
             }
         }
         readmit
+    }
+
+    fn settle_stopped(&self, state: &mut State, stop: Stop) {
+        if stop == Stop::Renew
+            && let Some(attempt) = state.attempt.checked_add(1)
+        {
+            state.attempt = attempt;
+            state.queued = Some(Action::Link);
+        } else {
+            state.snapshot.operation_state = OperationState::Idle;
+            if let Some(recovery) = &mut state.recovery {
+                recovery.message = "ChatGPT sign-in cancelled. Relink for a new code.";
+            }
+        }
+        let _ = self.project(state);
     }
 
     fn event(&self, event: &str, reason: Option<&str>) {

@@ -10,6 +10,7 @@ import "./settings/page.mjs";
 import "./settings/page-v2.mjs";
 import "./settings/codex/speed.mjs";
 import "./settings/accounts.mjs";
+import "./settings/codex/recovery.mjs";
 import "./settings/packs.mjs";
 import "./settings/leave.mjs";
 import "./settings/reload.mjs";

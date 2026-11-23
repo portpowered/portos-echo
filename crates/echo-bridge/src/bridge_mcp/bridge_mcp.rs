@@ -11,6 +11,7 @@ mod bridge_settings;
 mod bridge_token;
 
 use crate::Error;
+use crate::bridge_settings::openai_account::Account;
 pub use bridge_control::{Command, Prepared, parse};
 use bridge_presentation::Presentation;
 pub use bridge_settings::Settings;
@@ -161,6 +162,16 @@ impl Runtime {
         trace: crate::bridge_trace::Trace,
         epoch: Option<u64>,
     ) -> Result<Self, Error> {
+        Self::open_with_account(settings, presentation, trace, epoch, None).await
+    }
+
+    pub async fn open_with_account(
+        settings: Settings,
+        presentation: Presentation,
+        trace: crate::bridge_trace::Trace,
+        epoch: Option<u64>,
+        account: Option<Account>,
+    ) -> Result<Self, Error> {
         let token = bridge_control::pairing(&settings.pairing_file)?;
         let listener = tokio::net::TcpListener::bind(settings.listen)
             .await
@@ -200,7 +211,7 @@ impl Runtime {
         };
         runtime.tasks = vec![
             tokio::spawn(bridge_operations::serve(runtime.grant.clone(), receive)),
-            tokio::spawn(bridge_http::serve(listener, token, runtime.operator.clone())),
+            tokio::spawn(bridge_http::serve(listener, token, runtime.operator.clone(), account)),
         ];
         Ok(runtime)
     }

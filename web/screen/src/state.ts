@@ -11,6 +11,10 @@ export class Presentation {
     reopened(): void {
         this.fresh = true;
     }
+    clear(): void {
+        this.current = undefined;
+        this.wire = "";
+    }
     displays(wire: string): boolean {
         return this.current !== undefined && this.wire === wire;
     }

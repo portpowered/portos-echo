@@ -147,7 +147,10 @@ for line in sys.stdin:
         result = {"type": kind, "loginId": "local-login"}
         if kind == "chatgptDeviceCode":
             uri = "https://example.invalid/verify" if screen_recovery else "http://127.0.0.1:12345/verify"
-            result.update(verificationUrl=uri, userCode="TEST-CODE")
+            code = "TEST-CODE"
+            if screen_recovery and home.joinpath("login-type").exists():
+                uri, code = "https://example.invalid/renew", "NEXT-CODE"
+            result.update(verificationUrl=uri, userCode=code)
         if screen_recovery:
             home.joinpath("login-type").write_text(kind)
         else:

@@ -214,7 +214,7 @@ async fn save(client: &reqwest::Client, url: &reqwest::Url) {
     );
 }
 
-fn configure(fixture: &Fixture, port: u16, issuer: &str) -> Vec<u8> {
+pub(super) fn configure(fixture: &Fixture, port: u16, issuer: &str) -> Vec<u8> {
     restart::binary_home(fixture, port);
     let path = fixture.directory.path().join("bridge.toml");
     let grant = fixture.directory.path().join("grant");

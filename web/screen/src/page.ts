@@ -114,6 +114,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
     function renderLinkCode(
         details: HTMLElement,
         state: Extract<UiState, { state: "link_code" | "open_ai_signin" }>,
+        onExpired?: () => void,
     ): void {
         const expiry = text("p", "");
         const code = text("p", state.user_code);
@@ -126,6 +127,11 @@ export function startPage(root: HTMLElement, href: string): () => void {
                 "countdown",
             );
             expiry.textContent = label;
+            if (label === "Expired" && onExpired) {
+                code.remove();
+                uri.remove();
+                onExpired();
+            }
             expiryTimer =
                 refreshInMs === undefined
                     ? undefined
@@ -188,10 +194,26 @@ export function startPage(root: HTMLElement, href: string): () => void {
             case "link_code":
                 renderLinkCode(details, state);
                 break;
-            case "open_ai_signin":
+            case "open_ai_signin": {
                 if (state.muted) details.append(text("p", "Microphone muted"));
-                renderLinkCode(details, state);
+                const attempt_id = state.attempt_id;
+                controls.append(
+                    button(
+                        "Cancel",
+                        { action: "cancel_open_ai_signin", attempt_id },
+                        frame,
+                    ),
+                    button(
+                        "Get a new code",
+                        { action: "renew_open_ai_signin", attempt_id },
+                        frame,
+                    ),
+                );
+                renderLinkCode(details, state, () =>
+                    controls.replaceChildren(),
+                );
                 break;
+            }
             case "open_ai_relink": {
                 if (state.muted) details.append(text("p", "Microphone muted"));
                 const status = text("p", state.message);
@@ -311,6 +333,13 @@ export function startPage(root: HTMLElement, href: string): () => void {
     });
     function offline(): void {
         chrome.wait();
+        if (presentation.current?.state.state === "open_ai_signin") {
+            presentation.clear();
+            cancelPending?.();
+            clearTimeout(expiryTimer);
+            content.querySelector(".details")?.replaceChildren();
+            content.querySelector(".controls")?.replaceChildren();
+        }
     }
     function visibility(): void {
         build.setLive(chrome.enabled && !document.hidden);
@@ -342,7 +371,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
     };
     stream.onerror = () => {
         if (disposed) return;
-        chrome.wait();
+        offline();
         if (!chrome.enabled) diagnostic.textContent = INTERRUPTED;
     };
     function dispose(): void {

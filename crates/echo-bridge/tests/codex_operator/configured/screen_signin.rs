@@ -3,6 +3,9 @@ use super::*;
 use reqwest::{Client, StatusCode, Url};
 use tokio::net::{TcpListener, TcpStream};
 
+#[path = "screen_signin/operator.rs"]
+mod operator;
+
 const CODE: &str = "TEST-CODE";
 const VERIFY: &str = "https://example.invalid/verify"; // lint-rules: allow-literal fake sign-in URI is displayed only
 const EPOCH: &str = "1800000000";
@@ -18,9 +21,18 @@ struct Journey {
 
 impl Journey {
     async fn start(mode: &str, initially_linked: bool) -> Self {
+        Self::configured(mode, initially_linked, None).await
+    }
+
+    async fn configured(mode: &str, initially_linked: bool, issuer: Option<&str>) -> Self {
         let fixture = Fixture::new(mode);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        restart::binary_home(&fixture, listener.local_addr().unwrap().port());
+        let port = listener.local_addr().unwrap().port();
+        if let Some(issuer) = issuer {
+            super::restart_v2::configure(&fixture, port, issuer);
+        } else {
+            restart::binary_home(&fixture, port);
+        }
         if mode == "chatgpt" {
             std::fs::write(fixture.home.join("mode"), "screen-account").unwrap();
             std::fs::write(fixture.home.join("screen-recovery"), "").unwrap();
@@ -30,7 +42,7 @@ impl Journey {
         } else {
             std::fs::write(fixture.directory.path().join("credential"), "synthetic-nominated-key").unwrap();
         }
-        let loopback = "http://127.0.0.1:1";
+        let loopback = issuer.unwrap_or("http://127.0.0.1:1");
         let process = Process::spawn(super::super::voice_entry::command(&fixture).args([
             "--live-loopback",
             loopback,
@@ -110,12 +122,28 @@ impl Journey {
     async fn finish(&mut self, code: i32) {
         self.process.finish(code).await;
         let logs = self.process.stderr().await;
-        let trace = std::fs::read_to_string(&self.trace).unwrap();
-        for private in [CODE, VERIFY, "synthetic private error"] {
-            assert!(!logs.contains(private));
-            assert!(!trace.contains(private));
+        let mut stdout = String::new();
+        while let Some(line) = self.process.lines.next_line().await.unwrap() {
+            stdout.push_str(&line);
+            stdout.push('\n');
         }
+        let trace = std::fs::read_to_string(&self.trace).unwrap();
+        assert_private(&[&logs, &stdout, &trace]);
         super::super::host::released(&self.fixture).await;
+    }
+}
+
+fn assert_private(captures: &[&str]) {
+    for capture in captures {
+        for private in [
+            CODE,
+            VERIFY,
+            operator::NEXT_CODE,
+            operator::NEXT_VERIFY,
+            "synthetic private error",
+        ] {
+            assert_eq!(capture.matches(private).count(), 0);
+        }
     }
 }
 

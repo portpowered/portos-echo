@@ -1,5 +1,6 @@
 //! Bounded HTTP parser and sessions; browser origins cannot operate the grant.
 use super::bridge_operations::{Operation, Operator, StartError};
+use crate::bridge_settings::openai_account::Account;
 use echo_contracts::secret::Secret;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
@@ -10,34 +11,53 @@ use tokio::{
     task::JoinSet,
 };
 
-pub(super) async fn serve(listener: TcpListener, token: Secret<String>, operator: Operator) {
+#[derive(Debug, PartialEq, Eq)]
+enum Request {
+    PortOs(Operation),
+    OpenAiStart,
+    OpenAiStatus,
+}
+
+pub(super) async fn serve(listener: TcpListener, token: Secret<String>, operator: Operator, account: Option<Account>) {
     let token = Arc::new(token);
     let mut sessions = JoinSet::new();
     loop {
         tokio::select! {
             result = listener.accept(), if sessions.len() < 16 => {
                 let Ok((stream, _)) = result else { break };
-                sessions.spawn(session(stream, token.clone(), operator.clone()));
+                sessions.spawn(session(stream, token.clone(), operator.clone(), account.clone()));
             }
             _ = sessions.join_next(), if !sessions.is_empty() => (),
         }
     }
 }
 
-async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, operator: Operator) {
+async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, operator: Operator, account: Option<Account>) {
     let read = tokio::time::timeout(Duration::from_secs(1), read(&mut stream, token.expose())).await;
     let (operation, streaming) = match read {
         Ok(Ok(operation)) => operation,
         Ok(Err(code)) => {
-            let _ = respond(&mut stream, code, Value::Null).await;
+            let _ = respond(&mut stream, code, Value::Null, false).await;
             return;
         }
         Err(_) => return,
     };
+    let Request::PortOs(operation) = operation else {
+        let (code, body) = match operation {
+            Request::OpenAiStatus => (
+                200,
+                account.map_or_else(|| json!({"state":"unavailable"}), |account| account.recovery_status()),
+            ),
+            _ if account.is_some_and(|account| account.relink_start()) => (202, json!({"outcome":"accepted"})),
+            _ => (409, Value::Null),
+        };
+        let _ = tokio::time::timeout(Duration::from_secs(1), respond(&mut stream, code, body, true)).await;
+        return;
+    };
     let receipt = match operator.start(operation) {
         Ok(receipt) => receipt,
         Err(StartError::Busy) => {
-            let _ = respond(&mut stream, 409, Value::Null).await;
+            let _ = respond(&mut stream, 409, Value::Null, false).await;
             return;
         }
         Err(StartError::Closed) => return,
@@ -51,7 +71,7 @@ async fn session(mut stream: TcpStream, token: Arc<Secret<String>>, operator: Op
     if streaming {
         let _ = event(&mut stream, body).await;
     } else {
-        let _ = tokio::time::timeout(Duration::from_secs(1), respond(&mut stream, code, body)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(1), respond(&mut stream, code, body, false)).await;
     }
 }
 
@@ -91,7 +111,7 @@ async fn event(stream: &mut TcpStream, value: Value) -> Result<(), ()> {
     .map_err(|_| ())
 }
 
-async fn read(stream: &mut TcpStream, token: &str) -> Result<(Operation, bool), u16> {
+async fn read(stream: &mut TcpStream, token: &str) -> Result<(Request, bool), u16> {
     let mut bytes = [0; 4096];
     let mut used = 0;
     let end = loop {
@@ -160,15 +180,20 @@ fn headers(text: &str, token: &str) -> Result<usize, u16> {
     length.ok_or(400)
 }
 
-fn operation(bytes: &[u8]) -> Result<Operation, u16> {
+fn operation(bytes: &[u8]) -> Result<Request, u16> {
     let value: Value = serde_json::from_slice(bytes).map_err(|_| 400_u16)?;
     let object = value.as_object().filter(|o| o.len() == 1).ok_or(400_u16)?;
-    Operation::parse(object.get("operation").and_then(Value::as_str).ok_or(400_u16)?).ok_or(400)
+    match object.get("operation").and_then(Value::as_str).ok_or(400_u16)? {
+        "openai_signin_start" => Ok(Request::OpenAiStart),
+        "openai_signin_status" => Ok(Request::OpenAiStatus),
+        operation => Operation::parse(operation).map(Request::PortOs).ok_or(400),
+    }
 }
 
-async fn respond(stream: &mut TcpStream, code: u16, value: Value) -> std::io::Result<()> {
+async fn respond(stream: &mut TcpStream, code: u16, value: Value, no_store: bool) -> std::io::Result<()> {
     let reason = match code {
         200 => "OK",
+        202 => "Accepted",
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
@@ -183,7 +208,8 @@ async fn respond(stream: &mut TcpStream, code: u16, value: Value) -> std::io::Re
         value.to_string()
     };
     let allow = if code == 405 { "Allow: POST\r\n" } else { "" };
-    stream.write_all(format!("HTTP/1.1 {code} {reason}\r\n{allow}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
+    let cache = if no_store { "Cache-Control: no-store\r\n" } else { "" };
+    stream.write_all(format!("HTTP/1.1 {code} {reason}\r\n{allow}{cache}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
     stream.shutdown().await
 }
 
@@ -201,7 +227,10 @@ mod tests {
         ] {
             assert_eq!(operation(body.as_bytes()), Err(400));
         }
-        assert_eq!(operation(br#"{"operation":"refresh"}"#), Ok(Operation::Refresh));
+        assert_eq!(
+            operation(br#"{"operation":"refresh"}"#),
+            Ok(Request::PortOs(Operation::Refresh))
+        );
         let valid = "POST /operator/mcp HTTP/1.1\r\nAuthorization: Bearer synthetic-owner\r\nContent-Type: application/json\r\nContent-Length: 20\r\n\r\n";
         assert_eq!(headers(valid, "synthetic-owner"), Ok(20));
         assert_eq!(headers(valid, "wrong"), Err(401));
