@@ -62,7 +62,6 @@ async fn reply_loop<L: EchoLink>(
     let (events, microphone) = input;
     let (source, drain) = context;
     let mut generation_options = *options;
-    source.answer_due = options.response_deadline;
     let mut previous = super::Stats::default();
     tokio::pin!(cancelled);
     loop {
@@ -81,13 +80,13 @@ async fn reply_loop<L: EchoLink>(
             let ending = source.session.ending();
             if !settle_cut(source, options.listen_timeout.is_some() || ending, observe)? {
                 generation_options.response_deadline = source.controller.replacement_deadline()?;
-                source.answer_due = generation_options.response_deadline;
+                source.controller.set_response_due(generation_options.response_deadline);
                 continue;
             }
         } else {
             result?;
         }
-        if source.follow_up == super::voice_source::FollowUp::Unanswered {
+        if source.controller.follow_up() == echo_core_api::FollowUp::Unanswered {
             break;
         }
         if options.listen_timeout.is_some() {
@@ -107,7 +106,7 @@ async fn reply_loop<L: EchoLink>(
             break;
         }
         generation_options.response_deadline = source.controller.replacement_deadline()?;
-        source.answer_due = generation_options.response_deadline;
+        source.controller.set_response_due(generation_options.response_deadline);
     }
     if source.session.ending() {
         tokio::time::timeout(options.played_timeout, flush_end(port))
@@ -159,7 +158,8 @@ async fn after_reply<L: EchoLink>(
     }
     let mut followup = options.listen_timeout.is_some();
     if followup && !source.delegation.waiting() && crate::bridge_endpoint::remote_start::take_followup() {
-        let deadline = (Instant::now() + Duration::from_secs(2)).min(source.run_ceiling.ok_or(Error::Deadline)?);
+        let deadline =
+            (Instant::now() + Duration::from_secs(2)).min(source.controller.run_ceiling().ok_or(Error::Deadline)?);
         let next = super::remote_admission::followup(client, events, cancelled.as_mut(), deadline, |event| {
             super::device(event, true, source, observe)
         })
@@ -276,7 +276,7 @@ fn settled(
     stats.reply_sent -= previous.reply_sent;
     stats.reply_dropped -= previous.reply_dropped;
     *stats.quality = source.settle(port.rtp_lost());
-    source.follow_up = super::voice_source::FollowUp::Replied;
+    source.controller.reply_settled();
     *previous = totals;
     observe(Notice::ReplySettled(stats))?;
     observe(Notice::ReplyPlayed)?;
@@ -339,7 +339,7 @@ async fn listen<E: LinkEvents>(
             // turn still owns this reply; finish it before admitting cleanup.
             () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),
             () = until(deadline) => {
-                if let Some(expiry) = super::voice_wait::listen_lapsed(source, expiry) { return expiry; }
+                if let Some(expiry) = super::voice_wait::listen_lapsed(source, deadline, expiry) { return expiry; }
             },
             result = listening_step((events, microphone), port, source, &mut turn_started, observe) => {
                 if result? { return Ok(true); }

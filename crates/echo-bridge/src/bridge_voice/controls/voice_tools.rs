@@ -429,7 +429,7 @@ where
                     biased;
                     () = cancelled.as_mut() => return Err(Error::Control),
                     () = crate::bridge_endpoint::voice::ending() => return Err(Error::Control),
-                    result = crate::bridge_endpoint::remote_start::open(&mut call, &options.call, catalog.tools().to_vec(), options.deadline) => result?,
+                    result = crate::bridge_world::call_effect(true, crate::bridge_endpoint::remote_start::open(&mut call, &options.call, catalog.tools().to_vec(), options.deadline)) => result?,
                 }
                 Ok(catalog)
             }),
@@ -462,7 +462,8 @@ where
         .await
     };
     let result = work.await;
-    let cleanup = call.close(tokio::time::Instant::now() + Duration::from_secs(2)).await;
+    let cleanup =
+        crate::bridge_world::call_effect(false, call.close(tokio::time::Instant::now() + Duration::from_secs(2))).await;
     if matches!(result, Err(Error::Control | Error::SessionCeiling)) {
         cleanup.and(result)
     } else {

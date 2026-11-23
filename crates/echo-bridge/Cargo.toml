@@ -12,6 +12,7 @@ workspace = true
 echo-core-api = { version = "0.1.0", path = "../echo-core-api" }
 echo-sub-device = { version = "0.1.0", path = "../echo-sub-device" }
 echo-sub-pacer = { version = "0.1.0", path = "../echo-sub-pacer" }
+echo-sub-session = { version = "0.1.0", path = "../echo-sub-session" }
 echo-sub-trace = { version = "0.1.0", path = "../echo-sub-trace" }
 echo-svc-trace = { version = "0.1.0", path = "../echo-svc-trace" }
 echo-codex = { version = "0.1.0", path = "../echo-codex" }

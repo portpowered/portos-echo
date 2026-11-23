@@ -1,5 +1,6 @@
 //! Delegated response timing belongs to the admitted Wyoming run.
-use super::{Error, Source, UserSpeech, voice_source::FollowUp};
+use super::{Error, Source, UserSpeech};
+use echo_core_api::{FollowUp, SessionTimer};
 use tokio::time::{Duration, Instant};
 #[path = "run_marks.rs"]
 pub(super) mod run_marks;
@@ -45,13 +46,13 @@ fn reply_deadline(source: &Source, played: Option<Instant>) -> (Option<Instant>,
     if speaking {
         return (run_cap(source), Error::SessionCeiling);
     }
-    (Some(source.answer_due), Error::NoResponse)
+    (source.controller.response_due(), Error::NoResponse)
 }
 
 /// The run's ceiling, deferred while the user is speaking by at most one
 /// speech-start expiry: their end of speech brings a passed ceiling back at once.
 fn run_cap(source: &Source) -> Option<Instant> {
-    let ceiling = source.run_ceiling?;
+    let ceiling = source.controller.run_ceiling()?;
     if source.user_speech != UserSpeech::Active {
         return Some(ceiling);
     }
@@ -61,9 +62,10 @@ fn run_cap(source: &Source) -> Option<Instant> {
 /// A resolved hand-off holds the run for its answer: to the end of the
 /// no-answer window, and at least the grace from its resolution.
 fn owed(source: &Source, resolved: Instant) -> Instant {
+    let response = source.controller.response_due().unwrap_or(resolved);
     resolved
         .checked_add(HANDBACK_GRACE)
-        .map_or(source.answer_due, |grace| grace.max(source.answer_due))
+        .map_or(response, |grace| grace.max(response))
 }
 
 /// The wait between replies and what its expiry returns: a running turn has
@@ -95,11 +97,19 @@ fn earliest(due: Option<Instant>, latch: Option<Instant>) -> Option<Instant> {
 
 /// The listen wait's deadline passed: an expired latch only wakes the wait;
 /// anything else closes the listen with `expiry`, marked if it was the cap.
-pub(super) fn listen_lapsed(source: &mut Source, expiry: Result<bool, Error>) -> Option<Result<bool, Error>> {
-    if source.expire_latch() {
+pub(super) fn listen_lapsed(
+    source: &mut Source,
+    due: Option<Instant>,
+    expiry: Result<bool, Error>,
+) -> Option<Result<bool, Error>> {
+    if source.expire_latch() || !timeout_reached(source, due, expiry.as_ref().err()) {
         return None;
     }
-    if source.run_ceiling.is_some_and(|ceiling| Instant::now() >= ceiling) {
+    if source
+        .controller
+        .run_ceiling()
+        .is_some_and(|ceiling| Instant::now() >= ceiling)
+    {
         source.marks.capped("listen");
     }
     Some(expiry)
@@ -108,23 +118,33 @@ pub(super) fn listen_lapsed(source: &mut Source, expiry: Result<bool, Error>) ->
 /// The reply's deadline passed. Speech nobody answered after an earlier reply
 /// is not a failed run: the reply closes empty and the run ends the usual way.
 /// An expired speech latch only wakes the wait: the user is quiet again.
-pub(super) fn expired(source: &mut Source, error: Error) -> Result<(), Error> {
-    if source.expire_latch() {
+pub(super) fn expired(source: &mut Source, due: Option<Instant>, error: Error) -> Result<(), Error> {
+    if source.expire_latch() || !timeout_reached(source, due, Some(&error)) {
         return Ok(());
     }
     if error == Error::SessionCeiling {
         source.marks.capped("reply");
     }
     if error != Error::NoResponse
-        || source.follow_up != FollowUp::Replied
+        || source.controller.follow_up() != FollowUp::Replied
         || source.controller.speaking()
         || source.delegation.waiting()
     {
         return Err(error);
     }
-    source.follow_up = FollowUp::Unanswered;
+    source.controller.unanswered();
     source.marks.lapsed();
     source.reply.finish()
+}
+
+fn timeout_reached(source: &Source, due: Option<Instant>, error: Option<&Error>) -> bool {
+    let timer = match error {
+        None => SessionTimer::Listen,
+        Some(Error::SessionCeiling) => SessionTimer::RunCeiling,
+        Some(Error::NoResponse) => SessionTimer::Response,
+        _ => return true, // Playback acknowledgement has its own timeout.
+    };
+    due.is_some_and(|due| source.controller.deadline_reached(timer, due))
 }
 
 /// Delegated Codex turns and the assistant utterance they bracket. Each
@@ -289,10 +309,9 @@ mod tests {
             reply_lead_ms: 200,
             muted: false,
         };
-        let mut source = Source::new(200, false).unwrap();
+        let mut source = Source::with_session(200, false, opened, Some(options.session_max)).unwrap();
         let ceiling = opened + options.session_max;
-        source.run_ceiling = Some(ceiling);
-        source.answer_due = options.response_deadline;
+        source.controller.set_response_due(options.response_deadline);
         assert_eq!(
             deadline(&source, None),
             (Some(options.response_deadline), Error::NoResponse)
@@ -332,10 +351,10 @@ mod tests {
     /// A run admitted at `opened` with the Echo's own windows: a 15 s listen
     /// window and the default `voice.session_max_seconds` of 600 s.
     fn admitted(opened: Instant) -> (Source, Instant) {
-        let mut source = Source::new(200, false).unwrap();
-        let ceiling = opened + Duration::from_secs(600);
-        source.run_ceiling = Some(ceiling);
-        source.answer_due = opened + Duration::from_secs(15);
+        let maximum = Duration::from_secs(600);
+        let source = Source::with_session(200, false, opened, Some(maximum)).unwrap();
+        let ceiling = opened + maximum;
+        source.controller.set_response_due(opened + Duration::from_secs(15));
         (source, ceiling)
     }
 
@@ -360,7 +379,7 @@ mod tests {
         let (source, _) = admitted(Instant::now());
         let idle = Instant::now() + Duration::from_secs(15);
         assert!(!source.delegation.waiting());
-        assert_eq!(deadline(&source, None), (Some(source.answer_due), Error::NoResponse));
+        assert_eq!(deadline(&source, None), (Some(idle), Error::NoResponse));
         assert_eq!(listening(&source, idle), (Some(idle), Ok(false)));
     }
 

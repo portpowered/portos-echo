@@ -1,5 +1,6 @@
 //! One connected call spans wakes; every return awaits signaling/media cleanup.
 use super::{Notice, Options, Stats, VoicePort, run_opened};
+use crate::bridge_world::call_effect;
 use crate::{
     Error,
     bridge_codex::{Event, MediaCall, MediaEvent, RetainedCall},
@@ -134,7 +135,7 @@ where
                         if Instant::now() >= options.deadline { return Err(Error::Deadline); }
                         validate(&options.session)?;
                         if let Some(trace) = trace { call.trace_setup(trace)?; }
-                        crate::bridge_endpoint::remote_start::open(&mut call, &options.call, options.tools, options.deadline).await
+                        call_effect(true, crate::bridge_endpoint::remote_start::open(&mut call, &options.call, options.tools, options.deadline)).await
                     } => result?,
                 }
                 Ok(())
@@ -155,7 +156,7 @@ where
     let result = work.await;
     // Also covers a cancelled start and a failed Connected observer. The
     // conversation's own completed cleanup is idempotent here.
-    let cleanup = call.close(Instant::now() + Duration::from_secs(2)).await;
+    let cleanup = call_effect(false, call.close(Instant::now() + Duration::from_secs(2))).await;
     settled(result, cleanup)
 }
 
@@ -201,7 +202,7 @@ where
     let result = work.await;
     // This cleanup is deliberately outside the cancelled operation. A ready
     // cancellation or observer error must not drop an active media owner.
-    let cleanup = call.close(Instant::now() + Duration::from_secs(2)).await;
+    let cleanup = call_effect(false, call.close(Instant::now() + Duration::from_secs(2))).await;
     settled(result, cleanup)
 }
 
@@ -276,7 +277,7 @@ where
     };
     let result = work.await;
     // Drop the retained dispatch borrower before stopping its call generation.
-    let cleanup = call.close(Instant::now() + Duration::from_secs(2)).await;
+    let cleanup = call_effect(false, call.close(Instant::now() + Duration::from_secs(2))).await;
     settled(result, cleanup)
 }
 

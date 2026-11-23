@@ -188,11 +188,10 @@ async fn run_opened<L: EchoLink>(
     {
         return Err(Error::Deadline);
     }
-    let mut source = Source::new(options.reply_lead_ms, options.muted)?;
-    source.run_ceiling = opened.checked_add(options.session_max);
+    let mut source = Source::with_session(options.reply_lead_ms, options.muted, opened, Some(options.session_max))?;
     source.session = session_tools::Grants::new(options.listen_timeout, options.session_max);
     port.bind_session(Some(source.session.run.clone()));
-    port.start_muse_run(source.run_ceiling.ok_or(Error::Deadline)?)?;
+    port.start_muse_run(source.controller.run_ceiling().ok_or(Error::Deadline)?)?;
     source.controller.admit_response(options.response_deadline)?;
     // A cut replaces playback, while the run still owns pending clock receipts.
     let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
@@ -259,8 +258,13 @@ async fn generation<L: EchoLink>(
     // after the run's delegated waiting cutoff.
     let now = Instant::now();
     let response_window = options.response_deadline.saturating_duration_since(now);
-    let ceiling =
-        source.run_ceiling.unwrap_or(now).saturating_duration_since(now) + response_window + options.played_timeout;
+    let ceiling = source
+        .controller
+        .run_ceiling()
+        .unwrap_or(now)
+        .saturating_duration_since(now)
+        + response_window
+        + options.played_timeout;
     let playback_result = std::cell::Cell::new(None);
     let playback_started = std::cell::Cell::new(false);
     let playback = async {
@@ -345,7 +349,7 @@ async fn drive<L: EchoLink>(
             biased;
             () = crate::bridge_endpoint::voice::ending() => return voice_listen::remote_cut(port, source),
             duration = earcon::completed() => observe(Notice::EarconPlayed(duration))?,
-            () = voice_listen::until(deadline) => voice_wait::expired(source, on_timeout)?,
+            () = voice_listen::until(deadline) => voice_wait::expired(source, deadline, on_timeout)?,
             () = voice_listen::until(barge) => source.interrupt(port)?,
             () = voice_listen::until(source.reply.mouth_due()) => {
                 if let Some(notice) = voice_listen::playout_notice(&source.reply, source.delegation.in_flight()) {

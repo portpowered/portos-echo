@@ -97,12 +97,37 @@ to these three inputs. [Coordinator ruling](https://github.com/portpowered/porto
 
 `echo-sub-pacer` depends on `echo-core-api` and the existing `echo-audio` DSP.
 
+## A2 session lifecycle
+
+The controller steps device, session, pacer and trace in that order. It
+allocates one voice run slot and passes a generational handle to the reducer.
+Release invalidates the handle after the run's cleanup. A reused slot rejects
+events from the previous generation. The slot implementation retires entries
+whose generation is exhausted.
+
+The pure session reducer owns response, run-ceiling and quiet deadlines,
+playback receipt ownership, and capture settlement. The bridge passes
+monotonic offsets from its existing clock, including under paused simulation.
+A settled reply arms the quiet deadline. A close issues one end request
+after playback and mouth settlement, and capture EOF confirms completion.
+The service awaits existing device writes, playback, and capture at their
+original boundaries. It also consumes the call open and close commands at
+the existing call setup and teardown boundaries.
+
 ## Deferred
 
 - The device step receives wake and mute events. Wyoming has no separate
   button report in the current wire contract.
-- A2 owns the Wyoming service rename, session and call subsystems, slot
-  table and the phase-wide allocation proof.
+- Within this lane, the next two stories move run grants and tool slots,
+  then barge, floor and the remaining speech and hand-back policy.
+- A2 owns the Wyoming service rename, call reducer and phase-wide allocation
+  proof. The call reducer steps after pacer and before trace when introduced.
+  The retained-call policy and native goodbye path keep their current rules.
+- Playback join, reply completion and delegated turn completion retain their
+  service fences. The global inbox, record/replay, modeled speaker clock
+  and full allocation proofs remain with their existing plan gates.
+- Generational tool slots apply to session-control requests. The general
+  dispatcher, pending RPCs and tool ledger remain in B1.
 - The bounded EchoLink/Wyoming queue and serialization still use owned
   transport buffers. Their allocation work belongs at the service boundary.
 - The stepped simulator keeps its current adaptive-hold bypass. The
