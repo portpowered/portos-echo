@@ -92,7 +92,11 @@ async fn codex_voice_entry_binary_missing_configuration_never_dials_wyoming() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         configure(&fixture, listener.local_addr().unwrap().port());
         let path = fixture.directory.path().join("bridge.toml");
-        let text = std::fs::read_to_string(&path).unwrap();
+        // This test never connects to the screen. Let the bridge bind an
+        // ephemeral port atomically so screen startup cannot mask admission.
+        let text = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace(&fixture.screen.to_string(), "127.0.0.1:0");
         let text = if missing == "binary" {
             text.replace(
                 &fixture.binary.display().to_string(),

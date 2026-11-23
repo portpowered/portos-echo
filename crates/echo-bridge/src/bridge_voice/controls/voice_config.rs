@@ -1,6 +1,6 @@
 //! Offline configuration admission, then explicitly nominated credential loading.
 use super::{HostOptions, RunnerSkills, RuntimeOptions, ServeOptions, SessionOptions};
-use crate::{Error, bridge_codex};
+use crate::{Error, bridge_codex, bridge_time::Watch, bridge_trace::Trace};
 use echo_codex::DynamicTool;
 use echo_config::{BridgeConfig, EffectiveConfig, LiveMode};
 use echo_contracts::secret::Secret;
@@ -108,18 +108,28 @@ impl Configured {
     }
 
     // Held for a generation: the first measurement is in before the device is admitted.
-    async fn watch_time(&self) -> crate::bridge_time::Watch {
-        let mode = match self.config.live.mode {
-            LiveMode::Chatgpt => "chatgpt",
-            LiveMode::ApiKey => "api_key",
-        };
+    async fn watch_time(&self) -> (Watch, Option<Trace>) {
         let trace = if self.time_servers.is_empty() {
             None
         } else {
-            crate::bridge_trace::Trace::open(&self.trace, mode).ok()
+            self.open_trace().ok()
         };
         let interval = Duration::from_secs(u64::from(self.config.clock.interval_seconds));
-        crate::bridge_time::start(self.time_servers.clone(), interval, trace).await
+        let watch = crate::bridge_time::start(self.time_servers.clone(), interval, trace.clone()).await;
+        (watch, trace)
+    }
+
+    fn open_trace(&self) -> Result<Trace, Error> {
+        Trace::open_for_voice(
+            &self.trace,
+            self.config.live.mode,
+            self.world.clone(),
+            Some(&self.config),
+        )
+    }
+
+    fn voice_trace(&self, clock_trace: Option<Trace>) -> Result<Trace, Error> {
+        clock_trace.map_or_else(|| self.open_trace(), |trace| Ok(trace.with_new_origin()))
     }
 
     pub(crate) fn with_mcp_epoch(mut self, epoch: Option<u64>) -> Self {
@@ -152,7 +162,7 @@ impl Configured {
             self.config.home.as_ref().map(|home| home.dir.as_path()),
             async {
                 let api_key = self.api_key()?;
-                let _time = self.watch_time().await;
+                let (time, clock_trace) = self.watch_time().await;
                 let options = self.options(api_key.as_ref(), tools);
                 let work = super::voice_runtime::execute_owned(
                     options,
@@ -160,7 +170,7 @@ impl Configured {
                     &mut peer,
                     cancelled,
                     None,
-                    self.world.clone(),
+                    (self.voice_trace(clock_trace)?, Some(time)),
                 );
                 super::voice_wait::run_marks::scope(self.knobs(), Box::pin(work))
                     .await
@@ -209,7 +219,7 @@ impl Configured {
             prompts,
             async {
                 let api_key = self.api_key()?;
-                let _time = self.watch_time().await;
+                let (time, clock_trace) = self.watch_time().await;
                 let settings = if let Some(host) = retained {
                     Some(crate::bridge_settings::SettingsService::resume(host))
                 } else {
@@ -218,7 +228,12 @@ impl Configured {
                             crate::bridge_settings::SettingsService::open(*startup, super::prompts::accepted()?)
                                 .map_err(|_| Error::Prompt("home.dir: settings unavailable"))
                         })
-                        .transpose()?
+                        .transpose()
+                        .inspect_err(|_| {
+                            if let Some(trace) = &clock_trace {
+                                let _ = trace.finish();
+                            }
+                        })?
                 };
                 let options = self.options(api_key.as_ref(), tools);
                 let settings = settings.map(|(service, send)| {
@@ -235,7 +250,7 @@ impl Configured {
                     &mut peer,
                     cancelled,
                     settings,
-                    self.world.clone(),
+                    (self.voice_trace(clock_trace)?, Some(time)),
                 ))
                 .await
             },

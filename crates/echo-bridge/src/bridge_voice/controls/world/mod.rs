@@ -1,7 +1,7 @@
 //! A1 session composition. Services share the ordered device and trace World.
 use echo_core_api::{
     Broken, Clock, Command, Commands, DeviceControl, DeviceEvent, DeviceState, DeviceView, EntropyUnavailable, Event,
-    Now, OsRng, PendingTrace, Rng, SeededRng, TraceDrain, World,
+    Now, OsRng, PendingTrace, Rng, SeededRng, TraceDrain, TraceFailure, World,
 };
 use echo_link::LinkConnector;
 use echo_sub_device::Device;
@@ -49,7 +49,7 @@ type SessionWorld = World<Device, echo_sub_trace::Trace, BridgeClock, SessionRng
 struct State {
     world: SessionWorld,
     first_violation: Option<Broken>,
-    writer_failed: bool,
+    trace_held: bool,
 }
 
 pub(crate) struct Controller {
@@ -76,7 +76,7 @@ impl Controller {
                     rng: seed.map_or(SessionRng::Os(OsRng), |seed| SessionRng::Seeded(SeededRng::new(seed))),
                 },
                 first_violation: None,
-                writer_failed: false,
+                trace_held: false,
             }),
             witness,
         })
@@ -114,12 +114,18 @@ impl Controller {
     pub(crate) fn enqueue(&self, mut pending: PendingTrace, started: Instant) -> Result<bool, crate::Error> {
         let mut state = self.state.lock().map_err(|_| crate::Error::Trace)?;
         pending.row.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let mut event = Event::Trace(Some(pending));
+        let mut event = Event::TraceRow(Some(pending));
         let mut out = Commands::default();
         state.world.step(&mut event, &mut out);
         self.check_step(&mut state);
-        if matches!(event, Event::Trace(None)) {
-            Ok(out.take_trace_wake())
+        if matches!(event, Event::TraceRow(None)) {
+            let wake = out.take_trace_wake();
+            if wake {
+                // Checked writes, including shutdown receipts after a failed
+                // fixture, must always be able to release the FIFO.
+                state.trace_held = false;
+            }
+            Ok(wake)
         } else {
             Err(crate::Error::Trace)
         }
@@ -142,7 +148,27 @@ impl Controller {
     }
 
     pub(crate) fn close_trace(&self) {
-        self.state().world.trace.close();
+        let mut state = self.state();
+        state.trace_held = false;
+        state.world.trace.close();
+    }
+
+    pub(crate) fn hold_trace(&self, held: bool) {
+        self.state().trace_held = held;
+    }
+
+    pub(crate) fn has_witness(&self) -> bool {
+        self.witness.is_some()
+    }
+
+    pub(crate) fn trace_failed(&self) {
+        self.trace_outcome(Event::TraceFailed);
+    }
+
+    fn trace_outcome(&self, mut event: Event) {
+        let mut state = self.state();
+        state.world.step(&mut event, &mut Commands::default());
+        self.check_step(&mut state);
     }
 
     pub(crate) fn current_run(&self) -> Result<Option<String>, crate::Error> {
@@ -167,12 +193,19 @@ impl Controller {
 }
 
 impl TraceDrain for Controller {
-    fn next_row(&self) -> Option<PendingTrace> {
-        self.state().world.trace.next_row()
+    fn next_row(&self) -> Option<(u64, PendingTrace)> {
+        let mut state = self.state();
+        if state.trace_held {
+            return None;
+        }
+        state.world.trace.next_row()
     }
 
-    fn write_failed(&self) {
-        self.state().writer_failed = true;
+    fn completed(&self, through: u64, result: Result<(), TraceFailure>) {
+        self.trace_outcome(match result {
+            Ok(()) => Event::TraceFlushed { through },
+            Err(_) => Event::TraceFailed,
+        });
     }
 }
 

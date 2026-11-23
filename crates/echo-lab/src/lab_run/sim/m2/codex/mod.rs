@@ -258,6 +258,9 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
             std::fs::create_dir(&output).map_err(|_| "m2: cannot own case directory")?;
             state.trace_path = output.join("bridge.private.jsonl");
             state.start(options).await?;
+            if std::env::var(echo_bridge::world_witness::TRACE_TICK_ENV).as_deref() == Ok("1") {
+                witness_trace_tick(state.bridge.as_mut().ok_or("m2: missing bridge")?, &state.trace_path).await?;
+            }
             state.exercise(utterance).await
         },
         options.cancel.as_deref(),
@@ -285,6 +288,42 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
         .and(cleanup)
         .and_then(|()| oracle::check(&measured));
     (measured, result)
+}
+
+async fn witness_trace_tick(bridge: &mut Process, path: &Path) -> Result<(), String> {
+    const EXPECTED: &[u8] = b"{\"corrected\":false,\"elapsed_ms\":0,\"event\":\"clock.offset\",\"hosts\":0,\"provider_auth_mode\":\"api_key\",\"reason\":\"unreachable\",\"servers\":1,\"synced\":false}\n";
+    let read = || std::fs::read(path).map_err(|_| "m2: missing trace tick file");
+    let before = read()?;
+    for held in [true, false] {
+        bridge
+            .send(&json!({"action":"trace_writer_fixture","held":held}))
+            .await?;
+        let observed = bridge.expect("bridge.trace_writer").await?;
+        if observed["held"] != held || read()? != before {
+            return Err("m2: trace changed before the tick".into());
+        }
+    }
+    if advance(bridge, 100).await? {
+        return Err("m2: unexpected run during the trace tick".into());
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let bytes = read()?;
+            let suffix = bytes
+                .strip_prefix(before.as_slice())
+                .ok_or("m2: prior trace bytes changed")?;
+            if suffix == EXPECTED {
+                read_trace(path)?;
+                return Ok(());
+            }
+            if !EXPECTED.starts_with(suffix) {
+                return Err("m2: trace tick wrote unexpected bytes".into());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| "m2: trace row did not flush on the first tick")?
 }
 
 fn read_trace(path: &Path) -> Result<Trace, String> {

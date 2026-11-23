@@ -7,9 +7,11 @@ use std::collections::VecDeque;
 struct Source(Mutex<VecDeque<PendingTrace>>);
 
 impl TraceDrain for Source {
-    fn next_row(&self) -> Option<PendingTrace> {
-        self.0.lock().unwrap().pop_front()
+    fn next_row(&self) -> Option<(u64, PendingTrace)> {
+        self.0.lock().unwrap().pop_front().map(|row| (0, row))
     }
+
+    fn completed(&self, _: u64, _: Result<(), TraceFailure>) {}
 }
 
 fn row(fields: &Value) -> TraceRow {

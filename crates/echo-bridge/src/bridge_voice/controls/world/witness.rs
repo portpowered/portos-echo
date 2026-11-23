@@ -1,13 +1,14 @@
 //! Private World result used by the loopback scenario harness and its W1 child.
 use super::{Controller, State};
 use crate::Error;
-use echo_core_api::{Broken, LinkState, TraceDrain};
+use echo_core_api::{Broken, LinkState};
 use rustix::fs::{self, Dir, Mode, OFlags};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, net::SocketAddr, os::fd::OwnedFd, path::Path, sync::Arc};
 
 pub const DIRECTORY_ENV: &str = "ECHO_LAB_WORLD_CHECK_DIR";
 pub const SEED_ENV: &str = "ECHO_LAB_WORLD_SEED";
+pub const TRACE_TICK_ENV: &str = "ECHO_LAB_TRACE_TICK";
 pub const REPORT_FILE: &str = "world-check.json";
 
 pub(super) struct Witness {
@@ -101,7 +102,7 @@ impl HelperWorld {
     }
 
     pub fn trace_failed(&self) {
-        self.controller.write_failed();
+        self.controller.trace_failed();
     }
 
     /// # Errors
@@ -185,7 +186,7 @@ impl Report {
             },
             trace: Trace {
                 pending_rows: state.world.trace.pending_rows(),
-                writer_failed: state.writer_failed,
+                writer_failed: state.world.trace.writer_failed(),
             },
         };
         let failure = state

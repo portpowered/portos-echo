@@ -70,11 +70,9 @@ impl Drop for Writer {
 fn run(mut sink: impl Write, source: &impl TraceDrain, receiver: &Receiver<()>) {
     loop {
         let signalled = receiver.recv().is_ok();
-        while let Some(pending) = source.next_row() {
+        while let Some((sequence, pending)) = source.next_row() {
             let result = write_row(&mut sink, pending.row);
-            if result.is_err() {
-                source.write_failed();
-            }
+            source.completed(sequence, result);
             if let Some(receipt) = pending.receipt {
                 let _ = receipt.send(result);
             }

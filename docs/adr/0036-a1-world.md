@@ -36,9 +36,11 @@ the append handle, JSONL encoding, flush and join. Each writer creates files
 with mode 0600 and reopens on the existing generation boundary. Synchronous
 audit callers receive a result only after each row is flushed. Periodic clock
 failure diagnostics can wait for the 100 ms trace tick because they carry no completion
-receipt. A checked write can wake the writer earlier. Close stops admission and
-joins the drain. The clock monitor and replacement receipts keep their separate
-open lifetimes and elapsed-time origins.
+receipt. A checked write can wake the writer earlier. The session World counts
+rows until the writer sends a flush or failure event through the ordered step.
+The clock monitor and voice share one writer and keep their respective elapsed-time
+origins. Close stops the clock monitor, then stops admission and joins the drain.
+Replacement receipts retain their separate open lifetime after teardown.
 
 The T3 harness gives each bridge child a fresh owner-only directory and reads
 its World result after collecting the child. The controller remembers the
@@ -60,6 +62,12 @@ RNG for these invocations. Compare the two `world-snapshots.private.json` files
 with `cmp`. The files contain the three final results in scenario case order.
 Each contains only typed device state and trace drain status. Ordinary
 invocations remove the per-generation files on completion.
+
+The prebuilt M2 milestone CLI test sets `ECHO_LAB_TRACE_TICK=1` for the success
+journey. The guarded paused bridge queues one clock diagnostic while the writer
+is held. The harness releases the writer without waking it, advances exactly
+100 ms with the device idle and reads one complete, byte-exact row before sending
+the utterance. The regular playback, provider and credential oracles still run.
 
 ## Deferred
 

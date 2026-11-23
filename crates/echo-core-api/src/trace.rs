@@ -21,8 +21,8 @@ pub struct PendingTrace {
 }
 
 pub trait TraceDrain: Send + Sync {
-    fn next_row(&self) -> Option<PendingTrace>;
+    fn next_row(&self) -> Option<(u64, PendingTrace)>;
 
-    /// Observe failed writes, including rows that have no synchronous receipt.
-    fn write_failed(&self) {}
+    /// Publish the outcome before releasing any checked receipt.
+    fn completed(&self, sequence: u64, result: Result<(), TraceFailure>);
 }

@@ -1,5 +1,5 @@
 //! Collect each bridge generation's private result after the scenario reaps its children.
-use echo_bridge::world_witness::{DIRECTORY_ENV, REPORT_FILE, Report, SEED_ENV};
+use echo_bridge::world_witness::{DIRECTORY_ENV, REPORT_FILE, Report, SEED_ENV, TRACE_TICK_ENV};
 use std::{
     cell::RefCell,
     fs::{self, DirBuilder, OpenOptions},
@@ -29,28 +29,38 @@ struct Checks {
     root: tempfile::TempDir,
     generations: Vec<PathBuf>,
     seed: Option<u64>,
+    trace_tick: bool,
 }
 
 pub(in crate::lab_run) fn execute(
     id: &str,
     root: &Path,
     output: &mut impl Write,
-    work: impl FnOnce() -> (Result<(), String>, bool),
-) -> Result<(), String> {
+    work: impl FnOnce() -> Result<(Result<(), String>, bool), String>,
+) -> Result<Result<(), String>, String> {
     let checks = match Checks::new(id) {
         Ok(checks) => checks,
-        Err(error) => return emit(output, id, Err(INVALID), Err(error), false),
+        Err(error) => return Ok(emit(output, id, Err(INVALID), Err(error), false)),
     };
-    let ((result, blocked), world) = CURRENT.sync_scope(RefCell::new(checks), || {
+    CURRENT.sync_scope(RefCell::new(checks), || {
         let outcome = work();
-        let world = CURRENT.with(|current| current.borrow().finish(root));
-        (outcome, world)
-    });
-    emit(output, id, world, result, blocked)
+        CURRENT.with(|current| {
+            let checks = current.borrow();
+            let (result, blocked) = match outcome {
+                Err(error) if checks.generations.is_empty() => return Err(error),
+                Err(error) => (Err(error), false),
+                Ok(outcome) => outcome,
+            };
+            Ok(emit(output, id, checks.finish(root), result, blocked))
+        })
+    })
 }
 
 pub(in crate::lab_run::sim) fn attach(command: &mut Command) -> Result<(), String> {
-    command.env_remove(DIRECTORY_ENV).env_remove(SEED_ENV);
+    command
+        .env_remove(DIRECTORY_ENV)
+        .env_remove(SEED_ENV)
+        .env_remove(TRACE_TICK_ENV);
     CURRENT
         .try_with(|checks| checks.borrow_mut().attach(command))
         .unwrap_or(Ok(()))
@@ -81,6 +91,7 @@ impl Checks {
             root,
             generations: Vec::new(),
             seed,
+            trace_tick: id == "m2-live-connect" && std::env::var(TRACE_TICK_ENV).as_deref() == Ok("1"),
         })
     }
 
@@ -93,6 +104,9 @@ impl Checks {
         command.env(DIRECTORY_ENV, &dir);
         if let Some(seed) = self.seed {
             command.env(SEED_ENV, seed.to_string());
+        }
+        if self.trace_tick && self.generations.is_empty() {
+            command.env(TRACE_TICK_ENV, "1");
         }
         self.generations.push(dir);
         Ok(())

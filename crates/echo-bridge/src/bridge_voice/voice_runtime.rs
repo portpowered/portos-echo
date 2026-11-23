@@ -1,4 +1,5 @@
 //! Presentation lifetime encloses authenticated device and conversation cleanup.
+mod lifecycle;
 use super::{
     HostOptions, ServeOptions,
     retained_link::Retained,
@@ -21,6 +22,7 @@ use echo_link::LinkConnector;
 use echo_media::MediaPeer;
 use echo_screen_contract::settings_v1::LinkStatusV1;
 use echo_screen_server::SettingsRequest;
+pub(super) use lifecycle::execute_owned;
 use std::{cell::Cell, future::Future, net::SocketAddr, path::Path, pin::Pin};
 use tokio::{sync::OnceCell, time::Instant};
 
@@ -180,9 +182,17 @@ pub async fn execute<C: LinkConnector, P: MediaPeer>(
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
 ) -> Result<(), Error> {
-    Box::pin(execute_owned(options, connector, &mut peer, cancelled, None, None))
-        .await
-        .map(|_| ())
+    let trace = Trace::open_for_voice(options.trace, options.host.mode, None, options.delegation)?;
+    Box::pin(execute_owned(
+        options,
+        connector,
+        &mut peer,
+        cancelled,
+        None,
+        (trace, None),
+    ))
+    .await
+    .map(|_| ())
 }
 
 /// Mount the bounded authorized settings owner for this runtime generation.
@@ -201,26 +211,26 @@ pub async fn execute_with_settings<C: LinkConnector, P: MediaPeer>(
     cancelled: impl Future<Output = ()>,
     settings: (SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>),
 ) -> Result<RuntimeCompletion, Error> {
+    let trace = Trace::open_for_voice(options.trace, options.host.mode, None, options.delegation)?;
     Box::pin(execute_owned(
         options,
         connector,
         &mut peer,
         cancelled,
         Some(settings),
-        None,
+        (trace, None),
     ))
     .await
 }
 
-pub(super) async fn execute_owned<C: LinkConnector, P: MediaPeer>(
+async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
     options: RuntimeOptions<'_>,
     connector: C,
     mut peer: impl AsyncFnMut() -> Result<P, Error>,
     cancelled: impl Future<Output = ()>,
     settings: Option<(SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>)>,
-    world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
+    mut trace: Trace,
 ) -> Result<RuntimeCompletion, Error> {
-    let mut trace = Trace::open_for_voice(options.trace, options.host.mode, world, options.delegation)?;
     super::prompts::publish(&mut trace)?;
     let (service, send) = settings.map_or((None, None), |(service, send)| (Some(service), Some(send)));
     let camera = cfg!(target_os = "android") && options.delegation.is_some_and(|config| config.camera.enabled);
@@ -296,12 +306,10 @@ async fn finish(
     let health_receipt = trace.record("health.released", None, serde_json::json!({}));
     // A trace failure must not skip the remaining presentation cleanup.
     let cleanup = close_screen(&mut screen, &mut trace, !requested && result != Err(Error::Control)).await;
-    let drain = trace.finish();
     result
         .and(presentation)
         .and(cleanup)
         .and(health_receipt)
-        .and(drain)
         .map(|()| RuntimeCompletion {
             restart_requested: restart,
             settings: settings.map(|settings| settings.host),

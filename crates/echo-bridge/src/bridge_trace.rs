@@ -40,7 +40,7 @@
 //! handed to the Echo, and `endpoint` is `user_transcript` or `delegated_turn`,
 //! the Live session's first sign that the user's turn was over.
 use crate::{Error, bridge_world::Controller};
-use echo_core_api::{PendingTrace, TraceDrain, TraceRow};
+use echo_core_api::{PendingTrace, TraceRow};
 use echo_svc_trace::Writer;
 use serde_json::Value;
 use std::{
@@ -51,6 +51,7 @@ use tokio::time::Instant;
 mod delegation_payload;
 mod native_delegation;
 mod native_tools;
+pub(crate) mod tick_fixture;
 mod tool_receipts;
 pub(crate) use tool_receipts::{PortosReceipts, ToolTrace};
 
@@ -76,7 +77,7 @@ impl Owner {
             ticker.abort();
         }
         self.writer.finish().map_err(|_| {
-            self.world.write_failed();
+            self.world.trace_failed();
             Error::Trace
         })
     }
@@ -118,7 +119,7 @@ impl Trace {
 
     pub(crate) fn open_in(path: &Path, mode: &'static str, world: Arc<Controller>) -> Result<Self, Error> {
         let writer = Arc::new(Writer::open(path, world.clone()).map_err(|_| {
-            world.write_failed();
+            world.trace_failed();
             Error::Trace
         })?);
         let started = Instant::now();
@@ -153,6 +154,11 @@ impl Trace {
 
     pub(crate) fn finish(&self) -> Result<(), Error> {
         self.owner.finish()
+    }
+
+    pub(crate) fn with_new_origin(mut self) -> Self {
+        self.started = Instant::now();
+        self
     }
 
     pub(crate) fn with_payloads(mut self, payloads: bool) -> Self {
@@ -192,10 +198,8 @@ impl Trace {
     fn enqueue(&self, pending: PendingTrace) -> Result<(), Error> {
         if self.owner.world.enqueue(pending, self.started)? {
             self.owner.writer.wake();
-        } else if self.owner.ticker.is_some() {
-            self.owner.tick_needed.notify_one();
         } else {
-            self.owner.writer.wake();
+            self.owner.tick_needed.notify_one();
         }
         Ok(())
     }

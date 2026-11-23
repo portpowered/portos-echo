@@ -77,6 +77,15 @@ fn corrected(system: SystemTime, reference_ms: Option<i64>) -> SystemTime {
 /// Stops the periodic measurement when dropped.
 pub(crate) struct Watch(Option<tokio::task::JoinHandle<()>>);
 
+impl Watch {
+    pub(crate) async fn stop(mut self) {
+        if let Some(task) = self.0.take() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
 impl Drop for Watch {
     fn drop(&mut self) {
         if let Some(task) = &self.0 {

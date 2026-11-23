@@ -13,13 +13,17 @@ use std::time::Duration;
 
 pub enum Event {
     Device { generation: u64, change: DeviceEvent },
-    Trace(Option<PendingTrace>),
+    TraceRow(Option<PendingTrace>),
+    TraceFlushed { through: u64 },
+    TraceFailed,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EventKind {
     Device,
-    Trace,
+    TraceRow,
+    TraceFlushed,
+    TraceFailed,
 }
 
 pub enum Command {
