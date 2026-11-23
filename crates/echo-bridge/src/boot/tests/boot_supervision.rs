@@ -186,7 +186,7 @@ fn boot_supervision_bad_layout_and_privileges_fail_closed() {
     let mut host = Fake::new(&path, 150);
     host.deny = Some(Role::Core);
     assert_eq!(supervise(&mut host), Err("denied role setup"));
-    assert_eq!(host.times(Role::Core), []);
+    assert!(host.times(Role::Core).is_empty());
     assert_eq!(host.stops.iter().map(|stop| stop.1).collect::<Vec<_>>(), [Role::Device]);
 
     let mut host = Fake::new(&path, 200_000);

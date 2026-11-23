@@ -14,7 +14,7 @@ fn main() -> ExitCode {
         Some("device") => return device(args.skip(1)),
         Some("boot") => return boot::dispatch(args.skip(1)),
         #[cfg(any(target_os = "android", target_os = "linux"))]
-        Some("__boot-launch") => return boot::launch(args.skip(1)),
+        Some("__boot-launch") if cfg!(target_os = "android") => return boot::launch(args.skip(1)),
         Some("notices") => {
             if args.nth(1).is_some() {
                 return input_error(&Error::Input);

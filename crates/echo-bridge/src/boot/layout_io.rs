@@ -112,17 +112,30 @@ fn check_directory(directory: &Path) -> Result<()> {
 }
 
 pub(super) fn candidate(slot: Slot) -> Result<(PathBuf, File)> {
-    let bin = Path::new(layout::ROOT).join(layout::BIN);
+    let root = Path::new(layout::ROOT);
+    let bin = root.join(layout::BIN);
+    check_directory(root)?;
+    check_directory(&bin)?;
     let path = bin.join(slot.name());
-    let file = state_file(&path, OFlags::RDONLY).map_err(|_| "open selected binary")?;
-    let meta = file.metadata().map_err(|_| "inspect selected binary")?;
+    let file = candidate_file(&path)?;
+    Ok((path, file))
+}
+
+fn candidate_file(path: &Path) -> Result<File> {
+    check_candidate(&metadata(path)?)?;
+    let file = state_file(path, OFlags::RDONLY).map_err(|_| "open selected binary")?;
+    check_candidate(&file.metadata().map_err(|_| "inspect selected binary")?)?;
+    Ok(file)
+}
+
+fn check_candidate(meta: &Metadata) -> Result<()> {
     if meta.is_file()
         && meta.uid() == 0
         && meta.nlink() == 1
         && meta.mode() & 0o7022 == 0
         && meta.mode() & 0o111 == 0o111
     {
-        Ok((path, file))
+        Ok(())
     } else {
         Err("unsafe selected binary")
     }
@@ -180,5 +193,16 @@ fn remove(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         result => result,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn boot_supervision_refuses_a_symlink_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current");
+        std::os::unix::fs::symlink("/proc/self/exe", &path).unwrap();
+        assert_eq!(super::candidate_file(&path).unwrap_err(), "unsafe selected binary");
     }
 }

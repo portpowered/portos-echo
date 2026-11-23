@@ -191,7 +191,7 @@ impl Supervisor {
         match host.observe(role)? {
             ChildStatus::Exited => self.failure(host, role, Stop::Exited, now, elapsed),
             ChildStatus::Running { ready_at } if role == Role::Core && elapsed >= STABLE => {
-                if !ready_at.is_some_and(|at| at <= started + STABLE) {
+                if ready_at.is_none_or(|at| at > started + STABLE) {
                     return self.failure(host, role, Stop::Timeout, now, elapsed);
                 }
                 if !self.core.stable {
