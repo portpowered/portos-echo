@@ -87,6 +87,7 @@ impl Media {
                 960
             );
             energy += amplitude(&self.uplink_pcm);
+            world.advance(FRAME_TIME);
             tokio::time::advance(FRAME_TIME).await;
         }
         assert!(energy / u64::try_from(count).unwrap() > 1_000, "uplink lost the tone");
@@ -124,6 +125,7 @@ impl Media {
             let frame = self.peer.recv().await.unwrap().unwrap();
             energy += amplitude(&frame);
             world.receive(&frame);
+            world.advance(FRAME_TIME);
             tokio::time::advance(FRAME_TIME).await;
         }
         assert!(energy / u64::try_from(count).unwrap() > 1_000, "downlink lost the tone");
@@ -133,6 +135,7 @@ impl Media {
         tokio::time::resume();
         self.peer.close().await.unwrap();
         self.remote.close();
+        tokio::time::pause();
     }
 }
 

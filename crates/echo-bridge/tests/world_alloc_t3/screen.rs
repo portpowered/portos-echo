@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 const TOKEN: &str = "synthetic-screen-pair";
 
 pub(super) struct Screen {
-    _server: ScreenServer,
+    server: ScreenServer,
     _states: mpsc::Sender<UiState>,
     response: reqwest::Response,
     lips: Lips,
@@ -41,7 +41,7 @@ impl Screen {
         let lips = Lips::new(Box::new(server.mouth()), Duration::from_millis(40));
         assert_eq!(lips.delay(), Duration::from_millis(40));
         let mut screen = Self {
-            _server: server,
+            server,
             _states: states,
             response,
             lips,
@@ -63,6 +63,10 @@ impl Screen {
 
     pub(super) fn batches(&self) -> usize {
         self.batches
+    }
+
+    pub(super) async fn close(mut self) {
+        self.server.shutdown().await.unwrap();
     }
 
     async fn event(&mut self, prefix: &[u8]) -> &[u8] {

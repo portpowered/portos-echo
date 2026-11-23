@@ -66,17 +66,21 @@ fn t3_world_audio_after_warmup() {
     });
     let world = Arc::new(runtime.block_on(async { Witness::new() }));
     let mut device = runtime.block_on(device::Device::open(world.clone()));
-    let mut media = runtime.block_on(media::Media::open());
-    let mut screen = runtime.block_on(screen::Screen::open());
     world.open_paths();
     let _ = allocation_counter::measure(|| {});
-    let mut rows = device.capture_rows(&runtime, &world);
-    rows.extend(media.rows(&runtime, &world));
-    rows.push(core::pacing(&runtime, &world));
-    rows.push(device.playback_row(&runtime, &world, &mut screen));
-    rows.push(core::barge(&runtime, &world));
+    let [capture, mute] = device.capture_rows(&runtime, &world);
+
+    let mut media = runtime.block_on(media::Media::open());
+    let [uplink, downlink] = media.rows(&runtime, &world);
     runtime.block_on(media.close());
+    let pacing = core::pacing(&runtime, &world);
+
+    let mut screen = runtime.block_on(screen::Screen::open());
+    let playback = device.playback_row(&runtime, &world, &mut screen);
+    runtime.block_on(screen.close());
+    let barge = core::barge(&runtime, &world);
     driver.abort();
+    let rows = [capture, uplink, downlink, pacing, playback, mute, barge];
     for row in &rows {
         writeln!(
             std::io::stdout().lock(),
