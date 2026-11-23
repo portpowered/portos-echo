@@ -41,10 +41,6 @@ impl Process {
         Self::launch(command, true)
     }
 
-    pub(super) fn start_bridge(command: &mut Command, observed: bool) -> Result<Self, String> {
-        witness::attach(command)?;
-        Self::launch(command, observed)
-    }
     fn launch(command: &mut Command, observed: bool) -> Result<Self, String> {
         let mut child = command
             .stdin(Stdio::piped())

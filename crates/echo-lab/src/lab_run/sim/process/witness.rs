@@ -18,6 +18,13 @@ tokio::task_local! {
 const MISSING: &str = "proof.availability: expected one result per bridge generation, actual missing";
 const INVALID: &str = "proof.availability: expected one valid result per bridge generation, actual invalid";
 
+impl super::Process {
+    pub(in crate::lab_run::sim) fn start_bridge(command: &mut Command, observed: bool) -> Result<Self, String> {
+        attach(command)?;
+        Self::launch(command, observed)
+    }
+}
+
 struct Checks {
     root: tempfile::TempDir,
     generations: Vec<PathBuf>,
