@@ -31,24 +31,9 @@ async fn exercise() {
 
 async fn rejection(expired: bool, mode: LiveMode) {
     let directory = tempfile::tempdir().unwrap();
-
-    let base = directory.path().join("home");
-    let (home, home_mode) = match mode {
-        LiveMode::Chatgpt => (base.clone(), HomeMode::Chatgpt),
-        LiveMode::ApiKey => (directory.path().join("home-api-key"), HomeMode::ApiKey),
-    };
-    let binary = binary();
-    let config = CodexConfig {
-        binary: Some(binary.clone()),
-        home: Some(base.clone()),
-        ..CodexConfig::default()
-    };
-    let reserve = || {
-        let mut config = SupervisorConfig::new(binary.clone(), base.clone());
-        config.home_mode = home_mode;
-        Supervisor::new(config).unwrap()
-    };
-    drop(reserve());
+    let config = pinned_config(directory.path());
+    let (home, owner) = reserve_home(&config, mode);
+    drop(owner);
     let auth = synthetic(expired);
     std::fs::write(home.join("auth.json"), &auth).unwrap();
     let (mut provider, mut input, mut output, origin) = provider().await;
@@ -83,7 +68,18 @@ async fn rejection(expired: bool, mode: LiveMode) {
     drop(input);
     assert!(provider.wait().await.unwrap().success());
     assert_eq!(std::fs::read(home.join("auth.json")).unwrap(), auth);
-    drop(reserve());
+    drop(reserve_home(&config, mode).1);
+}
+
+fn reserve_home(config: &CodexConfig, mode: LiveMode) -> (PathBuf, Supervisor) {
+    let base = config.home.clone().unwrap();
+    let mut supervisor = SupervisorConfig::new(config.binary.clone().unwrap(), base.clone());
+    let (home, home_mode) = match mode {
+        LiveMode::Chatgpt => (base, HomeMode::Chatgpt),
+        LiveMode::ApiKey => (base.with_file_name("home-api-key"), HomeMode::ApiKey),
+    };
+    supervisor.home_mode = home_mode;
+    (home, Supervisor::new(supervisor).unwrap())
 }
 
 fn synthetic(expired: bool) -> Vec<u8> {
