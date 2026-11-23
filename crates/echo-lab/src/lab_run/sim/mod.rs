@@ -38,11 +38,14 @@ impl<'a> Sim<'a> {
             .enable_all()
             .build()
             .map_err(|_| "sim: cannot start runtime")?;
+        let scenarios: Vec<Value> = options
+            .scenarios
+            .iter()
+            .filter_map(|path| crate::lab_validate::load(path).ok())
+            .collect();
         Ok(Self {
-            m1: options
-                .scenarios
-                .iter()
-                .any(|path| crate::lab_validate::load(path).is_ok_and(|s| s["id"] == "m1-hassmic-bridge")),
+            m1: scenarios.iter().any(|s| s["id"] == "m1-hassmic-bridge"),
+            deadline: tokio::time::Instant::now() + run_budget(&scenarios),
             options,
             mute: production::mute::Probe::default(),
             runtime,
@@ -50,7 +53,6 @@ impl<'a> Sim<'a> {
             launched: false,
             expectations: vec![],
             budgets: vec![],
-            deadline: tokio::time::Instant::now() + Duration::from_secs(120),
         })
     }
 
@@ -286,6 +288,23 @@ impl Driver for Sim<'_> {
             Err(failures.join("; "))
         }
     }
+}
+
+/// The deadline for a whole sim run: a base for the scenario's ordinary steps
+/// plus one allowance per declared restart cycle. A cycle stops a process,
+/// starts it, re-admits it and completes a wake, about 4.5 s on a quiet host
+/// and up to 6 s on a hosted runner; M1 declares twenty of them, so a fixed
+/// 120 s left it with almost no headroom there.
+pub(super) fn run_budget(scenarios: &[Value]) -> Duration {
+    const BASE: Duration = Duration::from_secs(120);
+    const PER_RESTART: Duration = Duration::from_secs(10);
+    let cycles: u64 = scenarios
+        .iter()
+        .filter_map(|scenario| scenario["steps"].as_array())
+        .flatten()
+        .filter_map(|step| step["restart"]["count"].as_u64())
+        .sum();
+    BASE.saturating_add(PER_RESTART.saturating_mul(u32::try_from(cycles).unwrap_or(u32::MAX)))
 }
 
 pub fn parse_step(value: &Value, scenario: &str) -> Result<Step, String> {
