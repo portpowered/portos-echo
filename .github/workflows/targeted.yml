@@ -15,3 +15,5 @@ jobs:
           target: lint-rust
       - name: Lint changed Rust packages
         run: cargo clippy --locked --keep-going -p echo-core-api -p echo-sub-device -p echo-sub-trace -p echo-svc-trace -p echo-bridge --all-targets -- -D warnings
+      - name: Run the changed trace service fixture
+        run: cargo test --locked -p echo-svc-trace
