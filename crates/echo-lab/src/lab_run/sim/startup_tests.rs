@@ -156,3 +156,19 @@ async fn t3_cancelled_stop_keeps_its_deadline_and_collects_forced_exit() {
         assert_eq!(status.signal(), Some(9));
     }
 }
+
+#[test]
+fn run_budget_adds_one_allowance_per_declared_restart_cycle() {
+    let scenario = |name: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/scenarios")
+            .join(name);
+        crate::lab_validate::load(path.to_str().unwrap()).unwrap()
+    };
+    // M1 declares 10 bridge and 10 hassmic-host restart cycles; M3 none.
+    let m1 = scenario("m1-hassmic-bridge.yaml");
+    let m3 = scenario("m3-full-duplex.yaml");
+    assert_eq!(super::run_budget(&[m1]), std::time::Duration::from_secs(320));
+    assert_eq!(super::run_budget(&[m3]), std::time::Duration::from_secs(120));
+    assert_eq!(super::run_budget(&[]), std::time::Duration::from_secs(120));
+}
