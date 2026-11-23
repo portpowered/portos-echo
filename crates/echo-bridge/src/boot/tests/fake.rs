@@ -247,13 +247,12 @@ impl HostOps for Fake<'_> {
     fn observe(&mut self, role: Role) -> Result<ChildStatus> {
         let should_exit = self.exits.contains(&(self.time, role));
         let child = self.child(role).as_mut().ok_or("missing fake role")?;
+        let ready_at = child.ready_at;
         if should_exit {
             child.finish(7)?;
-            Ok(ChildStatus::Exited)
+            Ok(ChildStatus::Exited { ready_at })
         } else {
-            Ok(ChildStatus::Running {
-                ready_at: child.ready_at,
-            })
+            Ok(ChildStatus::Running { ready_at })
         }
     }
 

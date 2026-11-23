@@ -58,6 +58,7 @@ pub struct Journal {
     version: u8,
     pub packages: BTreeMap<String, PackageState>,
     pub settings: Vec<SavedSetting>,
+    pub wifi_diagnostics_restore_pending: Option<bool>,
 }
 
 impl Default for Journal {
@@ -66,6 +67,7 @@ impl Default for Journal {
             version: 1,
             packages: BTreeMap::new(),
             settings: Vec::new(),
+            wifi_diagnostics_restore_pending: Some(false),
         }
     }
 }
@@ -74,8 +76,12 @@ impl Journal {
     /// # Errors
     /// Rejects invalid, unsupported or non-Athena restore entries.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let journal: Self = serde_json::from_slice(bytes).map_err(|_| "invalid Alexa journal")?;
+        let mut journal: Self = serde_json::from_slice(bytes).map_err(|_| "invalid Alexa journal")?;
         journal.validate()?;
+        // Older journals only recorded package and setting work.
+        journal
+            .wifi_diagnostics_restore_pending
+            .get_or_insert(!journal.packages.is_empty() || !journal.settings.is_empty());
         Ok(journal)
     }
 
@@ -135,5 +141,19 @@ mod tests {
         assert!(Journal::decode(unrelated).is_err());
         let missing = br#"{"version":1,"packages":{},"settings":[{"namespace":"system","key":"smartconn_status"}]}"#;
         assert!(Journal::decode(missing).is_err());
+    }
+
+    #[test]
+    fn journal_recovers_diagnostics_for_legacy_journals_with_restore_work() {
+        for (bytes, pending) in [
+            (br#"{"version":1,"packages":{},"settings":[]}"#.as_slice(), false),
+            (
+                br#"{"version":1,"packages":{"com.amazon.bishop":"enabled"},"settings":[]}"#.as_slice(),
+                true,
+            ),
+        ] {
+            let journal = Journal::decode(bytes).unwrap();
+            assert_eq!(journal.wifi_diagnostics_restore_pending, Some(pending));
+        }
     }
 }

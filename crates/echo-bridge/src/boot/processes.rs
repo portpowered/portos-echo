@@ -84,12 +84,12 @@ impl RoleChild {
     }
 
     pub(super) fn observe(&self) -> Result<ChildStatus> {
-        if exited(self.pid()?)? {
-            Ok(ChildStatus::Exited)
+        let exited = exited(self.pid()?)?;
+        let ready_at = self.ready.get().copied();
+        if exited {
+            Ok(ChildStatus::Exited { ready_at })
         } else {
-            Ok(ChildStatus::Running {
-                ready_at: self.ready.get().copied(),
-            })
+            Ok(ChildStatus::Running { ready_at })
         }
     }
 

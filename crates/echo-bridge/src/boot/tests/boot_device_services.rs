@@ -75,6 +75,17 @@ fn restore(device: &DeviceIo) {
 }
 
 #[test]
+fn boot_device_services_restore_without_journal_runs_no_android_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let (filter, device) = fixture(dir.path());
+    restore(&device);
+    restore(&open(dir.path()));
+    assert_eq!(filter.read("device-commands"), "");
+    assert_eq!(state(&filter), original());
+    assert!(!device.journal.exists());
+}
+
+#[test]
 fn boot_device_services_restores_default_enabled_disabled_and_unset_values() {
     let dir = tempfile::tempdir().unwrap();
     let (filter, device) = fixture(dir.path());
@@ -91,9 +102,12 @@ fn boot_device_services_restores_default_enabled_disabled_and_unset_values() {
     assert_eq!(actions(&filter, "pm enable --user 0 com.amazon.bishop"), 1);
     assert_eq!(actions(&filter, "pm default-state --user 0 com.amazon.paladin"), 1);
     assert_eq!(actions(&filter, "settings --user 0 delete system smartconn_status"), 1);
-    assert_eq!(actions(&filter, "--ez val true"), 2);
+    assert_eq!(actions(&filter, "--ez val true"), 1);
     let journal: Value = serde_json::from_str(&filter.read("alexa.json")).unwrap();
-    assert_eq!(journal, json!({"version":1,"packages":{},"settings":[]}));
+    assert_eq!(
+        journal,
+        json!({"version":1,"packages":{},"settings":[],"wifi_diagnostics_restore_pending":false})
+    );
 }
 
 fn assert_disabled(filter: &FilterFixture) {
@@ -135,9 +149,46 @@ fn boot_device_services_retries_failed_apply_and_restore_with_durable_original()
     );
     assert_eq!(pending["packages"], json!({}));
     assert_eq!(state(&filter)["settings"]["system"]["owner_value"], USER_SETTING);
+    assert_eq!(actions(&filter, "--ez val true"), 0);
     filter.remove("fail");
     restore(&open(dir.path()));
     assert_eq!(state(&filter), original());
+    assert_eq!(actions(&filter, "--ez val true"), 1);
+}
+
+#[test]
+fn boot_device_services_retries_pending_diagnostics_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let (filter, device) = fixture(dir.path());
+    let configured = json!({
+        "packages": {"com.amazon.whad": 2},
+        "settings": {"global": {"device_provisioned": "1", "bluetooth_on": "0"},
+            "secure": {"user_setup_complete": "1"},
+            "system": {"screen_off_timeout": "300000", "smartconn_status": "enabled"}}
+    });
+    filter.write("device.json", &configured.to_string());
+    device.prepare(|stage| assert_eq!(stage, "screen APK unavailable"));
+    assert_eq!(actions(&filter, "--ez val false"), 1);
+
+    filter.write(
+        "fail",
+        "am broadcast --user 0 -a com.amazon.android.service.wifidiags.SET_ENABLEWIFIDIAGS --ez val true",
+    );
+    assert_eq!(device.restore(|_| ()), Err("set Athena Wi-Fi diagnostics"));
+    assert_eq!(actions(&filter, "--ez val true"), 1);
+    let pending: Value = serde_json::from_str(&filter.read("alexa.json")).unwrap();
+    assert_eq!(
+        pending,
+        json!({"version":1,"packages":{},"settings":[],"wifi_diagnostics_restore_pending":true})
+    );
+
+    filter.remove("fail");
+    restore(&open(dir.path()));
+    assert_eq!(actions(&filter, "--ez val true"), 2);
+    let transcript = filter.read("device-commands");
+    restore(&open(dir.path()));
+    assert_eq!(filter.read("device-commands"), transcript);
+    assert_eq!(state(&filter), configured);
 }
 
 #[test]

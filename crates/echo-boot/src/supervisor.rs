@@ -10,7 +10,7 @@ const MAX_BACKOFF: Duration = Duration::from_secs(300);
 #[derive(Debug, Eq, PartialEq)]
 pub enum ChildStatus {
     Running { ready_at: Option<Duration> },
-    Exited,
+    Exited { ready_at: Option<Duration> },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -281,25 +281,28 @@ impl Supervisor {
         };
         let now = host.now();
         let elapsed = now.saturating_sub(started);
-        match host.observe(role)? {
-            ChildStatus::Exited => self.failure(host, role, Stop::Exited, now, elapsed),
-            ChildStatus::Running { ready_at } if role == Role::Core && elapsed >= STABLE => {
-                if ready_at.is_none_or(|at| at > started + STABLE) {
-                    return self.failure(host, role, Stop::Timeout, now, elapsed);
-                }
-                if !self.core.stable {
-                    let selection = self.selection()?;
-                    selection.stabilize();
-                    host.save_selection(selection)?;
-                    self.core.stable = true;
-                }
-                Ok(())
+        let status = host.observe(role)?;
+        let ready_at = match status {
+            ChildStatus::Running { ready_at } | ChildStatus::Exited { ready_at } => ready_at,
+        };
+        let exited = matches!(status, ChildStatus::Exited { .. });
+        if role == Role::Core && elapsed >= STABLE && !self.core.stable {
+            if ready_at.is_some_and(|at| at <= started + STABLE) {
+                let selection = self.selection()?;
+                selection.stabilize();
+                host.save_selection(selection)?;
+                self.core.stable = true;
+            } else if !exited {
+                return self.restart_after_stop(host, role, Stop::Timeout, now, elapsed);
             }
-            ChildStatus::Running { .. } => Ok(()),
         }
+        if exited {
+            self.restart_after_stop(host, role, Stop::Exited, now, elapsed)?;
+        }
+        Ok(())
     }
 
-    fn failure(
+    fn restart_after_stop(
         &mut self,
         host: &mut impl HostOps,
         role: Role,
@@ -309,7 +312,7 @@ impl Supervisor {
     ) -> Result<()> {
         self.finish(host, role, why)?;
         self.life(role).retry(now, elapsed);
-        if role == Role::Core {
+        if role == Role::Core && !self.core.stable {
             let selection = self.selection()?;
             selection.fail();
             host.save_selection(selection)?;

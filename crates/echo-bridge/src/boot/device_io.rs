@@ -39,10 +39,7 @@ impl DeviceIo {
     }
 
     pub(super) fn prepare(&self, mut log: impl FnMut(&'static str)) {
-        if let Err(stage) = self.disable_alexa(&mut log) {
-            log(stage);
-        }
-        if let Err(stage) = self.wifi_diagnostics(false) {
+        if let Err(stage) = self.take_over(&mut log) {
             log(stage);
         }
         self.screen(log);
@@ -53,11 +50,10 @@ impl DeviceIo {
         command_io::run_bounded(&self.runtime, &tool, args, None, stage, ANDROID_LIMIT)
     }
 
-    fn load(&self) -> Result<Journal> {
-        match layout_io::read_journal(&self.journal, JOURNAL_LIMIT)? {
-            Some(bytes) => Journal::decode(&bytes),
-            None => Ok(Journal::default()),
-        }
+    fn load(&self) -> Result<Option<Journal>> {
+        layout_io::read_journal(&self.journal, JOURNAL_LIMIT)?
+            .map(|bytes| Journal::decode(&bytes))
+            .transpose()
     }
 
     fn save(&self, journal: &Journal) -> Result<()> {
@@ -68,8 +64,19 @@ impl DeviceIo {
         layout_io::write_journal(&self.journal, &bytes)
     }
 
-    fn disable_alexa(&self, log: &mut impl FnMut(&'static str)) -> Result<()> {
-        let mut journal = self.load()?;
+    fn take_over(&self, log: &mut impl FnMut(&'static str)) -> Result<()> {
+        let mut journal = self.load()?.unwrap_or_default();
+        if let Err(stage) = self.disable_alexa(&mut journal, log) {
+            log(stage);
+        }
+        if journal.wifi_diagnostics_restore_pending != Some(true) {
+            journal.wifi_diagnostics_restore_pending = Some(true);
+            self.save(&journal)?;
+        }
+        self.wifi_diagnostics(false)
+    }
+
+    fn disable_alexa(&self, journal: &mut Journal, log: &mut impl FnMut(&'static str)) -> Result<()> {
         let enabled = self.command(
             "pm",
             &["list", "packages", "--user", "0", "-e"],
@@ -77,13 +84,13 @@ impl DeviceIo {
         )?;
         for &name in PACKAGES {
             if listed(&enabled, name)
-                && let Err(stage) = self.disable_package(&mut journal, name)
+                && let Err(stage) = self.disable_package(journal, name)
             {
                 log(stage);
             }
         }
         for &(namespace, key, wanted) in SETTINGS {
-            if let Err(stage) = self.apply_setting(&mut journal, namespace, key, wanted) {
+            if let Err(stage) = self.apply_setting(journal, namespace, key, wanted) {
                 log(stage);
             }
         }
@@ -162,7 +169,9 @@ impl DeviceIo {
     }
 
     pub(super) fn restore(&self, mut log: impl FnMut(&'static str)) -> Result<()> {
-        let mut journal = self.load()?;
+        let Some(mut journal) = self.load()? else {
+            return Ok(());
+        };
         let mut failed = false;
         for (name, previous) in journal.packages.clone() {
             let (action, expected) = match previous {
@@ -194,12 +203,15 @@ impl DeviceIo {
                 }
             }
         }
-        self.wifi_diagnostics(true)?;
         if failed {
-            Err("Alexa restore incomplete")
-        } else {
-            Ok(())
+            return Err("Alexa restore incomplete");
         }
+        if journal.wifi_diagnostics_restore_pending == Some(true) {
+            self.wifi_diagnostics(true)?;
+            journal.wifi_diagnostics_restore_pending = Some(false);
+            self.save(&journal)?;
+        }
+        Ok(())
     }
 
     fn wifi_diagnostics(&self, enabled: bool) -> Result<()> {

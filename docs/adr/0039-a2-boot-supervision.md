@@ -18,8 +18,10 @@ single-threaded re-exec before dropping credentials.
 The supervisor records a current-slot attempt before launching core and
 reconciles an unfinished attempt at startup. The journal uses a SHA-256 digest
 of `bin/current` as its generation. Core must emit the existing
-`{"event":"bridge.ready"}` line on its own stdout and remain alive for 60 s to
-clear failed tries. The third failed try prevents further current starts.
+`{"event":"bridge.ready"}` line on its own stdout and reach 60 s of uptime to
+clear failed tries. A ready core observed exiting at the 60 s boundary clears
+the counter before restarting the current slot. The third failed try prevents
+further current starts.
 After reaping the old pair, the supervisor validates `bin/previous`, records
 its selection and logs the two digests. Promotion remains an installer action.
 A root-only journal is atomically replaced and synced in `bin/.boot`.
@@ -69,9 +71,13 @@ installer can stop the supervisor and invoke the trusted boot image as root
 with `__boot-launch restore-alexa`. Restore returns explicit enables to
 `enabled`, default enables to `default`, and absent settings to absence.
 Verified restores remove their journal entries. Failed restores keep their
-entries for retry. The Athena Wi-Fi diagnostics broadcast uses the fork's
-disable and restore values. The package and settings data come from the MIT
-fork whose notice ships with the existing `echo-bridge notices` output.
+entries for retry. The journal records `wifi_diagnostics_restore_pending`
+before the Athena Wi-Fi diagnostics disable broadcast. Restore enables
+diagnostics after packages and settings have been restored, then clears the
+flag after a successful broadcast. A missing journal or completed restore
+issues no Android commands. Older journals with saved packages or settings
+are treated as pending. The package and settings data come from the MIT fork
+whose notice ships with the existing `echo-bridge notices` output.
 
 Startup compares the SHA-256 of `bin/echo-screen.apk` with the installed base
 APK. It runs `pm install -r` for a changed or missing installation and launches
