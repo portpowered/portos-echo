@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - run: git switch --detach e880e5295d604899aa98a8d6fe76781e53a7d742
+      - run: git switch --detach 5c9b7388b3c5891ff950bffc397ba7f64b05e061
       - uses: ./.github/actions/setup
         with:
           target: test-sim
@@ -41,7 +41,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - run: git switch --detach e880e5295d604899aa98a8d6fe76781e53a7d742
+      - run: git switch --detach 5c9b7388b3c5891ff950bffc397ba7f64b05e061
       - uses: ./.github/actions/setup
         with:
           target: lint-self-tests
