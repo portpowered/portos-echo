@@ -4,6 +4,54 @@ use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
 #[tokio::test(start_paused = true)]
+async fn default_queue_wrap_keeps_fifo_and_a_held_frame() {
+    let (io, mut peer) = duplex(65_536);
+    let mut client = WyomingClient::from_io(io, ClientOptions::default());
+    let mut events = EchoLink::events(&mut client).unwrap();
+    send(
+        &mut peer,
+        "run-pipeline",
+        json!({
+            "start_stage":"asr", "end_stage":"tts", "restart_on_end":false, "wake_word_name":"Computer"
+        }),
+        vec![],
+    )
+    .await;
+    let Some(LinkEvent::Wake(mut run)) = events.recv().await.unwrap() else {
+        panic!("missing wake");
+    };
+    let format = json!({"rate":16000,"width":2,"channels":1});
+    send(&mut peer, "audio-chunk", format.clone(), vec![0, 0]).await;
+    let held = MicrophoneRun::recv(&mut run).await.unwrap().unwrap();
+    for start in [1_u8, 66] {
+        for marker in start..start + 65 {
+            send(&mut peer, "audio-chunk", format.clone(), vec![marker, 0]).await;
+        }
+        // Info is an ordered barrier and doesn't close or replace this run.
+        let asked = async {
+            assert_eq!(receive(&mut peer).await.header.r#type, "describe");
+            send(&mut peer, "info", json!({"barrier":true}), vec![]).await;
+        };
+        let (probe, ()) = tokio::join!(client.probe(), asked);
+        probe.unwrap();
+        for marker in start + 1..start + 65 {
+            let frame = MicrophoneRun::recv(&mut run).await.unwrap().unwrap();
+            assert_eq!(frame.payload.as_ref(), [marker, 0]);
+        }
+        assert_eq!(held.payload.as_ref(), [0, 0]);
+    }
+    assert_eq!(
+        MicrophoneRun::stats(&run),
+        RunStats {
+            received: 131,
+            dropped: 2
+        }
+    );
+    send(&mut peer, "audio-stop", serde_json::Value::Null, vec![]).await;
+    assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
+}
+
+#[tokio::test(start_paused = true)]
 async fn m1_restart_regression_wake_before_info_preserves_played() {
     for info_first in [false, true] {
         let (sender, receiver) = crate::wyoming_events::channel(32);

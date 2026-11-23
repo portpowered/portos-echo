@@ -169,6 +169,7 @@ impl Drop for Router {
 mod tests {
     use super::*;
     use crate::{RunStats, wyoming_test_support::frame};
+    use echo_contracts::wyoming::Event;
     use serde_json::json;
     use std::io::Write;
 
@@ -211,7 +212,7 @@ mod tests {
         );
         for index in [9_998_u32, 9_999] {
             let pcm = run.recv().await.unwrap().unwrap();
-            assert_eq!(pcm.payload, index.to_le_bytes());
+            assert_eq!(pcm.payload.as_ref(), index.to_le_bytes());
             assert_eq!(pcm.data.timestamp, Some(u64::from(index)));
         }
         assert_eq!(run.recv().await.unwrap(), None);

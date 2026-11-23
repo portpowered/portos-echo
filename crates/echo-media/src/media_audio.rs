@@ -176,6 +176,25 @@ mod media_audio_tests {
     }
 
     #[test]
+    fn successive_opus_packets_reuse_scratch_and_keep_the_owned_prefix() {
+        let mut encoder = Encoder::new().unwrap();
+        let positive = std::array::from_fn(|index| if index % 16 < 8 { 12_000 } else { -12_000 });
+        let negative = positive.map(|sample| -sample / 2);
+        assert!(encoder.encode(&positive).unwrap().is_none());
+        let first = encoder.encode(&positive).unwrap().unwrap();
+        let scratch = first.as_ptr();
+        let held = first.to_vec();
+        let next = encoder.encode(&negative).unwrap().unwrap();
+        assert_eq!(scratch, next.as_ptr());
+        assert!((1..=1275).contains(&held.len()));
+        assert!((1..=1275).contains(&next.len()));
+        assert_ne!(held.as_slice(), next);
+        let mut reference = Encoder::new().unwrap();
+        assert!(reference.encode(&positive).unwrap().is_none());
+        assert_eq!(reference.encode(&positive).unwrap().unwrap(), held);
+    }
+
+    #[test]
     fn pcm_conversion_clamps_and_rounds_without_wrapping() {
         for sample in [i16::MIN, -1, 0, 1, i16::MAX] {
             assert_eq!(pcm16(f64::from(sample)), sample);

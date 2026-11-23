@@ -267,3 +267,94 @@ fn encode_control(event: &WyomingEvent, payload: Vec<u8>) -> Result<Vec<u8>, Err
         payload,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tokio::io::{BufReader, duplex};
+
+    #[tokio::test]
+    async fn fragmented_audio_preserves_segment_precedence_and_large_valid_payloads() {
+        let (mut peer, socket) = duplex(1024);
+        let mut reader = Reader::new(16_384, 1);
+        let mut socket = BufReader::new(socket);
+        let data = br#"{"rate":16000,"width":2,"channels":1,"timestamp":21}"#;
+        let header = format!(
+            "{{\"type\":\"audio-chunk\",\"version\":\"1.5.4\",\"data_length\":{},\"payload_length\":8192}}\n",
+            data.len(),
+        );
+        let mut unusual = crate::wyoming_test_support::frame(
+            "audio-chunk",
+            json!({"rate":24000,"width":2,"channels":1,"timestamp":7,"custom":"inline"}),
+            vec![3; 8194],
+        );
+        unusual.data = Some(json!({"rate":16000,"timestamp":31,"custom":"segment"}));
+        let expected = unusual.typed().unwrap();
+        let raw = encode(&unusual);
+        let send = async move {
+            peer.write_all(header.as_bytes()).await.unwrap();
+            peer.write_all(data).await.unwrap();
+            peer.write_all(&[1; 8192]).await.unwrap();
+            for part in raw.chunks(23) {
+                peer.write_all(part).await.unwrap();
+            }
+        };
+        let read = async {
+            let Frame::Audio(data, held) = reader.read(&mut socket).await.unwrap() else {
+                panic!("missing audio")
+            };
+            assert_eq!(
+                (data.rate, data.width, data.channels, data.timestamp),
+                (16000, 2, 1, Some(21))
+            );
+            assert_eq!(&*held, &[1; 8192]);
+            let Frame::Audio(data, payload) = reader.read(&mut socket).await.unwrap() else {
+                panic!("missing audio")
+            };
+            assert_eq!(WyomingEvent::AudioChunk(data), expected);
+            assert_eq!(&*payload, &[3; 8194]);
+            assert_eq!(&*held, &[1; 8192]);
+            assert!(matches!(reader.read(&mut socket).await, Err(Error::Disconnected)));
+        };
+        tokio::join!(send, read);
+    }
+
+    #[tokio::test]
+    async fn reusable_writer_matches_canonical_chunk_and_rejects_before_writing() {
+        let (mut socket, mut peer) = duplex(4096);
+        let mut writer = Writer::new();
+        for timestamp in [None, Some(u64::MAX)] {
+            let chunk = AudioChunkData {
+                rate: 24_000,
+                channels: 1,
+                width: 2,
+                timestamp,
+                extra: Default::default(),
+            };
+            let payload = vec![4; 960];
+            let data = serde_json::to_value(&chunk).unwrap();
+            let expected = encode(&crate::wyoming_test_support::frame(
+                "audio-chunk",
+                data,
+                payload.clone(),
+            ));
+            let event = WyomingEvent::AudioChunk(chunk);
+            assert_eq!(
+                writer
+                    .write(&mut socket, &event, payload.clone(), expected.len() - 1)
+                    .await,
+                Err(Error::Capacity)
+            );
+            writer
+                .write(&mut socket, &event, payload, expected.len())
+                .await
+                .unwrap();
+            let mut actual = vec![0; expected.len()];
+            peer.read_exact(&mut actual).await.unwrap();
+            assert_eq!(actual, expected);
+        }
+        drop(socket);
+        assert_eq!(peer.read(&mut [0; 1]).await.unwrap(), 0);
+    }
+}
