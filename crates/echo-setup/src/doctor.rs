@@ -1,5 +1,8 @@
 //! Read-only diagnostic checks; external observations never become diagnostics.
-use crate::{adb::Adb, cli::Options};
+use crate::{
+    adb::Adb,
+    cli::{InstallPath, Options},
+};
 use serde_json::{Value, json};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -26,22 +29,37 @@ const CHECKS: [(&str, &str); 7] = [
 pub async fn execute(options: &Options) -> Value {
     let mut passed = [false; 7];
     let mut auth_mode = "unavailable";
+    let mut owner = InstallPath::Legacy;
     let ceiling = Duration::from_secs(options.timeout_seconds.min(15));
-    let _ = tokio::time::timeout(ceiling, observe(options, &mut passed, &mut auth_mode)).await;
+    let _ = tokio::time::timeout(ceiling, observe(options, &mut passed, &mut auth_mode, &mut owner)).await;
     let checks: Vec<_> = CHECKS
         .iter()
         .zip(passed)
-        .map(|((name, fix), ok)| json!({"name":name, "ok":ok, "fix":if ok {None} else {Some(fix)}}))
+        .map(|((name, fix), ok)| {
+            let fix = if *name == "hassmic" && owner == InstallPath::A2 {
+                "Check the A2 device role and its local Wyoming socket."
+            } else {
+                fix
+            };
+            json!({"name":name, "ok":ok, "fix":(!ok).then_some(fix)})
+        })
         .collect();
     json!({"type":"result", "command":"doctor", "ok":passed.iter().all(|ok| *ok), "checks":checks, "auth_mode":auth_mode})
 }
 
-async fn observe(options: &Options, passed: &mut [bool; 7], auth_mode: &mut &'static str) -> crate::Result<()> {
+async fn observe(
+    options: &Options,
+    passed: &mut [bool; 7],
+    auth_mode: &mut &'static str,
+    owner: &mut InstallPath,
+) -> crate::Result<()> {
     let mut adb = Adb::discover(options.adb.as_deref())?;
     passed[0] = true;
     adb.select_ready(options.serial.as_deref()).await?;
     passed[1] = true;
-    adb.installed_owner().await?;
+    let installed = adb.installed_owner().await;
+    *owner = adb.owner();
+    installed?;
     let (probes, mode) = selected(&adb).await?;
     passed[2..].copy_from_slice(&probes);
     *auth_mode = mode;

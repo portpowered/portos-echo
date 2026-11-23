@@ -244,3 +244,23 @@ fn t3_a2_install_incomplete_wake_exits_three_and_keeps_the_retained_install() ->
     assert!(!calls.contains("--host doctor"));
     Ok(())
 }
+
+#[test]
+fn t3_a2_install_doctor_uses_a2_satellite_fix_with_the_existing_check_label() -> Result {
+    let fixture = retained()?;
+    let checks = fs::read_to_string(fixture.0.join("doctor"))?.replace("hassmic=ok", "hassmic=failed");
+    fs::write(fixture.0.join("doctor"), checks)?;
+    let output = fixture
+        .command()
+        .args(["doctor", "--json", "--adb", env!("CARGO_BIN_EXE_echo-setup-test-adb")])
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    let result = private_output(&output)?;
+    assert_eq!(result["auth_mode"], "chatgpt");
+    assert_eq!(
+        result["checks"][2],
+        serde_json::json!({"name":"hassmic","ok":false,"fix":"Check the A2 device role and its local Wyoming socket."}),
+    );
+    assert!(!fs::read_to_string(fixture.0.join("ledger"))?.contains("/runas"));
+    Ok(())
+}

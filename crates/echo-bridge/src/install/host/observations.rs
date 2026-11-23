@@ -26,14 +26,25 @@ pub(super) fn status(files: &Files<'_>, version: &str) -> Result<String> {
         Some(false) => ("running", "unavailable"),
         None => ("stopped", "unavailable"),
     };
-    let link = if device {
-        "client connected"
-    } else {
-        "no Home Assistant link"
+    let link = match (core, device) {
+        (Some(true), true) if fs::read_to_string("/proc/net/unix").is_ok_and(|table| satellite_connected(&table)) => {
+            "client connected"
+        }
+        (_, true) => "unavailable",
+        (_, false) => "no Home Assistant link",
     };
     Ok(format!(
         "process={process}\nprocess_user={user}\nuptime_seconds=unavailable\nhassmic_link={link}\nversion_current={version}\nversion_previous=null"
     ))
+}
+
+fn satellite_connected(table: &str) -> bool {
+    table.lines().any(|line| {
+        let mut fields = line.split_ascii_whitespace();
+        fields.nth(4) == Some("0001")
+            && fields.next() == Some("03")
+            && fields.nth(1) == Some(echo_device::WYOMING_SOCKET)
+    })
 }
 
 pub(super) fn core_running(files: &Files<'_>) -> Result<bool> {
@@ -253,7 +264,7 @@ fn run_evidence(trace: impl Read) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::run_evidence;
+    use super::{run_evidence, satellite_connected};
     use std::fmt::Write as _;
 
     #[test]
@@ -281,5 +292,15 @@ mod tests {
         assert_eq!(run_evidence(&trace.as_bytes()[baseline..]), Ok(true));
         trace.push('{');
         assert_eq!(run_evidence(&trace.as_bytes()[baseline..]), Ok(false));
+    }
+
+    #[test]
+    fn a2_wake_socket_status_requires_an_established_local_stream() {
+        let socket = echo_device::WYOMING_SOCKET;
+        let row = |kind, state, path| format!("0000: 00000002 00000000 00010000 {kind} {state} 1337 {path}\n");
+        assert!(!satellite_connected(&row("0001", "01", socket)));
+        assert!(!satellite_connected(&row("0002", "03", socket)));
+        assert!(!satellite_connected(&row("0001", "03", "/data/local/other.sock")));
+        assert!(satellite_connected(&row("0001", "03", socket)));
     }
 }
