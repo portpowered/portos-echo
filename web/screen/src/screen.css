@@ -36,6 +36,19 @@ section {
     overflow: auto;
     min-height: 0;
 }
+.screen-presentation[data-ui-state="open_ai_signin"] > h1 {
+    margin-bottom: 12px;
+    font-size: 44px;
+}
+.screen-presentation[data-ui-state="open_ai_signin"] .details p {
+    margin-block: 6px;
+    line-height: 1.2;
+}
+.screen-presentation[data-ui-state="open_ai_signin"]
+    .details
+    p:not(.openai-code) {
+    font-size: 22px;
+}
 .openai-code {
     margin-block: 0.25em;
     font-size: 56px;

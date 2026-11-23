@@ -5,7 +5,7 @@ use crate::bridge_settings::openai_account::Account;
 use crate::{Error, bridge_input::loopback, bridge_trace::Trace};
 use echo_config::ScreenConfig;
 use echo_contracts::secret::Secret;
-use echo_screen_contract::UiState;
+use echo_screen_contract::{UiAction, UiState};
 use echo_screen_server::ScreenServer;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -266,25 +266,8 @@ impl Screen {
                 if !muted && approvals.answer(&action).is_err() {
                     break;
                 }
-                use echo_screen_contract::UiAction;
-                let result = match (&action, &account) {
-                    (UiAction::CancelOpenAiSignin { attempt_id }, Some(account)) => {
-                        account.stop_recovery(attempt_id, false);
-                        Ok(())
-                    }
-                    (UiAction::RenewOpenAiSignin { attempt_id }, Some(account)) => {
-                        account.stop_recovery(attempt_id, true);
-                        Ok(())
-                    }
-                    (UiAction::Relink, Some(account)) if account.relink_start() => Ok(()),
-                    (UiAction::Relink, None) if muted => Ok(()),
-                    (UiAction::Relink, None) if health.borrow().relink_required => {
-                        presentation.publish(failure_state(true))
-                    }
-                    (UiAction::Relink, _) => presentation.refresh(),
-                    _ => Ok(()),
-                };
-                if result.is_err() {
+                let relink_required = health.borrow().relink_required;
+                if recovery_action(&action, account.as_ref(), &presentation, muted, relink_required).is_err() {
                     break;
                 }
             }
@@ -328,6 +311,30 @@ impl Drop for Screen {
         if let Some(task) = &self.actions {
             task.abort();
         }
+    }
+}
+
+fn recovery_action(
+    action: &UiAction,
+    account: Option<&Account>,
+    presentation: &Presentation,
+    muted: bool,
+    relink_required: bool,
+) -> Result<(), Error> {
+    match (action, account) {
+        (UiAction::CancelOpenAiSignin { attempt_id }, Some(account)) => {
+            account.stop_recovery(attempt_id, false);
+            Ok(())
+        }
+        (UiAction::RenewOpenAiSignin { attempt_id }, Some(account)) => {
+            account.stop_recovery(attempt_id, true);
+            Ok(())
+        }
+        (UiAction::Relink, Some(account)) if account.relink_start() => Ok(()),
+        (UiAction::Relink, None) if muted => Ok(()),
+        (UiAction::Relink, None) if relink_required => presentation.publish(failure_state(true)),
+        (UiAction::Relink, _) => presentation.refresh(),
+        _ => Ok(()),
     }
 }
 

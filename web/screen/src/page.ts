@@ -151,6 +151,10 @@ export function startPage(root: HTMLElement, href: string): () => void {
             state.state === "open_ai_relink" ||
             state.state === "open_ai_signin";
         const previous = content.dataset.uiState;
+        const leftRecovery =
+            !recovery &&
+            (previous === "open_ai_relink" || previous === "open_ai_signin") &&
+            content.contains(document.activeElement);
         const idle = state.state === "ready" || state.state === "connected";
         const retained = content.querySelectorAll(
             ":scope > [data-pack-persistent]",
@@ -293,6 +297,10 @@ export function startPage(root: HTMLElement, href: string): () => void {
         if (recovery && previous !== state.state && !content.hidden) {
             heading.tabIndex = -1;
             if (!controls.contains(document.activeElement)) heading.focus();
+        } else if (leftRecovery && !content.hidden) {
+            const target = content.querySelector("button") ?? content;
+            if (target === content) content.tabIndex = -1;
+            target.focus();
         }
     }
     try {
@@ -324,7 +332,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         href,
         () => settings?.dirty() ?? false,
         () => {
-            chrome.wait();
+            offline();
             stream.restart();
         },
     );

@@ -102,4 +102,18 @@ test("B14: 960 × 600 recovery has visible keyboard controls, exact actions and 
     ]);
     assert.equal(await page.getByRole("button", { name: "Cancel" }).count(), 0);
     assert.equal((await calls(page)).length, 2);
+    await emit(page, frame(4, recoveryStates[0]));
+    assert.equal(
+        await page
+            .getByRole("button", { name: "Relink" })
+            .evaluate((node) => document.activeElement === node),
+        true,
+    );
+    await emit(page, frame(5));
+    assert.equal(
+        await page
+            .getByRole("button", { name: "Begin session" })
+            .evaluate((node) => document.activeElement === node),
+        true,
+    );
 });
