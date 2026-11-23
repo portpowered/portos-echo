@@ -36,6 +36,7 @@ pub struct World {
     pub run: Option<String>,
     pub endpoints: Vec<std::net::SocketAddr>,
     pub(super) wifi: Option<super::production::wifi::Device>,
+    pub(super) wifi_password_matches: Option<usize>,
 }
 
 impl World {
@@ -79,7 +80,10 @@ impl World {
         live: impl std::future::Future<Output = Result<FakeLive, echo_live::call::CallError>>,
         probe: impl FnMut(std::net::SocketAddr) -> F,
     ) -> Result<(), String> {
-        self.trace_path = root.join("bridge.private.jsonl");
+        self.trace_path = self.wifi.as_ref().map_or_else(
+            || root.join("bridge.private.jsonl"),
+            super::production::wifi::Device::trace,
+        );
         self.ui_path = root.join("ui.private.json");
         let deadline = process::readiness_deadline();
         self.host = Some(Process::start(host_command)?);
@@ -139,10 +143,11 @@ impl World {
         if super::production::selected(bridge) {
             self.private = Some(super::m2::codex::config::Root::new()?);
             let private = &self.private.as_ref().ok_or("m1: missing private root")?.0;
+            let trace_root = self.trace_path.parent().unwrap_or(root);
             super::production::configure_codex(
                 &mut command,
                 private,
-                root,
+                trace_root,
                 address,
                 &self.canonical.as_ref().ok_or("m1: missing provider")?.origin,
                 self.spoof.as_ref().ok_or("launch: missing spoof")?.url(),
@@ -154,7 +159,10 @@ impl World {
                 super::m2::auth::configure(&mut command, root, case, auth)?;
             }
         }
-        self.bridge = Some(Process::start_bridge(&mut command, false)?);
+        self.bridge = Some(match &self.wifi {
+            Some(wifi) => Process::start_bridge_with_log(&mut command, wifi.bridge_log()?)?,
+            None => Process::start_bridge(&mut command, false)?,
+        });
         self.bridge
             .as_mut()
             .ok_or("launch: missing bridge")?
@@ -339,10 +347,11 @@ impl World {
         {
             failures.push("cleanup: host failed to close".into());
         }
-        if let Some(wifi) = self.wifi.take()
-            && let Err(error) = wifi.close().await
-        {
-            failures.push(error);
+        if let Some(wifi) = self.wifi.take() {
+            match wifi.close().await {
+                Ok(matches) => self.wifi_password_matches = Some(matches),
+                Err(error) => failures.push(error),
+            }
         }
         if self.remove_private().await.is_err() {
             failures.push("cleanup: cannot remove private observation".into());
@@ -390,7 +399,7 @@ impl World {
 
     pub(super) async fn remove_private(&self) -> Result<(), String> {
         let mut failed = false;
-        let private = self.trace_path.parent().map(|root| root.join("configured.private"));
+        let private = self.ui_path.parent().map(|root| root.join("configured.private"));
         if let Some(private) = private.filter(|path| path.is_dir()) {
             failed |= tokio::fs::remove_dir_all(private).await.is_err();
         }

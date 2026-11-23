@@ -51,6 +51,11 @@ token, exact listener Origin and JSON media type. The server bounds the request 
 errors for rejected input. Results carry `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
 An unsupported result leaves the existing Settings available while the fork remains selectable.
 
+On a paired page with Wi-Fi support, the screen polls device reachability. A continuous confirmed
+loss opens Settings with Wi-Fi expanded and focus on its summary after 30 seconds. An unknown
+result clears the pending deadline. After dismissal, the next prompt requires a confirmed recovery
+and another full outage. The local page and its Wi-Fi relay remain available during network loss.
+
 ## Deferred
 
 - The coordinator proves the installed helper's system UID, Binder/SELinux admission, Wi-Fi route

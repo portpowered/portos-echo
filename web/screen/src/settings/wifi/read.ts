@@ -30,6 +30,7 @@ export function mountWifi(actions: string) {
     const section = element("details");
     section.className = "settings-section wifi-settings";
     section.hidden = true;
+    const summary = element("summary", "Wi-Fi");
     const current = element("p");
     current.setAttribute("role", "status");
     const feedback = element("p");
@@ -42,7 +43,7 @@ export function mountWifi(actions: string) {
     retry.type = "button";
     const joinSlot = element("div");
     section.append(
-        element("summary", "Wi-Fi"),
+        summary,
         current,
         mutationFeedback,
         joinSlot,
@@ -66,7 +67,7 @@ export function mountWifi(actions: string) {
 
     async function observe() {
         try {
-            const status = await request(
+            const status = await wifiRequest(
                 actions,
                 { op: "status" },
                 controller.signal,
@@ -88,7 +89,7 @@ export function mountWifi(actions: string) {
         retry.disabled = true;
         try {
             if (refreshStatus) await observe();
-            const reply = await request(
+            const reply = await wifiRequest(
                 actions,
                 { op: "scan" },
                 controller.signal,
@@ -167,7 +168,7 @@ export function mountWifi(actions: string) {
             frame.op === "join" ? "Joining Wi-Fi…" : "Forgetting network…";
         let refresh = false;
         try {
-            const result = await request(actions, frame, controller.signal);
+            const result = await wifiRequest(actions, frame, controller.signal);
             const observed = showStatus(result);
             if (result.ok === true && observed) {
                 mutationFeedback.textContent =
@@ -204,7 +205,15 @@ export function mountWifi(actions: string) {
     void observe().then((supported) => {
         if (!controller.signal.aborted) section.hidden = !supported;
     });
-    return { element: section, stop: () => controller.abort() };
+    return {
+        element: section,
+        open(focus: boolean) {
+            section.hidden = false;
+            section.open = true;
+            if (focus) summary.focus();
+        },
+        stop: () => controller.abort(),
+    };
 }
 
 function isNetwork(value: unknown): value is Network {
@@ -225,7 +234,7 @@ function isNetwork(value: unknown): value is Network {
     );
 }
 
-async function request(
+export async function wifiRequest(
     actions: string,
     data: WifiRequest,
     signal: AbortSignal,

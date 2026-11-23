@@ -23,6 +23,14 @@ impl super::Process {
         attach(command)?;
         Self::launch(command, observed)
     }
+
+    pub(in crate::lab_run::sim) fn start_bridge_with_log(
+        command: &mut Command,
+        log: std::fs::File,
+    ) -> Result<Self, String> {
+        attach(command)?;
+        Self::launch_with_stderr(command, log.into())
+    }
 }
 
 struct Checks {

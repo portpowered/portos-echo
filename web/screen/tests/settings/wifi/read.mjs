@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pageFor } from "../../browser.mjs";
+import { emit, pageFor } from "../../browser.mjs";
+import { frame } from "../../fixtures.mjs";
 import { snapshot } from "../page.mjs";
 
 const query =
     "?events=%2Fevents%3Ftoken%3Dsynthetic-screen-pair&actions=%2Factions%3Ftoken%3Dsynthetic-screen-pair";
 
-async function wifiPage(t, status, scan) {
+async function wifiPage(t, status, scan, openSettings = true) {
     const page = await pageFor(t, query, true, async (page) => {
         await page.evaluate(
             ({ status, scan, snapshot }) => {
@@ -41,8 +42,12 @@ async function wifiPage(t, status, scan) {
             { status, scan, snapshot },
         );
     });
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.locator('.settings-fields[aria-busy="false"]').waitFor();
+    if (openSettings) {
+        await page
+            .getByRole("button", { name: "Settings", exact: true })
+            .click();
+        await page.locator('.settings-fields[aria-busy="false"]').waitFor();
+    }
     return page;
 }
 
@@ -93,7 +98,7 @@ test("S01–S03 Wi-Fi shows current status, ordered signal, empty scans and retr
     await page.getByText("Wi-Fi is unavailable. Try again.").waitFor();
     assert.equal(await retry.isEnabled(), true);
     assert.deepEqual(
-        await page.evaluate(() => window.wifiCalls.slice(0, 2)),
+        await page.evaluate(() => window.wifiCalls.slice(1, 3)),
         ["status", "scan"].map((op) => ({
             url: "http://127.0.0.1:4173/_screen/wifi?token=synthetic-screen-pair",
             method: "POST",
@@ -222,6 +227,71 @@ test("S05 a legacy endpoint keeps Settings usable without a Wi-Fi scan", async (
         await page.evaluate(() =>
             window.wifiCalls.map((call) => call.frame.data.op),
         ),
-        ["status"],
+        ["status", "status"],
+    );
+});
+
+test("Wi-Fi opens at 30 seconds of confirmed loss and stays dismissed until recovery", async (t) => {
+    const page = await wifiPage(
+        t,
+        { ok: true, ssid: null, reachable: false },
+        { ok: true, networks: [] },
+        false,
+    );
+    await emit(page, frame(1));
+    const home = page.getByRole("region", { name: "Screen presentation" });
+    const wifi = page.getByText("Wi-Fi", { exact: true });
+    const disconnected = page.getByRole("status").filter({
+        hasText: "No current network (unreachable)",
+    });
+    await page.clock.runFor(29000);
+    assert.equal(await home.isVisible(), true);
+    assert.equal(await wifi.isVisible(), false);
+    await page.clock.runFor(1000);
+    await disconnected.waitFor();
+    await page.locator('.settings-fields[aria-busy="false"]').waitFor();
+    assert.equal(await home.isVisible(), false);
+    assert.equal(
+        await wifi.evaluate((node) => node === document.activeElement),
+        true,
+    );
+    console.log("Wi-Fi prompt: t=29s Home, t=30s Settings with Wi-Fi focused");
+
+    await page.keyboard.press("Escape");
+    const gear = page.getByRole("button", { name: "Settings", exact: true });
+    assert.equal(
+        await gear.evaluate((node) => node === document.activeElement),
+        true,
+    );
+    await page.clock.runFor(31000);
+    assert.equal(await home.isVisible(), true);
+
+    const status = (value) =>
+        page.evaluate((next) => (window.wifiResults.status = next), value);
+    await status({ ok: false, error: "wifi-unavailable" });
+    await page.clock.runFor(31000);
+    await status({ ok: true, ssid: null, reachable: false });
+    await page.clock.runFor(31000);
+    assert.equal(await home.isVisible(), true);
+
+    await status({ ok: true, ssid: "Fixture A", reachable: true });
+    await page.clock.runFor(1000);
+    await status({ ok: true, ssid: "Fixture A", reachable: false });
+    await page.clock.runFor(30000);
+    assert.equal(await home.isVisible(), true);
+    await status({ ok: false, error: "wifi-unsupported" });
+    await page.clock.runFor(31000);
+    assert.equal(await home.isVisible(), true);
+    await status({ ok: true, ssid: "Fixture A", reachable: false });
+    await page.clock.runFor(30000);
+    assert.equal(await home.isVisible(), true);
+    await page.clock.runFor(1000);
+    await page
+        .getByRole("status")
+        .filter({ hasText: "Current network: Fixture A (unreachable)" })
+        .waitFor();
+    assert.equal(
+        await wifi.evaluate((node) => node === document.activeElement),
+        true,
     );
 });

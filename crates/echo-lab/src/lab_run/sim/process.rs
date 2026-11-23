@@ -42,10 +42,15 @@ impl Process {
     }
 
     fn launch(command: &mut Command, observed: bool) -> Result<Self, String> {
+        let stderr = if observed { Stdio::piped() } else { Stdio::null() };
+        Self::launch_with_stderr(command, stderr)
+    }
+
+    fn launch_with_stderr(command: &mut Command, stderr: Stdio) -> Result<Self, String> {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(if observed { Stdio::piped() } else { Stdio::null() })
+            .stderr(stderr)
             .spawn()
             .map_err(|_| "launch: cannot spawn owned process")?;
         let input = child.stdin.take();

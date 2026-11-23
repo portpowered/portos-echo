@@ -300,6 +300,20 @@ impl Driver for Sim<'_> {
             }
         }
         failures.extend(self.finalize(artifacts, invalid_trace));
+        if self.wifi {
+            let matches = self.world.wifi_password_matches;
+            artifacts
+                .checks
+                .insert("wifi_password_matches".into(), matches == Some(0));
+            if let Some(matches) = matches
+                && let Err(error) = artifacts.measurement(json!({"event":"wifi.privacy", "password_matches":matches}))
+            {
+                failures.push(error);
+            }
+            if matches != Some(0) {
+                failures.push("Wi-Fi: expected zero password matches across private trace and logs".into());
+            }
+        }
         if self.m1 && self.world.initial_ready.is_some() {
             let m1 = production::report::collect(&self.world);
             let checked = production::report::check(&self.world, &m1);

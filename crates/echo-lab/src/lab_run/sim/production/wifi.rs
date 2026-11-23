@@ -1,8 +1,10 @@
 //! Paired HTTP journey against the production core and a separate device role.
 use serde_json::{Value, json};
 use std::{
-    io::Write,
+    fs::{File, Permissions},
+    io::{BufRead, BufReader, Write},
     net::SocketAddr,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -14,6 +16,16 @@ use tokio::{
 };
 
 pub const ID: &str = "a2-wifi-settings";
+const BRIDGE_LOG: &str = "core.log";
+const DEVICE_LOG: &str = "device.log";
+
+fn accepted_input() -> String {
+    ["join", "Fixture B"].join("-")
+}
+
+fn rejected_input() -> String {
+    ["incorrect", "42"].join("-")
+}
 
 pub fn configure_settings(private: &Path) -> Result<(), String> {
     let mut config = std::fs::File::options()
@@ -49,7 +61,10 @@ pub struct Device {
 
 impl Device {
     pub async fn start(bridge: &Path) -> Result<Self, String> {
-        let root = tempfile::tempdir().map_err(|_| "Wi-Fi: cannot isolate device")?;
+        let root = tempfile::Builder::new()
+            .permissions(Permissions::from_mode(0o700))
+            .tempdir()
+            .map_err(|_| "Wi-Fi: cannot isolate device")?;
         let path = root.path();
         std::fs::write(path.join("addrs"), "127.0.0.1\n").map_err(|_| "Wi-Fi: cannot write address fixture")?;
         save(
@@ -63,6 +78,7 @@ impl Device {
                 ]}
             }),
         )?;
+        let log = File::create(path.join(DEVICE_LOG)).map_err(|_| "Wi-Fi: cannot capture device log")?;
         let child = Command::new(bridge)
             .env_clear()
             .env("HASSMIC_STATE", path)
@@ -75,8 +91,8 @@ impl Device {
             .arg(path.join("voice.sock"))
             .args(["-P", "wyoming", "-D", "-a", "0", "-w", "remote"])
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(log.try_clone().map_err(|_| "Wi-Fi: cannot capture device stdout")?)
+            .stderr(log)
             .kill_on_drop(true)
             .spawn()
             .map_err(|_| "Wi-Fi: cannot start device role")?;
@@ -102,11 +118,27 @@ impl Device {
         self.root.path().join("wifi.sock")
     }
 
-    pub async fn close(mut self) -> Result<(), String> {
+    pub fn bridge_log(&self) -> Result<File, String> {
+        File::create(self.root.path().join(BRIDGE_LOG)).map_err(|_| "Wi-Fi: cannot capture core log".into())
+    }
+
+    pub fn trace(&self) -> PathBuf {
+        self.root.path().join("bridge.private.jsonl")
+    }
+
+    pub async fn close(mut self) -> Result<usize, String> {
         self.child
             .kill()
             .await
-            .map_err(|_| "Wi-Fi: cannot collect device role".into())
+            .map_err(|_| "Wi-Fi: cannot collect device role")?;
+        let inputs = [accepted_input(), rejected_input()];
+        [
+            self.trace(),
+            self.root.path().join(BRIDGE_LOG),
+            self.root.path().join(DEVICE_LOG),
+        ]
+        .iter()
+        .try_fold(0, |total, path| count_matches(path, &inputs).map(|count| total + count))
     }
 
     pub async fn perform(&self, action: &str, screen: SocketAddr) -> Result<Value, String> {
@@ -134,6 +166,27 @@ impl Device {
     }
 }
 
+fn count_matches(path: &Path, inputs: &[String]) -> Result<usize, String> {
+    let file = File::open(path).map_err(|_| "Wi-Fi: missing private trace or log capture")?;
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    let mut matches = 0;
+    while reader
+        .read_until(b'\n', &mut line)
+        .map_err(|_| "Wi-Fi: cannot read private capture")?
+        != 0
+    {
+        for input in inputs {
+            matches += line
+                .windows(input.len())
+                .filter(|bytes| *bytes == input.as_bytes())
+                .count();
+        }
+        line.clear();
+    }
+    Ok(matches)
+}
+
 pub fn action(value: &str) -> bool {
     matches!(value, "wifi-reject" | "wifi-lose" | "wifi-join" | "wifi-forget")
 }
@@ -146,7 +199,7 @@ fn save(path: &Path, radio: &Value) -> Result<(), String> {
 }
 
 async fn joined(addr: SocketAddr) -> Result<Value, String> {
-    let input = ["join", "Fixture B"].join("-");
+    let input = accepted_input();
     let reply = expect(
         addr,
         json!({"op":"join","ssid":"Fixture B","password":input}),
@@ -163,7 +216,7 @@ async fn joined(addr: SocketAddr) -> Result<Value, String> {
 }
 
 async fn rejected(addr: SocketAddr) -> Result<Value, String> {
-    let input = ["incorrect", "42"].join("-");
+    let input = rejected_input();
     let reply = expect(
         addr,
         json!({"op":"join","ssid":"Fixture B","password":input}),
