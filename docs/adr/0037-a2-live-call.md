@@ -32,6 +32,20 @@ pending. A matching run and offer are required for each receipt. Overflow
 evicts the oldest unsent frame. Mute and capture release clear unsent speech,
 including when the peer stays open for the next wake.
 
+The coordinator's binding answer for `sb-a2-call-subsystem` on 2026-11-23
+approved the internal Rust API at `16735684`. `CallEvent::Uplink` carries the
+run and its `UplinkEvent`. Send commands and receipts correlate the attempt
+so a receipt from before mute cannot remove a new frame in the same run.
+The command slot holds one action and one frame and reports an eviction for
+the step. The view exposes the backlog's current run.
+
+The same answer approved `allocation-counter` as the workspace's test-only
+allocation counter. `echo-sub-call` declares it as `allocation-counter = "0.8"`
+with the resolved version in `Cargo.lock`. Its allocator is linked into the
+reducer's unit-test binary. The test counts total allocations on the current
+thread while filling, overflowing and draining the ring after construction.
+`sb-a2-zero-alloc` will reuse this counter for the broader per-frame bench.
+
 Capture decodes into reused sample storage and collects complete frames in
 reused output storage. Invalid chunks consume no converter input and the
 incomplete tail stays unsent. Mute discards the converter with its filter

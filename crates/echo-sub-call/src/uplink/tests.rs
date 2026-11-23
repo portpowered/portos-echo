@@ -42,10 +42,12 @@ fn receipt(state: &mut State, run: SessionHandle, attempt: u64, receipt: UplinkR
 fn fixed_ring_evicts_oldest_and_drains_in_order_in_the_original_storage() {
     let mut state = State::default();
     let base = state.uplink.slots.as_ptr();
-    assert_eq!(state.uplink.slots.len(), CAPACITY);
+    assert_eq!(state.uplink.slots.len(), 1500);
 
-    fill_overflow_and_drain(&mut state, run(1));
+    let run = run(1);
+    let allocations = allocation_counter::measure(|| fill_overflow_and_drain(&mut state, run));
 
+    assert_eq!(allocations.count_total, 0, "uplink allocated after construction");
     assert_eq!(state.uplink.slots.as_ptr(), base);
     assert_eq!(state.uplink.slots.len(), CAPACITY);
 }
