@@ -22,6 +22,7 @@ impl Subsystem for VoiceReducers {
         CommandKind::CutReply,
         CommandKind::OpenCall,
         CommandKind::CloseCall,
+        CommandKind::SessionToolDecision,
         CommandKind::WriteFrame,
         CommandKind::LipBatch,
         CommandKind::MouthChanged,

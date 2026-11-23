@@ -413,7 +413,7 @@ where
     let work = async {
         // Discovery can outlast the chime. Keep its receipt, ordered mute and
         // microphone capture supervised through both discovery and call start.
-        let catalog = super::earcon::negotiating(
+        let (catalog, run) = super::earcon::negotiating(
             device.1,
             super::earcon::capture_during(&mut device.2, async {
                 let catalog = tokio::select! {
@@ -425,13 +425,16 @@ where
                 let trace = tools.trace.as_ref().ok_or(Error::Unavailable)?.clone();
                 call.trace_setup(trace.clone())?;
                 call.trace_tools(trace, &catalog, tools.server.as_deref());
-                tokio::select! {
+                let run = tokio::select! {
                     biased;
                     () = cancelled.as_mut() => return Err(Error::Control),
                     () = crate::bridge_endpoint::voice::ending() => return Err(Error::Control),
-                    result = crate::bridge_world::call_effect(true, crate::bridge_endpoint::remote_start::open(&mut call, &options.call, catalog.tools().to_vec(), options.deadline)) => result?,
-                }
-                Ok(catalog)
+                    result = crate::bridge_world::open_call(
+                        opened, options.session.listen_timeout, options.session.session_max, options.session.response_timeout,
+                        crate::bridge_endpoint::remote_start::open(&mut call, &options.call, catalog.tools().to_vec(), options.deadline),
+                    ) => result?,
+                };
+                Ok((catalog, run))
             }),
             &mut observe,
         )
@@ -439,7 +442,7 @@ where
         observe(super::SessionNotice::Connected)?;
         // One bounded request at a time; the dispatch awaits the run's answer.
         let (requests, receiver) = mpsc::channel(1);
-        let (run, active) = tokio::sync::watch::channel(None);
+        let (run_token, active) = tokio::sync::watch::channel(None);
         // Keep the retained scheduler/run future off the Windows main stack.
         Box::pin(super::voice_session::session_conversation(
             device,
@@ -454,8 +457,8 @@ where
                 catalog,
                 tools.budget.clone(),
             ),
-            Some((receiver, run, tools.skills.is_enabled(), tools.muse_for_call())),
-            (options.session, opened),
+            Some((receiver, run_token, tools.skills.is_enabled(), tools.muse_for_call())),
+            (options.session, opened, Some(run)),
             cancelled.as_mut(),
             &mut observe,
         ))
@@ -463,12 +466,8 @@ where
     };
     let result = work.await;
     let cleanup =
-        crate::bridge_world::call_effect(false, call.close(tokio::time::Instant::now() + Duration::from_secs(2))).await;
-    if matches!(result, Err(Error::Control | Error::SessionCeiling)) {
-        cleanup.and(result)
-    } else {
-        result.and_then(|completed| cleanup.map(|()| completed))
-    }
+        crate::bridge_world::close_call(call.close(tokio::time::Instant::now() + Duration::from_secs(2))).await;
+    super::voice_session::settled(result, cleanup)
 }
 
 #[cfg(test)]

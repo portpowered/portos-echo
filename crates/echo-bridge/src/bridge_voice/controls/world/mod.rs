@@ -16,7 +16,7 @@ mod tools;
 mod voice_reducers;
 pub mod witness;
 pub(crate) use pacer::{PacerPort, scope};
-pub(crate) use session::{SessionPort, call_effect};
+pub(crate) use session::{SessionPort, close_call, open_call};
 use slots::Slots;
 use voice_reducers::VoiceReducers;
 use witness::Witness;
@@ -84,17 +84,18 @@ impl Controller {
 
     fn with_pacer(witness: Option<Witness>, pacer: echo_sub_pacer::State) -> Arc<Self> {
         let seed = witness.as_ref().and_then(|witness| witness.seed);
+        let start = Instant::now();
         Arc::new(Self {
             state: Mutex::new(State {
                 world: World {
                     device: DeviceState::default(),
                     pacer: voice_reducers::State {
                         playback: pacer,
-                        session: echo_sub_session::State::default(),
+                        session: echo_sub_session::State::new(start.into_std()),
                     },
                     trace: echo_sub_trace::State::default(),
                     clock: BridgeClock {
-                        start: Instant::now(),
+                        start,
                         fixed_epoch: seed.is_some(),
                     },
                     rng: seed.map_or(SessionRng::Os(OsRng), |seed| SessionRng::Seeded(SeededRng::new(seed))),

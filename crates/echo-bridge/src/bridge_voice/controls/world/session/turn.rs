@@ -1,8 +1,8 @@
 use super::{Controller, SessionPort, session_error};
 use crate::Error;
 use echo_core_api::{
-    Event, SessionChange, SessionCommands, SessionEvent, SessionKnobs, SessionMark, SessionOutcome, SessionPlayback,
-    SessionTurnEvent, SessionWait,
+    Event, SessionChange, SessionCommands, SessionEvent, SessionHandle, SessionKnobs, SessionMark, SessionOutcome,
+    SessionPlayback, SessionTurnContext, SessionTurnEvent, SessionWait,
 };
 use tokio::time::Instant;
 
@@ -19,28 +19,51 @@ impl Controller {
 }
 
 impl SessionPort {
-    pub(crate) fn turn(&self, change: SessionTurnEvent) -> SessionCommands {
-        self.turn_step(&mut Event::Session(SessionEvent::Turn {
-            session: self.handle,
-            change,
-        }))
+    pub(crate) fn turn(&self, event: impl FnOnce(SessionHandle) -> SessionTurnEvent) -> SessionCommands {
+        self.send(SessionEvent::Turn(event(self.handle)))
+    }
+
+    pub(crate) fn speech_stopped(&self, voiced: bool) {
+        self.send(SessionEvent::TurnObserved {
+            turn: SessionTurnEvent::SpeechStopped { session: self.handle },
+            context: SessionTurnContext {
+                voiced,
+                ..SessionTurnContext::default()
+            },
+        });
+    }
+
+    pub(crate) fn dispatch_completed(&self, answered: bool, listening: bool) -> SessionCommands {
+        self.send(SessionEvent::TurnObserved {
+            turn: SessionTurnEvent::DispatchCompleted {
+                session: self.handle,
+                answered,
+            },
+            context: SessionTurnContext {
+                listening,
+                ..SessionTurnContext::default()
+            },
+        })
     }
 
     // World observes the existing allocation and the trace boundary receives it
     // back. The reducer retains only the bounded excerpt while barge is armed.
     pub(crate) fn transcript(&self, text: String, whole: bool, sounded: bool, voiced: bool) -> (String, bool) {
-        let mut event = Event::Session(SessionEvent::Turn {
-            session: self.handle,
-            change: SessionTurnEvent::Transcript {
+        let mut event = Event::Session(SessionEvent::TurnObserved {
+            turn: SessionTurnEvent::Transcript {
+                session: self.handle,
                 text,
                 whole,
+            },
+            context: SessionTurnContext {
                 sounded,
                 voiced,
+                ..SessionTurnContext::default()
             },
         });
         let held = self.turn_step(&mut event).outcome == Some(Ok(SessionOutcome::Held));
-        if let Event::Session(SessionEvent::Turn {
-            change: SessionTurnEvent::Transcript { text, .. },
+        if let Event::Session(SessionEvent::TurnObserved {
+            turn: SessionTurnEvent::Transcript { text, .. },
             ..
         }) = event
         {
@@ -91,10 +114,10 @@ impl SessionPort {
         if !state.world.pacer.session.barge_pending() {
             return false;
         }
-        let event = SessionEvent::Turn {
+        let event = SessionEvent::Turn(SessionTurnEvent::AssistantAudio {
             session: self.handle,
-            change: SessionTurnEvent::AssistantAudio { audible },
-        };
+            audible,
+        });
         self.world.session_step(&mut state, event).outcome == Some(Ok(SessionOutcome::Released))
     }
 
