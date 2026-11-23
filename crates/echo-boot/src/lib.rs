@@ -1,12 +1,15 @@
 //! Boot supervision policy. All time, processes and filesystem access are supplied by the host.
 
+pub mod alexa;
 mod firewall;
 pub mod layout;
 mod selection;
+mod services;
 mod supervisor;
 
 pub use firewall::{Family, watch_firewall};
 pub use selection::{Digest, Selection, Slot};
+pub use services::ClockStatus;
 pub use supervisor::{ChildStatus, HostOps, Log, Stop, supervise};
 
 pub type Result<T> = std::result::Result<T, &'static str>;

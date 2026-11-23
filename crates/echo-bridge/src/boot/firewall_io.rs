@@ -14,6 +14,7 @@ const ADB_PORT: &str = "service.adb.tcp.port";
 pub(super) struct FirewallIo {
     bin_dirs: Vec<PathBuf>,
     proc: PathBuf,
+    sys: PathBuf,
 }
 
 impl Default for FirewallIo {
@@ -24,6 +25,7 @@ impl Default for FirewallIo {
                 .map(PathBuf::from)
                 .collect(),
             proc: PathBuf::from("/proc"),
+            sys: PathBuf::from("/sys"),
         }
     }
 }
@@ -34,6 +36,7 @@ impl FirewallIo {
         Self {
             bin_dirs: vec![root.join("bin")],
             proc: root.join("proc"),
+            sys: root.join("sys"),
         }
     }
 
@@ -43,6 +46,25 @@ impl FirewallIo {
             .lines()
             .filter_map(resolver)
             .collect())
+    }
+
+    pub(super) fn network(&self, runtime: &Runtime) -> Result<Vec<IpAddr>> {
+        match fs::read_to_string(self.sys.join("class/net/wlan0/carrier")) {
+            Ok(carrier) if carrier.trim() == "1" => self.resolvers(runtime),
+            Ok(_) => Ok(Vec::new()),
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(rustix::io::Errno::INVAL.raw_os_error()) =>
+            {
+                Ok(Vec::new())
+            }
+            Err(_) => Err("inspect Wi-Fi link"),
+        }
+    }
+
+    pub(super) fn write_rtc(&self, runtime: &Runtime) -> Result<()> {
+        self.required(runtime, "hwclock", &["-w", "-u"], None, "write adjusted clock to RTC")?;
+        Ok(())
     }
 
     pub(super) fn filter(&self, runtime: &Runtime, family: Family) -> Result<Option<String>> {
@@ -137,7 +159,7 @@ impl FirewallIo {
         command_io::run(runtime, &tool, args, input, stage)
     }
 
-    fn find(&self, name: &str) -> Result<Option<PathBuf>> {
+    pub(super) fn find(&self, name: &str) -> Result<Option<PathBuf>> {
         for dir in &self.bin_dirs {
             let tool = dir.join(name);
             match fs::symlink_metadata(&tool) {

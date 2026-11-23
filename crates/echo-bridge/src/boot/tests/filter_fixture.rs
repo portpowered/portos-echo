@@ -22,12 +22,7 @@ pub(super) struct FilterFixture {
 
 impl FilterFixture {
     pub(super) fn new(root: &Path) -> Self {
-        let fixture = Self {
-            root: root.to_path_buf(),
-            io: FirewallIo::fixture(root),
-            runtime: Builder::new_current_thread().enable_all().build().unwrap(),
-            events: vec![],
-        };
+        let fixture = Self::attach(root);
         fs::create_dir_all(root.join("bin")).unwrap();
         fs::create_dir_all(root.join("proc/net")).unwrap();
         let program = root.join("bin/command");
@@ -50,11 +45,22 @@ impl FilterFixture {
         fixture.write("adb-port", "0");
         fixture.write("proc/net/tcp", "");
         fixture.write("proc/net/tcp6", "");
+        fs::create_dir_all(root.join("sys/class/net/wlan0")).unwrap();
+        fixture.write("sys/class/net/wlan0/carrier", "1\n");
         fixture.write(
             "resolvers",
             "[dhcp.wlan0.dns1]: [192.0.2.53]\n[net.dns1]: [192.0.2.53]\n[net.dns2]: [2001:db8::53%wlan0]\n",
         );
         fixture
+    }
+
+    pub(super) fn attach(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            io: FirewallIo::fixture(root),
+            runtime: Builder::new_current_thread().enable_all().build().unwrap(),
+            events: vec![],
+        }
     }
 
     pub(super) fn at(&self, previous: u64, now: u64) {

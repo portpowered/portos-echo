@@ -8,8 +8,11 @@ use std::{
     time::Duration,
 };
 
-use echo_boot::{ChildStatus, Digest, Family, HostOps, Identity, Log, Result, Role, Selection, Slot, Stop};
+use echo_boot::{
+    ChildStatus, ClockStatus, Digest, Family, HostOps, Identity, Log, Result, Role, Selection, Slot, Stop,
+};
 
+use super::super::{device_io::DeviceIo, jobs::Jobs};
 use super::filter_fixture::{FilterFixture, golden};
 
 pub(super) struct Fake<'a> {
@@ -29,6 +32,14 @@ pub(super) struct Fake<'a> {
     pub tries: Vec<(u64, u8)>,
     pub logs: Vec<String>,
     pub firewall: Option<FilterFixture>,
+    pub services: Option<DeviceIo>,
+    pub service_timeline: Option<FilterFixture>,
+    pub clock_delay: Option<u64>,
+    pub clock_starts: Vec<u64>,
+    pub clock_stops: Vec<u64>,
+    pub synchronize: Option<Box<dyn FnMut(u64) + 'a>>,
+    jobs: Jobs,
+    active_clock: Option<u64>,
     children: [Option<FakeChild>; 2],
 }
 
@@ -57,6 +68,14 @@ impl<'a> Fake<'a> {
             tries: vec![],
             logs: vec![],
             firewall: None,
+            services: None,
+            service_timeline: None,
+            clock_delay: Some(100),
+            clock_starts: vec![],
+            clock_stops: vec![],
+            synchronize: None,
+            jobs: Jobs::default(),
+            active_clock: None,
             children: [None, None],
         }
     }
@@ -139,6 +158,12 @@ impl HostOps for Fake<'_> {
         }
         if let Some(firewall) = &self.firewall {
             firewall.at(self.time, next);
+        }
+        if let Some(timeline) = &self.service_timeline {
+            timeline.at(self.time, next);
+        }
+        if let Some(sync) = self.synchronize.as_mut() {
+            sync(next);
         }
         self.time = next;
     }
@@ -229,6 +254,8 @@ impl HostOps for Fake<'_> {
             Log::Fallback { current, previous } => format!("fallback {} {}", current.as_str(), previous.as_str()),
             Log::FirewallReady => "firewall ready".into(),
             Log::FirewallUnhealthy(stage) => format!("firewall unhealthy: {stage}"),
+            Log::DeviceService(stage) => stage.into(),
+            Log::Network(online) => format!("network {online}"),
         };
         self.logs.push(line);
     }
@@ -261,5 +288,68 @@ impl HostOps for Fake<'_> {
             Some(firewall) => firewall.io.usb_adb_only(&firewall.runtime, enforce),
             None => Ok(true),
         }
+    }
+
+    fn prepare_device(&mut self) -> Result<()> {
+        if let Some(device) = &self.services {
+            device.prepare(|stage| self.logs.push(stage.into()));
+        }
+        Ok(())
+    }
+
+    fn poll_device(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn stop_device(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn network(&mut self) -> Result<Vec<IpAddr>> {
+        match &self.services {
+            Some(device) => device.commands.network(&device.runtime),
+            None => self.resolvers(),
+        }
+    }
+
+    fn start_clock(&mut self) -> Result<()> {
+        if self.services.is_some() {
+            let script = if self.clock_delay.is_some() {
+                "printf 'clock: offset_ms=2000 hosts=3 action=set\n'"
+            } else {
+                "kill -STOP $$"
+            };
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", script]);
+            self.jobs.start_clock(command)?;
+            self.active_clock = Some(self.time);
+            self.clock_starts.push(self.time);
+        }
+        Ok(())
+    }
+
+    fn poll_clock(&mut self) -> Result<ClockStatus> {
+        match (self.active_clock, self.clock_delay) {
+            (None, _) => Ok(ClockStatus::Unchanged),
+            (Some(started), Some(delay)) if self.time >= started + delay => {
+                self.jobs.await_clock_fixture();
+                self.active_clock = None;
+                self.jobs.poll_clock()
+            }
+            _ => Ok(ClockStatus::Running),
+        }
+    }
+
+    fn stop_clock(&mut self) -> Result<()> {
+        if self.active_clock.take().is_some() {
+            self.jobs.stop_clock()?;
+            self.clock_stops.push(self.time);
+        }
+        Ok(())
+    }
+
+    fn write_rtc(&mut self) -> Result<()> {
+        let device = self.services.as_ref().unwrap();
+        device.commands.write_rtc(&device.runtime)
     }
 }

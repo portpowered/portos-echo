@@ -8,6 +8,7 @@ use std::{
 };
 
 use echo_boot::{Identity, Result, Role, Slot, layout};
+use echo_bridge::bridge_time::clock_command;
 use rustix::{
     process::{self, Gid, Signal, Uid},
     thread::{set_thread_groups, set_thread_res_gid, set_thread_res_uid},
@@ -61,6 +62,16 @@ fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|_| "invalid private launch")?;
     match args.as_slice() {
+        [action] if action == "restore-alexa" => {
+            let _lock = super::layout_io::Layout::open()?;
+            super::device_io::DeviceIo::open()?.restore(super::device_io::log)
+        }
+        [action, parent] if action == "prepare-device" => {
+            guard_parent(parent)?;
+            super::device_io::DeviceIo::open()?.prepare(super::device_io::log);
+            Ok(())
+        }
+        [action, parent] if action == "clock" => clock(parent),
         [action, parent] if ["finish", "resume"].contains(&action.as_str()) => {
             drop_identity(Role::Core.identity(), parent)?;
             super::layout_io::acknowledge(action == "finish")
@@ -80,6 +91,24 @@ fn run(args: impl IntoIterator<Item = OsString>) -> Result<()> {
         }
         _ => Err("invalid private launch"),
     }
+}
+
+fn clock(parent: &str) -> Result<()> {
+    drop_identity(
+        Identity {
+            uid: 0,
+            real_gid: 3990,
+            effective_gid: 3990,
+            groups: &[3990, 3003],
+            domain: None,
+        },
+        parent,
+    )?;
+    let args = ["clock".to_owned(), "sync".to_owned()];
+    let command = clock_command::parse(&args, false)
+        .map_err(|_| "prepare clock sync")?
+        .ok_or("prepare clock sync")?;
+    command.execute(&mut std::io::stdout()).map_err(|_| "clock sync failed")
 }
 
 fn enter(role: Role, slot: Slot, parent: &str) -> Result<()> {
@@ -117,11 +146,6 @@ fn enter(role: Role, slot: Slot, parent: &str) -> Result<()> {
 }
 
 fn drop_identity(identity: Identity, parent: &str) -> Result<()> {
-    let expected_parent = parent
-        .parse::<i32>()
-        .ok()
-        .and_then(process::Pid::from_raw)
-        .ok_or("invalid supervisor process")?;
     // This entry runs immediately after exec of the private launcher, with one thread.
     let groups: Vec<_> = identity.groups.iter().copied().map(Gid::from_raw).collect();
     set_thread_groups(&groups).map_err(|_| "set role supplementary groups")?;
@@ -129,6 +153,15 @@ fn drop_identity(identity: Identity, parent: &str) -> Result<()> {
     set_thread_res_gid(Gid::from_raw(identity.real_gid), effective, effective).map_err(|_| "set role gids")?;
     let user = Uid::from_raw(identity.uid);
     set_thread_res_uid(user, user, user).map_err(|_| "set role uid")?;
+    guard_parent(parent)
+}
+
+fn guard_parent(parent: &str) -> Result<()> {
+    let expected_parent = parent
+        .parse::<i32>()
+        .ok()
+        .and_then(process::Pid::from_raw)
+        .ok_or("invalid supervisor process")?;
     process::set_parent_process_death_signal(Some(Signal::KILL)).map_err(|_| "guard role parent")?;
     if process::getppid() == Some(expected_parent) {
         Ok(())

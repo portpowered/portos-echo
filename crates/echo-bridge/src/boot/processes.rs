@@ -194,3 +194,20 @@ fn until(deadline: Instant, mut ready: impl FnMut() -> Result<bool>) -> Result<b
         thread::sleep(CHECK);
     }
 }
+
+pub(super) fn kill_job(child: &mut Child) -> Result<()> {
+    let pid = i32::try_from(child.id())
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or("invalid boot job process")?;
+    signal(pid, true, Signal::KILL)?;
+    let deadline = Instant::now() + REAP;
+    if !until(deadline, || exited(pid))? {
+        return Err("boot job did not exit");
+    }
+    child.wait().map_err(|_| "reap boot job")?;
+    if !until(deadline, || group_reaped(pid))? {
+        return Err("boot job descendants did not exit");
+    }
+    Ok(())
+}

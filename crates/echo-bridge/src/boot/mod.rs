@@ -5,7 +5,11 @@ mod android;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 mod command_io;
 #[cfg(any(target_os = "android", target_os = "linux"))]
+mod device_io;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 mod firewall_io;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+mod jobs;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 mod launcher;
 #[cfg(any(target_os = "android", target_os = "linux"))]

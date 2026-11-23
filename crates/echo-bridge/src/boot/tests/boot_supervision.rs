@@ -1,5 +1,7 @@
 //! T3 controlled supervision using isolated child processes and a paused host clock.
 
+mod boot_assembled;
+mod boot_device_services;
 mod boot_firewall;
 mod fake;
 mod filter_fixture;

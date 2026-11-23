@@ -17,6 +17,17 @@ pub(super) fn run(
     input: Option<&str>,
     stage: &'static str,
 ) -> Result<String> {
+    run_bounded(runtime, tool, args, input, stage, DEADLINE)
+}
+
+pub(super) fn run_bounded(
+    runtime: &Runtime,
+    tool: &Path,
+    args: &[&str],
+    input: Option<&str>,
+    stage: &'static str,
+    deadline: Duration,
+) -> Result<String> {
     runtime.block_on(async {
         let mut child = Command::new(tool)
             .args(args)
@@ -30,7 +41,7 @@ pub(super) fn run(
             .kill_on_drop(true)
             .spawn()
             .map_err(|_| stage)?;
-        match tokio::time::timeout(DEADLINE, exchange(&mut child, input)).await {
+        match tokio::time::timeout(deadline, exchange(&mut child, input)).await {
             Ok(Ok(output)) => Ok(output),
             _ => {
                 let _ = child.kill().await;

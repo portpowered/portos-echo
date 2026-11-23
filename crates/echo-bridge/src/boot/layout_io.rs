@@ -11,7 +11,6 @@ use rustix::fs::{Mode, OFlags, open};
 use sha2::{Digest as _, Sha256};
 
 const LOCK: &str = "supervisor.lock";
-const TEMP: &str = "selection.new";
 
 pub(super) struct Layout {
     state: PathBuf,
@@ -29,40 +28,51 @@ impl Layout {
     }
 
     pub(super) fn load(&self) -> Result<Option<Selection>> {
-        let file = match state_file(&self.state.join(layout::SELECTION), OFlags::RDONLY) {
-            Ok(file) => file,
-            Err(rustix::io::Errno::NOENT) => return Ok(None),
-            Err(_) => return Err("open selection journal"),
-        };
-        check_state_file(&file)?;
-        let mut bytes = Vec::new();
-        file.take(1025)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "read selection journal")?;
-        if bytes.len() > 1024 {
-            return Err("invalid selection journal");
-        }
-        Selection::decode(&bytes).map(Some)
+        read_journal(&self.state.join(layout::SELECTION), 1024)?
+            .as_deref()
+            .map(Selection::decode)
+            .transpose()
     }
 
     pub(super) fn save(&self, selection: &Selection) -> Result<()> {
-        let temp = self.state.join(TEMP);
-        remove(&temp).map_err(|_| "clear transient selection journal")?;
-        let mut file = state_file(&temp, OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL)
-            .map_err(|_| "create selection journal")?;
-        file.write_all(&selection.encode()?)
-            .and_then(|()| file.sync_all())
-            .map_err(|_| "write selection journal")?;
-        fs::rename(temp, self.state.join(layout::SELECTION)).map_err(|_| "publish selection journal")?;
-        sync_directory(&self.state)
+        write_journal(&self.state.join(layout::SELECTION), &selection.encode()?)
     }
+}
+
+pub(super) fn read_journal(path: &Path, limit: u64) -> Result<Option<Vec<u8>>> {
+    let file = match state_file(path, OFlags::RDONLY) {
+        Ok(file) => file,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(_) => return Err("open boot journal"),
+    };
+    check_state_file(&file)?;
+    let mut bytes = Vec::new();
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "read boot journal")?;
+    if bytes.len() as u64 > limit {
+        return Err("boot journal too large");
+    }
+    Ok(Some(bytes))
+}
+
+pub(super) fn write_journal(path: &Path, bytes: &[u8]) -> Result<()> {
+    let temp = path.with_extension("new");
+    remove(&temp).map_err(|_| "clear transient boot journal")?;
+    let mut file =
+        state_file(&temp, OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL).map_err(|_| "create boot journal")?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| "write boot journal")?;
+    fs::rename(temp, path).map_err(|_| "publish boot journal")?;
+    sync_directory(path.parent().ok_or("boot journal directory missing")?)
 }
 
 pub(super) fn lock_firewall() -> Result<File> {
     lock_state(&boot_state()?.join("firewall.lock")).map_err(|_| "firewall writer lock unavailable")
 }
 
-fn boot_state() -> Result<PathBuf> {
+pub(super) fn boot_state() -> Result<PathBuf> {
     let root = Path::new(layout::ROOT);
     let bin = root.join(layout::BIN);
     check_directory(root)?;
@@ -98,7 +108,11 @@ fn state_file(path: &Path, flags: OFlags) -> rustix::io::Result<File> {
 
 fn check_state_file(file: &File) -> Result<()> {
     let meta = file.metadata().map_err(|_| "inspect boot state")?;
-    if meta.is_file() && meta.uid() == 0 && meta.mode() & 0o7077 == 0 && meta.nlink() == 1 {
+    if meta.is_file()
+        && meta.uid() == rustix::process::getuid().as_raw()
+        && meta.mode() & 0o7077 == 0
+        && meta.nlink() == 1
+    {
         Ok(())
     } else {
         Err("unsafe boot state file")
@@ -155,11 +169,15 @@ fn check_candidate(meta: &Metadata) -> Result<()> {
 }
 
 pub(super) fn digest(slot: Slot) -> Result<Digest> {
-    let (_, mut file) = candidate(slot)?;
+    let (_, file) = candidate(slot)?;
+    hash(file, "hash selected binary")
+}
+
+pub(super) fn hash(mut file: File, stage: &'static str) -> Result<Digest> {
     let mut hasher = Sha256::new();
     let mut buffer = [0; 8192];
     loop {
-        let read = file.read(&mut buffer).map_err(|_| "hash selected binary")?;
+        let read = file.read(&mut buffer).map_err(|_| stage)?;
         if read == 0 {
             break;
         }
@@ -170,6 +188,27 @@ pub(super) fn digest(slot: Slot) -> Result<Digest> {
         let _ = write!(hex, "{byte:02x}");
     }
     Digest::parse(hex)
+}
+
+pub(super) fn apk_file(path: &Path, staged: bool) -> Result<Option<File>> {
+    let stage = if staged {
+        "read staged screen APK"
+    } else {
+        "read installed screen APK"
+    };
+    let file = match state_file(path, OFlags::RDONLY) {
+        Ok(file) => file,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(_) => return Err(stage),
+    };
+    let meta = file.metadata().map_err(|_| stage)?;
+    if !meta.is_file()
+        || (staged
+            && (meta.uid() != rustix::process::getuid().as_raw() || meta.mode() & 0o7022 != 0 || meta.nlink() != 1))
+    {
+        return Err(stage);
+    }
+    Ok(Some(file))
 }
 
 pub(super) fn marker(name: &str) -> PathBuf {

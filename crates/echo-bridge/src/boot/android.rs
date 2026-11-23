@@ -5,7 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use echo_boot::{ChildStatus, Digest, Family, HostOps, Identity, Log, Result, Role, Selection, Slot, Stop};
+use echo_boot::{
+    ChildStatus, ClockStatus, Digest, Family, HostOps, Identity, Log, Result, Role, Selection, Slot, Stop,
+};
 use tokio::{
     runtime::{Builder, Runtime},
     signal::unix::{Signal, SignalKind, signal},
@@ -13,6 +15,7 @@ use tokio::{
 
 use super::{
     firewall_io::FirewallIo,
+    jobs::Jobs,
     launcher,
     layout_io::{self, Layout},
     processes::RoleChild,
@@ -21,6 +24,7 @@ use super::{
 pub(super) struct Android {
     layout: Option<Layout>,
     firewall: FirewallIo,
+    jobs: Jobs,
     origin: Instant,
     device: Option<RoleChild>,
     core: Option<RoleChild>,
@@ -50,6 +54,7 @@ impl Android {
         Ok(Self {
             layout,
             firewall: FirewallIo::default(),
+            jobs: Jobs::default(),
             origin: Instant::now(),
             device: None,
             core: None,
@@ -152,6 +157,8 @@ impl HostOps for Android {
             }
             Log::FirewallReady => writeln!(log, "echo-bridge boot: firewall ready"),
             Log::FirewallUnhealthy(stage) => writeln!(log, "echo-bridge boot: firewall unhealthy: {stage}"),
+            Log::DeviceService(stage) => writeln!(log, "echo-bridge boot: {stage}"),
+            Log::Network(online) => writeln!(log, "echo-bridge boot: Wi-Fi with resolver={online}"),
         };
     }
 
@@ -173,5 +180,37 @@ impl HostOps for Android {
 
     fn usb_adb_only(&mut self, enforce: bool) -> Result<bool> {
         self.firewall.usb_adb_only(&self.signals, enforce)
+    }
+
+    fn prepare_device(&mut self) -> Result<()> {
+        self.jobs.prepare_device()
+    }
+
+    fn poll_device(&mut self) -> Result<()> {
+        self.jobs.poll_device()
+    }
+
+    fn stop_device(&mut self) -> Result<()> {
+        self.jobs.stop_device()
+    }
+
+    fn network(&mut self) -> Result<Vec<IpAddr>> {
+        self.firewall.network(&self.signals)
+    }
+
+    fn start_clock(&mut self) -> Result<()> {
+        self.jobs.start_clock(launcher::command("clock"))
+    }
+
+    fn poll_clock(&mut self) -> Result<ClockStatus> {
+        self.jobs.poll_clock()
+    }
+
+    fn stop_clock(&mut self) -> Result<()> {
+        self.jobs.stop_clock()
+    }
+
+    fn write_rtc(&mut self) -> Result<()> {
+        self.firewall.write_rtc(&self.signals)
     }
 }

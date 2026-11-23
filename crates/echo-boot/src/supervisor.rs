@@ -1,6 +1,6 @@
 use std::{net::IpAddr, time::Duration};
 
-use crate::{Digest, Family, Identity, Result, Role, Selection, Slot, firewall};
+use crate::{ClockStatus, Digest, Family, Identity, Result, Role, Selection, Slot, firewall, services::Services};
 
 const POLL: Duration = Duration::from_millis(100);
 const STABLE: Duration = Duration::from_secs(60);
@@ -29,6 +29,8 @@ pub enum Log<'a> {
     Fallback { current: &'a Digest, previous: &'a Digest },
     FirewallReady,
     FirewallUnhealthy(&'a str),
+    DeviceService(&'static str),
+    Network(bool),
 }
 
 /// Owns the environmental effects and the live child handles for the boot roles.
@@ -52,6 +54,14 @@ pub trait HostOps {
     fn restore_filter(&mut self, family: Family, transaction: &str) -> Result<()>;
     fn ipv6_disabled(&mut self, enforce: bool) -> Result<bool>;
     fn usb_adb_only(&mut self, enforce: bool) -> Result<bool>;
+    fn prepare_device(&mut self) -> Result<()>;
+    fn poll_device(&mut self) -> Result<()>;
+    fn stop_device(&mut self) -> Result<()>;
+    fn network(&mut self) -> Result<Vec<IpAddr>>;
+    fn start_clock(&mut self) -> Result<()>;
+    fn poll_clock(&mut self) -> Result<ClockStatus>;
+    fn stop_clock(&mut self) -> Result<()>;
+    fn write_rtc(&mut self) -> Result<()>;
 }
 
 /// Runs one supervisor, including reconciliation of a previously interrupted attempt.
@@ -62,7 +72,8 @@ pub fn supervise(host: &mut impl HostOps) -> Result<()> {
     let mut supervisor = Supervisor::default();
     let outcome = supervisor.run(host);
     let cleanup = supervisor.stop_all(host, Stop::Shutdown);
-    cleanup.and(outcome)
+    let services = supervisor.services.stop(host);
+    cleanup.and(services).and(outcome)
 }
 
 #[derive(Default)]
@@ -73,6 +84,7 @@ struct Supervisor {
     parked: bool,
     firewall_retry_at: Duration,
     firewall_error: Option<&'static str>,
+    services: Services,
 }
 
 #[derive(Default)]
@@ -116,7 +128,9 @@ impl Supervisor {
                 self.observe(host, Role::Core)?;
                 self.observe(host, Role::Device)?;
                 self.start_due(host, Role::Device)?;
-                self.start_due(host, Role::Core)?;
+                if self.services.tick(host) {
+                    self.start_due(host, Role::Core)?;
+                }
             }
             host.sleep(POLL);
         }
@@ -155,6 +169,7 @@ impl Supervisor {
             host.save_selection(&selection)?;
         }
         self.stop_all(host, Stop::Requested)?;
+        self.services.stop(host)?;
         host.acknowledge(true)?;
         self.parked = true;
         Ok(())

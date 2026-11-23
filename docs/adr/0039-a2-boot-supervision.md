@@ -5,7 +5,7 @@ last modified: 2026, november, 23
 status: accepted for the A2 boot role
 ---
 
-# ADR 0037 A2 boot supervision
+# ADR 0039 A2 boot supervision
 
 `echo-bridge boot run` is a selectable Android root role. It keeps the existing
 device and core entry points and uses the [A2 installation layout](../design/2026-11-22-single-binary-plan.md#6-installer).
@@ -60,10 +60,49 @@ produces an unhealthy log and is retried on the watch cadence. The supervisor
 checks the live protections before startup and resume. A resolver read failure
 still applies the baseline lock with no resolver exceptions.
 
+The supervisor starts the device role while Android startup services run in a
+separate child group. Alexa takeover disables only enabled packages from the
+[Athena package list](https://github.com/portpowered/echo-dot-assist/blob/7e0c758/devices/athena/device.conf)
+and saves the original package states and Android settings in
+`bin/.boot/alexa.json`. Each original is synced before its mutation. The
+installer can stop the supervisor and invoke the trusted boot image as root
+with `__boot-launch restore-alexa`. Restore returns explicit enables to
+`enabled`, default enables to `default`, and absent settings to absence.
+Verified restores remove their journal entries. Failed restores keep their
+entries for retry. The Athena Wi-Fi diagnostics broadcast uses the fork's
+disable and restore values. The package and settings data come from the MIT
+fork whose notice ships with the existing `echo-bridge notices` output.
+
+Startup compares the SHA-256 of `bin/echo-screen.apk` with the installed base
+APK. It runs `pm install -r` for a changed or missing installation and launches
+the fixed screen activity, including the prior installation if an update fails.
+Command failures log the affected stage. The staged file belongs to the
+root-owned install layout.
+
+The Wi-Fi observer reads link and resolver state and leaves reconnection to
+Android. When the link and resolvers are already usable at admission, the
+core can start immediately. A new resolver set settles for 5 s, allowing
+the firewall watcher to pick it up. The first core start waits at most 10 s
+even when Wi-Fi is offline. The trusted running boot image runs the existing
+clock sync as uid 0 with gid 3990 after network admission and then every 6 h
+while connected. Link loss or a 6 s deadline cancels a pending sync. Only a
+successful adjustment writes the UTC RTC. Android keeps its existing time
+zone. A stop acknowledgement follows cleanup of the startup and clock jobs
+as well as both product roles.
+
 ## Deferred
 
-- The device startup services land in the next story of this lane. Screen
-  APK embedding belongs to C1.
+- The bounded first-start wait replaces the fork's indefinite wait for a
+  resolver so the local screen can start offline. The hassmic Home Assistant
+  clock and zone feed, other models' Wi-Fi helpers, standby Kiosk updater,
+  hassmic OTA and mDNS remain in the legacy chain.
+- Native init-service and Bluetooth HAL teardown, wake locks, adaptive
+  brightness and overscan from the fork remain part of the installer and
+  physical integration assessment. This lane applies Athena's reversible
+  package, settings and Wi-Fi diagnostics controls.
+- Screen APK embedding belongs to C1. Screen HOME and band behavior
+  belong to `sb-a2-screen-home`, and Wi-Fi scan and join belong to
+  `sb-a2-wifi-settings`.
 - The installer owns the stable init entry, SELinux policy, root-owned layout,
   slot promotion while parked and legacy restore. A2 T5 verifies that Fire OS
   permits the fixed shell entry and enforces the resulting domain, socket access,
