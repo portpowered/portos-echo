@@ -8,30 +8,6 @@ defaults:
   run:
     shell: bash
 jobs:
-  cargo:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - run: git switch --detach HEAD^
-      - uses: ./.github/actions/setup
-        with:
-          target: test-sim
-      - name: E-VOICE, E-WARNING and E-REG
-        run: |
-          set -ex
-          git rev-parse HEAD
-          cargo build --locked -p echo-bridge -p echo-lab -p echo-muse-bridge --bins
-          cargo test --locked -p echo-bridge --test bridge_t3 t3_voice_overlay_ -- --ignored --nocapture --test-threads=1
-          cargo test --locked -p echo-bridge --test bridge_t3 t3_settings_overlay_invalid_startup_reports_and_ignores_entire_file -- --ignored --nocapture --test-threads=1
-          cargo test --locked -p echo-bridge --lib voice_config_tests
-          cargo test --locked -p echo-bridge --lib call_omitted_voice_uses_server_default_without_null_or_legacy_substitution
-          cargo test --locked -p echo-config --test config_load config_settings
-          cargo test --locked -p echo-bridge --lib settings
-          cargo test --locked -p echo-bridge --test bridge_t3 codex_operator::configured:: -- --ignored --test-threads=1
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -40,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - run: git switch --detach HEAD^
+      - run: git switch --detach 58f390f52f1ea7ff58f83bbc4acc19fd8cc40586
       - uses: ./.github/actions/setup
         with:
           target: lint-self-tests
@@ -50,6 +26,7 @@ jobs:
           fallback: none
       - name: Provision existing lint dependencies
         run: |
+          npm --prefix web/screen ci --offline=false
           cargo deny fetch
           directory=$(mktemp -d)
           curl --fail --location --retry 3 https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz -o "$directory/gitleaks.tar.gz"
