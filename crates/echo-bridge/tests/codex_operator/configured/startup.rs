@@ -305,15 +305,11 @@ async fn rejected_overlay(overlay: &str, reason: &str, deprecated: bool) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     binary_home(&fixture, listener.local_addr().unwrap().port());
     let base = fixture.directory.path().join("bridge.toml");
+    let text = overlay_test_base(&base, deprecated);
     let home = fixture.directory.path().join("agent-home");
     std::fs::create_dir(&home).unwrap();
     let overlay_path = home.join("settings.toml");
     std::fs::write(&overlay_path, overlay).unwrap();
-    let mut text = std::fs::read_to_string(&base).unwrap();
-    if deprecated {
-        text = text.replace("[agent]", "[agent]\nmax_tool_calls = 1");
-        std::fs::write(&base, &text).unwrap();
-    }
     let mut process = Process::spawn(&mut super::super::voice_entry::command(&fixture));
     let _satellite = binary_ready(&listener, &mut process).await;
     let path = fixture.directory.path().join("trace");
@@ -336,7 +332,21 @@ async fn rejected_overlay(overlay: &str, reason: &str, deprecated: bool) {
     super::super::host::released(&fixture).await;
     assert_eq!(std::fs::read(&base).unwrap(), text.as_bytes());
     assert_eq!(std::fs::read(&overlay_path).unwrap(), overlay.as_bytes());
-    let rows = trace(&path);
+    check_ignored_trace(&path, &home);
+}
+
+fn overlay_test_base(base: &Path, deprecated: bool) -> String {
+    let text = std::fs::read_to_string(base).unwrap();
+    if !deprecated {
+        return text;
+    }
+    let text = text.replace("[agent]", "[agent]\nmax_tool_calls = 1");
+    std::fs::write(base, &text).unwrap();
+    text
+}
+
+fn check_ignored_trace(path: &Path, home: &Path) {
+    let rows = trace(path);
     let warnings: Vec<_> = rows.iter().filter(|row| row["event"] == "settings.ignored").collect();
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0]["reason"], "invalid_config");

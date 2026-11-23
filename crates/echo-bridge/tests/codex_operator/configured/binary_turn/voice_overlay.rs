@@ -63,7 +63,14 @@ async fn complete_voice_run(fixture: &Fixture, listener: &TcpListener, process: 
     let media = remote(&mut signal).await;
     receive_playback(&mut satellite, &mut signal).await;
     bridge_short::send(&mut satellite, "played", json!({})).await;
-    finish_run(fixture, process, Finish::Eof, signal).await;
+    assert_eq!(
+        process.line().await,
+        r#"{"event":"bridge.run_completed","run_id":"run-1"}"#
+    );
+    // Played completes the run. EOF then shuts down its retained Live call.
+    drop(process.input.take());
+    closing(&mut signal).await;
+    signal.get_mut().write_all(b"close\n").await.unwrap();
     process.collect(0).await;
     media.abort();
     super::super::super::host::released(fixture).await;
