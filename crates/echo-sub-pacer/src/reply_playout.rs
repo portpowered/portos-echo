@@ -256,3 +256,84 @@ impl Wait {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pcm(level: i16) -> ReplyFrame {
+        let mut frame = [0; 960];
+        frame.as_chunks_mut::<2>().0.fill(level.to_le_bytes());
+        frame
+    }
+
+    fn sample(frame: &ReplyFrame, index: usize) -> i16 {
+        i16::from_le_bytes(frame.as_chunks::<2>().0[index])
+    }
+
+    #[test]
+    fn pacer_playout_fade_preserves_waveform_and_silence_threshold() {
+        let mut ramp = [0; 960];
+        for (out, sample) in ramp.as_chunks_mut::<2>().0.iter_mut().zip(0..480_i16) {
+            *out = (sample * 50).to_le_bytes();
+        }
+        assert!(audible(&ramp) && !audible(&pcm(64)) && audible(&pcm(-65)));
+        let faded = concealment(&ramp);
+        assert_eq!(
+            [0, 1, 240, 479].map(|index| sample(&faded, index)),
+            [23950, 23850, 5975, 0]
+        );
+        assert_eq!(sample(&concealment(&pcm(-8000)), 479), -16);
+        assert_eq!(concealment(&pcm(0)), pcm(0));
+
+        let mut risen = pcm(8000);
+        fade_in(&mut risen);
+        assert_eq!([0, 1, 240, 479].map(|index| sample(&risen, index)), [0, 16, 4000, 7983]);
+    }
+
+    #[test]
+    fn pacer_playout_fades_only_unfinished_audible_audio() {
+        let mut ring = Ring::default();
+        let mut pacer = ClockPacer::new(200, true);
+        let now = Duration::ZERO;
+        for level in [8000, 0, 8000] {
+            ring.push(&pcm(level));
+            let mut wait = pacer.offer(ring.len(), true, false, now);
+            assert_eq!(pacer.tick(&mut wait, &mut ring, true, now), Some(pcm(level)));
+            assert_eq!(pacer.conceals(false), level != 0);
+        }
+        assert!(pacer.offer(0, true, true, now).is_none());
+        assert!(pacer.offer(0, false, false, now).is_none());
+        let mut cancelled = pacer.offer(0, false, true, now);
+        assert!(pacer.tick(&mut cancelled, &mut ring, false, now).is_none());
+        let mut wait = pacer.offer(0, false, true, now);
+        assert_eq!(wait.unwrap().due(), PERIOD * 2);
+        assert_eq!(
+            pacer.tick(&mut wait, &mut ring, false, PERIOD * 2),
+            Some(concealment(&pcm(8000)))
+        );
+        assert!(!pacer.conceals(false));
+        ring.push(&pcm(8000));
+        let mut wait = pacer.offer(ring.len(), false, false, PERIOD * 2);
+        let mut resumed = pcm(8000);
+        fade_in(&mut resumed);
+        assert_eq!(pacer.tick(&mut wait, &mut ring, false, PERIOD * 2), Some(resumed));
+        let playout = pacer.take_playout();
+        assert_eq!((playout.reprimes, playout.concealed, playout.fade_ins), (0, 1, 1));
+        assert_eq!(pacer.take_playout(), Playout::default());
+    }
+
+    #[test]
+    fn pacer_playout_stepped_sim_bypasses_prime_and_fade() {
+        let mut pacer = ClockPacer::new(200, false);
+        let mut ring = Ring::default();
+        assert_eq!(pacer.retarget(PRIME * 3), Duration::ZERO);
+        let frame = pcm(8000);
+        ring.push(&frame);
+        let mut wait = pacer.offer(ring.len(), false, true, Duration::ZERO);
+        assert_eq!(pacer.tick(&mut wait, &mut ring, false, Duration::ZERO), Some(frame));
+        assert!(!pacer.conceals(false));
+        assert!(pacer.offer(0, false, true, Duration::ZERO).is_none());
+        assert_eq!(pacer.take_playout(), Playout::default());
+    }
+}

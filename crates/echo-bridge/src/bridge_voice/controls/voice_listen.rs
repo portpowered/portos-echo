@@ -14,8 +14,9 @@ pub(super) async fn until(deadline: Option<Instant>) {
 
 pub(super) fn remote_cut(port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
     source.session.request_end();
-    source.controller.cut();
     port.retire_audio();
+    source.fresh_reply(true)?;
+    source.controller.cut();
     Err(Error::Control)
 }
 

@@ -81,15 +81,28 @@ pub struct PacerView {
 #[derive(Clone, Copy)]
 pub struct PacerStatus {
     pub view: PacerView,
-    pub stalled: bool,
-    pub finished: bool,
-    pub staged: bool,
+    pub input: PacerInput,
+    pub output: PacerOutput,
     pub spoken: bool,
     pub sounded: bool,
-    pub voiced: bool,
     pub dropped: u64,
     pub deadline: Option<Duration>,
     pub mouth_due: Option<Duration>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PacerInput {
+    Closed,
+    Open,
+    Finished,
+    Cut,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PacerOutput {
+    Idle,
+    Staged,
+    Stalled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

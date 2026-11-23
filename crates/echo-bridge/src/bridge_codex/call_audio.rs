@@ -1,7 +1,9 @@
 //! PCM boundaries for the run owner; media owns Opus and the 48 kHz track.
 use crate::{Error, bridge_world::PacerPort};
 use echo_audio::PcmResampler;
-use echo_core_api::{Command, PacerCommand, PacerCommands, PacerEvent, PacerStatus, ReplyFrame};
+use echo_core_api::{
+    Command, PacerCommand, PacerCommands, PacerEvent, PacerInput, PacerOutput, PacerStatus, ReplyFrame,
+};
 use echo_link::PcmFormat;
 use echo_media::PcmFrame;
 use std::time::Duration;
@@ -263,7 +265,7 @@ impl ReplyAudio {
     }
 
     pub(crate) fn voiced(&self) -> bool {
-        self.status().voiced
+        self.status().view.playing
     }
 
     #[must_use]
@@ -273,7 +275,7 @@ impl ReplyAudio {
 
     #[must_use]
     pub fn stalled(&self) -> bool {
-        self.status().stalled
+        self.status().output == PacerOutput::Stalled
     }
 
     #[must_use]
@@ -283,14 +285,17 @@ impl ReplyAudio {
 
     #[must_use]
     pub fn finished(&self) -> bool {
-        self.status().finished
+        self.status().input == PacerInput::Finished
     }
 
     /// Transferred all retained frames. The device still owes a Played receipt.
     #[must_use]
     pub fn drained(&self) -> bool {
         let status = self.status();
-        status.finished && self.partial == 0 && status.view.depth == 0 && !status.staged
+        status.input == PacerInput::Finished
+            && self.partial == 0
+            && status.view.depth == 0
+            && status.output != PacerOutput::Staged
     }
 
     #[must_use]
@@ -298,7 +303,7 @@ impl ReplyAudio {
         self.status().dropped
     }
 
-    #[cfg(test)]
+    /// Receive and acknowledge one queued frame at the standalone PCM boundary.
     pub async fn next_frame(&mut self) -> Option<Vec<u8>> {
         let frame = self.stage(false).await?;
         self.handed();

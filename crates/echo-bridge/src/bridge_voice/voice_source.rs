@@ -104,7 +104,7 @@ impl Source {
     }
 
     /// Replace the reply queue and its pacer, keeping what they counted.
-    fn fresh_reply(&mut self, cut: bool) -> Result<(), Error> {
+    pub(super) fn fresh_reply(&mut self, cut: bool) -> Result<(), Error> {
         self.stats.reply_dropped += self.reply.dropped_frames();
         self.meter.paced(self.reply.reset(cut)?);
         Ok(())

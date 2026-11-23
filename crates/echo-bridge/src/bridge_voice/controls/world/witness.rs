@@ -237,6 +237,17 @@ fn pacer_world_report_accepts_only_fixed_diagnostics() {
     let controller = Controller::new();
     let mut report = Report::from_state(&controller.state());
     assert_eq!(report.verdict().unwrap(), None);
+    {
+        let mut state = controller.state();
+        state.world.step(
+            &mut echo_core_api::Event::Pacer(echo_core_api::PacerEvent::RunOpened {
+                lead_ms: 200,
+                adaptive: false,
+            }),
+            &mut echo_core_api::Commands::default(),
+        );
+        assert_eq!(Report::from_state(&state).verdict().unwrap(), Some(PACER_QUIESCENT));
+    }
     report.status = Status::Fail;
     for diff in [PACER_DEPTH, PACER_QUIESCENT] {
         report.diff = Some(diff.to_owned());
