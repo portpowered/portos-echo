@@ -28,6 +28,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+const LIVE_IDLE_ADVANCE_MS: u64 = 120_000;
+
 #[derive(Default)]
 struct Case {
     earcon: bool,
@@ -192,7 +194,7 @@ impl Case {
         // Keep the remote's socket alive but stop its RTP driver before closing
         // the production media owner. The pin's sideband stays until idle stop.
         self.provider.as_mut().ok_or("m2: missing provider")?.quiesce().await?;
-        advance(self.bridge.as_mut().ok_or("m2: missing bridge")?, 120_000).await?;
+        advance(self.bridge.as_mut().ok_or("m2: missing bridge")?, LIVE_IDLE_ADVANCE_MS).await?;
         self.bridge
             .as_mut()
             .ok_or("m2: missing bridge")?
@@ -258,10 +260,20 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
             std::fs::create_dir(&output).map_err(|_| "m2: cannot own case directory")?;
             state.trace_path = output.join("bridge.private.jsonl");
             state.start(options).await?;
+            state.exercise(utterance).await?;
             if std::env::var(echo_bridge::world_witness::TRACE_TICK_ENV).as_deref() == Ok("1") {
-                witness_trace_tick(state.bridge.as_mut().ok_or("m2: missing bridge")?, &state.trace_path).await?;
+                let elapsed_ms = state.clock["epoch_ms"]
+                    .as_u64()
+                    .and_then(|epoch| epoch.checked_add(LIVE_IDLE_ADVANCE_MS))
+                    .ok_or("m2: missing idle trace epoch")?;
+                witness_trace_tick(
+                    state.bridge.as_mut().ok_or("m2: missing bridge")?,
+                    &state.trace_path,
+                    elapsed_ms,
+                )
+                .await?;
             }
-            state.exercise(utterance).await
+            Ok(())
         },
         options.cancel.as_deref(),
         tokio::time::Instant::now() + DEADLINE,
@@ -290,8 +302,11 @@ pub(super) async fn run(options: &Options, root: &Path, utterance: &Path) -> (Va
     (measured, result)
 }
 
-async fn witness_trace_tick(bridge: &mut Process, path: &Path) -> Result<(), String> {
-    const EXPECTED: &[u8] = b"{\"corrected\":false,\"elapsed_ms\":0,\"event\":\"clock.offset\",\"hosts\":0,\"provider_auth_mode\":\"api_key\",\"reason\":\"unreachable\",\"servers\":1,\"synced\":false}\n";
+async fn witness_trace_tick(bridge: &mut Process, path: &Path, elapsed_ms: u64) -> Result<(), String> {
+    let expected = format!(
+        "{{\"corrected\":false,\"elapsed_ms\":{elapsed_ms},\"event\":\"clock.offset\",\"hosts\":0,\"provider_auth_mode\":\"api_key\",\"reason\":\"unreachable\",\"servers\":1,\"synced\":false}}\n"
+    );
+    let expected = expected.as_bytes();
     let read = || std::fs::read(path).map_err(|_| "m2: missing trace tick file");
     let before = read()?;
     for held in [true, false] {
@@ -312,11 +327,11 @@ async fn witness_trace_tick(bridge: &mut Process, path: &Path) -> Result<(), Str
             let suffix = bytes
                 .strip_prefix(before.as_slice())
                 .ok_or("m2: prior trace bytes changed")?;
-            if suffix == EXPECTED {
+            if suffix == expected {
                 read_trace(path)?;
                 return Ok(());
             }
-            if !EXPECTED.starts_with(suffix) {
+            if !expected.starts_with(suffix) {
                 return Err("m2: trace tick wrote unexpected bytes".into());
             }
             tokio::task::yield_now().await;

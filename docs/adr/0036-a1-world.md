@@ -65,9 +65,10 @@ invocations remove the per-generation files on completion.
 
 The prebuilt M2 milestone CLI test sets `ECHO_LAB_TRACE_TICK=1` for the success
 journey. The guarded paused bridge queues one clock diagnostic while the writer
-is held. The harness releases the writer without waking it, advances exactly
-100 ms with the device idle and reads one complete, byte-exact row before sending
-the utterance. The regular playback, provider and credential oracles still run.
+is held. After the normal reply and idle return, the harness releases the writer
+without waking it, advances exactly 100 ms and reads one complete, byte-exact
+row while the device stays idle. The playback, provider and credential oracles
+still run.
 
 ## Deferred
 

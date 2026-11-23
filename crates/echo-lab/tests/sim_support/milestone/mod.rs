@@ -134,10 +134,11 @@ fn m2_milestone_publishes_exact_success_invalid_and_expired_results() {
         .filter(|row| row["event"] == "clock.offset")
         .cloned()
         .collect();
+    let elapsed_ms = success["playout_clock"]["epoch_ms"].as_u64().unwrap() + 120_000;
     assert_eq!(
         clock_rows,
         [
-            json!({"event":"clock.offset","elapsed_ms":0,"provider_auth_mode":"api_key",
+            json!({"event":"clock.offset","elapsed_ms":elapsed_ms,"provider_auth_mode":"api_key",
         "synced":false,"reason":"unreachable","hosts":0,"servers":1,"corrected":false})
         ]
     );
