@@ -50,12 +50,12 @@ impl Source {
         let out = self.controller.turn(SessionTurnEvent::BargeDue {
             finished: self.reply.finished(),
         });
-        let Some(SessionCommand::CutReply { trigger, .. }) = out.effect else {
+        let Some(SessionCommand::CutReply { trigger, text, .. }) = out.effect else {
             return Ok(());
         };
         let (silent_ms, yield_ms) = self.meter.cut(trigger);
         self.stats.cut = Some(Box::new(Cut {
-            text: out.cut_text,
+            text,
             silent_ms,
             yield_ms,
         }));

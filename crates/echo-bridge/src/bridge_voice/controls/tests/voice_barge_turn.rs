@@ -359,7 +359,7 @@ async fn barge_turn_local_cut_off_leaves_the_yield_to_the_model() {
         local_cut: false,
         ..SessionKnobs::default()
     };
-    let world = Controller::new();
+    let world = Controller::for_voice_fixture();
     world.configure_session(knobs).unwrap();
     let mut work = Box::pin(scope(
         world,

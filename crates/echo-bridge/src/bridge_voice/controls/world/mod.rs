@@ -73,6 +73,11 @@ impl Controller {
         Self::with_witness(None)
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_voice_fixture() -> Arc<Self> {
+        Self::with_pacer(None, echo_sub_pacer::State::new(false))
+    }
+
     fn with_witness(witness: Option<Witness>) -> Arc<Self> {
         Self::with_pacer(witness, echo_sub_pacer::State::default())
     }

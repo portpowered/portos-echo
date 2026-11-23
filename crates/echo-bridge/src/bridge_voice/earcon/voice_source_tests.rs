@@ -1,4 +1,5 @@
 use super::*;
+use echo_core_api::BargeTrigger;
 use tokio::time::Duration;
 
 fn frame(level: i16) -> Vec<u8> {

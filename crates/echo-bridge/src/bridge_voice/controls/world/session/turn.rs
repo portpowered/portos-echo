@@ -83,6 +83,21 @@ impl SessionPort {
         self.read(echo_sub_session::State::barge_pending)
     }
 
+    pub(crate) fn assistant_released_barge(&self, audible: bool) -> bool {
+        if !audible {
+            return false;
+        }
+        let mut state = self.world.state();
+        if !state.world.pacer.session.barge_pending() {
+            return false;
+        }
+        let event = SessionEvent::Turn {
+            session: self.handle,
+            change: SessionTurnEvent::AssistantAudio { audible },
+        };
+        self.world.session_step(&mut state, event).outcome == Some(Ok(SessionOutcome::Released))
+    }
+
     pub(crate) fn barge_due(&self, finished: bool) -> Option<Instant> {
         let state = self.world.state();
         let clock = &state.world.clock;

@@ -286,7 +286,7 @@ impl SessionPort {
     }
 
     pub(crate) fn accepts_audio(&self) -> bool {
-        self.view().accepts_reply_audio
+        self.read(echo_sub_session::State::accepts_audio)
     }
 
     pub(crate) fn cutting(&self) -> bool {

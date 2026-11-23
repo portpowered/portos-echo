@@ -169,7 +169,7 @@ impl State {
             closing: self.run.as_ref().is_some_and(Run::closing),
             speaking: self.run.as_ref().is_some_and(Run::speaking),
             microphone_finished: self.run.as_ref().is_some_and(Run::microphone_finished),
-            accepts_reply_audio: self.idle_deadline.is_none() && self.run.as_ref().is_some_and(Run::accepts_audio),
+            accepts_reply_audio: self.accepts_audio(),
             idle_deadline: self.idle_deadline,
             next_deadline: self
                 .run
@@ -181,6 +181,11 @@ impl State {
     #[must_use]
     pub fn cutting(&self) -> bool {
         self.run.as_ref().is_some_and(Run::cutting)
+    }
+
+    #[must_use]
+    pub fn accepts_audio(&self) -> bool {
+        self.idle_deadline.is_none() && self.run.as_ref().is_some_and(Run::accepts_audio)
     }
 
     #[must_use]

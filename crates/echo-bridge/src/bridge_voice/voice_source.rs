@@ -115,9 +115,10 @@ impl Source {
     pub fn wrote(&mut self) {
         let now = Instant::now();
         self.reply.handed();
-        self.controller.turn(SessionTurnEvent::ReplyFrameHanded {
-            voiced: self.reply.voiced(),
-        });
+        if self.reply.voiced() {
+            self.controller
+                .turn(SessionTurnEvent::ReplyFrameHanded { voiced: true });
+        }
         self.meter.wrote(now);
     }
 
@@ -267,7 +268,7 @@ impl Source {
     /// converter. Discard both quiet and audible media at that boundary.
     pub fn audio(&mut self, frame: &PcmFrame) -> Result<(), Error> {
         self.stats.reply_received += 1;
-        let reason = if self.controller.cutting() || self.stale() {
+        let reason = if self.stale() {
             Discard::Cut
         } else if !self.controller.accepts_audio() {
             Discard::Idle
@@ -278,11 +279,7 @@ impl Source {
             // opens Speaking; the initial user transcript can lag audible RTP.
             let now = Instant::now();
             let audible = audible(frame);
-            let outcome = self
-                .controller
-                .turn(SessionTurnEvent::AssistantAudio { audible })
-                .outcome;
-            if outcome == Some(Ok(SessionOutcome::Released)) {
+            if self.controller.assistant_released_barge(audible) {
                 self.meter.released(now);
             }
             self.meter.arrived(now);

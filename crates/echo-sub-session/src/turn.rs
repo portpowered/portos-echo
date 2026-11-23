@@ -239,7 +239,7 @@ impl Run {
         if self.turn.dispatch.in_flight() || !self.speaking() {
             return;
         }
-        out.cut_text = self.turn.barge.said();
+        let text = self.turn.barge.said();
         self.turn.spend_floor(|turn| Mark::BargeCut { turn, trigger });
         self.turn.question.cut();
         self.turn.dispatch = Dispatch::default();
@@ -247,6 +247,7 @@ impl Run {
         out.effect = Some(SessionCommand::CutReply {
             session: self.handle,
             trigger,
+            text,
         });
     }
 

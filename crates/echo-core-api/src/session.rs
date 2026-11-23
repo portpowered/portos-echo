@@ -227,7 +227,7 @@ pub struct SessionView {
     pub next_deadline: Option<(Instant, SessionTimer)>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum SessionCommand {
     OpenCall,
     CloseCall,
@@ -243,6 +243,7 @@ pub enum SessionCommand {
     CutReply {
         session: SessionHandle,
         trigger: BargeTrigger,
+        text: String,
     },
 }
 
@@ -313,5 +314,4 @@ pub enum SessionToolRefusal {
 pub struct SessionCommands {
     pub effect: Option<SessionCommand>,
     pub outcome: Option<Result<SessionOutcome, SessionError>>,
-    pub cut_text: String,
 }

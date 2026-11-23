@@ -42,9 +42,12 @@ impl PacerPort {
     pub(crate) fn open(lead_ms: u16, adaptive: bool) -> Self {
         let world = current_controller().unwrap_or_else(|| {
             // Standalone component fixtures script their arrivals against the floor.
-            if cfg!(test) {
-                Controller::with_pacer(None, State::new(false))
-            } else {
+            #[cfg(test)]
+            {
+                Controller::for_voice_fixture()
+            }
+            #[cfg(not(test))]
+            {
                 Controller::new()
             }
         });
