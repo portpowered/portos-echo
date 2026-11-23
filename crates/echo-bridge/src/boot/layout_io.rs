@@ -1,0 +1,260 @@
+use std::{
+    fmt::Write as _,
+    fs::{self, DirBuilder, File, Metadata},
+    io::{self, Read, Write},
+    os::unix::fs::{DirBuilderExt, MetadataExt},
+    path::{Path, PathBuf},
+};
+
+use echo_boot::{Digest, Result, Selection, Slot, layout};
+use rustix::fs::{Mode, OFlags, open};
+use sha2::{Digest as _, Sha256};
+
+const LOCK: &str = "supervisor.lock";
+
+pub(super) struct Layout {
+    state: PathBuf,
+    // Inherited by the role and its descendants. An abrupt supervisor death
+    // cannot admit a second instance until the old group releases the lock.
+    _lock: File,
+}
+
+impl Layout {
+    pub(super) fn open() -> Result<Self> {
+        let state = boot_state()?;
+        let lock = lock_state(&state.join(LOCK)).map_err(|_| "supervisor already active or cleanup pending")?;
+        rustix::io::fcntl_setfd(&lock, rustix::io::FdFlags::empty()).map_err(|_| "inherit supervisor lock")?;
+        Ok(Self { state, _lock: lock })
+    }
+
+    pub(super) fn load(&self) -> Result<Option<Selection>> {
+        read_journal(&self.state.join(layout::SELECTION), 1024)?
+            .as_deref()
+            .map(Selection::decode)
+            .transpose()
+    }
+
+    pub(super) fn save(&self, selection: &Selection) -> Result<()> {
+        write_journal(&self.state.join(layout::SELECTION), &selection.encode()?)
+    }
+}
+
+pub(super) fn read_journal(path: &Path, limit: u64) -> Result<Option<Vec<u8>>> {
+    let file = match state_file(path, OFlags::RDONLY) {
+        Ok(file) => file,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(_) => return Err("open boot journal"),
+    };
+    check_state_file(&file)?;
+    let mut bytes = Vec::new();
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "read boot journal")?;
+    if bytes.len() as u64 > limit {
+        return Err("boot journal too large");
+    }
+    Ok(Some(bytes))
+}
+
+pub(super) fn write_journal(path: &Path, bytes: &[u8]) -> Result<()> {
+    let temp = path.with_extension("new");
+    remove(&temp).map_err(|_| "clear transient boot journal")?;
+    let mut file =
+        state_file(&temp, OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL).map_err(|_| "create boot journal")?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| "write boot journal")?;
+    fs::rename(temp, path).map_err(|_| "publish boot journal")?;
+    sync_directory(path.parent().ok_or("boot journal directory missing")?)
+}
+
+pub(super) fn lock_firewall() -> Result<File> {
+    lock_state(&boot_state()?.join("firewall.lock")).map_err(|_| "firewall writer lock unavailable")
+}
+
+pub(super) fn boot_state() -> Result<PathBuf> {
+    let root = Path::new(layout::ROOT);
+    let bin = root.join(layout::BIN);
+    check_directory(root)?;
+    check_directory(&bin)?;
+    let state = bin.join(layout::BOOT_STATE);
+    match DirBuilder::new().mode(0o700).create(&state) {
+        Ok(()) => sync_directory(&bin)?,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
+        Err(_) => return Err("create boot state"),
+    }
+    check_directory(&state)?;
+    if metadata(&state)?.mode() & 0o077 != 0 {
+        return Err("boot state must be root-only");
+    }
+    Ok(state)
+}
+
+fn lock_state(path: &Path) -> Result<File> {
+    let lock = state_file(path, OFlags::RDWR | OFlags::CREATE).map_err(|_| "open boot lock")?;
+    check_state_file(&lock)?;
+    lock.try_lock().map_err(|_| "acquire boot lock")?;
+    Ok(lock)
+}
+
+fn state_file(path: &Path, flags: OFlags) -> rustix::io::Result<File> {
+    open(
+        path,
+        flags | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .map(File::from)
+}
+
+fn check_state_file(file: &File) -> Result<()> {
+    let meta = file.metadata().map_err(|_| "inspect boot state")?;
+    if meta.is_file()
+        && meta.uid() == rustix::process::getuid().as_raw()
+        && meta.mode() & 0o7077 == 0
+        && meta.nlink() == 1
+    {
+        Ok(())
+    } else {
+        Err("unsafe boot state file")
+    }
+}
+
+fn sync_directory(directory: &Path) -> Result<()> {
+    File::open(directory)
+        .and_then(|dir| dir.sync_all())
+        .map_err(|_| "sync boot state directory")
+}
+
+fn metadata(path: &Path) -> Result<Metadata> {
+    fs::symlink_metadata(path).map_err(|_| "inspect install layout")
+}
+
+fn check_directory(directory: &Path) -> Result<()> {
+    let meta = metadata(directory)?;
+    if meta.is_dir() && meta.uid() == 0 && meta.mode() & 0o022 == 0 {
+        Ok(())
+    } else {
+        Err("unsafe install directory")
+    }
+}
+
+pub(super) fn candidate(slot: Slot) -> Result<(PathBuf, File)> {
+    let root = Path::new(layout::ROOT);
+    let bin = root.join(layout::BIN);
+    check_directory(root)?;
+    check_directory(&bin)?;
+    let path = bin.join(slot.name());
+    let file = candidate_file(&path)?;
+    Ok((path, file))
+}
+
+fn candidate_file(path: &Path) -> Result<File> {
+    check_candidate(&metadata(path)?)?;
+    let file = state_file(path, OFlags::RDONLY).map_err(|_| "open selected binary")?;
+    check_candidate(&file.metadata().map_err(|_| "inspect selected binary")?)?;
+    Ok(file)
+}
+
+fn check_candidate(meta: &Metadata) -> Result<()> {
+    if meta.is_file()
+        && meta.uid() == 0
+        && meta.nlink() == 1
+        && meta.mode() & 0o7022 == 0
+        && meta.mode() & 0o111 == 0o111
+    {
+        Ok(())
+    } else {
+        Err("unsafe selected binary")
+    }
+}
+
+pub(super) fn digest(slot: Slot) -> Result<Digest> {
+    let (_, file) = candidate(slot)?;
+    hash(file, "hash selected binary")
+}
+
+pub(super) fn hash(mut file: File, stage: &'static str) -> Result<Digest> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let read = file.read(&mut buffer).map_err(|_| stage)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let mut hex = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Digest::parse(hex)
+}
+
+pub(super) fn apk_file(path: &Path, staged: bool) -> Result<Option<File>> {
+    let stage = if staged {
+        "read staged screen APK"
+    } else {
+        "read installed screen APK"
+    };
+    let file = match state_file(path, OFlags::RDONLY) {
+        Ok(file) => file,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(_) => return Err(stage),
+    };
+    let meta = file.metadata().map_err(|_| stage)?;
+    if !meta.is_file()
+        || (staged
+            && (meta.uid() != rustix::process::getuid().as_raw() || meta.mode() & 0o7022 != 0 || meta.nlink() != 1))
+    {
+        return Err(stage);
+    }
+    Ok(Some(file))
+}
+
+pub(super) fn marker(name: &str) -> PathBuf {
+    Path::new(layout::ROOT)
+        .join(layout::PRIVATE)
+        .join(layout::RUN)
+        .join(name)
+}
+
+pub(super) fn stopped() -> Result<bool> {
+    match fs::symlink_metadata(marker(layout::STOP)) {
+        Ok(meta) if meta.is_file() => Ok(true),
+        Ok(_) => Err("unsafe stop marker"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err("inspect stop marker"),
+    }
+}
+
+// Called only by the credential-dropped marker helper.
+pub(super) fn acknowledge(finished: bool) -> Result<()> {
+    let path = marker(layout::FINISHED);
+    if !finished {
+        return remove(&path).map_err(|_| "clear finished marker");
+    }
+    let temp = path.with_extension("new");
+    remove(&temp).map_err(|_| "clear transient finished marker")?;
+    state_file(&temp, OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL)
+        .and_then(|file| rustix::fs::fchmod(file, Mode::RUSR | Mode::WUSR))
+        .map_err(|_| "create finished marker")?;
+    fs::rename(temp, path).map_err(|_| "publish finished marker")
+}
+
+fn remove(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn boot_supervision_refuses_a_symlink_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("current");
+        std::os::unix::fs::symlink("/proc/self/exe", &path).unwrap();
+        assert_eq!(super::candidate_file(&path).unwrap_err(), "unsafe selected binary");
+    }
+}

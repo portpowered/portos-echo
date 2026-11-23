@@ -1,6 +1,9 @@
 use echo_bridge::{Error, bridge_input, bridge_mcp, bridge_operator, bridge_runtime, bridge_time::clock_command};
 use std::{ffi::OsString, io::Write, process::ExitCode};
 
+#[path = "boot/mod.rs"]
+mod boot;
+
 fn main() -> ExitCode {
     let mut args = std::env::args_os();
     if args.next().is_some_and(|program| echo_device::satellite_name(&program)) {
@@ -9,6 +12,9 @@ fn main() -> ExitCode {
     let mut args = args.peekable();
     match args.peek().and_then(|arg| arg.to_str()) {
         Some("device") => return device(args.skip(1)),
+        Some("boot") => return boot::dispatch(args.skip(1)),
+        #[cfg(any(target_os = "android", target_os = "linux"))]
+        Some("__boot-launch") if cfg!(target_os = "android") => return boot::launch(args.skip(1)),
         Some("notices") => {
             if args.nth(1).is_some() {
                 return input_error(&Error::Input);

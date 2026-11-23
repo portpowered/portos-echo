@@ -1,0 +1,24 @@
+-P INPUT DROP
+-P OUTPUT DROP
+-N echo_out
+-A OUTPUT -j echo_out
+-A INPUT ! -i lo -p tcp -m tcp --dport 5555 -j DROP
+-A echo_out -p tcp -m tcp --dport 5555 -m owner ! --uid-owner 0 -j DROP
+-A echo_out -o lo -j RETURN
+-A echo_out -d 10.0.0.0/8 -j RETURN
+-A echo_out -d 172.16.0.0/12 -j RETURN
+-A echo_out -d 192.168.0.0/16 -j RETURN
+-A echo_out -d 169.254.0.0/16 -j RETURN
+-A echo_out -d 224.0.0.0/4 -j RETURN
+-A echo_out -d 255.255.255.255/32 -j RETURN
+-A echo_out -d 192.0.2.53/32 -p udp -m udp --dport 53 -j RETURN
+-A echo_out -d 192.0.2.53/32 -p tcp -m tcp --dport 53 -j RETURN
+-A echo_out -m owner --gid-owner 3990 -j RETURN
+-A echo_out -j DROP
+-A OUTPUT -o wlan0 -j ACCEPT
+-A OUTPUT -o lo -j ACCEPT
+-A INPUT -i lo -j ACCEPT
+-A INPUT -i wlan0 -p tcp -m state --state RELATED,ESTABLISHED -j ACCEPT
+-A INPUT -i wlan0 -p udp -m state --state RELATED,ESTABLISHED -j ACCEPT
+-A INPUT -i wlan0 -p udp -m udp --sport 67 --dport 68 -j ACCEPT
+-A INPUT -p icmp -m state --state RELATED,ESTABLISHED -j ACCEPT

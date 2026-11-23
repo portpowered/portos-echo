@@ -1,0 +1,216 @@
+use std::{io::Write, net::IpAddr, process::Stdio, time::Duration};
+
+use echo_boot::{
+    ChildStatus, ClockStatus, Digest, Family, HostOps, Identity, Log, Result, Role, Selection, Slot, Stop,
+};
+use echo_core_api::{Clock, SystemClock};
+use tokio::{
+    runtime::{Builder, Runtime},
+    signal::unix::{Signal, SignalKind, signal},
+};
+
+use super::{
+    firewall_io::{FirewallIo, WifiProbe},
+    jobs::Jobs,
+    launcher,
+    layout_io::{self, Layout},
+    processes::RoleChild,
+};
+
+pub(super) struct Android {
+    layout: Option<Layout>,
+    firewall: FirewallIo,
+    wifi: WifiProbe,
+    jobs: Jobs,
+    device: Option<RoleChild>,
+    core: Option<RoleChild>,
+    signals: Runtime,
+    interrupt: Signal,
+    terminate: Signal,
+    shutdown: bool,
+}
+
+impl Android {
+    pub(super) fn open(supervise: bool) -> Result<Self> {
+        let layout = if supervise {
+            rustix::process::set_child_subreaper(Some(rustix::process::Pid::INIT))
+                .map_err(|_| "enable role descendant reaping")?;
+            Some(Layout::open()?)
+        } else {
+            None
+        };
+        let signals = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| "open boot signal loop")?;
+        let (interrupt, terminate) = {
+            let _runtime = signals.enter();
+            (signal(SignalKind::interrupt()), signal(SignalKind::terminate()))
+        };
+        Ok(Self {
+            layout,
+            firewall: FirewallIo::default(),
+            wifi: WifiProbe::default(),
+            jobs: Jobs::default(),
+            device: None,
+            core: None,
+            signals,
+            interrupt: interrupt.map_err(|_| "watch boot interrupt")?,
+            terminate: terminate.map_err(|_| "watch boot termination")?,
+            shutdown: false,
+        })
+    }
+
+    fn child(&mut self, role: Role) -> &mut Option<RoleChild> {
+        match role {
+            Role::Device => &mut self.device,
+            Role::Core => &mut self.core,
+        }
+    }
+}
+
+impl HostOps for Android {
+    fn now(&self) -> Duration {
+        SystemClock.now().monotonic
+    }
+
+    fn sleep(&mut self, duration: Duration) {
+        self.shutdown = self.signals.block_on(async {
+            tokio::select! {
+                _ = self.interrupt.recv() => true,
+                _ = self.terminate.recv() => true,
+                () = tokio::time::sleep(duration) => false,
+            }
+        });
+    }
+
+    fn shutdown(&self) -> bool {
+        self.shutdown
+    }
+
+    fn stop_marker(&mut self) -> Result<bool> {
+        layout_io::stopped()
+    }
+
+    fn acknowledge(&mut self, finished: bool) -> Result<()> {
+        let status = launcher::command(if finished { "finish" } else { "resume" })
+            .stdin(Stdio::null())
+            .status()
+            .map_err(|_| "run marker helper")?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("marker helper failed")
+        }
+    }
+
+    fn candidate(&mut self, slot: Slot) -> Result<Digest> {
+        layout_io::digest(slot)
+    }
+
+    fn load_selection(&mut self) -> Result<Option<Selection>> {
+        self.layout.as_ref().ok_or("supervisor layout unavailable")?.load()
+    }
+
+    fn save_selection(&mut self, selection: &Selection) -> Result<()> {
+        self.layout
+            .as_ref()
+            .ok_or("supervisor layout unavailable")?
+            .save(selection)
+    }
+
+    fn spawn(&mut self, role: Role, slot: Slot, identity: Identity) -> Result<()> {
+        *self.child(role) = Some(RoleChild::spawn(role, slot, identity)?);
+        Ok(())
+    }
+
+    fn observe(&mut self, role: Role) -> Result<ChildStatus> {
+        self.child(role).as_ref().ok_or("missing role process")?.observe()
+    }
+
+    fn stop(&mut self, role: Role, why: Stop) -> Result<String> {
+        let child = self.child(role);
+        let status = child.as_mut().ok_or("missing role process")?.stop(why)?;
+        *child = None;
+        Ok(status)
+    }
+
+    fn log(&mut self, entry: Log<'_>) {
+        let mut log = std::io::stderr().lock();
+        let _ = match entry {
+            Log::Start(role, slot) => writeln!(log, "echo-bridge boot: start {} {}", role.name(), slot.name()),
+            Log::Exit(role, why, status) => {
+                writeln!(log, "echo-bridge boot: exit {} {why:?} status={status}", role.name())
+            }
+            Log::Fallback { current, previous } => {
+                writeln!(
+                    log,
+                    "echo-bridge boot: fallback current={} previous={}",
+                    current.as_str(),
+                    previous.as_str()
+                )
+            }
+            Log::FirewallReady => writeln!(log, "echo-bridge boot: firewall ready"),
+            Log::FirewallUnhealthy(stage) => writeln!(log, "echo-bridge boot: firewall unhealthy: {stage}"),
+            Log::DeviceService(stage) => writeln!(log, "echo-bridge boot: {stage}"),
+            Log::Network(online) => writeln!(log, "echo-bridge boot: Wi-Fi with resolver={online}"),
+        };
+    }
+
+    fn resolvers(&mut self) -> Result<Vec<IpAddr>> {
+        let resolvers = self.firewall.resolvers(&self.signals)?;
+        if self.layout.is_some() {
+            self.wifi.last.clone_from(&resolvers);
+        }
+        Ok(resolvers)
+    }
+
+    fn filter(&mut self, family: Family) -> Result<Option<String>> {
+        self.firewall.filter(&self.signals, family)
+    }
+
+    fn restore_filter(&mut self, family: Family, transaction: &str) -> Result<()> {
+        self.firewall.restore(&self.signals, family, transaction)
+    }
+
+    fn ipv6_disabled(&mut self, enforce: bool) -> Result<bool> {
+        self.firewall.ipv6_disabled(enforce)
+    }
+
+    fn usb_adb_only(&mut self, enforce: bool) -> Result<bool> {
+        self.firewall.usb_adb_only(&self.signals, enforce)
+    }
+
+    fn prepare_device(&mut self) -> Result<()> {
+        self.jobs.prepare_device()
+    }
+
+    fn poll_device(&mut self) -> Result<()> {
+        self.jobs.poll_device()
+    }
+
+    fn stop_device(&mut self) -> Result<()> {
+        self.wifi.clear();
+        self.jobs.stop_device()
+    }
+
+    fn network(&mut self) -> Result<Vec<IpAddr>> {
+        self.wifi.sample(&self.firewall, &self.signals)
+    }
+
+    fn start_clock(&mut self) -> Result<()> {
+        self.jobs.start_clock(launcher::command("clock"))
+    }
+
+    fn poll_clock(&mut self) -> Result<ClockStatus> {
+        self.jobs.poll_clock()
+    }
+
+    fn stop_clock(&mut self) -> Result<()> {
+        self.jobs.stop_clock()
+    }
+
+    fn write_rtc(&mut self) -> Result<()> {
+        self.firewall.write_rtc(&self.signals)
+    }
+}
