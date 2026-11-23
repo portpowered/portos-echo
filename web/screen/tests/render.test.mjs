@@ -5,6 +5,7 @@ import { snapshot as pixelSnapshot } from "./support/snapshot.mjs";
 import { pageFor, emit, calls, bounds } from "./browser.mjs";
 import { states, frame } from "./fixtures.mjs";
 import "./settings/usability.mjs";
+import "./chrome/render.mjs";
 import "./settings/page.mjs";
 import "./settings/page-v2.mjs";
 import "./settings/accounts.mjs";

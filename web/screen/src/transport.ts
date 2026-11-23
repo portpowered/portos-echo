@@ -80,6 +80,12 @@ export class Events implements StreamEvents {
         this.source.close();
     }
 
+    restart(): void {
+        if (this.stopped || this.source.readyState === CLOSED) return;
+        this.source.close();
+        this.connect();
+    }
+
     private connect(): void {
         const source = new EventSource(this.url);
         this.source = source;
@@ -113,22 +119,31 @@ export class Events implements StreamEvents {
 const BUILD_META = 'meta[name="echo-build"]';
 const RELOADED = "echo-screen-reload";
 const BUSY_RETRY_MS = 1000;
+const PROBE_INTERVAL_MS = 2000;
+const PROBE_TIMEOUT_MS = 3000;
 
 // The bridge embeds this page and names its build in the document. After a
 // bridge upgrade a running page is the previous build: each time the events
 // stream opens it reads the document again and reloads itself when the build
 // named there is not its own. It reloads at most once per build, waits while
 // `busy` (unsaved Settings edits) and does nothing when either side names none.
+// A visible page-owned screen also uses this same request to detect a silent
+// outage. Measure the interval from the start so response time cannot add to it.
 export function watchBuild(
     stream: StreamEvents,
     href: string,
     busy: () => boolean,
-): () => void {
+    unavailable: () => void,
+) {
     const loaded = document.querySelector(BUILD_META)?.getAttribute("content");
-    if (!loaded) return () => {};
     const index = new URL(href);
     index.search = index.hash = "";
-    const cancel = new AbortController();
+    let active: AbortController | undefined;
+    let live = false;
+    let lastFrame = -Infinity;
+    let retryAfterFrame = false;
+    let periodic: ReturnType<typeof setTimeout> | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     let wanted = "";
     let timer: ReturnType<typeof setTimeout> | undefined;
     function reload(): void {
@@ -148,28 +163,84 @@ export function watchBuild(
         location.reload();
     }
     async function check(): Promise<void> {
+        if (active || (!live && !loaded)) return;
+        const request = new AbortController();
+        active = request;
+        clearTimeout(periodic);
+        periodic = undefined;
+        const started = performance.now();
+        // A frame can invalidate the failure of an older probe. Its retry
+        // still has to finish within five seconds of that proof of life.
+        const remaining = retryAfterFrame
+            ? lastFrame + PROBE_INTERVAL_MS + PROBE_TIMEOUT_MS - started
+            : PROBE_TIMEOUT_MS;
+        deadline = setTimeout(
+            () => request.abort(),
+            Math.max(0, Math.min(PROBE_TIMEOUT_MS, remaining)),
+        );
+        retryAfterFrame = false;
         try {
             const response = await fetch(index.href, {
                 cache: "no-store",
-                signal: cancel.signal,
+                signal: request.signal,
             });
-            if (response.status !== 200) return;
+            if (response.status !== 200)
+                throw new Error("Document unavailable");
+            if (!loaded) return;
+            const html = await response.text();
+            if (request !== active || request.signal.aborted) return;
             const served = new DOMParser()
-                .parseFromString(await response.text(), "text/html")
+                .parseFromString(html, "text/html")
                 .querySelector(BUILD_META)
                 ?.getAttribute("content");
             wanted = served && served !== loaded ? served : "";
             if (timer === undefined) reload();
         } catch {
-            // The next time the stream opens asks again.
+            if (request === active && live) {
+                retryAfterFrame = lastFrame > started;
+                if (!retryAfterFrame) unavailable();
+            }
+        } finally {
+            if (request === active) {
+                clearTimeout(deadline);
+                active = undefined;
+                if (live)
+                    periodic = setTimeout(
+                        check,
+                        Math.max(
+                            0,
+                            PROBE_INTERVAL_MS - (performance.now() - started),
+                        ),
+                    );
+            }
         }
     }
+    function setLive(next: boolean): void {
+        if (live === next) return;
+        live = next;
+        if (live) periodic = setTimeout(check, PROBE_INTERVAL_MS);
+        else cancelCheck();
+    }
+    function cancelCheck(): void {
+        clearTimeout(periodic);
+        clearTimeout(deadline);
+        retryAfterFrame = false;
+        const request = active;
+        active = undefined;
+        request?.abort();
+    }
     const opened = () => void check();
-    stream.addEventListener("open", opened);
-    return () => {
-        stream.removeEventListener("open", opened);
-        cancel.abort();
-        clearTimeout(timer);
-        wanted = "";
+    if (loaded) stream.addEventListener("open", opened);
+    return {
+        receivedFrame() {
+            lastFrame = performance.now();
+        },
+        setLive,
+        dispose() {
+            if (loaded) stream.removeEventListener("open", opened);
+            cancelCheck();
+            clearTimeout(timer);
+            wanted = "";
+        },
     };
 }

@@ -6,6 +6,11 @@ use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use support::{Result, TOKEN, events, frame, page_build, post, report, request, server};
 use tokio::{io::AsyncReadExt, net::TcpListener};
 
+const SCREEN_STYLES: [&str; 2] = [
+    include_str!("../../../web/screen/src/screen.css"),
+    include_str!("../../../web/screen/src/chrome/screen.css"),
+];
+
 #[cfg(echo_screen_embedded)]
 #[tokio::test]
 async fn t3_embedded_javascript_is_served_outside_the_checkout() -> Result {
@@ -278,7 +283,7 @@ async fn t3_stream_capacity_assets_and_cleanup() -> Result {
     assert_eq!(request(addr, "GET", "/", "", "").await?, (200, page));
     assert_eq!(
         request(addr, "GET", "/screen.css", "", "").await?,
-        (200, include_str!("../../../web/screen/src/screen.css").into())
+        (200, SCREEN_STYLES.join("\n"))
     );
     let (status, tokens) = request(addr, "GET", "/tokens.css", "", "").await?;
     assert_eq!(status, 200);

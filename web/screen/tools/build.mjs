@@ -1,4 +1,4 @@
-import { mkdir, copyFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, copyFile, readFile, rm, writeFile } from "node:fs/promises";
 import { build } from "esbuild";
 import { tokensCss } from "./tokens.mjs";
 
@@ -30,10 +30,12 @@ await build({
     bundle: true,
 });
 await mkdir("dist/fonts", { recursive: true });
-for (const file of [
-    "index.html",
-    "screen.css",
-    "fonts/manrope-latin-wght-normal.woff2",
-])
+for (const file of ["index.html", "fonts/manrope-latin-wght-normal.woff2"])
     await copyFile(`src/${file}`, `dist/${file}`);
+const styles = await Promise.all(
+    ["screen.css", "chrome/screen.css"].map((file) =>
+        readFile(`src/${file}`, "utf8"),
+    ),
+);
+await writeFile("dist/screen.css", styles.join("\n"));
 await writeFile("dist/tokens.css", await tokensCss());

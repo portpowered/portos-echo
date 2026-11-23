@@ -6,6 +6,7 @@ import java.net.URISyntaxException;
 final class ScreenConfig {
     static final int TOP = 16;
     static final int BOTTOM = 10;
+    static final String WAITING = "Waiting for bridge";
     static final String DIAGNOSTIC = "url=[redacted]";
     final Secret url;
     final String message;
@@ -20,6 +21,22 @@ final class ScreenConfig {
         this.message = message;
     }
 
+    enum Chrome {
+        LEGACY(TOP, BOTTOM), PAGE(0, 0);
+
+        final int top;
+        final int bottom;
+
+        Chrome(int top, int bottom) {
+            this.top = top;
+            this.bottom = bottom;
+        }
+    }
+
+    static Chrome chrome(boolean legacyHome, boolean fullPanel, boolean trustedDocument) {
+        return !legacyHome && fullPanel && trustedDocument ? Chrome.PAGE : Chrome.LEGACY;
+    }
+
     static ScreenConfig select(boolean supplied, Secret extra, Store store) {
         Secret selected = supplied ? extra : store.read();
         if (selected == null && !supplied) {
@@ -31,7 +48,7 @@ final class ScreenConfig {
         if (supplied) {
             store.save(selected);
         }
-        return new ScreenConfig(selected, "Waiting for bridge");
+        return new ScreenConfig(selected, WAITING);
     }
 
     private static boolean valid(Secret value) {

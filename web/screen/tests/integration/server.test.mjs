@@ -50,6 +50,236 @@ after(async () => {
     assert.equal(diagnostic, "");
 });
 
+const pairedUrl = `${origin}/?${new URLSearchParams({
+    events: `/events?token=${token}`,
+    actions: `/actions?token=${token}`,
+})}`;
+
+function chromeState(page, state) {
+    return page.locator(`.screen-band.band-${state}`);
+}
+
+async function motion(band, name, duration, iterations = 1) {
+    const actual = await band.evaluate((element) => {
+        const [animation] = element.getAnimations({ subtree: true });
+        const timing = animation.effect.getTiming();
+        return [animation.animationName, timing.duration, timing.iterations];
+    });
+    assert.deepEqual(actual, [name, duration, iterations]);
+}
+
+test("B01–B07: the real paired stream paints stock chrome only on an opted-in page", async (t) => {
+    const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        serviceWorkers: "block",
+    });
+    t.after(() => context.close());
+    const page = await context.newPage();
+    await page.goto(pairedUrl);
+    assert.equal(await page.locator(".screen-grip, .screen-band").count(), 0);
+    await page.locator("html").evaluate((node) => {
+        node.dataset.echoScreenChrome = "page";
+    });
+    const waiting = page
+        .getByRole("status")
+        .filter({ hasText: "Waiting for bridge" });
+    await waiting.waitFor();
+    const grip = page.locator(".screen-grip");
+    assert.deepEqual(await grip.boundingBox(), {
+        x: 0,
+        y: 0,
+        width: 1280,
+        height: 16,
+    });
+    const state = async (next) => {
+        command({ state: next });
+        await page.locator(`[data-ui-state="${next.state}"]`).waitFor();
+    };
+    await state({ state: "listening" });
+    const listening = chromeState(page, "listening");
+    assert.match(
+        await listening.evaluate(
+            (node) => getComputedStyle(node).backgroundImage,
+        ),
+        /rgb\(0, 0, 255\).*rgb\(0, 255, 255\)/,
+    );
+    await motion(listening, "band-listening", 500);
+    await state({ state: "thinking" });
+    const thinking = chromeState(page, "thinking");
+    await motion(thinking, "band-thinking", 200, Infinity);
+    assert.deepEqual(
+        await thinking.evaluate((node) => {
+            const [animation] = node.getAnimations({ subtree: true });
+            animation.pause();
+            return [0, 99, 100, 199].map((ms) => {
+                animation.currentTime = ms;
+                return getComputedStyle(node, "::after").opacity;
+            });
+        }),
+        ["0", "0", "1", "1"],
+    );
+    await state({ state: "speaking" });
+    const speaking = chromeState(page, "speaking");
+    await motion(speaking, "band-speaking", 1690, Infinity);
+    assert.deepEqual(await sample(speaking, [0, 845]), [
+        "rgb(0, 255, 255)",
+        "rgb(0, 0, 255)",
+    ]);
+    await page.evaluate(() => {
+        window.mutedPaint = new Promise((resolve) => {
+            const band = document.querySelector(".screen-band");
+            const observer = new MutationObserver(() => {
+                if (!band.classList.contains("band-muted")) return;
+                observer.disconnect();
+                requestAnimationFrame(() =>
+                    resolve([
+                        getComputedStyle(band).backgroundColor,
+                        band
+                            .getAnimations()
+                            .map((animation) => animation.animationName),
+                    ]),
+                );
+            });
+            observer.observe(band, { attributeFilter: ["class"] });
+        });
+    });
+    await state({ state: "muted" });
+    assert.deepEqual(await page.evaluate(() => window.mutedPaint), [
+        "rgb(255, 0, 0)",
+        ["band-muted"],
+    ]);
+    const muted = chromeState(page, "muted");
+    await motion(muted, "band-muted", 700);
+    assert.deepEqual(await sample(muted, [0, 700]), [
+        "rgb(255, 0, 0)",
+        "rgb(153, 0, 0)",
+    ]);
+    await state({ state: "error", message: "Local link failed", relink: true });
+    const error = chromeState(page, "error");
+    await motion(error, "band-error", 1100, 3);
+    assert.deepEqual(await sample(error, [0, 550, 1650, 2750, 3300]), [
+        "rgb(0, 0, 0)",
+        "rgb(230, 0, 0)",
+        "rgb(230, 0, 0)",
+        "rgb(230, 0, 0)",
+        "rgb(0, 0, 0)",
+    ]);
+    assert.equal(await page.getByText("Local link failed").count(), 1);
+    assert.equal(await page.getByRole("button", { name: "Relink" }).count(), 1);
+    await state({ state: "ready", message: "Echo Live ready" });
+    assert.equal(
+        await page.locator(".screen-band").getAttribute("class"),
+        "screen-band",
+    );
+    assert.equal(await waiting.count(), 0);
+    await page
+        .locator("html")
+        .evaluate((node) => delete node.dataset.echoScreenChrome);
+    await state({ state: "speaking" });
+    assert.equal(await page.locator(".screen-grip, .screen-band").count(), 0);
+    console.log(
+        "A2 paired states: 500ms listening, 100ms thinking steps, 1690ms speaking, first-frame red and 700ms mute, 3 × 1100ms error, dark Ready, zero legacy strips",
+    );
+});
+
+function sample(band, times) {
+    return band.evaluate((node, ms) => {
+        const [animation] = node.getAnimations();
+        animation.pause();
+        return ms.map((time) => {
+            animation.currentTime = time;
+            return getComputedStyle(node).backgroundColor;
+        });
+    }, times);
+}
+
+test("B08: a silent established connection enters waiting within 5 seconds and the real stream recovers", (t) =>
+    verifyOutage(t, 0));
+
+test("B08: a frame during a hung probe keeps the band active and bounds the follow-up", (t) =>
+    verifyOutage(t, 500));
+
+async function verifyOutage(t, frameAfterProbeMs) {
+    const context = await browser.newContext({ serviceWorkers: "block" });
+    context.setDefaultTimeout(5000);
+    t.after(() => context.close());
+    const page = await context.newPage();
+    await page.clock.install({ time: 0 });
+    await page.clock.pauseAt(0);
+    let unreachable = false;
+    const firstHeldCheck = Promise.withResolvers();
+    const heldChecks = [];
+    const heldStream = Promise.withResolvers();
+    let checks = 0;
+    await context.route("**/*", (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (url.origin !== origin) return route.abort();
+        if (url.pathname === "/" && !request.isNavigationRequest()) {
+            checks++;
+            if (unreachable) {
+                heldChecks.push(route);
+                firstHeldCheck.resolve();
+                return;
+            }
+        }
+        if (url.pathname === "/events" && unreachable) {
+            heldStream.resolve(route);
+            return;
+        }
+        return route.continue();
+    });
+    const initialProbe = page.waitForResponse(
+        (response) => response.url() === `${origin}/`,
+    );
+    const initialState = frameAfterProbeMs ? "thinking" : "speaking";
+    command({ state: { state: initialState } });
+    await page.goto(pairedUrl);
+    await initialProbe;
+    await page.locator(`[data-ui-state="${initialState}"]`).waitFor();
+    await page.locator("html").evaluate((node) => {
+        node.dataset.echoScreenChrome = "page";
+    });
+    await chromeState(page, initialState).waitFor();
+    const waiting = page
+        .getByRole("status")
+        .filter({ hasText: "Waiting for bridge" });
+    unreachable = true;
+    await page.clock.runFor(2000);
+    await firstHeldCheck.promise;
+    if (frameAfterProbeMs) {
+        await page.clock.runFor(frameAfterProbeMs);
+        command({ state: { state: "speaking" } });
+        await chromeState(page, "speaking").waitFor();
+    }
+    await page.clock.runFor(frameAfterProbeMs ? 4999 : 2999);
+    assert.equal(await waiting.count(), 0);
+    assert.equal(await chromeState(page, "speaking").count(), 1);
+    await page.clock.runFor(1);
+    await waiting.waitFor();
+    assert.equal(
+        await page.locator(".screen-band").getAttribute("class"),
+        "screen-band",
+    );
+    assert.equal(checks, frameAfterProbeMs ? 3 : 2);
+    const reconnect = await heldStream.promise;
+    unreachable = false;
+    for (const probe of heldChecks) await probe.abort().catch(() => {});
+    command({ state: { state: "listening" } });
+    await reconnect.continue();
+    await chromeState(page, "listening").waitFor();
+    assert.equal(await waiting.count(), 0);
+    assert.equal(await page.locator(".screen-grip").count(), 1);
+    await page.evaluate(() => window.dispatchEvent(new Event("offline")));
+    await waiting.waitFor();
+    command({ state: { state: "muted" } });
+    await chromeState(page, "muted").waitFor();
+    assert.equal(await waiting.count(), 0);
+    console.log(
+        `A2 outage (frame ${frameAfterProbeMs ? "during" : "before"} probe): active through 4999ms, waiting at 5000ms, first valid SSE restores chrome, offline signal clears and recovers`,
+    );
+}
+
 test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and revoked refusal", async (t) => {
     const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },

@@ -1,0 +1,164 @@
+/* The stock grip and band follow the fork's android.c and ring_band.c. */
+:root[data-echo-screen-chrome="page"] {
+    --screen-grip-height: clamp(12px, 1.25vw, 16px);
+    --screen-band-height: clamp(7.5px, 0.78125vw, 10px);
+    --corner-top: var(--screen-grip-height);
+}
+[data-echo-screen-chrome="page"] main.settings-open {
+    padding-bottom: max(var(--space-2), var(--screen-band-height));
+}
+[data-echo-screen-chrome="page"] .screen-pack .home-tap {
+    inset-block: var(--screen-grip-height) max(8px, var(--screen-band-height));
+}
+.screen-grip,
+.screen-band {
+    position: fixed;
+    inset-inline: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: #000;
+}
+.screen-grip {
+    top: 0;
+    height: var(--screen-grip-height);
+    display: grid;
+    place-items: center;
+}
+.screen-grip::after {
+    content: "";
+    width: clamp(33px, 3.4375vw, 44px);
+    height: clamp(3px, 0.3125vw, 4px);
+    border-radius: 2px;
+    background: #3a3f47;
+}
+.screen-band {
+    --band-blue: #0000ff;
+    --band-cyan: #00ffff;
+    --band-red: #ff0000;
+    bottom: 0;
+    height: var(--screen-band-height);
+}
+.band-listening {
+    background-image: linear-gradient(
+        90deg,
+        var(--band-blue) 28%,
+        var(--band-cyan) 40% 60%,
+        var(--band-blue) 72%
+    );
+    animation: band-listening 500ms ease-out;
+}
+@keyframes band-listening {
+    from {
+        clip-path: polygon(
+            0 0,
+            100% 0,
+            100% 100%,
+            100% 100%,
+            100% 0,
+            0 0,
+            0 100%,
+            0 100%
+        );
+    }
+    to {
+        clip-path: polygon(
+            0 0,
+            100% 0,
+            100% 100%,
+            50% 100%,
+            50% 0,
+            50% 0,
+            50% 100%,
+            0 100%
+        );
+    }
+}
+.band-thinking {
+    background-image: repeating-linear-gradient(
+        90deg,
+        var(--band-blue) 0 calc(100% / 12),
+        var(--band-cyan) calc(100% / 12) calc(100% / 6)
+    );
+}
+.band-thinking::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: repeating-linear-gradient(
+        90deg,
+        var(--band-cyan) 0 calc(100% / 12),
+        var(--band-blue) calc(100% / 12) calc(100% / 6)
+    );
+    animation: band-thinking 200ms steps(1, end) infinite;
+}
+@keyframes band-thinking {
+    0%,
+    100% {
+        opacity: 0;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+.band-speaking {
+    background-color: var(--band-cyan);
+    animation: band-speaking 1690ms ease-in-out infinite;
+}
+@keyframes band-speaking {
+    0%,
+    100% {
+        background-color: var(--band-cyan);
+    }
+    50% {
+        background-color: var(--band-blue);
+    }
+}
+.band-muted {
+    background-color: #990000;
+    animation: band-muted 700ms ease-out;
+}
+@keyframes band-muted {
+    0%,
+    2.4% {
+        background-color: var(--band-red);
+    }
+}
+.band-error {
+    animation: band-error 1100ms ease-in-out 3;
+}
+@keyframes band-error {
+    50% {
+        background-color: #e60000;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .screen-band,
+    .screen-band::after {
+        animation: none;
+    }
+    .band-thinking::after {
+        opacity: 0;
+    }
+    .band-muted {
+        background-color: var(--band-red);
+    }
+    .band-error {
+        background-color: #e60000;
+    }
+}
+.screen-bridge-status {
+    position: fixed;
+    bottom: 26px;
+    left: 50%;
+    z-index: 3;
+    transform: translateX(-50%);
+    min-height: 0;
+    margin: 0;
+    padding: 8px 16px;
+    background: #101827;
+    color: #f4f7ff;
+    pointer-events: none;
+}
+.screen-bridge-status:empty {
+    padding: 0;
+}
