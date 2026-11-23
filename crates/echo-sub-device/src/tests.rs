@@ -10,15 +10,17 @@ fn apply(state: &mut DeviceState, generation: u64, change: DeviceEvent) -> Optio
         PausedClock::new(UNIX_EPOCH).now(),
         &mut out,
     );
-    out.take().map(
-        |Command::ApplyDeviceView {
-             generation: published,
-             view,
-         }| {
-            assert_eq!(published, generation);
-            view
-        },
-    )
+    out.take().and_then(|command| {
+        let Command::ApplyDeviceView {
+            generation: published,
+            view,
+        } = command
+        else {
+            return None;
+        };
+        assert_eq!(published, generation);
+        Some(view)
+    })
 }
 
 #[test]

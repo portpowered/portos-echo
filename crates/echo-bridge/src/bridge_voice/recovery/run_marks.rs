@@ -211,7 +211,7 @@ impl Source {
         if self.follow_up != FollowUp::Replied
             || self.delegation.waiting()
             || self.controller.speaking()
-            || self.mouth.voiced()
+            || self.reply.voiced()
         {
             return None;
         }

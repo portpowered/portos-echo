@@ -2,20 +2,17 @@ use echo_audio::{FrameQueue, Pacer};
 use std::time::Duration;
 use tokio::time::Instant;
 
+#[cfg(test)]
+mod playout_tests;
 mod reply_barge;
-mod reply_ear;
-mod reply_jitter;
 pub(crate) mod reply_lips;
-mod reply_playout;
 
+pub use echo_sub_pacer::{Heard, LipStats};
+pub(crate) use echo_sub_pacer::{PERIOD, Playout, QUIET};
 pub use reply_barge::BargeTrigger;
 #[cfg(test)]
 pub(crate) use reply_barge::{BARGE_QUIET, BARGE_WINDOW};
 pub(crate) use reply_barge::{Barge, Floor, Question};
-pub(crate) use reply_ear::Ear;
-pub use reply_ear::Heard;
-pub use reply_lips::LipStats;
-pub(crate) use reply_playout::{ClockPacer, PERIOD, Playout, QUIET};
 
 /// Initial playback credit followed by the existing no-catch-up 20 ms pacer.
 pub(crate) struct LeadPacer {
@@ -161,8 +158,6 @@ pub(crate) struct ReplyMeter {
     restarted: bool,
     /// When the pending hold began, and how long the Echo then still played.
     holding: Option<(Instant, u32)>,
-    /// The call's arrival lateness; it outlives each reply's window.
-    jitter: reply_jitter::Jitter,
     targeted: bool,
 }
 
@@ -171,18 +166,8 @@ fn millis(duration: Duration) -> u32 {
 }
 
 impl ReplyMeter {
-    /// The meter of a call on the Echo: its first reply starts on the
-    /// cushion such calls have needed, not on the floor.
-    pub(crate) fn call() -> Self {
-        Self {
-            jitter: reply_jitter::Jitter::expecting(reply_jitter::EXPECTED_MS),
-            ..Self::default()
-        }
-    }
-
-    /// One reply frame was accepted at `now`. Returns the playout cushion
-    /// the call's lateness asks for.
-    pub(crate) fn arrived(&mut self, now: Instant) -> Duration {
+    /// One reply frame was accepted at `now`.
+    pub(crate) fn arrived(&mut self, now: Instant) {
         if let Some(last) = self.arrived.replace(now) {
             let gap = now.saturating_duration_since(last);
             self.quality.arrival_gap_max_ms = self.quality.arrival_gap_max_ms.max(millis(gap));
@@ -190,8 +175,6 @@ impl ReplyMeter {
                 self.quality.late_arrivals += 1;
             }
         }
-        self.jitter.arrived(now);
-        self.jitter.target(now)
     }
 
     /// The cushion the pacer put in force for the frame just accepted.
@@ -265,8 +248,6 @@ impl ReplyMeter {
         };
         *count += 1;
         self.quality.discarded_audible += u32::from(audible);
-        // The audio clock does not run through frames that were never queued.
-        self.jitter.rest();
     }
 
     /// A barge-in cut the reply: the device was flushed and plays again from
@@ -307,11 +288,8 @@ impl ReplyMeter {
     pub(crate) fn settle(&mut self, lost: u64) -> ReplyQuality {
         let mut quality = std::mem::take(&mut self.quality);
         quality.rtp_lost = lost.saturating_sub(self.lost);
-        let mut jitter = std::mem::take(&mut self.jitter);
-        jitter.rest();
         *self = Self {
             lost,
-            jitter,
             ..Self::default()
         };
         quality

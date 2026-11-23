@@ -11,12 +11,7 @@ use crate::bridge_settings::{
     SettingsCompletion, SettingsHost, SettingsService, openai_account::Account, portos_permissions::PortosPermissions,
     settings_restart::replacement_pending,
 };
-use crate::{
-    Error,
-    bridge_health::Health,
-    bridge_runtime::{bridge_pacing::reply_lips, bridge_screen::Screen},
-    bridge_trace::Trace,
-};
+use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
 use echo_config::{LiveMode, ScreenConfig};
 use echo_link::LinkConnector;
 use echo_media::MediaPeer;
@@ -246,6 +241,7 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
     };
     screen.supervise_actions(health.state.subscribe());
     let settings_trace = trace.clone();
+    let world = trace.world();
     let mut view = View::new(&screen, &health, &mut trace)
         .with_screen_account(service.is_some() && options.host.mode == LiveMode::Chatgpt);
     let requested = Cell::new(false);
@@ -259,7 +255,8 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
         account.clone(),
     );
     let lips = screen.lips(options.screen);
-    let work = Box::pin(reply_lips::scope(
+    let work = Box::pin(crate::bridge_world::scope(
+        world,
         lips,
         work(options, connector, &mut peer, cancelled, &mut view, &requested, &link),
     ));

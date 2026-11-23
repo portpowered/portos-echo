@@ -1,11 +1,13 @@
 //! The synchronous World interface shared by the controller and its services.
 mod clock;
 mod device;
+mod pacer;
 mod rng;
 mod trace;
 
 pub use clock::{Clock, Now, PausedClock, SystemClock};
 pub use device::{CapturePrivacy, DeviceControl, DeviceEvent, DeviceState, DeviceView, LinkState};
+pub use pacer::*;
 pub use rng::{EntropyUnavailable, OsRng, Rng, SeededRng};
 pub use trace::{PendingTrace, TraceDrain, TraceFailure, TraceRow};
 
@@ -16,6 +18,7 @@ pub enum Event {
     TraceRow(Option<PendingTrace>),
     TraceFlushed { through: u64 },
     TraceFailed,
+    Pacer(PacerEvent),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -24,22 +27,29 @@ pub enum EventKind {
     TraceRow,
     TraceFlushed,
     TraceFailed,
+    Pacer,
 }
 
 pub enum Command {
     ApplyDeviceView { generation: u64, view: DeviceView },
+    Pacer(PacerCommand),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CommandKind {
     ApplyDeviceView,
     DrainTrace,
+    WriteFrame,
+    LipBatch,
+    MouthChanged,
+    PlayoutFinished,
 }
 
 #[derive(Default)]
 pub struct Commands {
     device: Option<Command>,
     drain_trace: bool,
+    pacer: PacerCommands,
 }
 
 impl Commands {
@@ -57,6 +67,14 @@ impl Commands {
 
     pub fn take_trace_wake(&mut self) -> bool {
         std::mem::take(&mut self.drain_trace)
+    }
+
+    pub fn pacer(&mut self) -> &mut PacerCommands {
+        &mut self.pacer
+    }
+
+    pub fn take_pacer(&mut self) -> PacerCommands {
+        std::mem::take(&mut self.pacer)
     }
 }
 
@@ -81,38 +99,41 @@ pub trait Subsystem {
     fn check(state: &Self::State) -> Result<(), Broken>;
 }
 
-pub struct World<D: Subsystem, T: Subsystem, C, R> {
+pub struct World<D: Subsystem, P: Subsystem, T: Subsystem, C, R> {
     pub device: D::State,
+    pub pacer: P::State,
     pub trace: T::State,
     pub clock: C,
     pub rng: R,
 }
 
-impl<D: Subsystem, T: Subsystem, C: Clock, R: Rng> World<D, T, C, R> {
+impl<D: Subsystem, P: Subsystem, T: Subsystem, C: Clock, R: Rng> World<D, P, T, C, R> {
     pub fn step(&mut self, event: &mut Event, out: &mut Commands) {
         let now = self.clock.now();
         D::on_event(&mut self.device, event, now, out);
+        P::on_event(&mut self.pacer, event, now, out);
         T::on_event(&mut self.trace, event, now, out);
     }
 
-    pub fn tick(&mut self, out: &mut Commands) {
-        let now = self.clock.now();
-        D::on_tick(&mut self.device, now, out);
-        T::on_tick(&mut self.trace, now, out);
+    pub fn tick_trace(&mut self, out: &mut Commands) {
+        T::on_tick(&mut self.trace, self.clock.now(), out);
+    }
+
+    /// Tick the mouth on its own wake, independent of PCM offers and trace flushes.
+    pub fn tick_pacer(&mut self, out: &mut Commands) {
+        P::on_tick(&mut self.pacer, self.clock.now(), out);
     }
 
     #[must_use]
-    pub fn next_deadline(&self) -> Option<Duration> {
-        D::next_deadline(&self.device)
-            .into_iter()
-            .chain(T::next_deadline(&self.trace))
-            .min()
+    pub fn trace_deadline(&self) -> Option<Duration> {
+        T::next_deadline(&self.trace)
     }
 
     /// # Errors
     /// Reports the first broken invariant, if any.
     pub fn check(&self) -> Result<(), Broken> {
         D::check(&self.device)?;
+        P::check(&self.pacer)?;
         T::check(&self.trace)
     }
 }

@@ -878,8 +878,8 @@ duration errors; pacing bounds queued speaker audio so a future interruption nee
 [call_audio.rs](../crates/echo-bridge/src/bridge_codex/call_audio.rs) uses
 [echo-audio](../crates/echo-audio/src/audio_pcm.rs) for PCM conversion;
 [media_audio.rs](../crates/echo-media/src/media_audio.rs) owns Rubato/Opus and
-[ClockPacer](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_playout.rs) schedules reply chunks
-towards the target of the [jitter estimate](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_jitter.rs).
+[ClockPacer](../crates/echo-sub-pacer/src/reply_playout.rs) schedules reply chunks
+towards the target of the [jitter estimate](../crates/echo-sub-pacer/src/reply_jitter.rs).
 
 #### Limits and plans — Audio formats and resampling
 
@@ -1030,7 +1030,7 @@ and that delay is the session's. From the sign the Echo plays out only the lead 
 it per cut: `silent_ms` from the sign to the last reply frame the Echo played, `cut_ms` from the sign to the
 cut, and `text`, the transcript the session gave, which shows whether it heard the user or the Echo's own
 speaker. The bridge still measures the microphone under each reply
-([reply_ear.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_ear.rs)) and reports it in
+([reply_ear.rs](../crates/echo-sub-pacer/src/reply_ear.rs)) and reports it in
 `reply.quality` `mic`; the measurement decides nothing.
 
 The pinned session's turn detection and noise reduction cannot be set by a client. The V3 session update
@@ -1311,7 +1311,7 @@ in a crate do not imply the configured voice owner calls them.
 | echo-agent-api | [Task/backend/tool traits](../crates/echo-agent-api/src/lib.rs), [0007](adr/0007-echo-agent-api.md) | In-process consumers; no runtime of its own | contracts |
 | echo-agent-loop | [Retained Responses backend](../crates/echo-agent-loop/src/lib.rs), [0013](adr/0013-echo-agent-loop.md) | PC legacy/Muse/provider consumers; superseded for configured Codex voice | agent-api, contracts, config |
 | echo-audio | [PCM conversion, Opus, queues/pacer](../crates/echo-audio/src/lib.rs), [0008](adr/0008-echo-audio.md) | Bridge host | contracts |
-| echo-bridge | [Conversation executable and orchestration](../crates/echo-bridge/src/lib.rs), [0024](adr/0024-echo-bridge.md) | PC today; Echo W4 | codex, core-api, device, sub-device, media, agent-api, link, agent-loop, delegation, mcp-client, mcp-auth, audio, config, contracts, live, screen-contract, screen-server, signin, wyoming |
+| echo-bridge | [Conversation executable and orchestration](../crates/echo-bridge/src/lib.rs), [0024](adr/0024-echo-bridge.md) | PC today; Echo W4 | codex, core-api, device, sub-device, sub-pacer, media, agent-api, link, agent-loop, delegation, mcp-client, mcp-auth, audio, config, contracts, live, screen-contract, screen-server, signin, wyoming |
 | echo-device | [Rust Wyoming protocol and device role](../crates/echo-device/src/lib.rs), [0034](adr/0034-vendored-device-satellite.md) | Wyoming event dispatch and publication over the existing TCP wire | echo-device-sys |
 | echo-device-sys | [C satellite build and protocol callback boundary](../crates/echo-device-sys/src/lib.rs), [0034](adr/0034-vendored-device-satellite.md) | Pinned framing and native core with Linux file audio and athena Android audio | cc (build) |
 | echo-chatgpt-auth | [Retained independent credential source](../crates/echo-chatgpt-auth/src/lib.rs), [0015](adr/0015-chatgpt-auth.md) | Legacy/Muse/sign-in adapters on bridge host | config, contracts |
@@ -1333,6 +1333,7 @@ in a crate do not imply the configured voice owner calls them.
 | echo-signin | [Writer-based commands and Codex account adapter](../crates/echo-signin/src/lib.rs), [0018](adr/0018-signin.md), [0026](adr/0026-codex-client.md) | Bridge/operator command process | codex, live, agent-loop, contracts, config, chatgpt-auth |
 | echo-spoof-mcp | [Deterministic MCP library/executable](../crates/echo-spoof-mcp/src/lib.rs), [0014](adr/0014-mcp-http.md) | Local tests/CI | contracts |
 | echo-sub-device | [Device reducer and World invariants](../crates/echo-sub-device/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
+| echo-sub-pacer | [Fixed reply ring, paced playout and mouth timing](../crates/echo-sub-pacer/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api, audio |
 | echo-sub-trace | [Bounded trace queue and deadline](../crates/echo-sub-trace/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-svc-trace | [Trace JSONL writer and file lifecycle](../crates/echo-svc-trace/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-wyoming | [Bounded duplex client and link adapter](../crates/echo-wyoming/src/lib.rs), [0012](adr/0012-echo-wyoming.md), [0025](adr/0025-echo-link.md) | Bridge host | link, contracts, core-api |

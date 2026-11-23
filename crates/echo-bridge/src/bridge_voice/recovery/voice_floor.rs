@@ -6,7 +6,7 @@
 //! What the bridge adds is the hold and the flush of the audio it has queued
 //! for the device. `voice.local_barge_cut` off leaves the yield to the model.
 use super::{Error, Source, VoicePort};
-use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Cut, reply_lips};
+use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Cut};
 use crate::bridge_voice::voice_wait::{Delegation, Mark, run_marks};
 use tokio::time::Instant;
 
@@ -27,7 +27,7 @@ impl Source {
         // Nobody talks over a reply that has not sounded yet, and a reply
         // that has is not talked over by its own question.
         let over = match trigger {
-            BargeTrigger::UserTranscript => self.question.transcribed(whole, replying && self.ear.sounded()),
+            BargeTrigger::UserTranscript => self.question.transcribed(whole, replying && self.reply.sounded()),
             BargeTrigger::SpeechStarted => self.question.speech_started(),
         };
         if over && replying {
@@ -106,10 +106,8 @@ impl Source {
         self.stale = true;
         self.question.cut();
         port.retire_audio();
-        self.fresh_reply()?;
+        self.fresh_reply(true)?;
         self.delegation = Delegation::default();
-        self.mouth = super::Mouth::default();
-        reply_lips::cut(Instant::now());
         self.controller.cut();
         Ok(())
     }

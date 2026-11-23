@@ -2,23 +2,16 @@ use super::{Error, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
 #[cfg(test)]
 use crate::bridge_runtime::bridge_pacing::BargeTrigger;
-use crate::bridge_runtime::bridge_pacing::{Barge, Cut, Discard, Ear, QUIET, ReplyMeter, ReplyQuality};
+use crate::bridge_runtime::bridge_pacing::{Barge, Cut, Discard, QUIET, ReplyMeter, ReplyQuality};
 use crate::bridge_runtime::bridge_pacing::{Floor, Question};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
-#[cfg(test)]
-use tokio::time::Duration;
 use tokio::time::Instant;
 
 #[path = "recovery/voice_floor.rs"]
 mod voice_floor;
-#[path = "earcon/voice_mouth.rs"]
-mod voice_mouth;
 pub use super::voice_wait::Delegation;
-pub use voice_mouth::Mouth;
-#[cfg(test)]
-use voice_mouth::{FRAME, OUTPUT_DELAY};
 
 /// Thirty seconds of 20 ms frames: above the setup capture's own bound.
 const UPLINK_BACKLOG: usize = 1500;
@@ -60,9 +53,7 @@ pub(super) struct Source {
     pub reply: ReplyAudio,
     pub controller: Controller,
     pub failure: &'static str,
-    lead_ms: u16,
     pub delegation: Delegation,
-    pub mouth: Mouth,
     pub meter: ReplyMeter,
     pub stats: Stats,
     pub session: super::session_tools::Grants,
@@ -83,8 +74,6 @@ pub(super) struct Source {
     barge: Barge,
     /// A barge-in cut the reply: call audio is its until the model speaks again.
     stale: bool,
-    /// Measures the microphone under the reply for `reply.quality`; decides nothing.
-    ear: Ear,
     /// The session's transcript of the turn the reply answers.
     question: Question,
     /// One cut per user turn.
@@ -95,9 +84,8 @@ impl Source {
     pub fn resume_reply(&mut self) -> Result<(), Error> {
         self.controller.resume()?;
         self.marks.reopened();
-        self.fresh_reply()?;
+        self.fresh_reply(false)?;
         self.delegation = self.delegation.carried();
-        self.mouth = Mouth::default();
         self.barge = Barge::default();
         Ok(())
     }
@@ -108,7 +96,7 @@ impl Source {
     /// answer is on its way, and always clears before that reply's audio ends.
     /// The device drops it itself when the run ends.
     pub(super) fn thinking_change(&mut self) -> Option<bool> {
-        let wanted = !self.mouth.voiced() && (self.thinking || self.delegation.in_flight());
+        let wanted = !self.reply.voiced() && (self.thinking || self.delegation.in_flight());
         (wanted != self.thinking).then(|| {
             self.thinking = wanted;
             wanted
@@ -116,10 +104,9 @@ impl Source {
     }
 
     /// Replace the reply queue and its pacer, keeping what they counted.
-    fn fresh_reply(&mut self) -> Result<(), Error> {
+    pub(super) fn fresh_reply(&mut self, cut: bool) -> Result<(), Error> {
         self.stats.reply_dropped += self.reply.dropped_frames();
-        self.meter.paced(self.reply.take_playout());
-        self.reply = ReplyAudio::new(self.lead_ms)?;
+        self.meter.paced(self.reply.reset(cut)?);
         Ok(())
     }
 
@@ -154,11 +141,11 @@ impl Source {
 
     /// Close the reply's quality window. `lost` is the call's cumulative RTP loss.
     pub fn settle(&mut self, lost: u64) -> ReplyQuality {
-        self.reply.hush();
-        self.meter.paced(self.reply.take_playout());
+        let pacer = self.reply.settle();
+        self.meter.paced(pacer.playout);
         let mut quality = self.meter.settle(lost);
-        quality.mic = self.ear.rest();
-        quality.lips = crate::bridge_runtime::bridge_pacing::reply_lips::settle(Instant::now());
+        quality.mic = pacer.heard;
+        quality.lips = pacer.lip_stats;
         if quality.cuts == 0 {
             self.stats.cut = None;
             self.question = Question::default();
@@ -167,18 +154,28 @@ impl Source {
     }
 
     /// One reply frame was handed to the Echo.
-    pub fn wrote(&mut self, frame: &[u8]) {
+    pub fn wrote(&mut self) {
         let now = Instant::now();
-        self.mouth.wrote(frame, now);
+        self.reply.handed();
         // A reply being spoken is an answer. The no-answer window covers the
         // wait for one, and the next quiet inside it, never the speech itself.
-        if self.mouth.voiced()
+        if self.reply.voiced()
             && let Ok(due) = self.controller.replacement_deadline()
         {
             self.answer_due = self.answer_due.max(due);
         }
         self.meter.wrote(now);
-        self.ear.played(frame, now);
+    }
+
+    pub(super) fn played(&mut self, stopped: bool) -> Result<bool, Error> {
+        let receipt = match self.controller.played(stopped) {
+            Ok(false) => return Ok(false),
+            Ok(true) if self.reply.played() => return Ok(true),
+            Ok(true) => Error::Wyoming,
+            Err(error) => error,
+        };
+        self.failure = "premature_played";
+        Err(receipt)
     }
 
     /// A dispatch that finished while listening gives its answer a fresh
@@ -198,22 +195,19 @@ impl Source {
             reply: ReplyAudio::new(lead_ms)?,
             controller: Controller::default(),
             failure: "playback",
-            lead_ms,
             delegation: Delegation::default(),
-            mouth: Mouth::default(),
             thinking: false,
             user_speech: UserSpeech::Quiet,
             marks: super::voice_wait::Marks::default(),
             answer_due: Instant::now(),
             follow_up: FollowUp::First,
             run_ceiling: None,
-            meter: meter(),
+            meter: ReplyMeter::default(),
             stats: Stats::default(),
             session: super::session_tools::Grants::default(),
             uplink: VecDeque::new(),
             barge: Barge::default(),
             stale: false,
-            ear: Ear::default(),
             question: Question::default(),
             floor: Floor::default(),
         })
@@ -240,9 +234,7 @@ impl Source {
         }
         self.stale = true;
         port.retire_audio();
-        self.fresh_reply()?;
-        self.mouth = Mouth::default();
-        crate::bridge_runtime::bridge_pacing::reply_lips::cut(Instant::now());
+        self.fresh_reply(true)?;
         self.controller.cut();
         Ok(false)
     }
@@ -272,7 +264,7 @@ impl Source {
         let microphone = self.microphone.as_mut().ok_or(Error::Audio)?;
         for frame in microphone.process(&frame.format, &frame.payload)? {
             // The microphone is measured, never judged: every frame goes up.
-            self.ear.heard(&frame, Instant::now());
+            self.reply.microphone(&frame);
             self.forward(&frame, port)?;
         }
         Ok(false)
@@ -331,34 +323,20 @@ impl Source {
             // opens Speaking; the initial user transcript can lag audible RTP.
             let now = Instant::now();
             let held = self.barge.pending();
-            self.barge.heard(now, audible(frame));
+            let audible = audible(frame);
+            self.barge.heard(now, audible);
             if held && !self.barge.pending() {
                 self.meter.released(now);
             }
-            if audible(frame) {
-                self.reply.speak();
-            }
-            let wanted = self.meter.arrived(now);
-            self.meter.targeted(self.reply.retarget(wanted));
+            self.meter.arrived(now);
+            self.meter.targeted(self.reply.arrived(audible));
             return self.reply.push(frame);
         };
         let audible = audible(frame);
         self.meter.discarded(reason, audible);
+        self.reply.discarded();
         Ok(())
     }
-}
-
-/// A call's first reply starts on the cushion calls on the Echo have needed.
-#[cfg(not(test))]
-fn meter() -> ReplyMeter {
-    ReplyMeter::call()
-}
-
-/// This crate's unit tests script their bursts against the floor; the T3
-/// tests run the call's own start (`bridge_reply_start.rs`).
-#[cfg(test)]
-fn meter() -> ReplyMeter {
-    ReplyMeter::default()
 }
 
 /// The call frame holds more than WebRTC silence.

@@ -5,7 +5,7 @@
 //! closed), and only the run's end publishes Ready.
 use super::*;
 use crate::bridge_mcp::bridge_presentation::Presentation;
-use crate::bridge_voice::{voice_listen::playout_notice, voice_source::Mouth};
+use crate::{bridge_codex::ReplyAudio, bridge_voice::voice_listen::playout_notice};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
 
@@ -16,15 +16,15 @@ fn frame(level: i16) -> Vec<u8> {
 }
 
 /// Queue `count` 20 ms frames on the Echo now; they play back to back.
-fn write(mouth: &mut Mouth, count: u64, level: i16) {
+fn write(mouth: &mut ReplyAudio, count: u64, level: i16) {
     for _ in 0..count {
-        mouth.wrote(&frame(level), Instant::now());
+        mouth.test_handoff(&frame(level));
     }
 }
 
 struct Run {
     start: Instant,
-    mouth: Mouth,
+    mouth: ReplyAudio,
     receive: mpsc::Receiver<UiState>,
     timeline: Timeline,
 }
@@ -39,9 +39,9 @@ impl Run {
 
     /// Play out everything queued on the mouth, projecting each notice.
     async fn play(&mut self, view: &mut View<'_>) {
-        while let Some(due) = self.mouth.due() {
+        while let Some(due) = self.mouth.mouth_due() {
             tokio::time::advance(due.saturating_duration_since(Instant::now())).await;
-            if let Some(notice) = playout_notice(&mut self.mouth, false) {
+            if let Some(notice) = playout_notice(&self.mouth, false) {
                 view.observe(ServeNotice::Session(SessionNotice::Run(notice))).unwrap();
                 self.collect();
             }
@@ -76,7 +76,7 @@ async fn run(gaps: &[u64], silence: u64) -> Timeline {
     let mut view = View::new(&screen, &health, &mut trace);
     let mut harness = Run {
         start: Instant::now(),
-        mouth: Mouth::default(),
+        mouth: ReplyAudio::mouth_fixture(),
         receive,
         timeline: Vec::new(),
     };
@@ -88,7 +88,7 @@ async fn run(gaps: &[u64], silence: u64) -> Timeline {
         write(&mut harness.mouth, 25, 1000);
     }
     // The whole reply is written: its last sound closes the mouth.
-    harness.mouth.settle();
+    harness.mouth.mouth_settle();
     harness.play(&mut view).await;
     tokio::time::advance(Duration::from_millis(silence)).await;
     harness.complete(&mut view);

@@ -1,16 +1,77 @@
 use super::*;
+use crate::bridge_runtime::bridge_pacing::reply_lips::{LipSink, Lips};
 use echo_link::{
     LinkConnector,
     fake::{Command, FakeConnector, Observer},
 };
+use echo_screen_contract::mouth::MouthBatch;
 use std::{
     cell::{Cell, RefCell},
     future::poll_fn,
     pin::Pin,
+    sync::{Arc, Mutex},
     task::Poll,
     time::Duration,
 };
 use tokio::{sync::mpsc, time::Instant};
+
+struct RemoteEndScreen(Arc<Mutex<Vec<MouthBatch>>>);
+
+impl LipSink for RemoteEndScreen {
+    fn wanted(&self) -> Option<bool> {
+        Some(true)
+    }
+
+    fn send(&self, batch: &MouthBatch) -> usize {
+        self.0.lock().unwrap().push(batch.clone());
+        1
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn remote_end_discards_staged_and_queued_pcm_without_a_lip_cut() {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let lips = Lips::new(Box::new(RemoteEndScreen(sent.clone())), Duration::from_millis(200));
+    let stepped = crate::bridge_mcp::bridge_clock::receipt::Context::for_voice_test();
+    let (_tx, rx) = mpsc::channel(1);
+    let mut port = Port(rx, std::rc::Rc::default());
+    crate::bridge_world::scope(crate::bridge_world::Controller::new(), Some(lips), async {
+        let mut source = stepped.owning(async { Source::new(u16::MAX, false).unwrap() }).await;
+        let frame = [0x20, 0x1f].repeat(480);
+        for _ in 0..7 {
+            source.reply.test_handoff(&frame);
+        }
+        let before = sent.lock().unwrap().clone();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].samples.len(), 5);
+        assert!(before[0].samples.iter().all(|sample| sample.open > 0));
+
+        let frame = frame.try_into().unwrap();
+        source.reply.push_pcm(&frame);
+        source.reply.push_pcm(&frame);
+        assert_eq!(source.reply.stage(false).await, Some(frame));
+        source.reply.finish().unwrap();
+        assert!(source.reply.has_frames());
+        assert!(!source.reply.drained());
+
+        assert_eq!(remote_cut(&mut port, &mut source), Err(Error::Control));
+        assert!(source.session.ending());
+        assert!(source.reply.drained());
+        assert_eq!(source.reply.stage(false).await, None);
+        assert_eq!(*sent.lock().unwrap(), before);
+
+        let quality = source.settle(0);
+        let after = sent.lock().unwrap();
+        assert_eq!((quality.lips.batches, quality.lips.samples, after.len()), (2, 7, 2));
+        let sample_times: Vec<_> = after[1]
+            .samples
+            .iter()
+            .map(|sample| (sample.at_ms, sample.open))
+            .collect();
+        assert_eq!(sample_times, [(300, 100), (320, 100)]);
+    })
+    .await;
+}
 
 struct Port(
     mpsc::Receiver<MediaEvent>,

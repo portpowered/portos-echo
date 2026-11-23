@@ -207,7 +207,7 @@ pub(super) async fn close<L: echo_link::EchoLink>(
     use echo_link::{LinkEvent, LinkEvents};
     let (events, microphone) = input;
     let work = async {
-        source.controller.begin_close(source.mouth.due().is_none())?;
+        source.controller.begin_close(source.reply.mouth_due().is_none())?;
         client.end_run().await?;
         while !source.controller.microphone_finished() {
             tokio::select! {
@@ -222,8 +222,8 @@ pub(super) async fn close<L: echo_link::EchoLink>(
                 },
             }
         }
-        source.controller.finish_close(source.mouth.due().is_none())?;
-        if source.controller.complete(true, source.mouth.due().is_none()) {
+        source.controller.finish_close(source.reply.mouth_due().is_none())?;
+        if source.controller.complete(true, source.reply.mouth_due().is_none()) {
             Ok(())
         } else {
             Err(Error::Wyoming)

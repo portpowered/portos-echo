@@ -1,15 +1,18 @@
-//! A1 session composition. Services share the ordered device and trace World.
+//! The session controller composes the ordered device, pacer and trace World.
 use echo_core_api::{
     Broken, Clock, Command, Commands, DeviceControl, DeviceEvent, DeviceState, DeviceView, EntropyUnavailable, Event,
     Now, OsRng, PendingTrace, Rng, SeededRng, TraceDrain, TraceFailure, World,
 };
 use echo_link::LinkConnector;
 use echo_sub_device::Device;
+use echo_sub_pacer::Pacer;
 use echo_wyoming::{ClientOptions, Endpoint};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::time::Instant;
 
+mod pacer;
 pub mod witness;
+pub(crate) use pacer::{PacerPort, scope};
 use witness::Witness;
 
 struct BridgeClock {
@@ -44,7 +47,7 @@ impl Rng for SessionRng {
     }
 }
 
-type SessionWorld = World<Device, echo_sub_trace::Trace, BridgeClock, SessionRng>;
+type SessionWorld = World<Device, Pacer, echo_sub_trace::Trace, BridgeClock, SessionRng>;
 
 struct State {
     world: SessionWorld,
@@ -63,11 +66,16 @@ impl Controller {
     }
 
     fn with_witness(witness: Option<Witness>) -> Arc<Self> {
+        Self::with_pacer(witness, echo_sub_pacer::State::default())
+    }
+
+    fn with_pacer(witness: Option<Witness>, pacer: echo_sub_pacer::State) -> Arc<Self> {
         let seed = witness.as_ref().and_then(|witness| witness.seed);
         Arc::new(Self {
             state: Mutex::new(State {
                 world: World {
                     device: DeviceState::default(),
+                    pacer,
                     trace: echo_sub_trace::State::default(),
                     clock: BridgeClock {
                         start: Instant::now(),
@@ -100,7 +108,7 @@ impl Controller {
         self.check_step(state);
         match commands.take() {
             Some(Command::ApplyDeviceView { view, .. }) => view,
-            None => state.world.device.view(generation),
+            _ => state.world.device.view(generation),
         }
     }
 
@@ -134,7 +142,7 @@ impl Controller {
     pub(crate) fn trace_tick(&self) -> bool {
         let mut out = Commands::default();
         let mut state = self.state();
-        state.world.tick(&mut out);
+        state.world.tick_trace(&mut out);
         self.check_step(&mut state);
         out.take_trace_wake()
     }
@@ -143,7 +151,7 @@ impl Controller {
         let state = self.state();
         let world = &state.world;
         world
-            .next_deadline()
+            .trace_deadline()
             .and_then(|deadline| world.clock.start.checked_add(deadline))
     }
 

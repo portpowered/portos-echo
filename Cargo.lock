@@ -837,6 +837,7 @@ dependencies = [
  "echo-signin",
  "echo-spoof-mcp",
  "echo-sub-device",
+ "echo-sub-pacer",
  "echo-sub-trace",
  "echo-svc-trace",
  "echo-wyoming",
@@ -1152,6 +1153,14 @@ dependencies = [
 name = "echo-sub-device"
 version = "0.1.0"
 dependencies = [
+ "echo-core-api",
+]
+
+[[package]]
+name = "echo-sub-pacer"
+version = "0.1.0"
+dependencies = [
+ "echo-audio",
  "echo-core-api",
 ]
 

@@ -1,12 +1,12 @@
 //! PCM boundaries for the run owner; media owns Opus and the 48 kHz track.
-use crate::{
-    Error,
-    bridge_runtime::bridge_pacing::{ClockPacer, Playout},
-};
-use echo_audio::{FrameQueue, PcmResampler};
+use crate::{Error, bridge_world::PacerPort};
+use echo_audio::PcmResampler;
+use echo_core_api::{Command, PacerCommand, PacerEvent, ReplyFrame};
 use echo_link::PcmFormat;
 use echo_media::PcmFrame;
-use std::num::NonZeroUsize;
+use echo_sub_pacer::{Heard, LipStats, Playout, State};
+use std::time::Duration;
+use tokio::time::Instant;
 
 struct Converter {
     resampler: PcmResampler,
@@ -121,140 +121,242 @@ fn frame_capture(pending: &mut Vec<i16>, samples: &[i16], frames: &mut Vec<PcmFr
     }
 }
 
-/// Bounded Wyoming PCM24 reply queue, paced on the audio clock up to the lead.
-/// `finish` is legal only after the caller has drained accepted media; transcript
-/// completion alone cannot establish that. Empty/drained never proves `played`.
+/// Resampling and the synchronous service port to the World-owned reply.
 pub struct ReplyAudio {
     converter: Converter,
-    queue: FrameQueue<Vec<u8>>,
-    partial: Vec<u8>,
-    pacer: ClockPacer<Vec<u8>>,
-    finished: bool,
-    /// The reply has taken audible audio: it is speaking, not just opened.
-    spoken: bool,
+    port: PacerPort,
+    scratch: Option<Box<ReplyFrame>>,
+    partial: usize,
+    microphone: Option<Box<PcmFrame>>,
+}
+
+pub(crate) struct ReplySettlement {
+    pub(crate) playout: Playout,
+    pub(crate) heard: Heard,
+    pub(crate) lip_stats: LipStats,
+}
+
+fn reply_converter() -> Result<Converter, Error> {
+    Converter::new(crate::bridge_audio::format(16_000), 24_000)
 }
 
 impl ReplyAudio {
     /// # Errors
     /// Reports PCM converter initialization failure.
     pub fn new(lead_ms: u16) -> Result<Self, Error> {
+        let adaptive = crate::bridge_mcp::bridge_clock::receipt::Context::current().is_none();
+        Self::with_pacing(lead_ms, adaptive)
+    }
+
+    fn with_pacing(lead_ms: u16, adaptive: bool) -> Result<Self, Error> {
         Ok(Self {
-            converter: Converter::new(crate::bridge_audio::format(16_000), 24_000)?,
-            queue: FrameQueue::new(NonZeroUsize::new(128).ok_or(Error::Audio)?),
-            partial: Vec::with_capacity(960),
-            pacer: ClockPacer::new(lead_ms),
-            finished: false,
-            spoken: false,
+            converter: reply_converter()?,
+            port: PacerPort::open(lead_ms, adaptive),
+            scratch: Some(Box::new([0; 960])),
+            partial: 0,
+            microphone: Some(Box::new([0; 320])),
         })
     }
 
     /// # Errors
     /// Rejects post-finish input and converter failures without decoding Opus again.
     pub fn push(&mut self, frame: &PcmFrame) -> Result<(), Error> {
-        if self.finished {
+        if self.finished() {
             return Err(Error::Audio);
         }
-        let (queue, partial) = (&mut self.queue, &mut self.partial);
+        let (port, scratch, partial) = (&self.port, &mut self.scratch, &mut self.partial);
         self.converter
-            .process(frame, |samples| frame_reply(queue, partial, samples))
+            .process(frame, |samples| frame_reply(port, scratch, partial, samples))
     }
 
     /// Flush accepted PCM exactly once. Every input frame yields 480 output samples.
     /// # Errors
     /// Reports converter failure or an incomplete output frame; never pads a tail.
     pub fn finish(&mut self) -> Result<(), Error> {
-        self.finished = true;
-        let (queue, partial) = (&mut self.queue, &mut self.partial);
-        self.converter.finish(|samples| frame_reply(queue, partial, samples))?;
-        if !self.partial.is_empty() {
+        let (port, scratch, partial) = (&self.port, &mut self.scratch, &mut self.partial);
+        port.send(PacerEvent::InputFinished);
+        self.converter
+            .finish(|samples| frame_reply(port, scratch, partial, samples))?;
+        if *partial != 0 {
             return Err(Error::Audio);
         }
         Ok(())
     }
 
-    /// Cancellation while waiting consumes no PCM. Frames are never sent more
-    /// than the lead ahead of the audio clock; late wakeups catch up. A dry
-    /// device is primed first (`ClockPacer`).
-    pub async fn next_frame(&mut self) -> Option<Vec<u8>> {
-        self.pacer.next_frame(&mut self.queue, self.finished).await
+    pub(crate) fn reset(&mut self, cut: bool) -> Result<Playout, Error> {
+        let playout = self.port.read(State::playout);
+        self.port
+            .send(if cut { PacerEvent::Cut } else { PacerEvent::ReplyOpened });
+        self.partial = 0;
+        self.converter = reply_converter()?;
+        Ok(playout)
     }
 
-    /// Whether a paced receive can eventually yield a retained frame.
-    #[must_use]
-    pub fn has_frames(&self) -> bool {
-        !self.queue.is_empty()
+    pub(crate) fn discard_output(&mut self) {
+        self.partial = 0;
+        self.port.send(PacerEvent::RemoteEnd);
     }
 
-    /// The unfinished reply has nothing queued and its last frame sent was
-    /// mid-speech: if nothing more comes, the device is owed a fade-out.
-    #[must_use]
-    pub fn stalled(&self) -> bool {
-        self.queue.is_empty() && self.pacer.conceals(self.finished)
+    pub(crate) fn arrived(&self, audible: bool) -> Duration {
+        self.port.send(PacerEvent::PeerFrameArrived { audible });
+        self.port.read(State::target)
     }
 
-    /// The next queued frame as `next_frame` paces it or, when stalled, one
-    /// frame that fades the reply to silence just before the device runs dry.
-    /// Cancellation while waiting changes nothing.
-    pub async fn next_or_fade(&mut self) -> Option<Vec<u8>> {
-        if self.queue.is_empty() {
-            self.pacer.fade_out(self.finished).await
-        } else {
-            self.next_frame().await
+    pub(crate) fn discarded(&self) {
+        self.port.send(PacerEvent::PeerFrameDiscarded);
+    }
+
+    pub(crate) fn microphone(&mut self, frame: &PcmFrame) {
+        let Some(mut scratch) = self.microphone.take() else {
+            return;
+        };
+        *scratch = *frame;
+        let mut event = PacerEvent::MicrophoneFrame(scratch);
+        self.port.dispatch(&mut event);
+        if let PacerEvent::MicrophoneFrame(scratch) = event {
+            self.microphone = Some(scratch);
         }
     }
 
-    /// Hold this much reply audio ahead of playout from the next dry start;
-    /// returns the cushion in force.
-    pub(crate) fn retarget(&mut self, wanted: std::time::Duration) -> std::time::Duration {
-        self.pacer.retarget(wanted)
+    /// Cancellation while waiting consumes no PCM. The single staged frame
+    /// remains in World until the transport takes it or the reply is cut.
+    pub(crate) async fn stage(&mut self, allow_fade: bool) -> Option<ReplyFrame> {
+        let mut out = self.port.send(PacerEvent::Offer { allow_fade });
+        loop {
+            if matches!(out.notification(), Some(Command::Pacer(PacerCommand::WriteFrame))) {
+                return out.take_frame();
+            }
+            let deadline = self.port.playout_due()?;
+            tokio::time::sleep_until(deadline).await;
+            out = self.port.send(PacerEvent::Tick);
+        }
     }
 
-    /// What the pacer did since this was last asked.
-    pub(crate) fn take_playout(&mut self) -> Playout {
-        self.pacer.take_playout()
+    pub(crate) fn handed(&self) {
+        self.port.handed();
     }
 
-    /// Audible audio was accepted into this reply.
-    pub fn speak(&mut self) {
-        self.spoken = true;
+    pub(crate) fn played(&self) -> bool {
+        matches!(
+            self.port.send(PacerEvent::Played).notification(),
+            Some(Command::Pacer(PacerCommand::PlayoutFinished))
+        )
     }
 
-    /// The reply settled: what it said is no longer being spoken.
-    pub fn hush(&mut self) {
-        self.spoken = false;
+    pub(crate) fn settle(&self) -> ReplySettlement {
+        let (playout, heard) = self.port.read(|state| (state.playout(), state.heard()));
+        self.port.send(PacerEvent::ReplySettled);
+        ReplySettlement {
+            playout,
+            heard,
+            lip_stats: self.port.take_lip_stats(),
+        }
     }
 
-    /// Whether this reply has accepted audible audio since it opened.
+    pub(crate) fn mouth_settle(&self) {
+        self.port.send(PacerEvent::MouthSettled);
+    }
+
+    pub(crate) fn mouth_due(&self) -> Option<Instant> {
+        self.port.instant(self.port.read(State::mouth_due))
+    }
+
+    pub(crate) fn mouth_change(&self) -> Option<bool> {
+        self.port.mouth_change()
+    }
+
+    pub(crate) fn sounded(&self) -> bool {
+        self.port.read(State::sounded)
+    }
+
+    pub(crate) fn voiced(&self) -> bool {
+        self.port.read(State::view).playing
+    }
+
+    #[must_use]
+    pub fn has_frames(&self) -> bool {
+        self.port.read(State::view).depth != 0
+    }
+
+    #[must_use]
+    pub fn stalled(&self) -> bool {
+        self.port.read(State::stalled)
+    }
+
     #[must_use]
     pub fn spoken(&self) -> bool {
-        self.spoken
+        self.port.read(State::spoken)
     }
 
-    /// The reply was flushed; later peer media is not part of it.
     #[must_use]
     pub fn finished(&self) -> bool {
-        self.finished
+        self.port.read(State::finished)
     }
 
-    /// Accepted media was flushed and all retained frames were handed to playback.
-    /// The run owner must still await Wyoming's played receipt.
+    /// Transferred all retained frames. The device still owes a Played receipt.
     #[must_use]
     pub fn drained(&self) -> bool {
-        self.finished && self.partial.is_empty() && self.queue.is_empty()
+        self.partial == 0 && self.port.read(State::drained)
     }
 
     #[must_use]
     pub fn dropped_frames(&self) -> u64 {
-        self.queue.drop_count()
+        self.port.read(State::dropped)
+    }
+
+    /// Receive and acknowledge one queued frame at the standalone PCM boundary.
+    pub async fn next_frame(&mut self) -> Option<Vec<u8>> {
+        let frame = self.stage(false).await?;
+        self.handed();
+        Some(frame.to_vec())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mouth_fixture() -> Self {
+        Self::with_pacing(u16::MAX, false).unwrap()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push_pcm(&mut self, frame: &ReplyFrame) {
+        **self.scratch.as_mut().unwrap() = *frame;
+        push_frame(&self.port, &mut self.scratch);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_handoff(&mut self, frame: &[u8]) {
+        if frame.is_empty() {
+            return;
+        }
+        self.push_pcm(frame.try_into().unwrap());
+        assert!(
+            self.port
+                .send(PacerEvent::Offer { allow_fade: false })
+                .take_frame()
+                .is_some()
+        );
+        self.handed();
     }
 }
 
-fn frame_reply(queue: &mut FrameQueue<Vec<u8>>, partial: &mut Vec<u8>, samples: &[i16]) {
+fn frame_reply(port: &PacerPort, scratch: &mut Option<Box<ReplyFrame>>, partial: &mut usize, samples: &[i16]) {
     for sample in samples {
-        partial.extend_from_slice(&sample.to_le_bytes());
-        if partial.len() == 960 {
-            queue.push(std::mem::replace(partial, Vec::with_capacity(960)));
+        let Some(buffer) = scratch.as_mut() else { return };
+        buffer[*partial..*partial + 2].copy_from_slice(&sample.to_le_bytes());
+        *partial += 2;
+        if *partial == buffer.len() {
+            push_frame(port, scratch);
+            *partial = 0;
         }
+    }
+}
+
+fn push_frame(port: &PacerPort, scratch: &mut Option<Box<ReplyFrame>>) {
+    // Temporarily move the buffer into the synchronous event and recover it.
+    let Some(frame) = scratch.take() else { return };
+    let mut event = PacerEvent::PcmPushed(frame);
+    port.dispatch(&mut event);
+    if let PacerEvent::PcmPushed(frame) = event {
+        *scratch = Some(frame);
     }
 }
 

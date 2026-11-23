@@ -70,12 +70,44 @@ without waking it, advances exactly 100 ms and reads one complete, byte-exact
 row while the device stays idle. The playback, provider and credential oracles
 still run.
 
+## A2 reply pacing
+
+The controller steps device, reply pacer and trace in that order. The pacer
+owns the 128 fixed 960-byte slots, one staged frame, the audio clock, jitter
+history, microphone measurement, mouth timing and lip batches. Its Copy view
+reports retained depth, playback activity and the last hand-off time.
+
+The voice service resamples PCM and recovers the same boxed input scratch
+after each synchronous event. It releases a staged frame to the existing
+transport, then reports that hand-off to the pacer. A cut clears the ring and
+staged frame before the existing device flush. Playback completion requires
+the accepted device receipt. Run opening seeds the measured jitter cushion
+for the first peer arrival in the native World. Standalone component fixtures
+start with an unprimed World for scripted arrival tests. The voice loop wakes
+separately for PCM offers and the World's mouth tick. The trace writer has its
+own deadline. The screen adapter publishes each lip batch through the existing
+sender and reports whether it was taken.
+`PeerFrameDiscarded` restarts the arrival chain and keeps the learned jitter.
+`RemoteEnd` drops queued and staged PCM before the device flush. Ordinary
+reply settlement still handles its pending lip samples. Barge-in uses the
+cut event to publish an immediate closing sample. `LipStatsCollected` clears
+the counters after the screen delivery receipt and the service's stats read.
+The binding mailbox answer for `sb-a2-pacer-subsystem` limited the new variants
+to these three inputs. [Coordinator ruling](https://github.com/portpowered/portos-echo/pull/357#issuecomment-7091032723)
+
+`echo-sub-pacer` depends on `echo-core-api` and the existing `echo-audio` DSP.
+
 ## Deferred
 
 - The device step receives wake and mute events. Wyoming has no separate
   button report in the current wire contract.
-- A2 owns the Wyoming service rename, session, pacer and call subsystems,
-  playback clock, slot table and allocation proof.
+- A2 owns the Wyoming service rename, session and call subsystems, slot
+  table and the phase-wide allocation proof.
+- The bounded EchoLink/Wyoming queue and serialization still use owned
+  transport buffers. Their allocation work belongs at the service boundary.
+- The stepped simulator keeps its current adaptive-hold bypass. The
+  simulated speaker clock and modeled tail remain later work, with the
+  new timing and lip goldens in C1.
 - A2 and B2 own migration of existing direct randomness consumers. The later
   service tracks own record and replay.
 - Trace rotation policy remains with later lifecycle work.

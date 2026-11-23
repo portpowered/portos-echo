@@ -36,7 +36,7 @@ fn reply_deadline(source: &Source, played: Option<Instant>) -> (Option<Instant>,
     }
     let speaking = source.user_speech == UserSpeech::Active;
     if source.delegation.waiting() {
-        let answering = source.mouth.voiced() || (source.controller.speaking() && !source.delegation.held());
+        let answering = source.reply.voiced() || (source.controller.speaking() && !source.delegation.held());
         return match source.delegation.resolved().filter(|_| !speaking && !answering) {
             Some(resolved) => (Some(owed(source, resolved)), Error::NoResponse),
             None => (run_cap(source).filter(|_| !answering), Error::SessionCeiling),
@@ -312,11 +312,13 @@ mod tests {
         assert_eq!(deadline(&source, None).0, None);
         assert!(!source.delegation.answered());
         let audible = [2000_i16.to_le_bytes(); 480].concat();
-        source.mouth.wrote(&audible, Instant::now());
+        source.reply.push_pcm(audible.as_slice().try_into().unwrap());
+        assert!(source.reply.stage(false).await.is_some());
+        source.reply.handed();
         assert_eq!(deadline(&source, None).0, None);
         tokio::time::advance(Duration::from_secs(1)).await;
-        assert_eq!(source.mouth.poll(Instant::now()), Some(true));
-        assert_eq!(source.mouth.poll(Instant::now()), Some(false));
+        assert_eq!(source.reply.mouth_change(), Some(true));
+        assert_eq!(source.reply.mouth_change(), Some(false));
         assert_eq!(deadline(&source, None), (Some(ceiling), Error::SessionCeiling));
         source.delegation.completed();
         source.spoke();

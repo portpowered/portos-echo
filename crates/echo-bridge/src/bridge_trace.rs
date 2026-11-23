@@ -111,6 +111,10 @@ fn ticker(
 }
 
 impl Trace {
+    pub(crate) fn world(&self) -> Arc<Controller> {
+        self.owner.world.clone()
+    }
+
     /// # Errors
     /// Returns a safe I/O category; paths never enter diagnostics.
     pub fn open(path: &Path, mode: &'static str) -> Result<Self, Error> {

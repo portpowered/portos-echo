@@ -151,6 +151,11 @@ path = "crates/echo-sub-device"
 kind = "lib"
 
 [[crate]]
+name = "echo-sub-pacer"
+path = "crates/echo-sub-pacer"
+kind = "lib"
+
+[[crate]]
 name = "echo-sub-trace"
 path = "crates/echo-sub-trace"
 kind = "lib"
