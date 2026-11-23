@@ -120,8 +120,8 @@ impl Trace {
         let ticker = ticker(world.clone(), &writer, tick_needed.clone());
         Ok(Self {
             owner: Arc::new(Owner {
-                writer,
                 world,
+                writer,
                 ticker,
                 tick_needed,
             }),
@@ -129,6 +129,20 @@ impl Trace {
             mode,
             payloads: true,
         })
+    }
+
+    pub(crate) fn open_for_voice(
+        path: &Path,
+        mode: echo_config::LiveMode,
+        world: Option<Arc<Controller>>,
+        config: Option<&echo_config::BridgeConfig>,
+    ) -> Result<Self, Error> {
+        let mode = match mode {
+            echo_config::LiveMode::Chatgpt => "chatgpt",
+            echo_config::LiveMode::ApiKey => "api_key",
+        };
+        let trace = Self::open_in(path, mode, world.unwrap_or_else(Controller::new))?;
+        Ok(trace.with_payloads(config.is_none_or(|config| config.trace.payloads)))
     }
 
     pub(crate) fn finish(&self) -> Result<(), Error> {

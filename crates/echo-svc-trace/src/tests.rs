@@ -13,12 +13,15 @@ impl TraceDrain for Source {
 }
 
 fn row(fields: Value) -> TraceRow {
+    let Value::Object(fields) = fields else {
+        panic!("expected object fields");
+    };
     TraceRow {
         event: "run.started".into(),
         elapsed_ms: 41,
         mode: "api_key",
         run: Some("run-1".into()),
-        fields: fields.as_object().unwrap().clone(),
+        fields,
         payload_fields: &[],
         limit: 4096,
     }
