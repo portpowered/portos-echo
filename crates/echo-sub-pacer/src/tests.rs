@@ -176,7 +176,7 @@ fn pacer_cut_discards_a_staged_and_a_queued_frame_then_accepts_receipt() {
 }
 
 #[test]
-fn pacer_playout_prime_survives_reoffers_and_restarts_without_waiting_when_full() {
+fn pacer_playout_prime_survives_reoffers_and_flushes_without_waiting() {
     let mut world = world();
     open(&mut world, 60, true);
     push(&mut world, Box::new(frame(1)));
@@ -192,27 +192,40 @@ fn pacer_playout_prime_survives_reoffers_and_restarts_without_waiting_when_full(
     assert_eq!(release(&mut world), frame(2));
     assert_eq!(world.clock.now().monotonic, ms(60));
 
-    // After the speaker runs dry, a full 60 ms cushion restarts immediately.
+    // EOF releases an incomplete cushion on a dry restart.
     world.clock.advance(ms(1000));
-    for marker in 3..6 {
-        push(&mut world, Box::new(frame(marker)));
-    }
-    for marker in 3..6 {
-        assert_eq!(release(&mut world), frame(marker));
-        assert_eq!(world.clock.now().monotonic, ms(1060));
-    }
-
-    // EOF releases an incomplete cushion on a later dry restart.
-    world.clock.advance(ms(1000));
-    push(&mut world, Box::new(frame(6)));
+    push(&mut world, Box::new(frame(3)));
     step(&mut world, PacerEvent::InputFinished);
-    assert_eq!(release(&mut world), frame(6));
-    assert_eq!(world.clock.now().monotonic, ms(2060));
+    assert_eq!(release(&mut world), frame(3));
+    assert_eq!(world.clock.now().monotonic, ms(1060));
     assert!(matches!(
         step(&mut world, PacerEvent::Played).notification(),
         Some(Command::Pacer(PacerCommand::PlayoutFinished))
     ));
+}
 
+#[test]
+fn pacer_playout_restarts_a_dry_speaker_immediately_with_a_full_cushion() {
+    let mut world = world();
+    open(&mut world, 60, true);
+    push(&mut world, Box::new(frame(1)));
+    assert_eq!(release(&mut world), frame(1));
+    assert_eq!(world.clock.now().monotonic, ms(60));
+
+    world.clock.advance(ms(1000));
+    for marker in 2..5 {
+        push(&mut world, Box::new(frame(marker)));
+    }
+    for marker in 2..5 {
+        assert_eq!(release(&mut world), frame(marker));
+        assert_eq!(world.clock.now().monotonic, ms(1060));
+    }
+}
+
+#[test]
+fn pacer_playout_retargets_a_lead_bounded_floor_after_late_arrival() {
+    let mut world = world();
+    open(&mut world, 60, true);
     // A smooth arrival keeps the lead-bounded floor. 160 ms of lateness
     // plus the 40 ms margin then lifts the target to 200 ms.
     step(&mut world, PacerEvent::PeerFrameArrived { audible: false });
