@@ -80,7 +80,7 @@ impl<'a> Sim<'a> {
                     && production::wifi::action(action)
                 {
                     let result = observe_wifi(&mut self.world, action).await?;
-                    return artifacts.measurement(json!({"wifi_step":action,"result":result}));
+                    return production::wifi::record(artifacts, action, result);
                 }
                 if self.m1 && (self.mute.skipped(step) || self.mute.observe(&mut self.world, step).await?) {
                     return Ok(());

@@ -138,14 +138,18 @@ impl World {
             .env("ECHO_LAB_UI_STATE_PATH", &self.ui_path);
         if super::production::selected(bridge) {
             self.private = Some(super::m2::codex::config::Root::new()?);
+            let private = &self.private.as_ref().ok_or("m1: missing private root")?.0;
             super::production::configure_codex(
                 &mut command,
-                &self.private.as_ref().ok_or("m1: missing private root")?.0,
+                private,
                 root,
                 address,
                 &self.canonical.as_ref().ok_or("m1: missing provider")?.origin,
                 self.spoof.as_ref().ok_or("launch: missing spoof")?.url(),
             )?;
+            if self.wifi.is_some() {
+                super::production::wifi::configure_settings(private)?;
+            }
             if let Some((case, auth)) = &self.m2 {
                 super::m2::auth::configure(&mut command, root, case, auth)?;
             }

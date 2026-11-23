@@ -1,6 +1,7 @@
 //! Paired HTTP journey against the production core and a separate device role.
 use serde_json::{Value, json};
 use std::{
+    io::Write,
     net::SocketAddr,
     path::{Path, PathBuf},
     process::Stdio,
@@ -13,6 +14,33 @@ use tokio::{
 };
 
 pub const ID: &str = "a2-wifi-settings";
+
+pub fn configure_settings(private: &Path) -> Result<(), String> {
+    let mut config = std::fs::File::options()
+        .append(true)
+        .open(private.join("configured.private/bridge.toml"))
+        .map_err(|_| "Wi-Fi: cannot open private core config")?;
+    writeln!(
+        config,
+        "\n[home]\ndir = '{}'\nagent_tools = false",
+        private.join("settings").display()
+    )
+    .map_err(|_| "Wi-Fi: cannot configure paired Settings".into())
+}
+
+pub fn record(artifacts: &mut crate::lab_run::Artifacts, action: &str, result: Value) -> Result<(), String> {
+    let name = "wifi-results.jsonl";
+    let mut file = std::fs::File::options()
+        .append(true)
+        .create(true)
+        .open(artifacts.root.join(name))
+        .map_err(|_| "Wi-Fi: cannot open result evidence")?;
+    writeln!(file, "{}", json!({"step":action,"result":result})).map_err(|_| "Wi-Fi: cannot record result evidence")?;
+    if !artifacts.evidence.iter().any(|entry| entry == name) {
+        artifacts.evidence.push(name.to_owned());
+    }
+    Ok(())
+}
 
 pub struct Device {
     child: Child,
@@ -213,7 +241,12 @@ async fn request(addr: SocketAddr, mut data: Value) -> Result<Value, String> {
     let text = std::str::from_utf8(&bytes).map_err(|_| "Wi-Fi: invalid HTTP result")?;
     let (headers, body) = text.split_once("\r\n\r\n").ok_or("Wi-Fi: incomplete HTTP result")?;
     if !headers.starts_with("HTTP/1.1 200 ") {
-        return Err("Wi-Fi: paired HTTP request rejected".into());
+        let status = headers
+            .split_whitespace()
+            .nth(1)
+            .and_then(|value| value.parse::<u16>().ok())
+            .ok_or("Wi-Fi: malformed HTTP status")?;
+        return Err(format!("Wi-Fi: paired request returned HTTP {status}"));
     }
     let response: Value = serde_json::from_str(body).map_err(|_| "Wi-Fi: invalid v1 result")?;
     if response["type"] != "wifi-result" || response["data"]["version"] != 1 {
