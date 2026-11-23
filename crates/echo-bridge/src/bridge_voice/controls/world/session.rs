@@ -424,6 +424,23 @@ mod tests {
     }
 
     #[test]
+    fn session_world_consumes_a_delayed_cut_receipt_while_closing() {
+        let session = SessionPort::open(Instant::now(), None).unwrap();
+        session.reply_started();
+        session.cut();
+        session.cut_settled();
+        session.cut_played();
+        assert_eq!(session.pending_cut_receipts(), 1);
+        session.begin_close(true).unwrap();
+        assert_eq!(session.played(true), Ok(false));
+        assert_eq!(session.pending_cut_receipts(), 0);
+        assert_eq!(session.played(true), Err(Error::Wyoming));
+        session.microphone_ended();
+        session.finish_close(true).unwrap();
+        assert!(session.complete(true, true));
+    }
+
+    #[test]
     fn session_slots_reuse_run_index_without_reopening_stale_run() {
         let world = Controller::new();
         let first = world.clone().admit(Instant::now(), None).unwrap();

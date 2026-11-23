@@ -189,6 +189,9 @@ impl Run {
             self.cut_receipts -= 1;
             return Ok(false);
         }
+        if self.closing() {
+            return Err(Error::Playback);
+        }
         if self.state == Phase::Retired {
             self.receipt = Receipt::Retired { acknowledged: true };
         } else if stopped || self.has_played() {

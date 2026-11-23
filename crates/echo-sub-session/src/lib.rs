@@ -306,6 +306,9 @@ impl Run {
                 self.microphone_ended();
             }
             SessionChange::FinishClose { mouth_drained } => self.finish_close(mouth_drained)?,
+            SessionChange::ReplyPlayed { output_stopped } => {
+                return self.played(output_stopped).map(SessionOutcome::Played);
+            }
             _ if self.closing() => return Err(closing_error(change)),
             SessionChange::AdmitResponse(due) => {
                 self.admit_response(due, now)?;
@@ -314,9 +317,6 @@ impl Run {
             SessionChange::ResponseDue(due) => self.response_due = due,
             SessionChange::CaptureStarted => self.microphone_started(),
             SessionChange::ReplyStarted => self.reply_started(),
-            SessionChange::ReplyPlayed { output_stopped } => {
-                return self.played(output_stopped).map(SessionOutcome::Played);
-            }
             SessionChange::ReplySettled => self.follow_up = FollowUp::Replied,
             SessionChange::Resume { preserve_dispatch } => {
                 self.resume()?;
@@ -362,7 +362,7 @@ impl Run {
 fn closing_error(change: SessionChange) -> SessionError {
     match change {
         SessionChange::Listen(_) => SessionError::Input,
-        SessionChange::BeginClose { .. } | SessionChange::ReplyPlayed { .. } => SessionError::Playback,
+        SessionChange::BeginClose { .. } => SessionError::Playback,
         _ => SessionError::Control,
     }
 }
