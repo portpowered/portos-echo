@@ -29,6 +29,11 @@ impl SettingsHost {
             return Err(CHATGPT);
         }
         let key = echo_signin::api_key(request.api_key.into_inner()).map_err(|_| INVALID)?;
+        // The per-call reader refuses a longer file, and a pasted space is never part of a key.
+        let text = key.expose();
+        if u64::try_from(text.len()).map_or(true, |length| length > LIMIT) || text.trim() != text {
+            return Err(INVALID);
+        }
         if self.store.uncertain {
             return Err(SettingsError::Durability);
         }
@@ -55,9 +60,9 @@ fn stored(path: &Path) -> Option<Secret<Vec<u8>>> {
     let read = std::fs::File::open(path).and_then(|file| file.take(LIMIT + 1).read_to_end(&mut bytes));
     let bytes = Secret::new(bytes);
     read.ok()?;
-    let text = std::str::from_utf8(bytes.expose()).ok()?.to_owned();
-    let valid =
-        u64::try_from(bytes.expose().len()).is_ok_and(|length| length <= LIMIT) && echo_signin::api_key(text).is_ok();
+    let text = Secret::new(std::str::from_utf8(bytes.expose()).ok()?.to_owned());
+    let valid = u64::try_from(bytes.expose().len()).is_ok_and(|length| length <= LIMIT)
+        && echo_signin::api_key(text.expose().clone()).is_ok();
     valid.then_some(bytes)
 }
 

@@ -51,7 +51,18 @@ const RULE: &str = "openai.api_key: expected one line of printable text";
 fn openai_api_key_save_refuses_blank_and_control_text_without_writing() {
     let (root, mut host) = host(LiveMode::ApiKey);
     assert_eq!(host.api_key(), Some(OpenAiApiKeyStatusV2 { configured: false }));
-    for text in ["", "\n", "  ", "dummy\u{7}local", "dummy\nlocal", "dummy\u{85}"] {
+    let oversized = "k".repeat(16_385);
+    for text in [
+        "",
+        "\n",
+        "  ",
+        "dummy\u{7}local",
+        "dummy\nlocal",
+        "dummy\u{85}",
+        " dummy-local-only",
+        "dummy-local-only ",
+        oversized.as_str(),
+    ] {
         assert_eq!(invalid(save(&mut host, text)).as_deref(), Some(RULE), "{text:?}");
     }
     assert!(!root.path().join("live.json").exists());

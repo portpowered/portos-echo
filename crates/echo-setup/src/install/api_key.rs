@@ -73,7 +73,8 @@ pub fn read(path: &Path) -> Result<Secret<String>> {
 }
 
 /// The bridge's rule (`echo_signin::api_key`): one trailing LF or CRLF is
-/// dropped; the rest must be non-blank visible ASCII, a valid header value.
+/// dropped; the rest must be non-blank visible ASCII, a valid header value,
+/// with no leading or trailing space (a copy-paste slip, never part of a key).
 /// # Errors
 /// `api_key_file_invalid` for empty, oversized, non-UTF-8 or control text.
 pub fn parse(bytes: &[u8]) -> Result<Secret<String>> {
@@ -86,7 +87,7 @@ pub fn parse(bytes: &[u8]) -> Result<Secret<String>> {
         .strip_suffix("\r\n")
         .or_else(|| text.strip_suffix('\n'))
         .unwrap_or(text);
-    if key.trim().is_empty() || !key.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+    if key.trim().is_empty() || key.trim() != key || !key.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
         return Err(INVALID);
     }
     Ok(Secret::new(key.to_owned()))
@@ -158,6 +159,8 @@ mod tests {
             "dummy\u{7f}",
             "dummy\u{85}",
             "dummy-ü",
+            " dummy-local-only",
+            "dummy-local-only \n",
             oversized.as_str(),
         ] {
             assert_eq!(parse(invalid.as_bytes()).err(), Some(Failure("api_key_file_invalid")));

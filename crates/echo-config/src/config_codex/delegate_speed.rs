@@ -1,5 +1,5 @@
 //! The delegated runner's service tier, with the legacy `delegate_fast` boolean.
-use crate::{ConfigError, SettingsOptions, config_decode::Fields};
+use crate::ConfigError;
 
 /// How fast the delegated Codex thread is served. Faster tiers cost more and
 /// need a model whose catalog lists them; the app server silently serves a
@@ -54,20 +54,5 @@ impl DelegateSpeed {
             )),
             (speed, legacy) => Ok(speed.or(legacy)),
         }
-    }
-}
-
-impl SettingsOptions {
-    /// Read the stored `[codex]` leaves; returns the stored voice.
-    pub(crate) fn decode_codex(&mut self, mut codex: Fields<'_>) -> Result<Option<String>, ConfigError> {
-        let voice = codex.optional("voice")?;
-        self.web_search = codex.optional("web_search")?;
-        self.delegate_model = codex.optional("delegate_model")?;
-        self.delegate_effort = codex.optional("delegate_effort")?;
-        // A legacy stored `delegate_fast` still loads; the next save writes `delegate_speed`.
-        self.delegate_speed =
-            DelegateSpeed::resolve(codex.optional("delegate_speed")?, codex.optional("delegate_fast")?)?;
-        codex.finish()?;
-        Ok(voice)
     }
 }

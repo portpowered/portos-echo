@@ -266,9 +266,10 @@ To install in this mode, set `[live] mode = "api_key"` and keep `live.credential
 `/data/local/echo-bridge/private/` (the example's `live.json` works). Then pass the key's local file to the installer:
 `echo-setup install --config bridge.toml --openai-api-key-file openai-key.txt` (add `--force` to replace an installed
 ChatGPT config; `update` accepts the option too). The installer refuses the option with a config whose mode is
-`chatgpt`. It drops one trailing newline and refuses a blank key or one with control characters. It streams the key
-to the Echo over adb stdin, never on a command line, and writes it as `live.credential_file` owned by the bridge user
-with mode 0600. It then skips ChatGPT sign-in, checks that `echo-bridge status` reports `mode: api-key` and
+`chatgpt`. It drops one trailing newline and refuses a blank key, a key with leading or trailing spaces, and any
+character outside visible ASCII. It streams the key to the Echo over adb stdin, never on a command line, and writes
+it as `live.credential_file` owned by the bridge user with mode 0600. It then skips ChatGPT sign-in, checks that
+`echo-bridge status` reports `mode: api-key` and
 continues with Port OS. `echo-setup status --json` and `doctor` report `auth_mode` (`api_key`, `chatgpt` or
 `unavailable`), never the key.
 

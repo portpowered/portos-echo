@@ -4,6 +4,8 @@ use crate::{
 };
 #[path = "config_settings/settings_muse.rs"]
 mod settings_muse;
+#[path = "config_settings/settings_validate.rs"]
+mod settings_validate;
 pub use settings_muse::SettingsMuse;
 use std::{collections::BTreeMap, io::Read, path::Path};
 
@@ -140,8 +142,14 @@ impl SettingsOverlay {
             result.listen_seconds = voice.optional("session_listen_seconds")?;
             voice.finish()?;
         }
-        if let Some(codex) = fields.section("codex")? {
-            result.voice = result.options.decode_codex(codex)?;
+        if let Some(mut codex) = fields.section("codex")? {
+            result.voice = codex.optional("voice")?;
+            result.options.web_search = codex.optional("web_search")?;
+            result.options.delegate_model = codex.optional("delegate_model")?;
+            result.options.delegate_effort = codex.optional("delegate_effort")?;
+            result.options.delegate_speed =
+                DelegateSpeed::resolve(codex.optional("delegate_speed")?, codex.optional("delegate_fast")?)?;
+            codex.finish()?;
         }
         if let Some(mut agent) = fields.section("agent")? {
             result.daily_cap = agent.optional("daily_request_cap")?;
@@ -172,12 +180,7 @@ impl SettingsOverlay {
             endpoint.finish()?;
         }
         fields.finish()?;
-        if let Some(name) = &result.endpoint.device_name {
-            crate::config_endpoint::validate_name(name)?;
-        }
-        if let Some(value) = result.daily_cap {
-            i64::try_from(value).map_err(|_| ConfigError::new("agent.daily_request_cap", "must fit a TOML integer"))?;
-        }
+        result.validate()?;
         Ok(result)
     }
 
