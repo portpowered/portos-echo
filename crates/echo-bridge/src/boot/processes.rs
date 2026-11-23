@@ -87,7 +87,11 @@ impl RoleChild {
         let exited = exited(self.pid()?)?;
         let ready_at = self.ready.get().copied();
         if exited {
-            Ok(ChildStatus::Exited { ready_at })
+            // waitid reports the exit state without a timestamp.
+            Ok(ChildStatus::Exited {
+                ready_at,
+                exited_at: None,
+            })
         } else {
             Ok(ChildStatus::Running { ready_at })
         }

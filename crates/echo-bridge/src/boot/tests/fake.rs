@@ -25,6 +25,7 @@ pub(super) struct Fake<'a> {
     pub previous: Option<String>,
     pub deny: Option<Role>,
     pub exits: Vec<(u64, Role)>,
+    pub report_exit_time: bool,
     pub parked: Option<(u64, u64)>,
     pub samples: Vec<u64>,
     pub jump: Option<(u64, u64)>,
@@ -49,6 +50,7 @@ struct FakeChild {
     child: Child,
     ready_at: Option<Duration>,
     exit: Option<String>,
+    exited_at: Option<Duration>,
 }
 
 impl<'a> Fake<'a> {
@@ -62,6 +64,7 @@ impl<'a> Fake<'a> {
             previous: Some("b".repeat(64)),
             deny: None,
             exits: vec![],
+            report_exit_time: false,
             parked: None,
             samples: vec![],
             jump: None,
@@ -122,6 +125,7 @@ impl FakeChild {
             child,
             ready_at: None,
             exit: None,
+            exited_at: None,
         };
         let mut line = String::new();
         let stdout = fixture.child.stdout.take().ok_or("missing fake role output")?;
@@ -181,6 +185,19 @@ impl HostOps for Fake<'_> {
         }
         if let Some(sync) = self.synchronize.as_mut() {
             sync(next);
+        }
+        for role in [Role::Core, Role::Device] {
+            let exit = self
+                .exits
+                .iter()
+                .find(|&&(at, target)| target == role && self.time < at && at <= next)
+                .map(|&(at, _)| at);
+            if let Some(at) = exit
+                && let Some(child) = self.child(role)
+            {
+                fixture_result(child.finish(7));
+                child.exited_at = Some(Duration::from_millis(at));
+            }
         }
         self.time = next;
     }
@@ -245,12 +262,14 @@ impl HostOps for Fake<'_> {
     }
 
     fn observe(&mut self, role: Role) -> Result<ChildStatus> {
-        let should_exit = self.exits.contains(&(self.time, role));
+        let report_exit_time = self.report_exit_time;
         let child = self.child(role).as_mut().ok_or("missing fake role")?;
         let ready_at = child.ready_at;
-        if should_exit {
-            child.finish(7)?;
-            Ok(ChildStatus::Exited { ready_at })
+        if child.exit.is_some() {
+            Ok(ChildStatus::Exited {
+                ready_at,
+                exited_at: child.exited_at.filter(|_| report_exit_time),
+            })
         } else {
             Ok(ChildStatus::Running { ready_at })
         }

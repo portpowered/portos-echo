@@ -9,8 +9,14 @@ const MAX_BACKOFF: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum ChildStatus {
-    Running { ready_at: Option<Duration> },
-    Exited { ready_at: Option<Duration> },
+    Running {
+        ready_at: Option<Duration>,
+    },
+    Exited {
+        ready_at: Option<Duration>,
+        /// Actual exit time in the host monotonic clock, when independently known.
+        exited_at: Option<Duration>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -282,12 +288,14 @@ impl Supervisor {
         let now = host.now();
         let elapsed = now.saturating_sub(started);
         let status = host.observe(role)?;
-        let ready_at = match status {
-            ChildStatus::Running { ready_at } | ChildStatus::Exited { ready_at } => ready_at,
+        let (ready_at, alive_until) = match status {
+            ChildStatus::Running { ready_at } => (ready_at, Some(now)),
+            ChildStatus::Exited { ready_at, exited_at } => (ready_at, exited_at),
         };
         let exited = matches!(status, ChildStatus::Exited { .. });
         if role == Role::Core && elapsed >= STABLE && !self.core.stable {
-            if ready_at.is_some_and(|at| at <= started + STABLE) {
+            let deadline = started + STABLE;
+            if ready_at.is_some_and(|at| at <= deadline) && alive_until.is_some_and(|at| at >= deadline) {
                 let selection = self.selection()?;
                 selection.stabilize();
                 host.save_selection(selection)?;

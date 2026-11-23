@@ -122,10 +122,12 @@ fn boot_supervision_counts_interrupted_attempt_once_and_honors_exact_boundary() 
 
 #[test]
 fn boot_supervision_classifies_exits_at_the_stability_boundary() {
-    for (elapsed, ready, slot, tries) in [
-        (59_999, true, Slot::Previous, 3),
-        (60_000, false, Slot::Previous, 3),
-        (60_000, true, Slot::Current, 0),
+    for (exit_at, observed_at, ready, report_exit_time, slot, tries) in [
+        (59_999, 59_999, true, true, Slot::Previous, 3),
+        (59_999, 60_000, true, false, Slot::Previous, 3),
+        (59_999, 60_000, true, true, Slot::Previous, 3),
+        (60_000, 60_000, false, true, Slot::Previous, 3),
+        (60_000, 60_000, true, true, Slot::Current, 0),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.json");
@@ -134,24 +136,25 @@ fn boot_supervision_classifies_exits_at_the_stability_boundary() {
         supervise(&mut seed).unwrap();
         assert_eq!(seed.journal().failed_tries(), 2);
 
-        let mut host = Fake::new(&path, elapsed + 3_100);
+        let mut host = Fake::new(&path, observed_at + 3_100);
         host.ready_current = ready;
-        host.samples = vec![elapsed];
-        host.exits = vec![(elapsed, Role::Core)];
+        host.report_exit_time = report_exit_time;
+        host.samples = vec![observed_at];
+        host.exits = vec![(exit_at, Role::Core)];
         supervise(&mut host).unwrap();
 
-        assert_eq!(host.times(Role::Core), [0, elapsed + 3_000]);
+        assert_eq!(host.times(Role::Core), [0, observed_at + 3_000]);
         assert_eq!(
             host.stops[0],
-            (elapsed, Role::Core, Stop::Exited, "exit status: 7".into())
+            (observed_at, Role::Core, Stop::Exited, "exit status: 7".into())
         );
-        assert_eq!(host.tries, [(0, 2), (elapsed, tries)]);
+        assert_eq!(host.tries, [(0, 2), (observed_at, tries)]);
         assert_eq!(host.journal().slot(), slot);
         assert_eq!(host.journal().failed_tries(), tries);
         let device_starts = if slot == Slot::Current {
             vec![0]
         } else {
-            vec![0, elapsed + 3_000]
+            vec![0, observed_at + 3_000]
         };
         assert_eq!(host.times(Role::Device), device_starts);
     }

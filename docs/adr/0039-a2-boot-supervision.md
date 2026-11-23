@@ -19,9 +19,11 @@ The supervisor records a current-slot attempt before launching core and
 reconciles an unfinished attempt at startup. The journal uses a SHA-256 digest
 of `bin/current` as its generation. Core must emit the existing
 `{"event":"bridge.ready"}` line on its own stdout and reach 60 s of uptime to
-clear failed tries. A ready core observed exiting at the 60 s boundary clears
-the counter before restarting the current slot. The third failed try prevents
-further current starts.
+clear failed tries. The reset needs a live observation at or after the deadline,
+or a known exit time at or after it. Android's process observation reports exit
+status without an exit timestamp. If the first observation at or after the
+deadline finds the child already exited, the attempt spends a try. The third
+failed try prevents further current starts.
 After reaping the old pair, the supervisor validates `bin/previous`, records
 its selection and logs the two digests. Promotion remains an installer action.
 A root-only journal is atomically replaced and synced in `bin/.boot`.
