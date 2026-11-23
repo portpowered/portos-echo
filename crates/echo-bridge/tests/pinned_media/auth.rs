@@ -2,6 +2,7 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use echo_codex::codex_supervisor::{HomeMode, Supervisor, SupervisorConfig};
+use std::path::PathBuf;
 
 #[tokio::test]
 async fn t3_pinned_codex_invalid_and_expired_auth_use_only_local_refresh() {
