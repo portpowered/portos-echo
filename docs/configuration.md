@@ -433,7 +433,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `chatgpt_auth.device_redirect_uri` | Default `https://auth.openai.com/deviceauth/callback`; safe endpoint URL. | restart / no |
 | `chatgpt_auth.browser_redirect_uri` | Default `http://localhost:1455/auth/callback`; HTTP loopback (`localhost` or literal IPv4 loopback), path exactly /auth/callback. | restart / no |
 | `codex` | Optional app-server table in decoder; current voice runtime requires home. | restart / no |
-| `codex.home` | Default unset; absolute private directory, required at runtime, mode 0700. API-key mode uses a sibling named with the `-api-key` suffix. | restart / no |
+| `codex.home` | Default unset; absolute private directory, required at runtime, mode exactly 0700. API-key mode uses a sibling named with the `-api-key` suffix. | restart / no |
 | `codex.binary` | Default unset (pinned host helper resolves multi-tool); if set absolute path. Device must name installed standalone app server. | restart / no |
 | `codex.launch` | `subcommand` default (`app-server --listen stdio://`) or `standalone` (`--listen stdio://`); standalone requires binary. | restart / no |
 | `codex.ca_file` | Default unset; absolute PEM path, child SSL_CERT_FILE and bridge Port OS OAuth/MCP additional trust roots. | restart / no |

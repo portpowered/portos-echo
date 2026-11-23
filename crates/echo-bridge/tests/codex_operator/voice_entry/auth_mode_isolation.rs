@@ -48,7 +48,11 @@ async fn auth_mode_isolation_switches_homes_and_preserves_chatgpt_account() {
     assert!(fs::read(key_file).unwrap() == KEY_FILE, "nominated key source changed");
     assert_key_absent(&fixture.home);
     assert_key_absent(&api_home);
-    eprintln!("auth mode switch: ready=1+1, relink=0, ChatGPT auth preserved, API auth copy removed");
+    writeln!(
+        std::io::stdout().lock(),
+        "auth mode switch: ready=1+1, relink=0, ChatGPT auth preserved, API auth copy removed"
+    )
+    .unwrap();
 }
 
 #[tokio::test]
@@ -100,7 +104,11 @@ async fn auth_mode_isolation_refuses_unsafe_cleanup_then_recovers() {
     start_and_stop(&fixture, &listener, &fixture.home, "chatgpt").await;
     assert_chatgpt_state(&fixture);
     assert!(fs::read(key_file).unwrap() == KEY_FILE, "nominated key source changed");
-    eprintln!("unsafe cleanup: exit=2, child starts=0, safe retry ready=1");
+    writeln!(
+        std::io::stdout().lock(),
+        "unsafe cleanup: exit=2, child starts=0, safe retry ready=1"
+    )
+    .unwrap();
 }
 
 async fn installation() -> (Fixture, TcpListener) {

@@ -94,7 +94,9 @@ fn reserve(path: &Path, marker: &str, other_marker: &str, create: bool) -> Resul
         .open(marker)
         .map_err(|_| ProcessError::PrivateHome)?;
     lease.try_lock().map_err(|_| ProcessError::PrivateHome)?;
-    private_directory(&work)?;
+    if !entry(&work)?.is_some_and(|metadata| metadata.is_dir()) {
+        return Err(ProcessError::PrivateHome);
+    }
     Ok(Some(lease))
 }
 
