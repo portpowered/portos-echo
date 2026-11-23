@@ -1,39 +1,12 @@
-name: Targeted
-on:
-  workflow_dispatch:
-    inputs:
-      nextest_filter:
-        description: Optional nextest -E expression
-        type: string
-        required: false
-        default: ''
-      scenarios:
-        description: Optional space-separated scenario stems or .yaml filenames
-        type: string
-        required: false
-        default: ''
-      repeat:
-        description: Number of executions, integer 1-10
-        type: number
-        required: false
-        default: 1
-      ignored:
-        description: Include ignored tests in the filter selection
-        type: boolean
-        required: false
-        default: true
-      release_bundle:
-        description: Build and verify the distributable release bundle
-        type: boolean
-        required: false
-        default: false
+name: Targeted A2 audio witnesses
+on: workflow_dispatch
 permissions:
   contents: read
+  actions: read
 jobs:
-  targeted:
-    if: ${{ !inputs.release_bundle || inputs.nextest_filter != '' || inputs.scenarios != '' }}
+  alloc:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -41,128 +14,409 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
-          target: test-sim
-          sim: 'true'
-      - name: Execute requested selections
-        id: selections
-        shell: sh
-        env:
-          TARGETED_FILTER: ${{ inputs.nextest_filter }}
-          TARGETED_SCENARIOS: ${{ inputs.scenarios }}
-          TARGETED_REPEAT: ${{ inputs.repeat }}
-          TARGETED_IGNORED: ${{ inputs.ignored }}
+          target: test-unit-rust
+      - name: Clean and seeded allocation gate
+        shell: bash
         run: |
-          python - <<'PY'
-          import os
-          import re
-          import subprocess
-          import tempfile
-          from pathlib import Path
-          selection = os.environ["TARGETED_FILTER"].strip()
-          names = os.environ["TARGETED_SCENARIOS"].split()
-          count = os.environ["TARGETED_REPEAT"]
-          ignored = os.environ["TARGETED_IGNORED"]
-          if not re.fullmatch(r"(?:[1-9]|10)", count) or ignored not in ("true", "false"):
-              raise SystemExit("targeted: repeat must be 1-10 and ignored must be boolean")
-          if not selection and not names:
-              raise SystemExit("targeted: provide nextest_filter or scenarios")
-          paths = []
-          for name in names:
-              if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*(?:\.yaml)?", name):
-                  raise SystemExit("targeted: use scenario names within tests/scenarios")
-              path = Path("tests/scenarios") / (name if name.endswith(".yaml") else name + ".yaml")
-              if not path.is_file() or path.resolve().parent != Path("tests/scenarios").resolve():
-                  raise SystemExit("targeted: missing or unsafe scenario")
-              paths.append(path)
-          subprocess.run(["cargo", "build", "--locked", "-p", "echo-lab", "-p", "echo-bridge",
-                          "-p", "echo-muse-bridge", "--bins"], check=True)
-          report_root = Path(tempfile.mkdtemp(prefix="targeted-reports-", dir=os.environ["RUNNER_TEMP"])).resolve()
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              print(f"report_root={report_root}", file=output)
-          failed = False
-          for number in range(1, int(count) + 1):
-              code = 0
-              if selection:
-                  command = ["cargo", "nextest", "run", "--locked", "--workspace", "--all-targets",
-                             "--config-file", ".github/nextest.toml", "--profile", "ci",
-                             "--no-tests", "fail", "-E", selection]
-                  if ignored == "true":
-                      command += ["--run-ignored", "all"]
-                  code = subprocess.run(command).returncode
-              for index, path in enumerate(paths):
-                  parent = report_root / ("repeat-" + str(number))
-                  parent.mkdir(parents=True, exist_ok=True)
-                  destination = parent / (str(index) + "-" + path.stem)
-                  result = subprocess.run(["target/debug/echo-lab", "run", str(path),
-                                           "--driver", "sim", "--out", str(destination)]).returncode
-                  if result and not code:
-                      code = result
-              print(f"TARGETED_RESULT repeat={number} exit={code}", flush=True)
-              failed = failed or code != 0
-          raise SystemExit(1 if failed else 0)
-          PY
-      - name: Upload echo-lab reports
-        if: always() && steps.selections.outputs.report_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-reports-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.selections.outputs.report_root }}
-          if-no-files-found: ignore
-          retention-days: 3
-  release-bundle:
-    if: ${{ inputs.release_bundle }}
-    runs-on: ubuntu-24.04
-    # Existing standalone Codex job allows 180 minutes for a cold build.
-    timeout-minutes: 240
-    env:
-      CARGO_BUILD_JOBS: '4'
-      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
+          set -euxo pipefail
+          uname -srmo
+          rustc -Vv
+          git rev-parse HEAD^
+          make test-alloc
+          f=crates/echo-sub-pacer/src/lib.rs
+          sed -i '/PacerEvent::MicrophoneFrame(frame) => {/a\                std::hint::black_box(vec![1_u8; 4]);' "$f"
+          set +e
+          make test-alloc 2>&1 | tee "$RUNNER_TEMP/seed.log"
+          code=${PIPESTATUS[0]}
+          set -e
+          git restore -- "$f"
+          git diff --exit-code -- "$f"
+          test "$code" -ne 0
+          grep -E 'ALLOC path=capture .* core=500 ' "$RUNNER_TEMP/seed.log"
+          grep -F 'capture core allocations' "$RUNNER_TEMP/seed.log"
+          printf 'TARGETED_RESULT P-ALLOC exit=0 P-SEED expected_failure=%s\n' "$code"
+  components:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Focused wrapper and packaging tests
+      - uses: ./.github/actions/setup
+        with:
+          target: lint-deps
+      - name: Focused audio and gate checks
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          python3 tests/test_release_kit.py
-          python3 tests/test_release_redirects.py
+          set -euxo pipefail
+          cargo test --locked -p echo-wyoming --lib
+          cargo test --locked -p echo-link --features fake
+          cargo test --locked -p echo-media --lib
+          cargo test --locked -p echo-screen-server --lib screen_mouth
+          cargo test --locked -p echo-screen-server --lib screen_http::tests
+          make test-contract
+          make lint-deps lint-ci-parity lint-shape
+          cargo clippy --locked -p echo-audio -p echo-bridge -p echo-link -p echo-wyoming -p echo-media -p echo-screen-server -p echo-sub-pacer -p echo-sub-session --all-targets -- -D warnings
+          printf 'TARGETED_RESULT components exit=0\n'
+  sim:
+    name: Scenarios ${{ matrix.shard }}/2
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          target: test-sim-suites
+          sim: 'true'
+      - name: Run the existing Linux scenario shard
+        run: make test-sim-scenarios SCENARIO_PARTITION=${{ matrix.shard }}/2
+  golden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: ./.github/actions/setup
         with:
           target: build-echo
-      - name: Provision release tools
-        shell: sh
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang perl pkg-config file python3 gcc-mingw-w64-x86-64-posix
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "platforms;android-34" "build-tools;35.0.0"
-          rustup target add --toolchain 1.100.0 armv7-linux-androideabi x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: Cheap release checks
+      - name: Download archived A1b wire oracle
         env:
           GH_TOKEN: ${{ github.token }}
+        run: gh run download 45060570075 --name a1b-controlled-raw-streams --dir "$RUNNER_TEMP/a1b-archive"
+      - name: Compare production C and Rust handlers over the same deterministic TCP journey
         run: |
-          actionlint .github/workflows/release.yml .github/workflows/targeted.yml
-          python3 tests/test_release_kit.py --configure-native
-      - name: Build and verify release bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          make dist
-          python3 tests/test_release_kit.py --assets dist
+          git checkout --detach HEAD^
+          rustc -Vv
+          repo=$PWD
+          root="$RUNNER_TEMP/a1b-golden"
+          mkdir -p "$root/driver/src" "$root/artifacts"
+          git worktree add --detach "$root/baseline" ae1cdf9c
+          printf 'candidate=%s baseline=%s\n' "$(git rev-parse HEAD)" "$(git -C "$root/baseline" rev-parse HEAD)"
+          cat >"$root/core.c" <<'C'
+          #define _POSIX_C_SOURCE 200809L
+          #include <assert.h>
+          #include <stdint.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <sys/socket.h>
+          #include <time.h>
+          #include "board.h"
+          #include "core.h"
+          #include "screen.h"
+
+          static const char model[] = "Echo Show 8 2nd gen (athena)";
+          static const char word[] = "computer-en-US";
+          static int output_mute, volume = 40, ended, audio_bytes;
+          static enum state current_state = IDLE;
+          static long long clock_ms = 7000;
+          static const struct proto *provider;
+          #ifdef CANDIDATE
+          static struct proto registered;
+          void __real_echo_hassmic_register(void (*)(int), void (*)(void),
+              void (*)(const void *, size_t), void (*)(void), void (*)(int),
+              void (*)(int), void (*)(void));
+          void __wrap_echo_hassmic_register(void (*serve)(int), void (*start)(void),
+              void (*audio)(const void *, size_t), void (*played)(void),
+              void (*volume_changed)(int), void (*mute_changed)(int),
+              void (*print_mdns)(void)) {
+              __real_echo_hassmic_register(serve, start, audio, played, volume_changed, mute_changed, print_mdns);
+              registered = (struct proto){.serve=serve, .start=start, .audio=audio,
+                  .played=played, .volume_changed=volume_changed, .mute_changed=mute_changed,
+                  .print_mdns=print_mdns};
+              provider = &registered;
+          }
+          int __wrap_echo_hassmic_listening(void) { return current_state == LISTENING; }
+          void __wrap_echo_hassmic_thinking(void) {
+              current_state = THINKING;
+              fprintf(stderr, "LEDGER thinking\n");
+          }
+          void __wrap_echo_hassmic_heard(const char *text) {
+              fprintf(stderr, "LEDGER heard %s\n", text);
+          }
+          const char *__wrap_echo_hassmic_model(void) { return model; }
+          const char *__wrap_echo_hassmic_wake_word(void) { return word; }
+          long long __wrap_echo_hassmic_millis(void) { return clock_ms++; }
+          #else
+          pthread_mutex_t core_lock = PTHREAD_MUTEX_INITIALIZER;
+          const char *core_name;
+          int core_port, core_duplex, core_local_wake;
+          const struct board board = {.model=model};
+          int core_wake_words(const struct core_wake_word **list) {
+              static const struct core_wake_word row = {.id="computer-en-US"};
+              assert(strcmp(row.id, word) == 0);
+              *list = &row;
+              return 1;
+          }
+          int core_wake_word(int set) { assert(set == -1); return 0; }
+          enum state core_state(void) { return current_state; }
+          void core_set_state(enum state state) {
+              current_state = state;
+              if (state == THINKING) fprintf(stderr, "LEDGER thinking\n");
+          }
+          void screen_words(int kind, const char *text) {
+              assert(kind == SCREEN_WORDS_HEARD);
+              fprintf(stderr, "LEDGER heard %s\n", text);
+          }
+          int __wrap_clock_gettime(clockid_t id, struct timespec *ts) {
+              assert(id == CLOCK_MONOTONIC);
+              long long ms = clock_ms++;
+              ts->tv_sec = ms / 1000;
+              ts->tv_nsec = (ms % 1000) * 1000000;
+              return 0;
+          }
+          #endif
+          int core_muted(void) { return 0; }
+          int core_volume(void) { return volume; }
+          int core_output_mute(int set) {
+              if (set >= 0) {
+                  output_mute = set;
+                  fprintf(stderr, "LEDGER output mute %d\n", set);
+              }
+              return output_mute;
+          }
+          void core_set_volume(int set) {
+              volume = set;
+              fprintf(stderr, "LEDGER volume %d\n", volume);
+              provider->volume_changed(volume);
+          }
+          void core_link(int up, int ready) { fprintf(stderr, "LEDGER link %d %d\n", up, ready); }
+          void core_duplex_connected(void) { fprintf(stderr, "LEDGER connected\n"); }
+          void core_duplex_failsafe(int seconds) { fprintf(stderr, "LEDGER failsafe %d\n", seconds); }
+          void core_duplex_progress(void) { fprintf(stderr, "LEDGER progress\n"); }
+          void core_tts_begin(unsigned rate, unsigned channels, int media) {
+              fprintf(stderr, "LEDGER reply start %u %u %d\n", rate, channels, media);
+          }
+          void core_tts_data(const void *pcm, size_t len) {
+              static const unsigned char expected[] = {0x10,0x00,0x20,0x00,0x30,0x00,0x40,0x00};
+              assert(len == sizeof expected && memcmp(pcm, expected, len) == 0);
+              audio_bytes += len;
+              fprintf(stderr, "LEDGER reply bytes %zu\n", len);
+          }
+          void core_tts_end(void) { ended = 1; fprintf(stderr, "LEDGER reply end\n"); }
+          #ifndef CANDIDATE
+          void core_link_pause(void) { abort(); }
+          void core_mic_off(void) { abort(); }
+          int core_continue(void) { abort(); }
+          void core_duplex_flush(void) { abort(); }
+          void core_duplex_end(void) { abort(); }
+          void core_no_speech(void) { abort(); }
+          void core_error(void) { abort(); }
+          #endif
+          static void *serve(void *opaque) {
+              int fd = *(int *)opaque;
+              provider->serve(fd);
+              assert(shutdown(fd, SHUT_RDWR) == 0);
+              return NULL;
+          }
+          static void wake(void) {
+              current_state = LISTENING;
+              fprintf(stderr, "LEDGER wake\n");
+              provider->start();
+              for (unsigned frame = 0; frame < 5; frame++) {
+                  unsigned char pcm[640];
+                  for (unsigned i = 0; i < sizeof pcm; i++) pcm[i] = (i + 17 * frame) % 128;
+                  provider->audio(pcm, sizeof pcm);
+              }
+          }
+          static int harness(void) {
+              assert(provider && provider->serve);
+              core_name = "Lab-Sat";
+              core_duplex = 1;
+              core_local_wake = 1;
+              core_port = 16700;
+              const char *descriptor = getenv("GOLD_FD");
+              assert(descriptor);
+              int fd = atoi(descriptor);
+              pthread_t thread;
+              assert(pthread_create(&thread, NULL, serve, &fd) == 0);
+              for (int command; (command = getchar()) != EOF; ) {
+                  assert(pthread_mutex_lock(&core_lock) == 0);
+                  if (command == 'w') wake();
+                  else if (command == 'p') {
+                      assert(ended && audio_bytes == 8);
+                      fprintf(stderr, "LEDGER played\n");
+                      provider->played();
+                  } else abort();
+                  assert(pthread_mutex_unlock(&core_lock) == 0);
+              }
+              return pthread_join(thread, NULL);
+          }
+          #ifdef CANDIDATE
+          int __wrap_echo_hassmic_main(int argc, char **argv) {
+              assert(argc == 1 && strcmp(argv[0], "hassmic") == 0);
+              return harness();
+          }
+          #else
+          int main(void) { provider = &proto_wyoming; return harness(); }
+          #endif
+          C
+          cat >"$root/driver/Cargo.toml" <<EOF
+          [package]
+          name = "a1b-golden-driver"
+          version = "0.0.0"
+          edition = "2024"
+          [dependencies]
+          echo-device = { path = "$repo/crates/echo-device" }
+          EOF
+          echo 'fn main() { match echo_device::run(std::iter::empty()) { Ok(never) => match never {}, Err(e) => panic!("{e}") } }' >"$root/driver/src/main.rs"
+          baseline="$root/baseline/third_party/hassmic"
+          baseline_source="$baseline/src/hassmic"
+          version=$(cat "$baseline/version")
+          set -x
+          cc -std=gnu11 -O2 -pthread -I"$baseline_source" -I"$baseline/src/include" "-DVERSION=\"$version\"" \
+            "$root/core.c" "$baseline_source/proto_wyoming.c" "$baseline_source/wyoming.c" "$baseline_source/json.c" \
+            -Wl,--wrap=clock_gettime -o "$root/historical"
+          core_wrappers=(core_muted core_volume core_output_mute core_set_volume core_link core_duplex_connected core_duplex_failsafe core_duplex_progress core_tts_begin core_tts_data core_tts_end)
+          wrapflags=()
+          definers=()
+          for name in "${core_wrappers[@]}"; do
+            definers+=("-D$name=__wrap_$name")
+            wrapflags+=("-Clink-arg=-Wl,--wrap=$name")
+          done
+          for name in echo_hassmic_main echo_hassmic_register echo_hassmic_listening echo_hassmic_thinking echo_hassmic_heard echo_hassmic_model echo_hassmic_wake_word echo_hassmic_millis; do
+            wrapflags+=("-Clink-arg=-Wl,--wrap=$name")
+          done
+          candidate="$repo/third_party/hassmic"
+          cc -std=gnu11 -O2 -pthread -DCANDIDATE -I"$candidate/src/hassmic" -I"$candidate/src/include" \
+            "${definers[@]}" -c "$root/core.c" -o "$root/core.o"
+          cargo generate-lockfile --offline --manifest-path "$root/driver/Cargo.toml"
+          cargo rustc --offline --locked --manifest-path "$root/driver/Cargo.toml" -- \
+            -Clink-arg="$root/core.o" "${wrapflags[@]}"
+          sha256sum "$root/historical" "$root/driver/target/debug/a1b-golden-driver"
+          set +x
+          cat >"$root/drive.py" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import socket
+          import subprocess
+          import sys
+
+          root = Path(sys.argv[1])
+          expected_ledger = [
+              "connected", "failsafe 30", "link 1 0", "failsafe 17", "link 1 1",
+              "wake", "progress", "heard synthetic question", "thinking", "reply start 16000 1 0",
+              "progress", "reply bytes 8", "progress", "reply end", "played", "volume 73",
+              "output mute 1", "link 0 0",
+          ]
+
+          def capture(name, binary):
+              with socket.socket(socket.AF_INET) as listener:
+                  listener.bind(("127.0.0.1", 0))
+                  listener.listen()
+                  client = socket.create_connection(listener.getsockname(), 3)
+                  server, _ = listener.accept()
+              with client, server:
+                  with subprocess.Popen([binary], pass_fds=(server.fileno(),),
+                          env={**os.environ, "GOLD_FD": str(server.fileno())},
+                          stdin=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+                      server.close()
+                      inbound, outbound, input_order, output_order = [], [], [], []
+                      reader = client.makefile("rb")
+                      def send(kind, data=None, payload=b"", inline=False):
+                          header = {"type": kind}
+                          data_bytes = b""
+                          if inline:
+                              header["data"] = data
+                          elif data is not None:
+                              data_bytes = json.dumps(data, separators=(",", ":")).encode()
+                              header["data_length"] = len(data_bytes)
+                          if payload:
+                              header["payload_length"] = len(payload)
+                          frame = json.dumps(header, separators=(",", ":")).encode() + b"\n" + data_bytes + payload
+                          client.sendall(frame)
+                          inbound.append(frame)
+                          input_order.append(kind)
+
+                      def receive(expected):
+                          line = reader.readline()
+                          assert line.endswith(b"\n"), line
+                          header = json.loads(line)
+                          assert header["type"] == expected, (header, expected)
+                          assert header["version"] == "1.5.4", header
+                          data = reader.read(header.get("data_length", 0))
+                          pcm = reader.read(header.get("payload_length", 0))
+                          outbound.append(line + data + pcm)
+                          output_order.append(expected)
+                          return json.loads(data) if data else None, pcm
+
+                      def callback(char):
+                          process.stdin.write(char)
+                          process.stdin.flush()
+
+                      assert receive("hassmic-speaker") == ({"volume":40, "muted":False}, b"")
+                      send("describe")
+                      info, _ = receive("info")
+                      assert info["satellite"]["name"] == "Lab-Sat"
+                      send("run-satellite", {"hassmic_failsafe_seconds":17})
+                      send("ping")
+                      receive("pong")
+                      callback(b"w")
+                      assert receive("run-pipeline")[0]["wake_word_name"] == "computer-en-US"
+                      for index in range(5):
+                          data, pcm = receive("audio-chunk")
+                          assert data == {"rate":16000, "width":2, "channels":1, "timestamp":7000 + index}, data
+                          assert pcm == bytes((i + 17 * index) % 128 for i in range(640))
+                      send("transcript", {"text":"synthetic question"})
+                      send("synthesize", {"text":"synthetic answer"})
+                      send("audio-start", {"rate":16000, "width":2, "channels":1})
+                      send("audio-chunk", payload=b"\x10\x00\x20\x00\x30\x00\x40\x00")
+                      send("audio-stop")
+                      send("ping")
+                      receive("pong")
+                      callback(b"p")
+                      receive("played")
+                      send("hassmic-set-volume", {"volume":73}, inline=True)
+                      assert receive("hassmic-speaker") == ({"volume":73, "muted":False}, b"")
+                      send("hassmic-set-output-mute", {"mute":True})
+                      assert receive("hassmic-speaker") == ({"volume":73, "muted":True}, b"")
+                      send("ping")
+                      receive("pong")
+                      client.shutdown(socket.SHUT_WR)
+                      assert reader.read() == b""
+                      reader.close()
+                      _, diagnostics = process.communicate(timeout=3)
+                      assert process.returncode == 0, diagnostics
+              ledger = [line.removeprefix("LEDGER ") for line in diagnostics.decode().splitlines() if line.startswith("LEDGER ")]
+              assert ledger == expected_ledger, diagnostics
+              (root / "artifacts" / (name + ".ledger")).write_text("\n".join(ledger) + "\n")
+              print(f"{name} ledger={ledger}")
+              streams = [b"".join(inbound), b"".join(outbound)]
+              for direction, order, stream in zip(("client-to-device", "device-to-client"), (input_order, output_order), streams):
+                  (root / "artifacts" / (name + "." + direction + ".bin")).write_bytes(stream)
+                  print(f"{name} {direction}: frames={len(order)} bytes={len(stream)} sha256={hashlib.sha256(stream).hexdigest()} order={order}")
+              return streams
+
+          original = capture("historical", root / "historical")
+          candidate = capture("candidate", root / "driver/target/debug/a1b-golden-driver")
+          for direction, (a, b) in enumerate(zip(original, candidate)):
+              assert a == b, (direction, next((i for i, pair in enumerate(zip(a,b)) if pair[0] != pair[1]), min(len(a),len(b))))
+          print("TARGETED_RESULT P-GOLD exit=0 approved_field_exceptions=0")
+          PY
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          unshare --user --map-root-user --net -- /bin/sh -c 'ip link set lo up && exec "$@"' sh python3 "$root/drive.py" "$root"
+          cmp "$root/artifacts/historical.client-to-device.bin" "$root/artifacts/candidate.client-to-device.bin"
+          cmp "$root/artifacts/historical.device-to-client.bin" "$root/artifacts/candidate.device-to-client.bin"
+          cmp "$root/artifacts/candidate.client-to-device.bin" "$RUNNER_TEMP/a1b-archive/historical.client-to-device.bin"
+          test "$(wc -c < "$root/artifacts/candidate.client-to-device.bin")" -eq 540
+          cmp "$root/artifacts/candidate.device-to-client.bin" "$RUNNER_TEMP/a1b-archive/historical.device-to-client.bin"
+          test "$(wc -c < "$root/artifacts/candidate.device-to-client.bin")" -eq 4857
+          cmp "$root/artifacts/candidate.ledger" "$RUNNER_TEMP/a1b-archive/historical.ledger"
+          test "$(wc -c < "$root/artifacts/candidate.ledger")" -eq 204
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
-          name: targeted-release-${{ github.sha }}
-          path: |
-            dist/echo-*-armv7.tar.gz
-            dist/default-*.screenpack.tar.gz
-            dist/companion-0.2.2.screenpack.tar.gz
-            dist/echo-setup-*-linux-x86_64
-            dist/echo-setup-*-windows-x86_64.exe
-            dist/install.sh
-            dist/install.ps1
-            dist/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 7
+          name: a1b-controlled-raw-streams
+          path: ${{ runner.temp }}/a1b-golden/artifacts
