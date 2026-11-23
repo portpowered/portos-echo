@@ -77,7 +77,7 @@ async fn exercise(mute: bool) {
         start().unwrap();
         let options =
             admission_options().conversation(("discovery", "discovery"), Instant::now() + Duration::from_secs(15));
-        let result = crate::bridge_voice::voice_tools::conversation(
+        let result = Box::pin(crate::bridge_voice::voice_tools::conversation(
             (&client, &mut events, run),
             &mut io,
             MemoryPeer,
@@ -87,7 +87,7 @@ async fn exercise(mute: bool) {
                 observe(&notice, &acknowledged, mute);
                 Ok(())
             },
-        )
+        ))
         .await;
         assert_eq!(result, Err(if mute { Error::Control } else { Error::Unavailable }));
         replay().await;

@@ -183,7 +183,7 @@ async fn opening_rejects_expiry_and_ready_cancellation_before_offer_or_rpc() {
         let (link, mut events, microphone, observer) = device().await;
         let mut options = opening_options();
         options.deadline = Instant::now();
-        let result = open_conversation(
+        let result = Box::pin(open_conversation(
             (&link, &mut events, microphone),
             &mut io,
             peer,
@@ -194,7 +194,7 @@ async fn opening_rejects_expiry_and_ready_cancellation_before_offer_or_rpc() {
                 }
             },
             |_| unreachable!(),
-        )
+        ))
         .await;
         assert_eq!(result, Err(if cancelled { Error::Control } else { Error::Deadline }));
         assert_eq!(*state.states.borrow(), PeerState::Closed);
@@ -397,14 +397,14 @@ async fn opening_invalid_response_and_played_budgets_have_no_call_effects() {
         options.session.response_timeout = response;
         options.session.played_timeout = played;
         assert_eq!(
-            open_conversation(
+            Box::pin(open_conversation(
                 (&link, &mut events, microphone),
                 &mut io,
                 peer,
                 options,
                 std::future::pending(),
                 |_| unreachable!(),
-            )
+            ))
             .await,
             Err(Error::Input)
         );

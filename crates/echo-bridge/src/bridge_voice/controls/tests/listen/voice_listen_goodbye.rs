@@ -79,20 +79,13 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) -> usize {
     let (tx, rx) = mpsc::channel(64);
     let mut port = Port(rx, std::rc::Rc::default());
     let mut source = Source::new(200, false).unwrap();
-    let options = Options {
-        listen_timeout: Some(Duration::from_secs(3)),
-        session_max: Duration::from_secs(60),
-        response_deadline: Instant::now() + Duration::from_secs(10),
-        played_timeout: Duration::from_secs(1),
-        reply_lead_ms: 200,
-        muted: false,
-    };
-    source
-        .controller
+    let options = farewell_options();
+    let controller = &source.controller;
+    controller
         .configure_tools(options.listen_timeout, options.session_max)
         .unwrap();
-    source.controller.admit_response(options.response_deadline).unwrap();
-    let (end, answer) = session_request(SessionCommand::End, source.controller.token(), "farewell");
+    controller.admit_response(options.response_deadline).unwrap();
+    let (end, answer) = session_request(SessionCommand::End, controller.token(), "farewell");
     let played = tokio::sync::Notify::new();
     let stopped = tokio::sync::Notify::new();
     let mut receipts = Vec::new();
@@ -131,6 +124,17 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) -> usize {
     let cut = commands.iter().filter(|cmd| matches!(cmd, Command::Cut(_)));
     assert_eq!(cut.count(), cuts);
     played_bytes(&commands)
+}
+
+fn farewell_options() -> Options {
+    Options {
+        listen_timeout: Some(Duration::from_secs(3)),
+        session_max: Duration::from_secs(60),
+        response_deadline: Instant::now() + Duration::from_secs(10),
+        played_timeout: Duration::from_secs(1),
+        reply_lead_ms: 200,
+        muted: false,
+    }
 }
 
 fn played_bytes(commands: &[Command]) -> usize {

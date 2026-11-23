@@ -427,18 +427,18 @@ mod tests {
     fn session_slots_reuse_run_index_without_reopening_stale_run() {
         let world = Controller::new();
         let first = world.clone().admit(Instant::now(), None).unwrap();
-        let stale = first.handle;
+        let old_handle = first.handle;
         assert!(matches!(world.clone().admit(Instant::now(), None), Err(Error::Control)));
         drop(first);
 
         let second = world.clone().admit(Instant::now(), None).unwrap();
-        assert_eq!(second.handle.index, stale.index);
-        assert_ne!(second.handle.generation, stale.generation);
+        assert_eq!(second.handle.index, old_handle.index);
+        assert_ne!(second.handle.generation, old_handle.generation);
         let mut state = world.state();
         let result = world.session_step(
             &mut state,
             SessionEvent::Run {
-                session: stale,
+                session: old_handle,
                 change: SessionChange::ReplyStarted,
             },
         );
