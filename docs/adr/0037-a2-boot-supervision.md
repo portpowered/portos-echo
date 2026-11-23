@@ -54,3 +54,5 @@ and [bridge supervisor](https://github.com/portpowered/echo-dot-assist/blob/c3b6
   slot promotion while parked and legacy restore. A2 T5 verifies that Fire OS
   permits the fixed shell entry and enforces the resulting domain, socket access,
   process cleanup and rollback with the installed init services.
+- The installer provisions the A1 device's existing wake model and state
+  locations on a bare rooted Echo. The launch keeps the A1 asset lookup.

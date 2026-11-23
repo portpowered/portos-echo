@@ -134,6 +134,30 @@ fn boot_supervision_parks_until_marker_is_removed_without_charging() {
 }
 
 #[test]
+fn boot_supervision_parks_during_backoff_and_reopens_a_stopped_attempt() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.json");
+    let mut host = Fake::new(&path, 10_100);
+    host.exits = vec![(100, Role::Core), (3200, Role::Core)];
+    host.parked = Some((4000, 10_000));
+    supervise(&mut host).unwrap();
+    assert_eq!(host.times(Role::Core), [0, 3100, 10_000]);
+    assert_eq!(host.tries, [(0, 0), (100, 1), (3200, 2)]);
+    assert_eq!(host.acks, [(0, false), (4000, true), (10_000, false)]);
+
+    let mut stopped = Fake::new(&path, 1000);
+    stopped.parked = Some((0, 2000));
+    supervise(&mut stopped).unwrap();
+    assert!(stopped.starts.is_empty());
+    assert_eq!(stopped.journal().failed_tries(), 2);
+
+    let mut reopened = Fake::new(&path, 200);
+    supervise(&mut reopened).unwrap();
+    assert_eq!(reopened.times(Role::Core), [0]);
+    assert_eq!(reopened.journal().failed_tries(), 2);
+}
+
+#[test]
 fn boot_supervision_quick_exit_backoff_caps_and_recovers() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.json");

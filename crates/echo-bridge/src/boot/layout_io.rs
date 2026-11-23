@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write as _,
     fs::{self, DirBuilder, File, Metadata},
     io::{self, Read, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt},
@@ -138,7 +139,11 @@ pub(super) fn digest(slot: Slot) -> Result<Digest> {
         }
         hasher.update(&buffer[..read]);
     }
-    Digest::parse(format!("{:x}", hasher.finalize()))
+    let mut hex = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Digest::parse(hex)
 }
 
 pub(super) fn marker(name: &str) -> PathBuf {
