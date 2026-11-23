@@ -327,12 +327,7 @@ impl World {
     pub async fn close(&mut self) -> Result<(), String> {
         self.screen.take();
         let mut failures = self.close_bridge().await;
-        if let Some(provider) = self.canonical.take() {
-            match provider.close().await {
-                Ok(snapshot) if self.valid_provider(&snapshot) => {}
-                _ => failures.push("cleanup: canonical M1 provider observations disagree".into()),
-            }
-        }
+        failures.extend(self.close_provider().await.err());
         self.private.take();
         if let Some(live) = self.live.take() {
             live.shutdown().await;
@@ -355,6 +350,16 @@ impl World {
             Ok(())
         } else {
             Err(failures.join("; "))
+        }
+    }
+
+    async fn close_provider(&mut self) -> Result<(), String> {
+        let Some(provider) = self.canonical.take() else {
+            return Ok(());
+        };
+        match provider.close().await {
+            Ok(snapshot) if self.valid_provider(&snapshot) => Ok(()),
+            _ => Err("cleanup: canonical M1 provider observations disagree".into()),
         }
     }
 
