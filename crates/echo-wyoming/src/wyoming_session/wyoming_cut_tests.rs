@@ -25,7 +25,7 @@ async fn failure_after_cut_preserves_real_played_and_completes_capture() {
         vec![1, 2],
     )
     .await;
-    assert_eq!(run.recv().await.unwrap().unwrap().payload, vec![1, 2]);
+    assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), vec![1, 2]);
     let (_tx, rx) = mpsc::channel(1);
     let format = serde_json::from_value(json!({"rate":24000,"width":2,"channels":1})).unwrap();
     let owner = client.clone();
@@ -76,7 +76,7 @@ async fn missing_played_deadline_retires_failed_run_and_serves_next_run() {
     let caller = async {
         report_failure(&client).await;
         let mut run = events.recv().await.unwrap().unwrap().run.unwrap();
-        assert_eq!(run.recv().await.unwrap().unwrap().payload, vec![1, 2]);
+        assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), vec![1, 2]);
         let (tx, rx) = mpsc::channel(1);
         tx.send(vec![3, 4]).await.unwrap();
         drop(tx);
@@ -329,7 +329,7 @@ async fn cut_at_reply_end(drained: bool) {
         .await;
         client.describe().await.unwrap();
         assert_eq!(play.await, Ok(PlayOutcome::Cut));
-        assert_eq!(run.recv().await.unwrap().unwrap().payload, vec![3, 4]);
+        assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), vec![3, 4]);
         client.close().await.unwrap();
     };
     let server = async {

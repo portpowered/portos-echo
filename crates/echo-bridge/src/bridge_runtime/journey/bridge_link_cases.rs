@@ -281,7 +281,7 @@ async fn bridge_link_partial_send_failure_never_claims_completed() {
         "Computer",
         vec![MicFrame {
             format: bridge_audio::format(16_000),
-            payload: vec![0; 2048],
+            payload: vec![0; 2048].into(),
         }],
     );
     let run = select_wake(events.recv().await.unwrap()).unwrap().unwrap();
@@ -364,7 +364,7 @@ fn capture(samples: usize) -> Vec<MicFrame> {
     } else {
         vec![MicFrame {
             format: bridge_audio::format(16_000),
-            payload: vec![0; samples * 2],
+            payload: vec![0; samples * 2].into(),
         }]
     }
 }
@@ -425,7 +425,7 @@ async fn bridge_link_continuation_requires_new_input_and_preserves_admitted_tota
 fn marker(sample: i16) -> MicFrame {
     MicFrame {
         format: bridge_audio::format(16_000),
-        payload: sample.to_le_bytes().repeat(1024),
+        payload: sample.to_le_bytes().repeat(1024).into(),
     }
 }
 

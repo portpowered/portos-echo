@@ -50,7 +50,7 @@ async fn media_call_runs_device_capture_reply_drain_and_played_on_one_io_owner()
         "Computer",
         vec![MicFrame {
             format: crate::bridge_audio::format(16_000),
-            payload: vec![0; 1280],
+            payload: vec![0; 1280].into(),
         }],
     );
     let Some(LinkEvent::Wake(run)) = events.recv().await.unwrap() else {

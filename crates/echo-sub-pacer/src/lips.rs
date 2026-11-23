@@ -65,7 +65,7 @@ impl Lips {
         self.wanted = wanted.unwrap_or(self.wanted);
         if !self.wanted {
             if !self.analyser.at_rest() {
-                self.analyser = analyser();
+                self.analyser.reset();
             }
             self.clear_pending();
             self.moving = false;
@@ -137,7 +137,7 @@ impl Lips {
     pub(crate) fn cut(&mut self, now: Duration) -> Option<PacerLipBatch> {
         self.clear_pending();
         self.moving = false;
-        self.analyser = analyser();
+        self.analyser.reset();
         if !self.wanted {
             return None;
         }

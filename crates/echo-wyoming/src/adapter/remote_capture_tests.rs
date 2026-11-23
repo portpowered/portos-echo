@@ -95,7 +95,7 @@ async fn remote_capture_requires_live_id_and_preserves_independent_wake() {
         vec![8, 0],
     )
     .await;
-    assert_eq!(run.recv().await.unwrap().unwrap().payload, [8, 0]);
+    assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), [8, 0]);
 }
 
 #[tokio::test(start_paused = true)]

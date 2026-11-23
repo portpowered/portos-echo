@@ -53,6 +53,7 @@ impl Converter {
 pub(crate) struct Encoder {
     converter: Converter,
     codec: opus::Encoder,
+    packet: [u8; 1275],
 }
 impl Encoder {
     pub(crate) fn new() -> Result<Self, Error> {
@@ -60,21 +61,20 @@ impl Encoder {
             converter: Converter::new(320, 3.0)?,
             codec: opus::Encoder::new(48_000, opus::Channels::Mono, opus::Application::Voip)
                 .map_err(|_| Error::Audio)?,
+            packet: [0; 1275],
         })
     }
-    pub(crate) fn encode(&mut self, pcm: &PcmFrame) -> Result<Option<Vec<u8>>, Error> {
+    pub(crate) fn encode(&mut self, pcm: &PcmFrame) -> Result<Option<&[u8]>, Error> {
         let input = pcm.map(|sample| f32::from(sample) / 32768.0);
         self.converter.push(&input)?;
         let Some(samples) = self.converter.take::<960>() else {
             return Ok(None);
         };
-        let mut packet = vec![0; 1275];
         let len = self
             .codec
-            .encode_float(&samples, &mut packet)
+            .encode_float(&samples, &mut self.packet)
             .map_err(|_| Error::Audio)?;
-        packet.truncate(len);
-        Ok(Some(packet))
+        Ok(Some(&self.packet[..len]))
     }
 }
 

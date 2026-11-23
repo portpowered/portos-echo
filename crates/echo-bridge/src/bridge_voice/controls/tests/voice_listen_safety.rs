@@ -58,7 +58,7 @@ impl Input {
         self.capture
             .send(MicFrame {
                 format: crate::bridge_audio::format(16_000),
-                payload: value.to_le_bytes().repeat(count),
+                payload: value.to_le_bytes().repeat(count).into(),
             })
             .await
             .unwrap();

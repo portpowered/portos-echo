@@ -48,8 +48,8 @@ pub async fn cut_duplex<T: AsyncRead + AsyncWrite + Unpin>(mut client: WyomingCl
                 dropped: 3
             }
         );
-        assert_eq!(run.recv().await.unwrap().unwrap().payload, [4]);
-        assert_eq!(run.recv().await.unwrap().unwrap().payload, [5]);
+        assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), [4]);
+        assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), [5]);
         for value in 10..15 {
             tx.try_send(vec![value]).unwrap();
         }
@@ -60,8 +60,8 @@ pub async fn cut_duplex<T: AsyncRead + AsyncWrite + Unpin>(mut client: WyomingCl
             WyomingEvent::Info(json!({"cut":true}))
         );
         assert_eq!(play.await, Ok(PlayOutcome::Cut));
-        assert_eq!(run.recv().await.unwrap().unwrap().payload, [6]);
-        assert_eq!(run.recv().await.unwrap().unwrap().payload, [7]);
+        assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), [6]);
+        assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), [7]);
         assert_eq!(run.recv().await.unwrap(), None);
         assert_eq!(run.stats().received, 7);
         client.cut().await.unwrap();

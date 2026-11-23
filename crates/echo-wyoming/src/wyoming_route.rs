@@ -1,8 +1,8 @@
 use crate::adapter::speaker_events;
 use crate::wyoming_client::device::Connection;
 use crate::wyoming_events;
-use crate::{Error, MicFrame, ReceivedEvent, Run, wyoming_queue::MicQueue};
-use echo_contracts::wyoming::{Event, WyomingEvent};
+use crate::{Error, MicFrame, ReceivedEvent, Run, wyoming_queue::MicQueue, wyoming_wire::Frame};
+use echo_contracts::wyoming::WyomingEvent;
 use echo_core_api::DeviceEvent;
 use echo_link::SpeakerState;
 use std::sync::{Arc, Weak};
@@ -62,21 +62,34 @@ impl Router {
         matches
     }
 
-    pub(crate) fn route(&mut self, mut frame: Event) -> Result<WyomingEvent, Error> {
-        let event = frame.typed().map_err(|_| Error::Protocol)?;
+    #[cfg(test)]
+    pub(crate) fn route(&mut self, frame: echo_contracts::wyoming::Event) -> Result<WyomingEvent, Error> {
+        let frame = match frame.typed().map_err(|_| Error::Protocol)? {
+            WyomingEvent::AudioChunk(data) => Frame::Audio(data, frame.payload.into()),
+            _ => Frame::Control(frame),
+        };
+        self.route_frame(frame)
+    }
+
+    pub(crate) fn route_frame(&mut self, frame: Frame) -> Result<WyomingEvent, Error> {
+        let (event, payload) = match frame {
+            Frame::Audio(data, payload) => {
+                if !self.stale_capture
+                    && let Some(queue) = &self.current
+                {
+                    queue.push(MicFrame {
+                        data: data.clone(),
+                        payload,
+                    });
+                }
+                (WyomingEvent::AudioChunk(data), Vec::new())
+            }
+            Frame::Control(frame) => (frame.typed().map_err(|_| Error::Protocol)?, frame.payload),
+        };
         let audio_count = u64::from(matches!(event, WyomingEvent::AudioChunk(_)));
         let speaker = self.observe_speaker(&event);
         let run = match &event {
             WyomingEvent::RunPipeline(pipeline) => self.open(pipeline),
-            WyomingEvent::AudioChunk(data) if !self.stale_capture => {
-                if let Some(queue) = &self.current {
-                    queue.push(MicFrame {
-                        data: data.clone(),
-                        payload: std::mem::take(&mut frame.payload),
-                    });
-                }
-                None
-            }
             WyomingEvent::Other(name, data) if name == "hassmic-mute" => {
                 let muted = data["muted"].as_bool().ok_or(Error::Protocol)?;
                 self.device.observe(DeviceEvent::MicMuteObserved { muted });
@@ -101,7 +114,7 @@ impl Router {
                 capture_active: self.device.view().capture_open && !self.stale_capture,
                 speaker,
                 event: event.clone(),
-                payload: if audio_count == 0 { frame.payload } else { vec![] },
+                payload,
                 run,
             })
             .map_err(|_| Error::Capacity)?;

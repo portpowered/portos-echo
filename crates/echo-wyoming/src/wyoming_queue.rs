@@ -26,7 +26,7 @@ impl<T> FrameQueue<T> {
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             state: Mutex::new(State {
-                frames: VecDeque::new(),
+                frames: VecDeque::with_capacity(capacity.min(crate::ClientOptions::default().mic_capacity)),
                 retain: true,
                 muted: false,
                 end_seen: false,
@@ -156,7 +156,7 @@ mod wyoming_loom {
                     timestamp: None,
                     extra: std::collections::BTreeMap::default(),
                 },
-                payload: vec![index; if index == 12 { 1024 } else { 2048 }],
+                payload: vec![index; if index == 12 { 1024 } else { 2048 }].into(),
             });
         }
         assert_eq!(
@@ -169,7 +169,7 @@ mod wyoming_loom {
         queue.close(Ok(()));
         for index in 0..53_u8 {
             assert_eq!(
-                queue.recv().await.unwrap().unwrap().payload,
+                queue.recv().await.unwrap().unwrap().payload.as_ref(),
                 vec![index; if index == 12 { 1024 } else { 2048 }]
             );
         }

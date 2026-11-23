@@ -59,7 +59,7 @@ pub enum Error {
 #[derive(Debug, PartialEq)]
 pub struct MicFrame {
     pub data: AudioChunkData,
-    pub payload: Vec<u8>,
+    pub payload: echo_link::MicPayload,
 }
 
 /// Counts scoped to one run, including frames evicted before consumption.

@@ -89,7 +89,7 @@ mod tests {
                 width: 2,
                 channels: 1,
             },
-            payload: value.to_le_bytes().repeat(320),
+            payload: value.to_le_bytes().repeat(320).into(),
         }
     }
 
@@ -176,7 +176,7 @@ mod tests {
     fn wake_earcon_setup_capacity_fails_without_evicting_retained_pcm() {
         let mut capture = Capture::default();
         let mut large = frame(123);
-        large.payload.resize(MAX_BYTES, 1);
+        large.payload = vec![1; MAX_BYTES].into();
         capture.push(Some(large)).unwrap();
         assert_eq!(capture.push(Some(frame(456))), Err(echo_link::Error::Capacity.into()));
         assert_eq!((capture.bytes, capture.frames.len()), (MAX_BYTES, 1));
