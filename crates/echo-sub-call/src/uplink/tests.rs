@@ -41,27 +41,32 @@ fn receipt(state: &mut State, run: SessionHandle, attempt: u64, receipt: UplinkR
 #[test]
 fn fixed_ring_evicts_oldest_and_drains_in_order_in_the_original_storage() {
     let mut state = State::default();
-    let run = run(1);
     let base = state.uplink.slots.as_ptr();
     assert_eq!(state.uplink.slots.len(), CAPACITY);
-    step(&mut state, run, UplinkEvent::CaptureOpened);
-    let first = offer(step(&mut state, run, UplinkEvent::MicFrame(&[0; 320])), run, 0);
-    receipt(&mut state, run, first, UplinkReceipt::Full);
+
+    fill_overflow_and_drain(&mut state, run(1));
+
+    assert_eq!(state.uplink.slots.as_ptr(), base);
+    assert_eq!(state.uplink.slots.len(), CAPACITY);
+}
+
+fn fill_overflow_and_drain(state: &mut State, run: SessionHandle) {
+    step(state, run, UplinkEvent::CaptureOpened);
+    let first = offer(step(state, run, UplinkEvent::MicFrame(&[0; 320])), run, 0);
+    receipt(state, run, first, UplinkReceipt::Full);
     let capacity = i16::try_from(CAPACITY).unwrap();
     for marker in 1..=capacity {
-        let out = step(&mut state, run, UplinkEvent::MicFrame(&[marker; 320]));
+        let out = step(state, run, UplinkEvent::MicFrame(&[marker; 320]));
         assert_eq!(out.uplink_evicted, marker == capacity);
         assert_eq!(out.into_parts(), (None, None));
     }
     assert_eq!(state.view().backlog_depth, CAPACITY);
     assert_eq!(state.view().uplink_dropped, 1);
     for marker in 1..=capacity {
-        let attempt = offer(step(&mut state, run, UplinkEvent::Writable), run, marker);
-        receipt(&mut state, run, attempt, UplinkReceipt::Accepted);
+        let attempt = offer(step(state, run, UplinkEvent::Writable), run, marker);
+        receipt(state, run, attempt, UplinkReceipt::Accepted);
     }
     assert_eq!(state.view().backlog_depth, 0);
-    assert_eq!(state.uplink.slots.as_ptr(), base);
-    assert_eq!(state.uplink.slots.len(), CAPACITY);
 }
 
 #[test]
