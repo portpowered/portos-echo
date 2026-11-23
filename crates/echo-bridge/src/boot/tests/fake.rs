@@ -1,13 +1,16 @@
 use std::{
     fs,
     io::{BufRead, BufReader, Write},
+    net::IpAddr,
     path::Path,
     process::{Child, Command, Stdio},
     sync::OnceLock,
     time::Duration,
 };
 
-use echo_boot::{ChildStatus, Digest, HostOps, Identity, Log, Result, Role, Selection, Slot, Stop};
+use echo_boot::{ChildStatus, Digest, Family, HostOps, Identity, Log, Result, Role, Selection, Slot, Stop};
+
+use super::filter_fixture::{FilterFixture, golden};
 
 pub(super) struct Fake<'a> {
     pub state: &'a Path,
@@ -25,6 +28,7 @@ pub(super) struct Fake<'a> {
     pub acks: Vec<(u64, bool)>,
     pub tries: Vec<(u64, u8)>,
     pub logs: Vec<String>,
+    pub firewall: Option<FilterFixture>,
     children: [Option<FakeChild>; 2],
 }
 
@@ -52,6 +56,7 @@ impl<'a> Fake<'a> {
             acks: vec![],
             tries: vec![],
             logs: vec![],
+            firewall: None,
             children: [None, None],
         }
     }
@@ -131,6 +136,9 @@ impl HostOps for Fake<'_> {
             if sample > self.time {
                 next = next.min(sample);
             }
+        }
+        if let Some(firewall) = &self.firewall {
+            firewall.at(self.time, next);
         }
         self.time = next;
     }
@@ -219,7 +227,39 @@ impl HostOps for Fake<'_> {
             Log::Start(role, slot) => format!("start {} {}", role.name(), slot.name()),
             Log::Exit(role, why, status) => format!("exit {} {why:?} {status}", role.name()),
             Log::Fallback { current, previous } => format!("fallback {} {}", current.as_str(), previous.as_str()),
+            Log::FirewallReady => "firewall ready".into(),
+            Log::FirewallUnhealthy(stage) => format!("firewall unhealthy: {stage}"),
         };
         self.logs.push(line);
+    }
+
+    fn resolvers(&mut self) -> Result<Vec<IpAddr>> {
+        match &self.firewall {
+            Some(firewall) => firewall.io.resolvers(&firewall.runtime),
+            None => Ok(["192.0.2.53", "2001:db8::53"].map(|s| s.parse().unwrap()).to_vec()),
+        }
+    }
+
+    fn filter(&mut self, family: Family) -> Result<Option<String>> {
+        match &self.firewall {
+            Some(firewall) => firewall.io.filter(&firewall.runtime, family),
+            None => Ok(Some(golden(family).into())),
+        }
+    }
+
+    fn restore_filter(&mut self, family: Family, transaction: &str) -> Result<()> {
+        let firewall = self.firewall.as_ref().unwrap();
+        firewall.io.restore(&firewall.runtime, family, transaction)
+    }
+
+    fn ipv6_disabled(&mut self, enforce: bool) -> Result<bool> {
+        self.firewall.as_ref().unwrap().io.ipv6_disabled(enforce)
+    }
+
+    fn usb_adb_only(&mut self, enforce: bool) -> Result<bool> {
+        match &self.firewall {
+            Some(firewall) => firewall.io.usb_adb_only(&firewall.runtime, enforce),
+            None => Ok(true),
+        }
     }
 }

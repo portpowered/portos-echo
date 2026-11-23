@@ -1,6 +1,6 @@
-use std::time::Duration;
+use std::{net::IpAddr, time::Duration};
 
-use crate::{Digest, Identity, Result, Role, Selection, Slot};
+use crate::{Digest, Family, Identity, Result, Role, Selection, Slot, firewall};
 
 const POLL: Duration = Duration::from_millis(100);
 const STABLE: Duration = Duration::from_secs(60);
@@ -27,6 +27,8 @@ pub enum Log<'a> {
     Start(Role, Slot),
     Exit(Role, Stop, &'a str),
     Fallback { current: &'a Digest, previous: &'a Digest },
+    FirewallReady,
+    FirewallUnhealthy(&'a str),
 }
 
 /// Owns the environmental effects and the live child handles for the boot roles.
@@ -44,6 +46,12 @@ pub trait HostOps {
     /// Finishes cleanup and reaps the process before returning its status.
     fn stop(&mut self, role: Role, why: Stop) -> Result<String>;
     fn log(&mut self, entry: Log<'_>);
+    fn resolvers(&mut self) -> Result<Vec<IpAddr>>;
+    /// None denotes a missing tool. A failed invocation is an error.
+    fn filter(&mut self, family: Family) -> Result<Option<String>>;
+    fn restore_filter(&mut self, family: Family, transaction: &str) -> Result<()>;
+    fn ipv6_disabled(&mut self, enforce: bool) -> Result<bool>;
+    fn usb_adb_only(&mut self, enforce: bool) -> Result<bool>;
 }
 
 /// Runs one supervisor, including reconciliation of a previously interrupted attempt.
@@ -63,6 +71,8 @@ struct Supervisor {
     core: Lifecycle,
     selection: Option<Selection>,
     parked: bool,
+    firewall_retry_at: Duration,
+    firewall_error: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -97,6 +107,10 @@ impl Supervisor {
                 self.park(host)?;
             } else {
                 if self.parked || self.selection.is_none() {
+                    if !self.firewall_ready(host) {
+                        host.sleep(POLL);
+                        continue;
+                    }
                     self.resume(host)?;
                 }
                 self.observe(host, Role::Core)?;
@@ -107,6 +121,26 @@ impl Supervisor {
             host.sleep(POLL);
         }
         Ok(())
+    }
+
+    fn firewall_ready(&mut self, host: &mut impl HostOps) -> bool {
+        if host.now() < self.firewall_retry_at {
+            return false;
+        }
+        match firewall::check_firewall(host) {
+            Ok(()) => {
+                self.firewall_error = None;
+                true
+            }
+            Err(stage) => {
+                if self.firewall_error != Some(stage) {
+                    host.log(Log::FirewallUnhealthy(stage));
+                }
+                self.firewall_error = Some(stage);
+                self.firewall_retry_at = host.now() + firewall::WATCH;
+                false
+            }
+        }
     }
 
     fn park(&mut self, host: &mut impl HostOps) -> Result<()> {

@@ -1,6 +1,8 @@
 //! T3 controlled supervision using isolated child processes and a paused host clock.
 
+mod boot_firewall;
 mod fake;
+mod filter_fixture;
 
 use echo_boot::{Identity, Role, Slot, Stop, supervise};
 use fake::Fake;

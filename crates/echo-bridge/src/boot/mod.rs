@@ -3,6 +3,10 @@ use std::{ffi::OsString, io::Write, process::ExitCode};
 #[cfg(any(target_os = "android", target_os = "linux"))]
 mod android;
 #[cfg(any(target_os = "android", target_os = "linux"))]
+mod command_io;
+#[cfg(any(target_os = "android", target_os = "linux"))]
+mod firewall_io;
+#[cfg(any(target_os = "android", target_os = "linux"))]
 mod launcher;
 #[cfg(any(target_os = "android", target_os = "linux"))]
 mod layout_io;
@@ -64,8 +68,20 @@ fn run(_: Mode) -> echo_boot::Result<()> {
 #[cfg(any(target_os = "android", target_os = "linux"))]
 fn run(mode: Mode) -> echo_boot::Result<()> {
     launcher::require_root()?;
+    let _firewall_lock = match mode {
+        Mode::Firewall => Some(layout_io::lock_firewall()?),
+        Mode::Run => None,
+    };
+    execute(mode, &mut android::Android::open(matches!(mode, Mode::Run))?)
+}
+
+#[cfg(any(target_os = "android", target_os = "linux"))]
+fn execute(mode: Mode, host: &mut impl echo_boot::HostOps) -> echo_boot::Result<()> {
     match mode {
-        Mode::Firewall => Err("firewall mode unavailable"),
-        Mode::Run => echo_boot::supervise(&mut android::Android::open()?),
+        Mode::Firewall => {
+            echo_boot::watch_firewall(host);
+            Ok(())
+        }
+        Mode::Run => echo_boot::supervise(host),
     }
 }

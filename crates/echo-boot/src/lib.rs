@@ -1,9 +1,11 @@
 //! Boot supervision policy. All time, processes and filesystem access are supplied by the host.
 
+mod firewall;
 pub mod layout;
 mod selection;
 mod supervisor;
 
+pub use firewall::{Family, watch_firewall};
 pub use selection::{Digest, Selection, Slot};
 pub use supervisor::{ChildStatus, HostOps, Log, Stop, supervise};
 

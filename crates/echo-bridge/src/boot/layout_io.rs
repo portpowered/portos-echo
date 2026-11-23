@@ -22,24 +22,8 @@ pub(super) struct Layout {
 
 impl Layout {
     pub(super) fn open() -> Result<Self> {
-        let root = Path::new(layout::ROOT);
-        let bin = root.join(layout::BIN);
-        check_directory(root)?;
-        check_directory(&bin)?;
-        let state = bin.join(layout::BOOT_STATE);
-        match DirBuilder::new().mode(0o700).create(&state) {
-            Ok(()) => sync_directory(&bin)?,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
-            Err(_) => return Err("create boot state"),
-        }
-        check_directory(&state)?;
-        if metadata(&state)?.mode() & 0o077 != 0 {
-            return Err("boot state must be root-only");
-        }
-        let lock = state_file(&state.join(LOCK), OFlags::RDWR | OFlags::CREATE).map_err(|_| "open supervisor lock")?;
-        check_state_file(&lock)?;
-        lock.try_lock()
-            .map_err(|_| "supervisor already active or cleanup pending")?;
+        let state = boot_state()?;
+        let lock = lock_state(&state.join(LOCK)).map_err(|_| "supervisor already active or cleanup pending")?;
         rustix::io::fcntl_setfd(&lock, rustix::io::FdFlags::empty()).map_err(|_| "inherit supervisor lock")?;
         Ok(Self { state, _lock: lock })
     }
@@ -72,6 +56,35 @@ impl Layout {
         fs::rename(temp, self.state.join(layout::SELECTION)).map_err(|_| "publish selection journal")?;
         sync_directory(&self.state)
     }
+}
+
+pub(super) fn lock_firewall() -> Result<File> {
+    lock_state(&boot_state()?.join("firewall.lock")).map_err(|_| "firewall writer lock unavailable")
+}
+
+fn boot_state() -> Result<PathBuf> {
+    let root = Path::new(layout::ROOT);
+    let bin = root.join(layout::BIN);
+    check_directory(root)?;
+    check_directory(&bin)?;
+    let state = bin.join(layout::BOOT_STATE);
+    match DirBuilder::new().mode(0o700).create(&state) {
+        Ok(()) => sync_directory(&bin)?,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
+        Err(_) => return Err("create boot state"),
+    }
+    check_directory(&state)?;
+    if metadata(&state)?.mode() & 0o077 != 0 {
+        return Err("boot state must be root-only");
+    }
+    Ok(state)
+}
+
+fn lock_state(path: &Path) -> Result<File> {
+    let lock = state_file(path, OFlags::RDWR | OFlags::CREATE).map_err(|_| "open boot lock")?;
+    check_state_file(&lock)?;
+    lock.try_lock().map_err(|_| "acquire boot lock")?;
+    Ok(lock)
 }
 
 fn state_file(path: &Path, flags: OFlags) -> rustix::io::Result<File> {

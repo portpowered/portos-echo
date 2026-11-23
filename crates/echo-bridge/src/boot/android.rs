@@ -1,23 +1,26 @@
 use std::{
     io::Write,
+    net::IpAddr,
     process::Stdio,
     time::{Duration, Instant},
 };
 
-use echo_boot::{ChildStatus, Digest, HostOps, Identity, Log, Result, Role, Selection, Slot, Stop};
+use echo_boot::{ChildStatus, Digest, Family, HostOps, Identity, Log, Result, Role, Selection, Slot, Stop};
 use tokio::{
     runtime::{Builder, Runtime},
     signal::unix::{Signal, SignalKind, signal},
 };
 
 use super::{
+    firewall_io::FirewallIo,
     launcher,
     layout_io::{self, Layout},
     processes::RoleChild,
 };
 
 pub(super) struct Android {
-    layout: Layout,
+    layout: Option<Layout>,
+    firewall: FirewallIo,
     origin: Instant,
     device: Option<RoleChild>,
     core: Option<RoleChild>,
@@ -28,10 +31,14 @@ pub(super) struct Android {
 }
 
 impl Android {
-    pub(super) fn open() -> Result<Self> {
-        let layout = Layout::open()?;
-        rustix::process::set_child_subreaper(Some(rustix::process::Pid::INIT))
-            .map_err(|_| "enable role descendant reaping")?;
+    pub(super) fn open(supervise: bool) -> Result<Self> {
+        let layout = if supervise {
+            rustix::process::set_child_subreaper(Some(rustix::process::Pid::INIT))
+                .map_err(|_| "enable role descendant reaping")?;
+            Some(Layout::open()?)
+        } else {
+            None
+        };
         let signals = Builder::new_current_thread()
             .enable_all()
             .build()
@@ -42,6 +49,7 @@ impl Android {
         };
         Ok(Self {
             layout,
+            firewall: FirewallIo::default(),
             origin: Instant::now(),
             device: None,
             core: None,
@@ -100,11 +108,14 @@ impl HostOps for Android {
     }
 
     fn load_selection(&mut self) -> Result<Option<Selection>> {
-        self.layout.load()
+        self.layout.as_ref().ok_or("supervisor layout unavailable")?.load()
     }
 
     fn save_selection(&mut self, selection: &Selection) -> Result<()> {
-        self.layout.save(selection)
+        self.layout
+            .as_ref()
+            .ok_or("supervisor layout unavailable")?
+            .save(selection)
     }
 
     fn spawn(&mut self, role: Role, slot: Slot, identity: Identity) -> Result<()> {
@@ -139,6 +150,28 @@ impl HostOps for Android {
                     previous.as_str()
                 )
             }
+            Log::FirewallReady => writeln!(log, "echo-bridge boot: firewall ready"),
+            Log::FirewallUnhealthy(stage) => writeln!(log, "echo-bridge boot: firewall unhealthy: {stage}"),
         };
+    }
+
+    fn resolvers(&mut self) -> Result<Vec<IpAddr>> {
+        self.firewall.resolvers(&self.signals)
+    }
+
+    fn filter(&mut self, family: Family) -> Result<Option<String>> {
+        self.firewall.filter(&self.signals, family)
+    }
+
+    fn restore_filter(&mut self, family: Family, transaction: &str) -> Result<()> {
+        self.firewall.restore(&self.signals, family, transaction)
+    }
+
+    fn ipv6_disabled(&mut self, enforce: bool) -> Result<bool> {
+        self.firewall.ipv6_disabled(enforce)
+    }
+
+    fn usb_adb_only(&mut self, enforce: bool) -> Result<bool> {
+        self.firewall.usb_adb_only(&self.signals, enforce)
     }
 }

@@ -46,13 +46,26 @@ The timing, group choices and stop mechanism follow the fork's MIT-licensed
 [satellite supervisor](https://github.com/portpowered/echo-dot-assist/blob/7e0c758/scripts/system/main.sh)
 and [bridge supervisor](https://github.com/portpowered/echo-dot-assist/blob/c3b6c6c/scripts/device/bridge.sh).
 
+Start `echo-bridge boot firewall` as a separate init service before
+`boot run`. A root-only lock in `bin/.boot` admits one firewall writer.
+The writer checks the live filter every 5 s and repairs drift with one
+`-w --noflush` restore per changed family. It puts `echo_out` first in
+OUTPUT, preserves stock chains and restores the required Wi-Fi transport rules
+for DHCP and outbound connections. The fixed IPv4 and IPv6 rules follow the
+fork's MIT-licensed [lockdown policy](https://github.com/portpowered/echo-dot-assist/blob/7e0c758/scripts/device/lockdown.sh).
+The writer restricts TCP/5555 to root-local traffic and configures adbd
+for USB only. If ip6tables is absent, it verifies IPv6 is disabled on all
+interfaces and by default. A failed installed tool or an unconfirmed apply
+produces an unhealthy log and is retried on the watch cadence. The supervisor
+checks the live protections before startup and resume.
+
 ## Deferred
 
-- Firewall mode and the device startup services land in the subsequent
-  stories of this lane. Screen APK embedding belongs to C1.
+- The device startup services land in the next story of this lane. Screen
+  APK embedding belongs to C1.
 - The installer owns the stable init entry, SELinux policy, root-owned layout,
   slot promotion while parked and legacy restore. A2 T5 verifies that Fire OS
   permits the fixed shell entry and enforces the resulting domain, socket access,
-  process cleanup and rollback with the installed init services.
+  process cleanup, firewall enforcement and rollback with the installed init services.
 - The installer provisions the A1 device's existing wake model and state
   locations on a bare rooted Echo. The launch keeps the A1 asset lookup.
