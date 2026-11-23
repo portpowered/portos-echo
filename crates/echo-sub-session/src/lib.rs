@@ -2,7 +2,7 @@
 use echo_core_api::{
     Broken, CommandKind, Commands, Event, EventKind, FollowUp, Now, SessionChange, SessionCommand, SessionCommands,
     SessionError, SessionEvent, SessionHandle, SessionKnobs, SessionMark, SessionOutcome, SessionPlayback,
-    SessionTurnEvent, SessionView, SessionWait, Subsystem,
+    SessionTurnContext, SessionTurnEvent, SessionView, SessionWait, Subsystem,
 };
 use std::time::{Duration, Instant};
 
@@ -15,8 +15,9 @@ pub use barge::{BARGE_QUIET, BARGE_WINDOW};
 use run::Run;
 pub use wait::HANDBACK_GRACE;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct State {
+    epoch: Instant,
     run: Option<Run>,
     idle_deadline: Option<Instant>,
     knobs: SessionKnobs,
@@ -34,6 +35,7 @@ impl Subsystem for Session {
         CommandKind::CutReply,
         CommandKind::OpenCall,
         CommandKind::CloseCall,
+        CommandKind::SessionToolDecision,
     ];
 
     fn on_event(state: &mut State, event: &mut Event, now: Now, out: &mut Commands) {
@@ -44,37 +46,37 @@ impl Subsystem for Session {
                 state.knobs = knobs;
                 Ok(SessionOutcome::Applied)
             }
-            SessionEvent::CallAdmitted if state.run.is_none() => {
-                out.effect = Some(SessionCommand::OpenCall);
-                Ok(SessionOutcome::Applied)
-            }
             SessionEvent::CallCloseDue if state.run.is_none() => {
-                out.effect = Some(SessionCommand::CloseCall);
+                out.effects[0] = Some(SessionCommand::CloseCall);
                 Ok(SessionOutcome::Applied)
             }
             SessionEvent::Wake {
                 session,
-                epoch,
                 opened,
+                listen,
                 max,
-            } if state.run.is_none() => state.wake(session, epoch, opened, max, now.monotonic, out),
-            SessionEvent::Run { .. } | SessionEvent::Turn { .. } | SessionEvent::Tool { .. } => {
-                state.step_run(event, now.monotonic, out)
-            }
+                response_due,
+                reuse_call,
+            } if state.run.is_none() => state.wake(
+                session,
+                (opened, listen, max, response_due),
+                reuse_call,
+                now.monotonic,
+                out,
+            ),
             SessionEvent::RunReleased { session } if state.is_active(session) => {
                 state.run = None;
                 state.idle_deadline = None;
-                out.effect = Some(SessionCommand::StopCapture { session });
+                out.effects[0] = Some(SessionCommand::StopCapture { session });
                 Ok(SessionOutcome::Applied)
             }
-            _ => Err(SessionError::Control),
+            _ => state.step_run(event, now.monotonic, out),
         });
     }
 
     fn next_deadline(state: &State) -> Option<Duration> {
-        let run = state.run.as_ref()?;
-        let (deadline, _) = run.next_deadline(state.idle_deadline, state.knobs)?;
-        Some(deadline.saturating_duration_since(run.epoch))
+        let (deadline, _) = state.view().next_deadline?;
+        Some(deadline.saturating_duration_since(state.epoch))
     }
 
     fn check(state: &State) -> Result<(), Broken> {
@@ -95,38 +97,45 @@ impl Subsystem for Session {
 }
 
 impl State {
+    #[must_use]
+    pub fn new(epoch: Instant) -> Self {
+        Self {
+            epoch,
+            run: None,
+            idle_deadline: None,
+            knobs: SessionKnobs::default(),
+        }
+    }
+
     fn step_run(
         &mut self,
         event: &SessionEvent,
         offset: Duration,
         out: &mut SessionCommands,
     ) -> Result<SessionOutcome, SessionError> {
-        let (SessionEvent::Run { session, .. }
-        | SessionEvent::Turn { session, .. }
-        | SessionEvent::Tool { session, .. }) = event
-        else {
-            return Err(SessionError::Control);
-        };
+        let session = event.session().ok_or(SessionError::Control)?;
         let run = self
             .run
             .as_mut()
-            .filter(|run| run.handle == *session)
+            .filter(|run| run.handle == session)
             .ok_or(SessionError::Control)?;
         let now = run.epoch.checked_add(offset).ok_or(SessionError::Deadline)?;
         let idle = &mut self.idle_deadline;
         match event {
             SessionEvent::Run { change, .. } => run.apply(*change, idle, self.knobs, now, out),
-            SessionEvent::Tool { change, .. } => run.tool_event(*change, idle, now),
-            SessionEvent::Turn { change, .. }
-                if !run.closing()
-                    || matches!(
-                        change,
-                        SessionTurnEvent::RunEnded | SessionTurnEvent::SpeechStopped { .. }
-                    ) =>
-            {
-                Ok(run.turn_event(change, idle, self.knobs, now, out))
+            SessionEvent::Tool(change) => run.tool_event(*change, idle, now, out),
+            SessionEvent::Turn(turn) => {
+                let context = SessionTurnContext {
+                    sounded: run.playback.voiced,
+                    voiced: run.playback.voiced,
+                    listening: idle.is_some(),
+                };
+                run.observe_turn(turn, context, idle, self.knobs, now, out)
             }
-            _ => Err(SessionError::Control),
+            SessionEvent::TurnObserved { turn, context } => {
+                run.observe_turn(turn, *context, idle, self.knobs, now, out)
+            }
+            _ => run.lifecycle(event, *idle, self.knobs, now),
         }
     }
 
@@ -143,18 +152,20 @@ impl State {
     fn wake(
         &mut self,
         session: SessionHandle,
-        epoch: Instant,
-        opened: Instant,
-        max: Option<Duration>,
+        (opened, listen, max, response_due): (Instant, Option<Duration>, Duration, Instant),
+        reuse_call: bool,
         offset: Duration,
         out: &mut SessionCommands,
     ) -> Result<SessionOutcome, SessionError> {
-        let now = epoch.checked_add(offset).ok_or(SessionError::Deadline)?;
-        let ceiling = max
-            .map(|max| opened.checked_add(max).ok_or(SessionError::Deadline))
-            .transpose()?;
-        self.run = Some(Run::new(session, epoch, ceiling, now));
-        out.effect = Some(SessionCommand::StartCapture { session });
+        let now = self.epoch.checked_add(offset).ok_or(SessionError::Deadline)?;
+        let ceiling = opened.checked_add(max).ok_or(SessionError::Deadline)?;
+        let mut run = Run::new(session, self.epoch, ceiling, now, response_due, reuse_call);
+        run.configure_tools(listen, max, now);
+        self.run = Some(run);
+        out.effects = [
+            Some(SessionCommand::StartCapture { session }),
+            (!reuse_call).then_some(SessionCommand::OpenCall { session }),
+        ];
         Ok(SessionOutcome::Applied)
     }
 
@@ -169,10 +180,12 @@ impl State {
             closing: self.run.as_ref().is_some_and(Run::closing),
             speaking: self.run.as_ref().is_some_and(Run::speaking),
             microphone_finished: self.run.as_ref().is_some_and(Run::microphone_finished),
+            accepts_reply_audio: self.accepts_reply_audio(),
             idle_deadline: self.idle_deadline,
             next_deadline: self
                 .run
                 .as_ref()
+                .filter(|run| !run.call_opening)
                 .and_then(|run| run.next_deadline(self.idle_deadline, self.knobs)),
         }
     }
@@ -183,7 +196,7 @@ impl State {
     }
 
     #[must_use]
-    pub fn accepts_audio(&self) -> bool {
+    pub fn accepts_reply_audio(&self) -> bool {
         self.idle_deadline.is_none() && self.run.as_ref().is_some_and(Run::accepts_audio)
     }
 
@@ -293,6 +306,39 @@ impl State {
 }
 
 impl Run {
+    fn lifecycle(
+        &mut self,
+        event: &SessionEvent,
+        idle: Option<Instant>,
+        knobs: SessionKnobs,
+        now: Instant,
+    ) -> Result<SessionOutcome, SessionError> {
+        match *event {
+            SessionEvent::CallOpened { .. } if self.call_opening => self.call_opening = false,
+            SessionEvent::CaptureEnded { .. } => self.microphone_ended(),
+            SessionEvent::ReplyPlayed { output_stopped, .. } => {
+                return self.played(output_stopped).map(SessionOutcome::Played);
+            }
+            _ if self.closing() || self.call_opening => return Err(SessionError::Control),
+            SessionEvent::ReplyStarted { .. } => {
+                self.reply_started();
+                self.turn.dispatch.spoke();
+            }
+            SessionEvent::ReplyEnded { .. } if self.turn.dispatch.answered() => return Ok(SessionOutcome::FinishReply),
+            SessionEvent::ReplyEnded { .. } => (),
+            SessionEvent::ReplySettled { .. } => self.follow_up = FollowUp::Replied,
+            SessionEvent::ExplicitEnd { .. } => self.request_end(),
+            SessionEvent::Deadline { timer, .. } => {
+                let reached = self
+                    .next_deadline(idle, knobs)
+                    .is_some_and(|(due, next)| next == timer && now >= due);
+                return Ok(SessionOutcome::DeadlineReached(reached));
+            }
+            _ => return Err(SessionError::Control),
+        }
+        Ok(SessionOutcome::Applied)
+    }
+
     fn apply(
         &mut self,
         change: SessionChange,
@@ -302,13 +348,7 @@ impl Run {
         out: &mut SessionCommands,
     ) -> Result<SessionOutcome, SessionError> {
         match change {
-            SessionChange::CaptureEnded => {
-                self.microphone_ended();
-            }
             SessionChange::FinishClose { mouth_drained } => self.finish_close(mouth_drained)?,
-            SessionChange::ReplyPlayed { output_stopped } => {
-                return self.played(output_stopped).map(SessionOutcome::Played);
-            }
             _ if self.closing() => return Err(closing_error(change)),
             SessionChange::AdmitResponse(due) => {
                 self.admit_response(due, now)?;
@@ -316,8 +356,6 @@ impl Run {
             }
             SessionChange::ResponseDue(due) => self.response_due = due,
             SessionChange::CaptureStarted => self.microphone_started(),
-            SessionChange::ReplyStarted => self.reply_started(),
-            SessionChange::ReplySettled => self.follow_up = FollowUp::Replied,
             SessionChange::Resume { preserve_dispatch } => {
                 self.resume()?;
                 *idle = None;
@@ -328,18 +366,12 @@ impl Run {
             SessionChange::Listen(timeout) => *idle = Some(self.listen_after_reply(timeout, now)?),
             SessionChange::ConfigureTools { listen, max } => self.configure_tools(listen, max, now),
             SessionChange::RenewIdle => self.renew_idle(idle, now),
-            SessionChange::RequestEnd => self.request_end(),
             SessionChange::Cut => self.cut(),
             SessionChange::CutSettled => self.cut_settled(),
             SessionChange::CutPlayed => self.cut_played(),
             SessionChange::Playback(playback) => {
                 self.playback = playback;
                 self.playback_observed = now;
-            }
-            SessionChange::Deadline { timer, due } => {
-                return Ok(SessionOutcome::DeadlineReached(
-                    self.deadline_reached(timer, due, now, *idle),
-                ));
             }
             SessionChange::WaitExpired {
                 wait,
@@ -352,7 +384,7 @@ impl Run {
             SessionChange::BeginClose { mouth_drained } => {
                 self.begin_close(mouth_drained)?;
                 *idle = None;
-                out.effect = Some(SessionCommand::EndSession { session: self.handle });
+                out.effects[0] = Some(SessionCommand::EndSession { session: self.handle });
             }
         }
         Ok(SessionOutcome::Applied)

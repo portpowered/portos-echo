@@ -37,18 +37,32 @@ impl Controller {
         out.take_session()
     }
 
-    fn admit(self: Arc<Self>, opened: Instant, max: Option<Duration>) -> Result<SessionPort, Error> {
+    fn admit(
+        self: Arc<Self>,
+        opened: Instant,
+        listen: Option<Duration>,
+        max: Duration,
+        response_due: Instant,
+        reuse_call: bool,
+    ) -> Result<SessionPort, Error> {
         let mut state = self.state();
         let (index, generation) = state.runs.insert(()).ok_or(Error::Control)?;
         let session = SessionHandle { index, generation };
         let event = SessionEvent::Wake {
             session,
-            epoch: state.world.clock.start.into_std(),
             opened: opened.into_std(),
+            listen,
             max,
+            response_due: response_due.into_std(),
+            reuse_call,
         };
         let result = self.session_step(&mut state, event);
-        if result.effect != Some(SessionCommand::StartCapture { session }) {
+        if result.effects
+            != [
+                Some(SessionCommand::StartCapture { session }),
+                (!reuse_call).then_some(SessionCommand::OpenCall { session }),
+            ]
+        {
             state.runs.remove(index, generation);
             return Err(session_error(result.outcome));
         }
@@ -59,43 +73,85 @@ impl Controller {
             token: Arc::new(()),
         })
     }
+
+    #[cfg(test)]
+    fn admit_fixture(self: Arc<Self>, opened: Instant, max: Option<Duration>) -> Result<SessionPort, Error> {
+        self.admit(opened, None, max.unwrap_or(Duration::from_secs(600)), opened, true)
+    }
 }
 
-/// Send call lifecycle through the same ordered World before polling the I/O.
-/// The call owner keeps its existing setup, retention and teardown fences.
-pub(crate) async fn call_effect<T>(open: bool, work: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
-    let (event, command) = if open {
-        (SessionEvent::CallAdmitted, SessionCommand::OpenCall)
-    } else {
-        (SessionEvent::CallCloseDue, SessionCommand::CloseCall)
-    };
+/// Admit the run before opening its call. The voice loop replaces this initial
+/// response deadline once negotiation has completed.
+pub(crate) async fn open_call(
+    opened: Instant,
+    listen: Option<Duration>,
+    max: Duration,
+    response_timeout: Duration,
+    work: impl Future<Output = Result<(), Error>>,
+) -> Result<SessionPort, Error> {
+    let response_due = opened.checked_add(response_timeout).ok_or(Error::Deadline)?;
+    let run =
+        pacer::current_controller()
+            .unwrap_or_else(Controller::new)
+            .admit(opened, listen, max, response_due, false)?;
+    work.await?;
+    run.apply_event(SessionEvent::CallOpened { session: run.handle })?;
+    Ok(run)
+}
+
+pub(crate) async fn close_call(work: impl Future<Output = Result<(), Error>>) -> Result<(), Error> {
     let world = pacer::current_controller().unwrap_or_else(Controller::new);
-    let out = world.session_step(&mut world.state(), event);
-    if out.effect != Some(command) {
+    let out = world.session_step(&mut world.state(), SessionEvent::CallCloseDue);
+    if out.effects[0] != Some(SessionCommand::CloseCall) {
         return Err(session_error(out.outcome));
     }
     work.await
 }
 
 impl SessionPort {
+    #[cfg(test)]
     pub(crate) fn open(opened: Instant, max: Option<Duration>) -> Result<Self, Error> {
         pacer::current_controller()
             .unwrap_or_else(Controller::new)
-            .admit(opened, max)
+            .admit_fixture(opened, max)
+    }
+
+    pub(crate) fn on_connected_call(
+        opened: Instant,
+        listen: Option<Duration>,
+        max: Duration,
+        response_due: Instant,
+    ) -> Result<Self, Error> {
+        pacer::current_controller()
+            .unwrap_or_else(Controller::new)
+            .admit(opened, listen, max, response_due, true)
     }
 
     fn dispatch(&self, change: SessionChange) -> SessionCommands {
+        self.send(SessionEvent::Run {
+            session: self.handle,
+            change,
+        })
+    }
+
+    fn send(&self, event: SessionEvent) -> SessionCommands {
         let mut state = self.world.state();
         let session = self.handle;
         if state.runs.get(session.index, session.generation).is_none() {
             return SessionCommands::default();
         }
-        self.world
-            .session_step(&mut state, SessionEvent::Run { session, change })
+        self.world.session_step(&mut state, event)
     }
 
     fn apply(&self, change: SessionChange) -> Result<(), Error> {
-        match self.dispatch(change).outcome {
+        self.apply_event(SessionEvent::Run {
+            session: self.handle,
+            change,
+        })
+    }
+
+    fn apply_event(&self, event: SessionEvent) -> Result<(), Error> {
+        match self.send(event).outcome {
             Some(Ok(SessionOutcome::Applied)) => Ok(()),
             outcome => Err(session_error(outcome)),
         }
@@ -127,21 +183,16 @@ impl SessionPort {
             return Ok((cached, true));
         }
         let tool = state.tools.start(key).ok_or(Error::Control)?;
-        let start = SessionEvent::Tool {
-            session,
-            change: SessionToolEvent::Started { tool, action },
-        };
-        let decision = match self.world.session_step(&mut state, start).outcome {
-            Some(Ok(SessionOutcome::Tool(decision))) => decision,
-            outcome => {
+        let start = SessionEvent::Tool(SessionToolEvent::Started { session, tool, action });
+        let mut commands = self.world.session_step(&mut state, start);
+        let decision = match commands.take_effect() {
+            Some(SessionCommand::Tool(decision)) => decision,
+            _ => {
                 state.tools.remove(tool);
-                return Err(session_error(outcome));
+                return Err(session_error(commands.outcome));
             }
         };
-        let end = SessionEvent::Tool {
-            session,
-            change: SessionToolEvent::Ended { tool },
-        };
+        let end = SessionEvent::Tool(SessionToolEvent::Ended { session, tool });
         let outcome = self.world.session_step(&mut state, end).outcome;
         if outcome != Some(Ok(SessionOutcome::Applied)) {
             state.tools.remove(tool);
@@ -160,7 +211,7 @@ impl SessionPort {
     }
 
     pub(crate) fn request_end(&self) {
-        self.dispatch(SessionChange::RequestEnd);
+        self.send(SessionEvent::ExplicitEnd { session: self.handle });
     }
 
     #[cfg(test)]
@@ -186,10 +237,10 @@ impl SessionPort {
     }
 
     #[cfg(test)]
-    pub(crate) fn deadline_reached(&self, timer: SessionTimer, due: Instant) -> bool {
-        self.dispatch(SessionChange::Deadline {
+    fn deadline_reached(&self, timer: SessionTimer) -> bool {
+        self.send(SessionEvent::Deadline {
+            session: self.handle,
             timer,
-            due: due.into_std(),
         })
         .outcome
             == Some(Ok(SessionOutcome::DeadlineReached(true)))
@@ -210,7 +261,7 @@ impl SessionPort {
     }
 
     pub(crate) fn reply_settled(&self) {
-        self.dispatch(SessionChange::ReplySettled);
+        self.send(SessionEvent::ReplySettled { session: self.handle });
     }
 
     pub(crate) fn listen_after_reply(&self, timeout: Duration) -> Result<(), Error> {
@@ -227,9 +278,10 @@ impl SessionPort {
 
     pub(crate) fn begin_close(&self, mouth_drained: bool) -> Result<(), Error> {
         let commands = self.dispatch(SessionChange::BeginClose { mouth_drained });
-        match commands.effect {
-            Some(SessionCommand::EndSession { session }) if session == self.handle => Ok(()),
-            _ => Err(session_error(commands.outcome)),
+        if commands.effects[0] == Some(SessionCommand::EndSession { session: self.handle }) {
+            Ok(())
+        } else {
+            Err(session_error(commands.outcome))
         }
     }
 
@@ -239,7 +291,8 @@ impl SessionPort {
 
     pub(crate) fn played(&self, stopped: bool) -> Result<bool, Error> {
         match self
-            .dispatch(SessionChange::ReplyPlayed {
+            .send(SessionEvent::ReplyPlayed {
+                session: self.handle,
                 output_stopped: stopped,
             })
             .outcome
@@ -254,12 +307,15 @@ impl SessionPort {
     }
 
     pub(crate) fn microphone_ended(&self) {
-        self.dispatch(SessionChange::CaptureEnded);
+        self.send(SessionEvent::CaptureEnded { session: self.handle });
     }
 
-    #[cfg(test)]
     pub(crate) fn reply_started(&self) {
-        self.dispatch(SessionChange::ReplyStarted);
+        self.send(SessionEvent::ReplyStarted { session: self.handle });
+    }
+
+    pub(crate) fn reply_ended(&self) -> SessionCommands {
+        self.send(SessionEvent::ReplyEnded { session: self.handle })
     }
 
     pub(crate) fn cut(&self) {
@@ -288,7 +344,7 @@ impl SessionPort {
     }
 
     pub(crate) fn accepts_audio(&self) -> bool {
-        self.read(echo_sub_session::State::accepts_audio)
+        self.read(echo_sub_session::State::accepts_reply_audio)
     }
 
     pub(crate) fn cutting(&self) -> bool {
@@ -324,7 +380,7 @@ impl Drop for SessionPort {
         let out = self
             .world
             .session_step(&mut state, SessionEvent::RunReleased { session });
-        if out.effect == Some(SessionCommand::StopCapture { session }) {
+        if out.effects[0] == Some(SessionCommand::StopCapture { session }) {
             state.tools.clear();
             state.runs.remove(session.index, session.generation);
         }
@@ -348,120 +404,4 @@ fn map_error(error: SessionError) -> Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use echo_core_api::Subsystem;
-
-    #[tokio::test(start_paused = true)]
-    async fn session_slots_release_invalidates_retained_tool_results() {
-        let world = Controller::new();
-        let run = world.clone().admit(Instant::now(), None).unwrap();
-        run.configure_tools(Some(Duration::from_secs(3)), Duration::from_secs(12))
-            .unwrap();
-        let (decision, cached) = run.answer_tool("key".into(), SessionToolAction::End).unwrap();
-        let SessionToolDecision::Ending {
-            tool: old,
-            duplicate: false,
-        } = decision
-        else {
-            unreachable!()
-        };
-        assert!(!cached);
-        drop(run);
-
-        let run = world.admit(Instant::now(), None).unwrap();
-        run.configure_tools(Some(Duration::from_secs(3)), Duration::from_secs(12))
-            .unwrap();
-        let (decision, cached) = run
-            .answer_tool("key".into(), SessionToolAction::Extend { seconds: 2 })
-            .unwrap();
-        let SessionToolDecision::Extended {
-            tool: new,
-            deadline_ms: 5000,
-            capped: false,
-        } = decision
-        else {
-            unreachable!()
-        };
-        assert!(!cached);
-        assert_eq!(new.index, old.index);
-        assert_ne!(new.generation, old.generation);
-        assert!(!run.ending());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn session_world_release_clears_quiet_deadline() {
-        let world = Controller::new();
-        let session = world.clone().admit(Instant::now(), None).unwrap();
-        let window = Duration::from_secs(15);
-        session.reply_started();
-        session.played(true).unwrap();
-        session.listen_after_reply(window).unwrap();
-        let due = session.idle_deadline().unwrap();
-        assert_eq!(
-            session.view().next_deadline,
-            Some((due.into_std(), SessionTimer::Listen))
-        );
-        assert!(!session.deadline_reached(SessionTimer::Listen, due));
-        tokio::time::advance(window).await;
-        assert!(session.deadline_reached(SessionTimer::Listen, due));
-        session.begin_close(true).unwrap();
-        assert_eq!(session.begin_close(true), Err(Error::Wyoming));
-        assert_eq!(session.finish_close(true), Err(Error::Wyoming));
-        session.microphone_ended();
-        session.finish_close(true).unwrap();
-        drop(session);
-
-        let view = world.state().world.pacer.session.view();
-        assert_eq!(view.session, None);
-        assert_eq!(view.next_deadline, None);
-        assert_eq!(view.idle_deadline, None);
-        assert_eq!(
-            echo_sub_session::Session::next_deadline(&world.state().world.pacer.session),
-            None
-        );
-        assert!(world.state().world.check().is_ok());
-    }
-
-    #[test]
-    fn session_world_consumes_a_delayed_cut_receipt_while_closing() {
-        let session = SessionPort::open(Instant::now(), None).unwrap();
-        session.reply_started();
-        session.cut();
-        session.cut_settled();
-        session.cut_played();
-        assert_eq!(session.pending_cut_receipts(), 1);
-        session.begin_close(true).unwrap();
-        assert_eq!(session.played(true), Ok(false));
-        assert_eq!(session.pending_cut_receipts(), 0);
-        assert_eq!(session.played(true), Err(Error::Wyoming));
-        session.microphone_ended();
-        session.finish_close(true).unwrap();
-        assert!(session.complete(true, true));
-    }
-
-    #[test]
-    fn session_slots_reuse_run_index_without_reopening_stale_run() {
-        let world = Controller::new();
-        let first = world.clone().admit(Instant::now(), None).unwrap();
-        let old_handle = first.handle;
-        assert!(matches!(world.clone().admit(Instant::now(), None), Err(Error::Control)));
-        drop(first);
-
-        let second = world.clone().admit(Instant::now(), None).unwrap();
-        assert_eq!(second.handle.index, old_handle.index);
-        assert_ne!(second.handle.generation, old_handle.generation);
-        let mut state = world.state();
-        let result = world.session_step(
-            &mut state,
-            SessionEvent::Run {
-                session: old_handle,
-                change: SessionChange::ReplyStarted,
-            },
-        );
-        assert_eq!(result.outcome, Some(Err(SessionError::Control)));
-        let view = state.world.pacer.session.view();
-        assert_eq!(view.session, Some(second.handle));
-        assert!(!view.speaking);
-    }
-}
+mod tests;

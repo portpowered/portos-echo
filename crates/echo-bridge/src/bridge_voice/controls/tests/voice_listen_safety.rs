@@ -129,7 +129,9 @@ async fn settings_restart_waits_for_delegation_and_beats_ready_followup() {
             let (tx, rx) = mpsc::channel(2);
             let mut port = Port(rx, std::rc::Rc::default());
             let mut source = source();
-            source.controller.turn(echo_core_api::SessionTurnEvent::DispatchStarted);
+            source
+                .controller
+                .turn(|session| echo_core_api::SessionTurnEvent::DispatchStarted { session });
             restart.request();
             {
                 let mut drain = None;

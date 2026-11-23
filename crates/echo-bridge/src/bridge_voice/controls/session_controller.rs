@@ -1,6 +1,107 @@
 //! Run lifecycle I/O at the playback and capture acknowledgement fences.
-use super::Error;
+use super::{Error, Notice, Options, Source, Stats, VoicePort, voice_listen, voice_session::SessionOptions};
 pub(super) use crate::bridge_world::SessionPort as Controller;
+use echo_link::{EchoLink, LinkEvents};
+use std::future::Future;
+use tokio::time::Instant;
+
+pub(super) async fn run_opened<L: EchoLink>(
+    client: &L,
+    events: &mut L::Events,
+    mut microphone: <L::Events as LinkEvents>::Run,
+    port: &mut impl VoicePort,
+    (options, opened, admitted): (Options, Instant, Option<Controller>),
+    cancelled: impl Future<Output = ()>,
+    mut observe: impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<Stats, Error> {
+    let mut source = run_source(&options, opened, admitted)?;
+    let controller = &source.controller;
+    controller.configure_tools(options.listen_timeout, options.session_max)?;
+    port.bind_session(Some(controller.token().clone()));
+    port.start_muse_run(controller.run_ceiling().ok_or(Error::Deadline)?)?;
+    controller.admit_response(options.response_deadline)?;
+    // A cut replaces playback, while the run still owns pending clock receipts.
+    let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
+        .map(|clock| clock.voice())
+        .transpose()?;
+    tokio::pin!(cancelled);
+    // Retain the reply-loop state once per run rather than embedding it in
+    // every conversation/admission future above this boundary.
+    let result = Box::pin(voice_listen::replies(
+        client,
+        (events, &mut microphone),
+        port,
+        (&mut source, &mut drain),
+        &options,
+        cancelled.as_mut(),
+        &mut observe,
+    ))
+    .await;
+    let cleanup = port.finish_muse_run().await;
+    port.bind_session(None);
+    result.and(cleanup)?;
+    close(
+        client,
+        (events, &mut microphone),
+        port,
+        &mut source,
+        options.played_timeout,
+        cancelled.as_mut(),
+        &mut observe,
+    )
+    .await?;
+    if let Some(drain) = drain.take() {
+        drain.finish();
+    }
+    if options.listen_timeout.is_none() {
+        observe(Notice::ReplyPlayed)?;
+    }
+    source.stats.received_chunks = microphone.stats().received;
+    source.stats.dropped_chunks = microphone.stats().dropped;
+    source.stats.reply_dropped += source.reply.dropped_frames();
+    *source.stats.quality = source.settle(port.rtp_lost());
+    Ok(source.stats)
+}
+
+fn run_source(options: &Options, opened: Instant, admitted: Option<Controller>) -> Result<Source, Error> {
+    if options.played_timeout.is_zero()
+        || Instant::now() >= options.response_deadline
+        || options
+            .listen_timeout
+            .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
+        || opened.checked_add(options.session_max).is_none()
+    {
+        return Err(Error::Deadline);
+    }
+    let controller = match admitted {
+        Some(controller) => controller,
+        None => Controller::on_connected_call(
+            opened,
+            options.listen_timeout,
+            options.session_max,
+            options.response_deadline,
+        )?,
+    };
+    Source::with_controller(options.reply_lead_ms, options.muted, controller)
+}
+
+pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {
+    if options.response_timeout.is_zero()
+        || options.played_timeout.is_zero()
+        || options
+            .listen_timeout
+            .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
+        || options.session_max.is_zero()
+        || Instant::now().checked_add(options.session_max).is_none()
+    {
+        return Err(Error::Input);
+    }
+    Instant::now()
+        .checked_add(options.response_timeout)
+        .and_then(|deadline| deadline.checked_add(options.played_timeout))
+        .ok_or(Error::Input)?;
+    Ok(())
+}
 
 /// Execute controller-selected close after both playback acknowledgments.
 /// Keep observing mute and draining accepted capture until explicit-end EOF.

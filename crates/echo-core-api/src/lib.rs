@@ -54,6 +54,7 @@ pub enum CommandKind {
     CutReply,
     OpenCall,
     CloseCall,
+    SessionToolDecision,
 }
 
 #[derive(Default)]
