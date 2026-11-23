@@ -1,7 +1,7 @@
 //! Pure lifecycle of the controller's admitted voice run.
 use echo_core_api::{
     Broken, CommandKind, Commands, Event, EventKind, FollowUp, Now, SessionChange, SessionCommand, SessionCommands,
-    SessionError, SessionEvent, SessionHandle, SessionOutcome, SessionTimer, SessionView, Subsystem,
+    SessionError, SessionEvent, SessionHandle, SessionOutcome, SessionView, Subsystem,
 };
 use std::time::{Duration, Instant};
 
