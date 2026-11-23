@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 4d94af828737766791ddd647dbadc80cd84b20f8
+          ref: 39557d426c0fdfae635104d1affe08b17c69bd9b
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 4d94af828737766791ddd647dbadc80cd84b20f8
+          ref: 39557d426c0fdfae635104d1affe08b17c69bd9b
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -64,5 +64,7 @@ jobs:
             return "$status"
           }
           run make codex-app-server sim-prereqs
-          run cargo nextest run -p echo-codex -p echo-bridge --all-targets --locked --config-file .github/nextest.toml --profile ci
-          run make test-sim-bridge test-alloc
+          status=0
+          run cargo nextest run -p echo-codex -p echo-bridge --all-targets --locked --config-file .github/nextest.toml --profile ci || status=1
+          run make test-sim-bridge test-alloc || status=1
+          exit "$status"
