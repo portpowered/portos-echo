@@ -55,6 +55,14 @@ export function mountWifi(request: WifiExchange) {
     let scanning = false;
     let mutating = false;
 
+    function updateControls() {
+        const controls = section.querySelectorAll<
+            HTMLButtonElement | HTMLInputElement
+        >("button, input");
+        for (const control of controls) control.disabled = mutating;
+        retry.disabled = scanning || mutating;
+    }
+
     function showStatus(status: Record<string, unknown>) {
         if (typeof status.reachable !== "boolean") return false;
         const reachability = status.reachable ? "reachable" : "unreachable";
@@ -84,7 +92,8 @@ export function mountWifi(request: WifiExchange) {
         feedback.textContent = "Scanning for networks…";
         retry.disabled = true;
         try {
-            if (refreshStatus) await observe();
+            // Enqueue the status and scan together so a join follows both.
+            if (refreshStatus) void observe();
             const reply = await request({ op: "scan" }, controller.signal);
             if (!reply.ok || !Array.isArray(reply.networks))
                 throw new Error(unavailable);
@@ -95,7 +104,7 @@ export function mountWifi(request: WifiExchange) {
             feedback.textContent = unavailable;
         } finally {
             scanning = false;
-            retry.disabled = false;
+            updateControls();
         }
     }
 
@@ -139,6 +148,7 @@ export function mountWifi(request: WifiExchange) {
         form.append(submit);
         form.addEventListener("submit", (event) => {
             event.preventDefault();
+            if (mutating) return;
             const value = password.value;
             password.value = "";
             void mutate({ op: "join", ssid: row.ssid, password: value });
@@ -151,11 +161,10 @@ export function mountWifi(request: WifiExchange) {
     async function mutate(
         frame: Extract<WifiRequest, { op: "join" | "forget" }>,
     ) {
-        if (scanning || mutating) return;
+        if (mutating) return;
         mutating = true;
         const hadFocus = section.contains(document.activeElement);
-        const controls = section.querySelectorAll("button, input");
-        for (const control of controls) control.setAttribute("disabled", "");
+        updateControls();
         mutationFeedback.textContent =
             frame.op === "join" ? "Joining Wi-Fi…" : "Forgetting network…";
         let refresh = false;
@@ -180,7 +189,7 @@ export function mountWifi(request: WifiExchange) {
             mutationFeedback.textContent = unavailable;
         } finally {
             mutating = false;
-            for (const control of controls) control.removeAttribute("disabled");
+            updateControls();
             if (hadFocus && document.activeElement === document.body) {
                 (
                     joinSlot.querySelector("input") ??

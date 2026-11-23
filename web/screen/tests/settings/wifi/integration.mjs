@@ -4,16 +4,39 @@ import { startScreenFixture } from "../../support/server-fixture.mjs";
 export async function verifyWifiPrompt(t, browser) {
     const fixture = await startScreenFixture(true);
     const context = await browser.newContext({ serviceWorkers: "block" });
+    const rescanReady = Promise.withResolvers();
+    const releaseRescan = Promise.withResolvers();
     t.after(async () => {
+        releaseRescan.resolve();
         await context.close();
         await fixture.stop();
     });
     context.setDefaultTimeout(5000);
-    await context.route("**/*", (route) =>
-        new URL(route.request().url()).origin === fixture.origin
-            ? route.continue()
-            : route.abort(),
-    );
+    const credential = ["incorrect", 42].join("-");
+    let holdRescan = false;
+    let joins = 0;
+    let submissionPreserved = false;
+    await context.route("**/*", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (url.origin !== fixture.origin) return route.abort();
+        if (url.pathname === "/_screen/wifi") {
+            const { data } = request.postDataJSON();
+            if (data.op === "join") {
+                joins++;
+                submissionPreserved =
+                    data.ssid === "Fixture B" && data.password === credential;
+            }
+            if (data.op === "scan" && holdRescan) {
+                holdRescan = false;
+                const response = await route.fetch({ maxRedirects: 0 });
+                rescanReady.resolve();
+                await releaseRescan.promise;
+                return route.fulfill({ response });
+            }
+        }
+        return route.continue();
+    });
     // The real HTTP response is read before advancing the clock to the next poll.
     let statusReads = 0;
     let statusRead = Promise.withResolvers();
@@ -71,15 +94,25 @@ export async function verifyWifiPrompt(t, browser) {
         await field.evaluate((node) => document.activeElement === node),
         true,
     );
-    await field.fill(["incorrect", 42].join("-"));
-    await page.keyboard.press("Enter");
+    await field.fill(credential);
+    holdRescan = true;
+    const retry = page.getByRole("button", { name: "Scan again" });
+    await retry.click();
+    await rescanReady.promise;
+    await field.press("Enter");
+    await page.getByText("Joining Wi-Fi…", { exact: true }).waitFor();
+    assert.equal(await field.isDisabled(), true);
+    assert.equal(joins, 0);
+    releaseRescan.resolve();
     await page
         .getByRole("status")
         .filter({
             hasText: "Could not join Wi-Fi. The previous network was kept.",
         })
         .waitFor();
-    assert.equal(await field.inputValue(), "");
+    assert.equal(joins, 1);
+    assert.equal(submissionPreserved, true);
+    assert.equal((await field.inputValue()) === "", true);
     await page.keyboard.press("Escape");
     const gear = page.getByRole("button", { name: "Settings", exact: true });
     assert.equal(
@@ -88,6 +121,6 @@ export async function verifyWifiPrompt(t, browser) {
     );
     assert.equal(await home.isVisible(), true);
     console.log(
-        "Paired Wi-Fi on loopback: Home at 29s, focused Wi-Fi at 30s, keyboard join rejection, cleared password, Escape returns focus to Settings",
+        "Paired Wi-Fi on loopback: Home at 29s, focused Wi-Fi at 30s, one intact keyboard join after a held rescan, rejection shown, password cleared, Escape returns focus to Settings",
     );
 }
