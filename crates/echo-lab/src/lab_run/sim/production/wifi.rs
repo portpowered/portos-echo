@@ -47,7 +47,9 @@ pub fn record(artifacts: &mut crate::lab_run::Artifacts, action: &str, result: V
         .create(true)
         .open(artifacts.root.join(name))
         .map_err(|_| "Wi-Fi: cannot open result evidence")?;
-    writeln!(file, "{}", json!({"step":action,"result":result})).map_err(|_| "Wi-Fi: cannot record result evidence")?;
+    let mut entry = json!({"step":action});
+    entry["result"] = result;
+    writeln!(file, "{entry}").map_err(|_| "Wi-Fi: cannot record result evidence")?;
     if !artifacts.evidence.iter().any(|entry| entry == name) {
         artifacts.evidence.push(name.to_owned());
     }
@@ -268,7 +270,9 @@ async fn expect(addr: SocketAddr, frame: Value, expected: Value) -> Result<Value
 
 async fn request(addr: SocketAddr, mut data: Value) -> Result<Value, String> {
     data["version"] = json!(1);
-    let body = json!({"type":"wifi-request","data":data}).to_string();
+    let mut frame = json!({"type":"wifi-request"});
+    frame["data"] = data;
+    let body = frame.to_string();
     let headers = format!(
         "POST /_screen/wifi?token=synthetic-local-screen HTTP/1.1\r\nHost: {addr}\r\n\
         Origin: http://{addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

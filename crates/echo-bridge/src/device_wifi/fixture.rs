@@ -1,5 +1,5 @@
 //! Linux radio substitute for prebuilt-device and echo-lab journeys.
-use super::wire::{self, Error, Network, Reading, Request};
+use super::wire::{self, Error, Reading, Request, ScanEntry};
 use echo_device::wifi::{self, Join, Status};
 use std::{
     fs::{self, File},
@@ -48,7 +48,7 @@ struct Radio {
 }
 
 impl Radio {
-    fn networks(&mut self) -> Option<&mut Vec<Network>> {
+    fn networks(&mut self) -> Option<&mut Vec<ScanEntry>> {
         match &mut self.fixture.scan {
             Some(Reading::Scan { networks }) => Some(networks),
             _ => None,

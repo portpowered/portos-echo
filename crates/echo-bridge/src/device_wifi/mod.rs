@@ -120,8 +120,8 @@ fn valid_result(request: &Request, bytes: &[u8]) -> bool {
             .remove("error")
             .and_then(|v| serde_json::from_value::<Error>(v).ok());
         return match (request, error) {
-            (_, Some(Error::Unavailable | Error::Unsupported)) => fields.is_empty(),
-            (Request::Join { .. } | Request::Forget { .. }, Some(Error::Busy))
+            (_, Some(Error::Unavailable | Error::Unsupported))
+            | (Request::Join { .. } | Request::Forget { .. }, Some(Error::Busy))
             | (Request::Forget { .. }, Some(Error::NotSaved)) => fields.is_empty(),
             (Request::Join { .. }, Some(Error::JoinFailed | Error::RollbackFailed)) => valid_status(fields, None),
             _ => false,

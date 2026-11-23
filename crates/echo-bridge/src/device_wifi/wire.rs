@@ -112,12 +112,12 @@ pub(super) struct ResultData {
 #[serde(untagged, deny_unknown_fields)]
 pub(super) enum Reading {
     Status { ssid: Option<String>, reachable: bool },
-    Scan { networks: Vec<Network> },
+    Scan { networks: Vec<ScanEntry> },
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Network {
+pub(super) struct ScanEntry {
     pub ssid: String,
     pub signal_dbm: i32,
     pub secured: bool,
