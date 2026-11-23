@@ -94,6 +94,60 @@ async fn t3_time_no_servers_measure_and_trace_nothing() {
     assert_eq!(rows(&path), Vec::<Value>::new());
 }
 
+#[tokio::test]
+async fn t3_time_failure_diagnostic_drains_without_a_followup_event() {
+    use echo_core_api::{Clock, SystemClock};
+
+    // The clock monitor receives an invalid SNTP reply on each loopback attempt.
+    let mut fake = Fake::ahead(0);
+    fake.stratum = 0;
+    let server = fake.serve().await;
+    let outcome = super::sntp::measure(&[server], Duration::from_millis(400)).await;
+    assert!(matches!(
+        outcome,
+        Outcome::Unsynced {
+            reason: "unreachable",
+            answered: 0
+        }
+    ));
+
+    tokio::time::pause();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("trace");
+    let trace = Trace::open(&path, "api_key").unwrap();
+    let mut reporter = super::Reporter {
+        trace: Some(trace),
+        servers: 1,
+        unsynced: false,
+    };
+    assert!(!reporter.observe(outcome, false));
+
+    tokio::task::yield_now().await;
+    assert_eq!(std::fs::read(&path).unwrap(), b"");
+    let buffered_at = tokio::time::Instant::now();
+    tokio::time::advance(echo_sub_trace::TICK).await;
+    let watchdog = SystemClock.now().monotonic + Duration::from_secs(2);
+    let bytes = loop {
+        let bytes = std::fs::read(&path).unwrap();
+        if bytes.ends_with(b"\n") {
+            break bytes;
+        }
+        assert!(
+            SystemClock.now().monotonic < watchdog,
+            "clock failure exceeded one trace tick"
+        );
+        tokio::task::yield_now().await;
+    };
+    assert_eq!(buffered_at.elapsed(), echo_sub_trace::TICK);
+    let mut row: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(row.as_object_mut().unwrap().remove("corrected").unwrap().is_boolean());
+    assert_eq!(
+        row,
+        json!({"elapsed_ms":0,"event":"clock.offset","provider_auth_mode":"api_key",
+        "synced":false,"reason":"unreachable","servers":1,"hosts":0})
+    );
+}
+
 fn args(text: &str) -> Vec<String> {
     text.split_whitespace().map(String::from).collect()
 }
