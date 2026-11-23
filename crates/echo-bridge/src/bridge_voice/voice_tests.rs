@@ -490,7 +490,7 @@ async fn voice_stuck_delegation_cuts_once_the_filler_has_played_at_the_run_ceili
     assert_eq!(work.await, Err(Error::SessionCeiling));
     assert_eq!(observer.commands().last(), Some(&Command::Cut(0)));
     assert_eq!(frames(&observer), filler);
-    assert!(matches!(port.events.try_recv(), Ok(Ok(event)) if event.into_parts().1.is_some()));
+    assert!(port.events.try_recv().unwrap().unwrap().into_parts().1.is_some());
 }
 
 fn assert_drained_reply(observer: &Observer, old_frames: usize) {
