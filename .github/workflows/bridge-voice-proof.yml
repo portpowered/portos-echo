@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - run: git switch --detach 43f0307b265f6a3af268e17df48031f0b489663b
+      - run: git switch --detach e880e5295d604899aa98a8d6fe76781e53a7d742
       - uses: ./.github/actions/setup
         with:
           target: test-sim
@@ -28,6 +28,7 @@ jobs:
           cargo test --locked -p echo-bridge --test bridge_t3 t3_voice_overlay_ -- --ignored --nocapture --test-threads=1
           cargo test --locked -p echo-bridge --test bridge_t3 t3_settings_overlay_invalid_startup_reports_and_ignores_entire_file -- --ignored --nocapture --test-threads=1
           cargo test --locked -p echo-bridge --lib voice_config_tests
+          cargo test --locked -p echo-bridge --lib voice_config::tests::
           cargo test --locked -p echo-bridge --lib call_omitted_voice_uses_server_default_without_null_or_legacy_substitution
           cargo test --locked -p echo-config --test config_load config_settings
           cargo test --locked -p echo-bridge --lib settings
@@ -40,7 +41,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - run: git switch --detach 43f0307b265f6a3af268e17df48031f0b489663b
+      - run: git switch --detach e880e5295d604899aa98a8d6fe76781e53a7d742
       - uses: ./.github/actions/setup
         with:
           target: lint-self-tests
