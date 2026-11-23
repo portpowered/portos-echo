@@ -29,7 +29,7 @@ async fn t3_portos_unlinked_call_starts_without_server_tools_and_plays_reply() {
         },
     );
     let inspect = async {
-        let (_control, _screen) = ready(&fixture).await;
+        let (_control, _screen) = ready(&fixture, screen_address(&path, 0).await).await;
         observer.wake("unlinked reply", vec![]);
         while !observer.commands().contains(&echo_link::fake::Command::Stop) {
             tokio::task::yield_now().await;

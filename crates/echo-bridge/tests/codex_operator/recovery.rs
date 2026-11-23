@@ -140,7 +140,7 @@ async fn answered(fixture: &Fixture) {
 #[ignore = "T3 requires local Python"]
 async fn codex_recovery_live_failure_during_a_run_ends_that_run_and_the_next_wake_is_served() {
     let outcome = journey("tool-echo", async |fixture, path, observer, lost| {
-        let _ready = ready(fixture).await;
+        let _ready = ready(fixture, screen_address(path, 0).await).await;
         observer.wake("first", vec![]);
         answered(fixture).await;
         lost.notify_one();
@@ -170,7 +170,7 @@ async fn codex_recovery_live_failure_during_a_run_ends_that_run_and_the_next_wak
 #[ignore = "T3 requires local Python"]
 async fn codex_recovery_idle_call_media_failure_keeps_the_bridge_and_the_next_wake_starts_a_run() {
     let outcome = journey("tool-reply", async |fixture, path, observer, lost| {
-        let _ready = ready(fixture).await;
+        let _ready = ready(fixture, screen_address(path, 0).await).await;
         for run in 1..=2 {
             observer.wake("reply", vec![]);
             sent(observer, &Command::Stop, run).await;
@@ -200,7 +200,7 @@ async fn codex_recovery_idle_call_media_failure_keeps_the_bridge_and_the_next_wa
 #[ignore = "T3 requires local Python"]
 async fn codex_recovery_child_exit_respawns_and_the_next_wake_is_served() {
     let outcome = journey("tool-echo", async |fixture, path, observer, _| {
-        let _ready = ready(fixture).await;
+        let _ready = ready(fixture, screen_address(path, 0).await).await;
         let child = std::fs::read_to_string(fixture.home.join("peer-pid")).unwrap();
         let killed = std::process::Command::new("kill")
             .args(["-9", child.trim()])

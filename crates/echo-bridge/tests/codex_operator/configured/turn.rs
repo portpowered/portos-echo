@@ -65,7 +65,8 @@ async fn save_during_playback(
     path: &Path,
     closed: &std::sync::atomic::AtomicUsize,
 ) {
-    let (_control, _screen) = ready(fixture).await;
+    let address = screen_address(path, 0).await;
+    let (_control, _screen) = ready(fixture, address).await;
     observer.wake("held reply", vec![]);
     while !observer.commands().contains(&Command::Stop) {
         assert!(trace(path).iter().all(|row| row["event"] != "bridge.recovering"));
@@ -76,11 +77,11 @@ async fn save_during_playback(
         json!({"codex":{"voice":"maple"}}),
     ] {
         assert_eq!(
-            settings_runtime_patch(fixture, patch).await,
+            settings_runtime_patch(address, patch).await,
             json!({"version":1,"restart_pending":true})
         );
     }
-    pending_snapshot(fixture).await;
+    pending_snapshot(address).await;
     assert_eq!(closed.load(Ordering::SeqCst), 0);
     assert!(!observer.commands().contains(&Command::Close));
     let rows = trace(path);
@@ -89,10 +90,10 @@ async fn save_during_playback(
     }
 }
 
-async fn pending_snapshot(fixture: &Fixture) {
+async fn pending_snapshot(address: SocketAddr) {
     // A completed HTTP snapshot crosses the live host after both commits.
     let snapshot: Value = reqwest::Client::new()
-        .get(settings_runtime_url(fixture, "/settings/v1"))
+        .get(settings_runtime_url(address, "/settings/v1"))
         .send()
         .await
         .unwrap()
@@ -196,8 +197,9 @@ async fn t3_settings_configured_saved_prompts_reach_next_call_without_restart() 
 }
 
 async fn saved_prompt_call(fixture: &Fixture, observer: &Observer, path: &Path) {
-    let (_control, _screen) = ready(fixture).await;
-    save_prompts(fixture).await;
+    let address = screen_address(path, 0).await;
+    let (_control, _screen) = ready(fixture, address).await;
+    save_prompts(fixture, address).await;
     observer.wake("saved prompt fixture", vec![]);
     while !observer.commands().contains(&Command::Stop) {
         assert!(trace(path).iter().all(|row| row["event"] != "bridge.recovering"));
@@ -231,10 +233,10 @@ async fn saved_prompt_call(fixture: &Fixture, observer: &Observer, path: &Path) 
     }
 }
 
-async fn save_prompts(fixture: &Fixture) {
+async fn save_prompts(fixture: &Fixture, address: SocketAddr) {
     for (kind, text) in [("voice", "saved voice\n語 \n"), ("runner", "saved runner\n")] {
         let response = reqwest::Client::new()
-            .post(settings_runtime_url(fixture, &format!("/settings/v1/prompts/{kind}")))
+            .post(settings_runtime_url(address, &format!("/settings/v1/prompts/{kind}")))
             .json(&json!({"version":1,"text":text}))
             .send()
             .await

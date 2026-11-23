@@ -8,7 +8,8 @@ mod recovery;
 mod settings_link;
 mod tools;
 mod voice_entry;
-use fixture::Fixture;
+use fixture::{Fixture, screen_address, signin_screen};
+use std::net::SocketAddr;
 
 impl Fixture {
     pub async fn invoke(&self, args: &[&str], code: i32, stdout: &str, stderr: &str) {
@@ -85,7 +86,7 @@ async fn codex_operator_signin_screen_matching_completion_and_reopened_status() 
             "code: TEST-CODE\nurl: http://127.0.0.1:12345/verify\n"
         };
         let mut control = fixture.control().await;
-        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        let mut screen = bridge_wire_screen::stream(&signin_screen(&mut process).await.to_string()).await;
         let state = bridge_wire_screen::state(&mut screen).await;
         assert_eq!(state, json!({"state":"ready", "message":prompt}));
         // The peer has already sent a successful foreign completion. It cannot finish login.
@@ -128,7 +129,7 @@ async fn codex_operator_failed_completion_and_eof_preserve_auth_and_release_reso
         assert_eq!(process.line().await, "code: TEST-CODE");
         assert_eq!(process.line().await, "url: http://127.0.0.1:12345/verify");
         let mut control = fixture.control().await;
-        let mut screen = bridge_wire_screen::ScreenEvents::connect(fixture.screen.port()).await;
+        let mut screen = bridge_wire_screen::ScreenEvents::connect(signin_screen(&mut process).await.port()).await;
         assert_eq!(
             screen.next(&format!("{outcome}: waiting for sign-in Ready")).await?,
             Some(json!({"seq":1,"state":{"state":"ready",

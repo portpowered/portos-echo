@@ -56,7 +56,7 @@ async fn codex_configured_refused_device_shows_error_then_retries_to_ready() {
     let inspect = async {
         let _control = fixture.control().await;
         connector.entered.notified().await;
-        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        let mut screen = bridge_wire_screen::stream(&screen_address(&path, 0).await.to_string()).await;
         connector.release.notify_one();
         let mut shown = false;
         loop {
@@ -128,24 +128,23 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
         );
         let inspect = async {
             let _control = fixture.control().await;
-            let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+            let address = screen_address(&path, 0).await;
+            let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
             while bridge_wire_screen::state(&mut screen).await["message"] != "Echo Live ready" {}
-            settings_runtime_requests(&fixture, &home).await;
+            settings_runtime_requests(address, &home).await;
             presentation_owned(&path);
             assert!(!observer.commands().contains(&Command::Close));
             if restart {
-                let response = settings_runtime_patch(&fixture, json!({"agent":{"daily_request_cap":"3"}})).await;
+                let response = settings_runtime_patch(address, json!({"agent":{"daily_request_cap":"3"}})).await;
                 assert_eq!(response, json!({"version":1,"restart_pending":true}));
                 assert_eq!(
                     bridge_wire_screen::state(&mut screen).await,
                     json!({"state":"ready","message":"Restarting bridge..."})
                 );
-                while let Some(line) = screen.next_line().await.unwrap() {
-                    assert!(!line.starts_with("data:"));
-                }
             } else {
                 stop.send(()).unwrap();
             }
+            super::voice_entry::screen_ended(&mut screen).await;
         };
         let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
             tokio::join!(work, inspect)
@@ -168,7 +167,6 @@ async fn t3_settings_runtime_mounts_authorized_host_and_releases_before_restart(
                 .count(),
             usize::from(restart)
         );
-        assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
     }
 }
 
@@ -206,17 +204,16 @@ fn retained_settings(host: &mut echo_bridge::bridge_settings::SettingsHost, rest
     assert_eq!(snapshot.prompts.voice, "saved voice\n");
     assert_eq!(snapshot.prompts.runner, "admitted runner");
 }
-pub(super) fn settings_runtime_url(fixture: &Fixture, path: &str) -> reqwest::Url {
-    assert_eq!(fixture.screen.ip(), std::net::Ipv4Addr::LOCALHOST);
+pub(super) fn settings_runtime_url(address: SocketAddr, path: &str) -> reqwest::Url {
     let mut url = reqwest::Url::parse("http://127.0.0.1").unwrap();
-    url.set_port(Some(fixture.screen.port())).unwrap();
+    url.set_port(Some(address.port())).unwrap();
     url.set_path(path);
     url.set_query(Some("token=synthetic-screen-pair"));
     url
 }
-async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) -> serde_json::Value {
+async fn settings_runtime_patch(address: SocketAddr, settings: serde_json::Value) -> serde_json::Value {
     let response = reqwest::Client::new()
-        .post(settings_runtime_url(fixture, "/settings/v1"))
+        .post(settings_runtime_url(address, "/settings/v1"))
         .json(&json!({"version":1,"settings":settings}))
         .send()
         .await
@@ -225,16 +222,16 @@ async fn settings_runtime_patch(fixture: &Fixture, settings: serde_json::Value) 
     response.json().await.unwrap()
 }
 
-async fn settings_runtime_requests(fixture: &Fixture, home: &Path) {
-    settings_runtime_snapshot(fixture).await;
+async fn settings_runtime_requests(address: SocketAddr, home: &Path) {
+    settings_runtime_snapshot(address).await;
     let client = reqwest::Client::new();
-    let url = settings_runtime_url(fixture, "/settings/v1");
-    settings_runtime_saves(fixture, home, &client, &url).await;
+    let url = settings_runtime_url(address, "/settings/v1");
+    settings_runtime_saves(address, home, &client, &url).await;
 }
 
-async fn settings_runtime_snapshot(fixture: &Fixture) {
+async fn settings_runtime_snapshot(address: SocketAddr) {
     let client = reqwest::Client::new();
-    let mut url = settings_runtime_url(fixture, "/settings/v1");
+    let mut url = settings_runtime_url(address, "/settings/v1");
     url.set_query(None);
     assert_eq!(
         client.get(url.as_str()).send().await.unwrap().status(),
@@ -252,9 +249,9 @@ async fn settings_runtime_snapshot(fixture: &Fixture) {
     }
 }
 
-async fn settings_runtime_saves(fixture: &Fixture, home: &Path, client: &reqwest::Client, url: &reqwest::Url) {
+async fn settings_runtime_saves(address: SocketAddr, home: &Path, client: &reqwest::Client, url: &reqwest::Url) {
     assert_eq!(
-        settings_runtime_patch(fixture, json!({"agent":{"daily_request_cap":"8"}})).await,
+        settings_runtime_patch(address, json!({"agent":{"daily_request_cap":"8"}})).await,
         json!({"version":1,"restart_pending":false})
     );
     let previous = std::fs::read(home.join("settings.toml")).unwrap();
@@ -267,7 +264,7 @@ async fn settings_runtime_saves(fixture: &Fixture, home: &Path, client: &reqwest
     assert_eq!(invalid.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(std::fs::read(home.join("settings.toml")).unwrap(), previous);
     let prompt = client
-        .post(settings_runtime_url(fixture, "/settings/v1/prompts/voice"))
+        .post(settings_runtime_url(address, "/settings/v1/prompts/voice"))
         .json(&json!({"version":1,"text":"saved voice\n"}))
         .send()
         .await
@@ -309,7 +306,7 @@ async fn codex_configured_service_authenticates_both_modes_before_ready_and_reap
         );
         let inspect = async {
             let _control = fixture.control().await;
-            let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+            let mut screen = bridge_wire_screen::stream(&screen_address(&path, 0).await.to_string()).await;
             loop {
                 let state = bridge_wire_screen::state(&mut screen).await;
                 assert_eq!(state["state"], "ready");
@@ -473,7 +470,8 @@ async fn t3_settings_overlay_invalid_startup_reports_and_ignores_entire_file() {
         assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
         bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
         assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
-        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        let path = fixture.directory.path().join("trace");
+        let mut screen = bridge_wire_screen::stream(&screen_address(&path, 0).await.to_string()).await;
         assert_eq!(
             bridge_wire_screen::state(&mut screen).await,
             json!({

@@ -79,7 +79,8 @@ async fn codex_voice_runtime_prewake_ready_and_cancel_reap_before_presentation_c
     );
     let inspect = async {
         let _control = fixture.control().await;
-        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        let address = screen_address(&path, 0).await;
+        let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
         loop {
             let state = bridge_wire_screen::state(&mut screen).await;
             assert_eq!(state["state"], "ready");
@@ -92,7 +93,7 @@ async fn codex_voice_runtime_prewake_ready_and_cancel_reap_before_presentation_c
             [Command::Connect, Command::Capture, Command::Probe]
         );
         presentation_owned(&path);
-        let stalled = stalled_screen_body(fixture.screen).await;
+        let stalled = stalled_screen_body(address).await;
         stop.send(()).unwrap();
         screen_eof(stalled).await;
     };
@@ -159,7 +160,8 @@ async fn codex_voice_runtime_relink_stays_visible_without_device_or_lease_until_
     );
     let inspect = async {
         let _control = fixture.control().await;
-        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        let address = screen_address(&path, 0).await;
+        let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
         loop {
             let state = bridge_wire_screen::state(&mut screen).await;
             if state["relink"] == true {
@@ -441,7 +443,7 @@ async fn codex_voice_runtime_kill_overlay_clear_and_cancel_keep_one_owned_proces
     );
     let inspect = async {
         let _control = fixture.control().await;
-        clear_kill_screen(&fixture, &kill_path).await;
+        clear_kill_screen(&trace_path, &kill_path).await;
         presentation_owned(&trace_path);
         stop.send(()).unwrap();
     };
@@ -468,8 +470,8 @@ async fn codex_voice_runtime_kill_overlay_clear_and_cancel_keep_one_owned_proces
     );
 }
 
-async fn clear_kill_screen(fixture: &Fixture, kill_path: &Path) {
-    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+async fn clear_kill_screen(path: &Path, kill_path: &Path) {
+    let mut screen = bridge_wire_screen::stream(&screen_address(path, 0).await.to_string()).await;
     loop {
         let state = bridge_wire_screen::state(&mut screen).await;
         if state["state"] == "error" {

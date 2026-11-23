@@ -1,11 +1,11 @@
 use super::*;
 use echo_codex::codex_supervisor::{Supervisor, SupervisorConfig};
+use std::net::{Ipv4Addr, SocketAddr};
 
 pub(super) struct Fixture {
     pub directory: tempfile::TempDir,
     pub home: PathBuf,
     pub binary: PathBuf,
-    pub screen: std::net::SocketAddr,
     lifetimes: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<tokio::net::TcpStream>>,
     lifetime_task: tokio::task::JoinHandle<()>,
     observed: std::sync::atomic::AtomicUsize,
@@ -32,15 +32,11 @@ impl Fixture {
         .unwrap();
         lifetimes.set_nonblocking(true).unwrap();
         drop(owner);
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let screen = listener.local_addr().unwrap();
-        drop(listener);
         let (lifetimes, lifetime_task) = watch_children(tokio::net::TcpListener::from_std(lifetimes).unwrap());
         let fixture = Self {
             directory,
             home,
             binary,
-            screen,
             lifetimes: tokio::sync::Mutex::new(lifetimes),
             lifetime_task,
             observed: std::sync::atomic::AtomicUsize::new(0),
@@ -53,13 +49,10 @@ impl Fixture {
         let path = self.directory.path();
         bridge_wire_auth::config(path, mode, "");
         std::fs::write(path.join("screen-token"), "synthetic-screen-pair").unwrap();
-        let text = std::fs::read_to_string(path.join("bridge.toml"))
-            .unwrap()
-            .replace(
-                "credentials/screen-pairing.txt",
-                &path.join("screen-token").display().to_string().replace('\\', "/"),
-            )
-            .replace("127.0.0.1:0", &self.screen.to_string());
+        let text = std::fs::read_to_string(path.join("bridge.toml")).unwrap().replace(
+            "credentials/screen-pairing.txt",
+            &path.join("screen-token").display().to_string().replace('\\', "/"),
+        );
         std::fs::write(
             path.join("bridge.toml"),
             format!(
@@ -118,6 +111,102 @@ impl Fixture {
             .await
             .unwrap()
     }
+}
+
+/// The trace is append-only across runtime generations and process images.
+/// Count only complete `screen.listening` records in the caller's trace.
+pub(super) async fn screen_address(path: &Path, generation: usize) -> SocketAddr {
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        let mut polls = tokio::time::interval(POLL_INTERVAL);
+        loop {
+            polls.tick().await;
+            if let Some(address) = traced_screen(path, generation) {
+                break address;
+            }
+        }
+    })
+    .await
+    .map_err(|_| format!("missing screen.listening for generation {generation} in {path:?}"))
+    .unwrap()
+}
+
+fn traced_screen(path: &Path, generation: usize) -> Option<SocketAddr> {
+    let bytes = std::fs::read(path)
+        .map(Some)
+        .or_else(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => Ok(None),
+            _ => Err(error),
+        })
+        .expect("read bridge screen trace")?;
+    let end = bytes.iter().rposition(|&byte| byte == b'\n')?;
+    let row = bytes[..end]
+        .split(|&byte| byte == b'\n')
+        .map(|line| serde_json::from_slice::<Value>(line).unwrap())
+        .filter(|row| row["event"] == "screen.listening")
+        .nth(generation)?;
+    let address: SocketAddr = row["address"].as_str().unwrap().parse().unwrap();
+    assert_eq!(address.ip(), Ipv4Addr::LOCALHOST);
+    assert_ne!(address.port(), 0);
+    Some(address)
+}
+
+/// Standalone sign-in publishes a prompt without a runtime trace. Resolve
+/// only IPv4 listeners whose socket inodes are held by that bridge child.
+pub(super) async fn signin_screen(process: &mut Process) -> SocketAddr {
+    let pid = process.child.id().expect("sign-in child PID after prompt");
+    let proc = PathBuf::from(format!("/proc/{pid}"));
+    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
+        let mut polls = tokio::time::interval(POLL_INTERVAL);
+        loop {
+            polls.tick().await;
+            let addresses = child_listeners(&proc);
+            let status = process.child.try_wait().unwrap();
+            assert!(status.is_none(), "sign-in bridge exited after prompt: {status:?}");
+            let addresses = addresses.map_err(|error| format!("reading sign-in bridge {pid} listeners: {error}"))?;
+            match addresses.as_slice() {
+                [] => (),
+                [address] => break Ok(*address),
+                addresses => {
+                    break Err(format!(
+                        "sign-in bridge {pid} has ambiguous loopback listeners: {addresses:?}"
+                    ));
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|_| format!("sign-in bridge {pid} did not expose an IPv4 loopback listener after its prompt"))
+    .unwrap()
+    .unwrap()
+}
+
+fn child_listeners(proc: &Path) -> std::io::Result<Vec<SocketAddr>> {
+    let mut sockets = std::collections::HashSet::new();
+    for fd in std::fs::read_dir(proc.join("fd"))? {
+        let target = match std::fs::read_link(fd?.path()) {
+            Ok(target) => target,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if let Some(inode) = target.to_str().and_then(|link| link.strip_prefix("socket:[")) {
+            sockets.insert(inode.strip_suffix(']').unwrap().to_owned());
+        }
+    }
+    let tcp = std::fs::read_to_string(proc.join("net/tcp"))?;
+    Ok(tcp
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            if fields[3] != "0A" || !sockets.contains(fields[9]) {
+                return None;
+            }
+            let (ip, port) = fields[1].split_once(':').unwrap();
+            let ip = Ipv4Addr::from(u32::from_str_radix(ip, 16).unwrap().to_ne_bytes());
+            let port = u16::from_str_radix(port, 16).unwrap();
+            (ip == Ipv4Addr::LOCALHOST && port != 0).then_some((ip, port).into())
+        })
+        .collect())
 }
 
 impl Drop for Fixture {

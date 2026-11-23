@@ -26,7 +26,7 @@ async fn t3_settings_v2_portos_advises_relink_until_own_client_is_committed() {
 
     let mut process = Process::spawn(&mut super::super::voice_entry::command(&fixture));
     let _satellite = restart::binary_ready(&listener, &mut process).await;
-    relink_with_settings(&fixture, &mock).await;
+    relink_with_settings(screen_address(&fixture.directory.path().join("trace"), 0).await, &mock).await;
     drop(process.input.take());
     process.collect(0).await;
     assert_eq!(process.stderr().await, "");
@@ -55,14 +55,14 @@ async fn prepare_legacy_grant(fixture: &Fixture, mock: &echo_mcp_auth::mock::Moc
     auth.await_approval(instructions).await.unwrap();
 }
 
-async fn relink_with_settings(fixture: &Fixture, mock: &echo_mcp_auth::mock::Mock) {
+async fn relink_with_settings(address: SocketAddr, mock: &echo_mcp_auth::mock::Mock) {
     let client = reqwest::Client::new();
-    let url = settings_runtime_url(fixture, "/settings/v2");
+    let url = settings_runtime_url(address, "/settings/v2");
     let requests = mock.state.lock().unwrap().requests.len();
     let legacy = legacy_portos_snapshot(&client, &url).await;
     assert_eq!(mock.state.lock().unwrap().requests.len(), requests);
 
-    let pending = start_portos_relink(fixture, &client, &url).await;
+    let pending = start_portos_relink(address, &client, &url).await;
     let linked = approved_portos_snapshot(&client, &url).await;
 
     assert_client_identity_omitted(&[legacy, pending, linked]);
@@ -85,8 +85,8 @@ async fn legacy_portos_snapshot(client: &reqwest::Client, url: &reqwest::Url) ->
     legacy
 }
 
-async fn start_portos_relink(fixture: &Fixture, client: &reqwest::Client, url: &reqwest::Url) -> Value {
-    let operation = settings_runtime_url(fixture, "/settings/v2/portos");
+async fn start_portos_relink(address: SocketAddr, client: &reqwest::Client, url: &reqwest::Url) -> Value {
+    let operation = settings_runtime_url(address, "/settings/v2/portos");
     let response = client
         .post(operation)
         .json(&json!({"version":2,"operation":"link"}))
@@ -146,7 +146,8 @@ async fn t3_settings_v2_restart_installs_overlay_and_links_with_saved_scopes() {
     let pid = process.child.id().unwrap();
     let mut old_satellite = restart::binary_ready(&listener, &mut process).await;
     let identity = restart::process_identity(pid);
-    let url = settings_runtime_url(&fixture, "/settings/v2");
+    let path = fixture.directory.path().join("trace");
+    let url = settings_runtime_url(screen_address(&path, 0).await, "/settings/v2");
     let client = reqwest::Client::new();
     let before = leaves(&snapshot(&client, &url).await);
     assert_eq!(
@@ -167,6 +168,8 @@ async fn t3_settings_v2_restart_installs_overlay_and_links_with_saved_scopes() {
         .await
         .unwrap()
         .unwrap();
+    let address = screen_address(&path, 1).await;
+    let url = settings_runtime_url(address, "/settings/v2");
     let active = snapshot(&client, &url).await;
     assert_eq!(active["restart_pending"], false);
     let after = leaves(&active);
@@ -178,7 +181,7 @@ async fn t3_settings_v2_restart_installs_overlay_and_links_with_saved_scopes() {
     overlay(&fixture, &home, &base);
     tokio::time::timeout(
         OBSERVATION_TIMEOUT,
-        super::super::settings_link::replacement_grant(&fixture, &mock, epoch),
+        super::super::settings_link::replacement_grant(&fixture, address, &mock, epoch),
     )
     .await
     .unwrap();
@@ -306,9 +309,10 @@ async fn t3_settings_account_changes_reuse_the_credential_owners() {
     std::fs::write(fixture.home.join("auth.json"), "synthetic-private-openai-value").unwrap();
     let mut process = account_process(&fixture, &mock, epoch);
     let mut first = restart::binary_ready(&listener, &mut process).await;
-    let url = settings_runtime_url(&fixture, "/settings/v2/openai");
+    let address = screen_address(&fixture.directory.path().join("trace"), 0).await;
+    let url = settings_runtime_url(address, "/settings/v2/openai");
     let client = reqwest::Client::new();
-    assert_fixed_clock_save_refused(&fixture, &client, &overlay).await;
+    assert_fixed_clock_save_refused(address, &client, &overlay).await;
     assert_eq!(
         snapshot(&client, &url).await,
         json!({"version":2,"link_status":"linked","operation_state":"idle"})
@@ -326,7 +330,7 @@ async fn t3_settings_account_changes_reuse_the_credential_owners() {
         .unwrap();
     tokio::time::timeout(
         OBSERVATION_TIMEOUT,
-        super::super::settings_link::controlled_grant(&fixture, &mock, epoch, &mut process),
+        super::super::settings_link::controlled_grant(&fixture, address, &mock, epoch, &mut process),
     )
     .await
     .unwrap();
@@ -346,14 +350,14 @@ async fn t3_settings_account_changes_reuse_the_credential_owners() {
     assert_account_owner_receipts(&fixture);
 }
 
-async fn assert_fixed_clock_save_refused(fixture: &Fixture, client: &reqwest::Client, overlay: &Path) {
-    let v2 = settings_runtime_url(fixture, "/settings/v2");
+async fn assert_fixed_clock_save_refused(address: SocketAddr, client: &reqwest::Client, overlay: &Path) {
+    let v2 = settings_runtime_url(address, "/settings/v2");
     let before = snapshot(client, &v2).await;
     assert_eq!(before["restart_pending"], false);
     assert_eq!(before["settings"]["agent"]["daily_request_cap"], "8");
     for (request, version) in [
         (client.patch(v2.clone()), 2),
-        (client.post(settings_runtime_url(fixture, "/settings/v1")), 1),
+        (client.post(settings_runtime_url(address, "/settings/v1")), 1),
     ] {
         let response = request
             .json(&json!({"version":version,"settings":{"agent":{"daily_request_cap":"6"}}}))
@@ -381,10 +385,8 @@ async fn assert_fixed_clock_noop_accepted(client: &reqwest::Client, v2: reqwest:
         .await
         .unwrap();
     assert_eq!(noop.status(), reqwest::StatusCode::OK);
-    assert_eq!(
-        noop.json::<Value>().await.unwrap(),
-        json!({"version":2,"restart_pending":false})
-    );
+    let receipt = noop.json::<Value>().await.unwrap();
+    assert_eq!(receipt, json!({"version":2,"restart_pending":false}));
 }
 
 fn account_process(fixture: &Fixture, mock: &MockPortos, epoch: u64) -> Process {
