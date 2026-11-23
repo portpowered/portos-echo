@@ -20,7 +20,7 @@ fn capture_preserves_irregular_pcm_and_reports_unpadded_tail() {
     assert_eq!(frames.len(), 3);
     assert_eq!(frames.concat(), input[..960]);
     assert_eq!(capture.tail_samples(), 43);
-    assert!(capture.finish().unwrap().is_empty());
+    assert_eq!(capture.finish().unwrap().len(), 0);
     assert_eq!(capture.process(&format, &[]), Err(Error::Audio));
 }
 
@@ -39,7 +39,7 @@ fn capture_validation_consumes_nothing_and_new_owner_discards_old_tail() {
     );
     let stereo = [i16::MAX, i16::MIN].repeat(320);
     assert_eq!(capture.process(&format, &bytes(&stereo)).unwrap(), &[[0; 320]]);
-    assert!(capture.process(&format, &bytes(&[6000; 100])).unwrap().is_empty());
+    assert_eq!(capture.process(&format, &bytes(&[6000; 100])).unwrap().len(), 0);
     drop(capture);
     let mut capture = CaptureAudio::new(format).unwrap();
     assert_eq!(capture.process(&format, &bytes(&[0; 640])).unwrap(), &[[0; 320]]);
