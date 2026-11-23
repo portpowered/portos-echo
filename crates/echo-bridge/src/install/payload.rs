@@ -1,7 +1,8 @@
 use std::{
     collections::BTreeMap,
+    ffi::OsStr,
     fs::File,
-    os::unix::fs::MetadataExt,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Path, PathBuf},
 };
 
@@ -179,7 +180,7 @@ fn migrate_private(files: &Files<'_>, source: &File, target: &Path) -> Result<()
         ) {
             continue;
         }
-        let name = Path::new(std::os::unix::ffi::OsStrExt::from_bytes(name));
+        let name = Path::new(OsStr::from_bytes(name));
         let target = target.join(name);
         if entry.file_type() == rustix::fs::FileType::Directory {
             files::copy_tree(files, &source_dir(source, name)?, &target, CORE, 0o700, 32)?;

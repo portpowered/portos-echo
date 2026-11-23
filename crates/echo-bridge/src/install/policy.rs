@@ -8,7 +8,6 @@ use echo_boot::Result;
 use super::files::{self, Files, ROOT};
 
 pub(super) const PATH: &str = "/vendor/etc/selinux/precompiled_sepolicy";
-#[cfg(target_os = "android")]
 pub(super) const SHA256: &str = "e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a";
 const MODEL_RULES: &str = "\
 allow init su process { transition siginh rlimitinh noatsecure }
@@ -44,7 +43,8 @@ pub(super) trait Tool {
 }
 
 pub(super) fn prepare(files: &Files<'_>, ops: &mut impl Tool, tool: &Path, work: &Path) -> Result<()> {
-    let input = files.path(PATH);
+    let input = work.join("policy.original");
+    files.copy(files.trusted_file(&files.path(PATH))?, &input, ROOT, 0o600)?;
     let model = work.join("model.rules");
     let intermediate = work.join("policy.model");
     files.write(&model, MODEL_RULES.as_bytes(), ROOT, 0o600)?;

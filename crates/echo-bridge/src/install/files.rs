@@ -1,7 +1,11 @@
 use std::{
+    ffi::OsStr,
     fs::{self, DirBuilder, File, Metadata},
     io::{self, Read, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt},
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{DirBuilderExt, MetadataExt},
+    },
     path::{Path, PathBuf},
 };
 
@@ -179,7 +183,7 @@ pub(super) fn copy_tree(
         if matches!(name, b"." | b"..") {
             continue;
         }
-        let name = Path::new(std::os::unix::ffi::OsStrExt::from_bytes(name));
+        let name = Path::new(OsStr::from_bytes(name));
         let target = destination.join(name);
         let meta = unix::statat(source, name, unix::AtFlags::SYMLINK_NOFOLLOW).map_err(|_| "inspect source entry")?;
         if unix::FileType::from_raw_mode(meta.st_mode) == unix::FileType::Directory {

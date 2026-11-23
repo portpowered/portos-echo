@@ -52,10 +52,10 @@ pub(super) enum Step {
 const STEPS: [Step; 8] = [
     Step::Layout,
     Step::WakeAssets,
-    Step::PrivateHome,
     Step::Policy,
     Step::Slots,
     Step::ForkServices,
+    Step::PrivateHome,
     Step::InitHook,
     Step::Mounts,
 ];
@@ -162,15 +162,13 @@ pub(super) fn run(files: &Files<'_>, ops: &mut impl System, input: &Install) -> 
     let lock = files.protected(&files.path("/data/local"))?;
     lock.try_lock().map_err(|_| "installer already running")?;
     let paths = Paths::new(files);
-    files.protected(&paths.bin)?;
     for path in [&paths.root, &paths.bin] {
-        if files::mode(
-            &files
-                .protected(path)?
-                .metadata()
-                .map_err(|_| "inspect install layout")?,
-        ) != 0o755
-        {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = files
+            .protected(path)?
+            .metadata()
+            .map_err(|_| "inspect install layout")?;
+        if files::mode(&metadata) != 0o755 || (files.root_uid == 0 && metadata.gid() != 0) {
             return Err("invalid staged install directory mode");
         }
     }

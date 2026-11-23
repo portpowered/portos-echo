@@ -1,6 +1,6 @@
 use std::{ffi::OsString, io::Write, path::PathBuf, process::ExitCode};
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 mod android;
 #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 mod files;
@@ -86,12 +86,13 @@ fn parse(args: Vec<OsString>) -> Option<Install> {
     })
 }
 
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
 fn execute(install: Install) -> echo_boot::Result<&'static str> {
-    #[cfg(target_os = "android")]
-    return android::run(install);
-    #[cfg(not(target_os = "android"))]
-    {
-        let _input = (install.magiskpolicy, install.stage, install.reboot);
-        Err("requires Android root")
-    }
+    android::run(install)
+}
+
+#[cfg(not(any(target_os = "android", all(test, target_os = "linux"))))]
+fn execute(install: Install) -> echo_boot::Result<&'static str> {
+    let _input = (install.magiskpolicy, install.stage, install.reboot);
+    Err("requires Android root")
 }

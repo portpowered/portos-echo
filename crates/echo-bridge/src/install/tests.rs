@@ -373,10 +373,10 @@ fn t3_a2_device_install_rolls_back_each_failed_step() {
     let steps = [
         Step::Layout,
         Step::WakeAssets,
-        Step::PrivateHome,
         Step::Policy,
         Step::Slots,
         Step::ForkServices,
+        Step::PrivateHome,
         Step::InitHook,
         Step::Mounts,
     ];

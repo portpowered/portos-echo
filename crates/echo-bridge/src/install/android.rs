@@ -33,7 +33,7 @@ struct Android {
 }
 
 pub(super) fn run(input: Install) -> Result<&'static str> {
-    if !(getuid().is_root() && geteuid().is_root()) {
+    if !(cfg!(target_os = "android") && getuid().is_root() && geteuid().is_root()) {
         return Err("requires Android root");
     }
     let root = Path::new("/");
