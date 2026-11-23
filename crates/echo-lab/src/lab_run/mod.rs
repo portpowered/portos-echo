@@ -310,7 +310,9 @@ fn execute_with_errors(args: &[String], output: &mut impl Write, errors: &mut im
         let id = scenario["id"].as_str().ok_or("sim: missing scenario ID")?;
         let root = artifacts.root.clone();
         sim::process::witness::execute(id, &root, output, || {
-            run_with_driver(driver(&options, configuration, errors)?, &steps, &mut artifacts)
+            let result = driver(&options, configuration, errors)
+                .and_then(|driver| run_with_driver(driver, &steps, &mut artifacts));
+            (result, !artifacts.blocked.is_empty())
         })
     } else {
         run_with_driver(driver(&options, configuration, errors)?, &steps, &mut artifacts)

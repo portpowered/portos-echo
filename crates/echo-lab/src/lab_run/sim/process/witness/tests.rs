@@ -29,7 +29,7 @@ fn t1_world_witness_requires_a_valid_result_from_each_generation() {
     let root = tempfile::tempdir().unwrap();
     let first = generation(root.path(), "first", Some(&clean()));
     let second = generation(root.path(), "second", None);
-    assert_eq!(collect(&[first.clone()]).ok().unwrap().len(), 1);
+    assert_eq!(collect(std::slice::from_ref(&first)).ok().unwrap().len(), 1);
     assert_eq!(collect(&[first.clone(), second.clone()]).err(), Some(MISSING));
     let mut bad = clean();
     bad["snapshot"]["device"]
@@ -55,7 +55,7 @@ fn t1_world_witness_prints_one_safe_first_diff_and_preserves_oracle_error() {
     let mut output = Vec::new();
     let world = collect(&[first, later]).map(|_| ());
     assert_eq!(
-        emit(&mut output, "fixture", world, Err("wire oracle".into())),
+        emit(&mut output, "fixture", world, Err("wire oracle".into()), false),
         Err("wire oracle".into())
     );
     assert_eq!(
@@ -64,7 +64,7 @@ fn t1_world_witness_prints_one_safe_first_diff_and_preserves_oracle_error() {
     );
     let mut output = Vec::new();
     assert_eq!(
-        emit(&mut output, "fixture", Ok(()), Err("wire oracle".into())),
+        emit(&mut output, "fixture", Ok(()), Err("wire oracle".into()), false),
         Err("wire oracle".into())
     );
     assert_eq!(

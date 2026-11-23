@@ -4,7 +4,7 @@ use std::{
     cell::RefCell,
     fs::{self, DirBuilder, OpenOptions},
     io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 use tokio::process::Command;
@@ -28,36 +28,18 @@ pub(in crate::lab_run) fn execute(
     id: &str,
     root: &Path,
     output: &mut impl Write,
-    work: impl FnOnce() -> Result<(), String>,
+    work: impl FnOnce() -> (Result<(), String>, bool),
 ) -> Result<(), String> {
-    let seed = if id == "m2-live-connect" {
-        std::env::var_os(SEED_ENV)
-            .map(|seed| {
-                seed.to_str()
-                    .and_then(|seed| seed.parse::<u64>().ok())
-                    .ok_or("sim: invalid World seed")
-            })
-            .transpose()?
-    } else {
-        None
+    let checks = match Checks::new(id) {
+        Ok(checks) => checks,
+        Err(error) => return emit(output, id, Err(INVALID), Err(error), false),
     };
-    let temp = std::env::temp_dir()
-        .canonicalize()
-        .map_err(|_| "sim: cannot resolve temporary directory")?;
-    let checks = Checks {
-        root: tempfile::Builder::new()
-            .prefix("echo-world-")
-            .tempdir_in(temp)
-            .map_err(|_| "sim: cannot own private World directory")?,
-        generations: Vec::new(),
-        seed,
-    };
-    let (result, world) = CURRENT.sync_scope(RefCell::new(checks), || {
-        let result = work();
+    let ((result, blocked), world) = CURRENT.sync_scope(RefCell::new(checks), || {
+        let outcome = work();
         let world = CURRENT.with(|current| current.borrow().finish(root));
-        (result, world)
+        (outcome, world)
     });
-    emit(output, id, world, result)
+    emit(output, id, world, result, blocked)
 }
 
 pub(in crate::lab_run::sim) fn attach(command: &mut Command) -> Result<(), String> {
@@ -68,6 +50,33 @@ pub(in crate::lab_run::sim) fn attach(command: &mut Command) -> Result<(), Strin
 }
 
 impl Checks {
+    fn new(id: &str) -> Result<Self, String> {
+        let seed = if id == "m2-live-connect" {
+            std::env::var_os(SEED_ENV)
+                .map(|seed| {
+                    seed.to_str()
+                        .and_then(|seed| seed.parse::<u64>().ok())
+                        .ok_or("sim: invalid World seed")
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .map_err(|_| "sim: cannot resolve temporary directory")?;
+        let root = tempfile::Builder::new()
+            .prefix("echo-world-")
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir_in(temp)
+            .map_err(|_| "sim: cannot own private World directory")?;
+        Ok(Self {
+            root,
+            generations: Vec::new(),
+            seed,
+        })
+    }
+
     fn attach(&mut self, command: &mut Command) -> Result<(), String> {
         let dir = self.root.path().join(self.generations.len().to_string());
         DirBuilder::new()
@@ -131,15 +140,16 @@ fn emit(
     id: &str,
     world: Result<(), &'static str>,
     result: Result<(), String>,
+    blocked: bool,
 ) -> Result<(), String> {
     let status = if world.is_ok() { "pass" } else { "fail" };
     let write_error = |_| "run stdout: write failed";
-    writeln!(output, "world invariant scenario={id} status={status}").map_err(write_error)?;
+    writeln!(output, "world invariant scenario={} status={status}", id.escape_debug()).map_err(write_error)?;
     if let Err(diff) = world {
         writeln!(output, "World diff: {diff}").map_err(write_error)?;
         result.and(Err("sim: World invariant failed".into()))
     } else {
-        if result.is_err() {
+        if result.is_err() || blocked {
             writeln!(output, "World diff: none (invariants hold)").map_err(write_error)?;
         }
         result

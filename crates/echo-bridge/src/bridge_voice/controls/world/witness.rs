@@ -138,10 +138,10 @@ struct Snapshot {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Device {
-    connected: bool,
-    registered: bool,
-    run_open: bool,
-    capture_open: bool,
+    connected: Flag,
+    registered: Flag,
+    run_open: Flag,
+    capture_open: Flag,
     mic_muted: bool,
     mute_latched: bool,
     #[serde(deserialize_with = "Option::deserialize")]
@@ -149,6 +149,10 @@ struct Device {
     #[serde(deserialize_with = "Option::deserialize")]
     speaker_muted: Option<bool>,
 }
+
+#[derive(Serialize, Deserialize)]
+#[serde(transparent)]
+struct Flag(bool);
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -170,10 +174,10 @@ impl Report {
         let device = state.world.device.current();
         let snapshot = Snapshot {
             device: Device {
-                connected: device.link != LinkState::Disconnected,
-                registered: device.link == LinkState::Registered,
-                run_open: device.run_open,
-                capture_open: device.capture_open,
+                connected: Flag(device.link != LinkState::Disconnected),
+                registered: Flag(device.link == LinkState::Registered),
+                run_open: Flag(device.run_open),
+                capture_open: Flag(device.capture_open),
                 mic_muted: device.privacy.mic_muted,
                 mute_latched: device.privacy.mute_latched,
                 speaker_volume: device.speaker_volume,
@@ -223,10 +227,10 @@ fn render(broken: &Broken) -> String {
 impl Snapshot {
     fn terminal_failure(&self) -> Option<&'static str> {
         [
-            (self.device.capture_open, CAPTURE),
+            (self.device.capture_open.0, CAPTURE),
             (self.device.speaker_volume.is_some_and(|volume| volume > 100), VOLUME),
-            (self.device.run_open, RUN),
-            (self.device.connected || self.device.registered, LINK),
+            (self.device.run_open.0, RUN),
+            (self.device.connected.0 || self.device.registered.0, LINK),
             (self.trace.pending_rows != 0, ROWS),
             (self.trace.writer_failed, WRITER),
         ]

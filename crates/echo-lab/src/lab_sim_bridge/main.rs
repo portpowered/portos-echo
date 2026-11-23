@@ -75,7 +75,7 @@ async fn drain(events: &mut EventStream) -> Result<(), String> {
     }
 }
 
-async fn observe(client: &WyomingClient, events: &mut EventStream, trace: &mut Trace) -> Result<(), String> {
+async fn observe(client: &WyomingClient, events: &mut EventStream, trace: &mut Trace<'_>) -> Result<(), String> {
     let mut sequence = 0_u64;
     loop {
         let event = events
