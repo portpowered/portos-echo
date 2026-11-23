@@ -61,13 +61,13 @@ impl Journey {
         restart::binary_ready(&self.listener, &mut self.process).await
     }
 
-    async fn action(&self, action: Value, token: Option<&str>, origin: Option<&str>) -> StatusCode {
+    async fn action(&self, action: &Value, token: Option<&str>, origin: Option<&str>) -> StatusCode {
         let mut url = Url::parse("http://127.0.0.1/actions").unwrap();
         url.set_port(Some(self.screen.port())).unwrap();
         if let Some(token) = token {
             url.query_pairs_mut().append_pair("token", token);
         }
-        let mut request = self.client.post(url).json(&action);
+        let mut request = self.client.post(url).json(action);
         if let Some(origin) = origin {
             request = request.header("origin", origin);
         }
@@ -76,7 +76,7 @@ impl Journey {
 
     async fn relink(&self) {
         assert_eq!(
-            self.action(json!({"action":"relink"}), Some("synthetic-screen-pair"), None)
+            self.action(&json!({"action":"relink"}), Some("synthetic-screen-pair"), None)
                 .await,
             204
         );
@@ -143,7 +143,7 @@ async fn denied(journey: &Journey) {
             StatusCode::FORBIDDEN,
         ),
     ] {
-        assert_eq!(journey.action(json!({"action":"relink"}), token, origin).await, status);
+        assert_eq!(journey.action(&json!({"action":"relink"}), token, origin).await, status);
     }
     assert_eq!(journey.launches(), 1);
     assert_eq!(journey.methods(), ["initialize", "initialized", "account/read"]);
@@ -294,7 +294,7 @@ async fn t3_bridge_screen_signin_respects_mode_and_preserves_microphone_privacy(
         assert_eq!(
             journey
                 .action(
-                    json!({"action":"approve","id":"stale"}),
+                    &json!({"action":"approve","id":"stale"}),
                     Some("synthetic-screen-pair"),
                     None
                 )
@@ -302,7 +302,7 @@ async fn t3_bridge_screen_signin_respects_mode_and_preserves_microphone_privacy(
             204
         );
         journey.fixture.control().await.write_all(b"success").await.unwrap();
-        assert_muted_readmission(&mut journey, &mut events, ready).await;
+        assert_muted_readmission(&mut journey, &mut events, &ready).await;
         drop(events);
         journey.finish(0).await;
     }
@@ -313,7 +313,7 @@ async fn t3_bridge_screen_signin_respects_mode_and_preserves_microphone_privacy(
     .unwrap();
 }
 
-async fn assert_muted_readmission(journey: &mut Journey, events: &mut bridge_wire_screen::ScreenEvents, ready: Value) {
+async fn assert_muted_readmission(journey: &mut Journey, events: &mut bridge_wire_screen::ScreenEvents, ready: &Value) {
     let mut recovered = journey.ready().await;
     assert_eq!(state(events, "muted").await, json!({"state":"muted"}));
     assert_eq!(journey.health().await["relink_required"], false);
@@ -324,7 +324,7 @@ async fn assert_muted_readmission(journey: &mut Journey, events: &mut bridge_wir
     )
     .await;
     bridge_short::send(&mut recovered, "hassmic-mute", json!({"muted":false})).await;
-    assert_eq!(state(events, "ready").await, ready);
+    assert_eq!(&state(events, "ready").await, ready);
     assert_eq!(
         trace(&journey.trace)
             .iter()

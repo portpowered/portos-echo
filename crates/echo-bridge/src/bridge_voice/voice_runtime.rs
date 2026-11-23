@@ -239,11 +239,8 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
         .map(|_| Account::new(options.host.mode, screen.presentation.clone(), trace.clone()));
     let recovery = account.clone().filter(|_| options.host.mode == LiveMode::Chatgpt);
     screen.supervise_actions(health.state.subscribe(), recovery.clone());
-    let service = service.map(|service| {
-        service
-            .with_local_muse(options.host.routes.is_some())
-            .with_trace(trace.clone())
-    });
+    let local = options.host.routes.is_some();
+    let service = service.map(|host| host.with_local_muse(local).with_trace(trace.clone()));
     let world = trace.world();
     if let Some(config) = options.delegation {
         world.configure_session(echo_core_api::SessionKnobs {
