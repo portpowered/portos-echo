@@ -196,9 +196,12 @@ fn boot_device_services_settles_new_resolver_and_writes_rtc_on_clock_adjustment(
     assert_eq!(host.clock_starts, [7000, 21_607_000]);
     assert!(host.clock_stops.is_empty());
     let timeline = host.service_timeline.unwrap();
-    assert_eq!(actions(&timeline, "7100 hwclock -w -u"), 1);
-    assert_eq!(actions(&timeline, "21607100 hwclock -w -u"), 1);
-    assert_eq!(actions(&timeline, "hwclock"), 2);
+    let transcript = timeline.read("device-commands");
+    let rtc_writes: Vec<_> = transcript
+        .lines()
+        .filter(|line| line.ends_with(" hwclock -w -u"))
+        .collect();
+    assert_eq!(rtc_writes, ["7100 hwclock -w -u", "21607100 hwclock -w -u"]);
     assert_eq!(state(&timeline)["settings"]["global"]["auto_time_zone"], "1");
 }
 

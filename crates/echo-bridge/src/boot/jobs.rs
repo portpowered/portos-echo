@@ -48,10 +48,10 @@ impl Jobs {
     }
 
     pub(super) fn poll_clock(&mut self) -> Result<ClockStatus> {
+        const STAGE: &str = "clock sync failed";
         let Some((mut child, status)) = completed(&mut self.clock, "observe clock sync")? else {
             return Ok(ClockStatus::Running);
         };
-        const STAGE: &str = "clock sync failed";
         if !status.success() {
             return Err(STAGE);
         }

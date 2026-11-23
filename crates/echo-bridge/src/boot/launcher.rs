@@ -116,31 +116,28 @@ fn enter(role: Role, slot: Slot, parent: &str) -> Result<()> {
     process::setsid().map_err(|_| "create role session")?;
     let identity = role.identity();
     drop_identity(identity, parent)?;
-    match identity.domain {
-        Some(domain) => {
-            OpenOptions::new()
-                .write(true)
-                .open("/proc/self/attr/exec")
-                .and_then(|mut attr| attr.write_all(domain.as_bytes()))
-                .map_err(|_| "set device exec context")?;
-            let _error = Command::new(SHELL)
-                .args(["-c", DEVICE_TRAMPOLINE, "echo-bridge-boot-device"])
-                .arg(path)
-                .args(["device", "-P", "wyoming", "-D", "-E"])
-                .exec();
-        }
-        None => {
-            process::kill_process(process::getpid(), Signal::STOP).map_err(|_| "pause core launch")?;
-            let root = Path::new(layout::ROOT);
-            let private = root.join(layout::PRIVATE);
-            let _error = Command::new(path)
-                .env("HOME", root.join(layout::HOME))
-                .arg("--config")
-                .arg(private.join(layout::CONFIG))
-                .arg("--trace")
-                .arg(private.join(layout::TRACE))
-                .exec();
-        }
+    if let Some(domain) = identity.domain {
+        OpenOptions::new()
+            .write(true)
+            .open("/proc/self/attr/exec")
+            .and_then(|mut attr| attr.write_all(domain.as_bytes()))
+            .map_err(|_| "set device exec context")?;
+        let _error = Command::new(SHELL)
+            .args(["-c", DEVICE_TRAMPOLINE, "echo-bridge-boot-device"])
+            .arg(path)
+            .args(["device", "-P", "wyoming", "-D", "-E"])
+            .exec();
+    } else {
+        process::kill_process(process::getpid(), Signal::STOP).map_err(|_| "pause core launch")?;
+        let root = Path::new(layout::ROOT);
+        let private = root.join(layout::PRIVATE);
+        let _error = Command::new(path)
+            .env("HOME", root.join(layout::HOME))
+            .arg("--config")
+            .arg(private.join(layout::CONFIG))
+            .arg("--trace")
+            .arg(private.join(layout::TRACE))
+            .exec();
     }
     Err("execute selected binary")
 }

@@ -54,12 +54,11 @@ async fn invoke(
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| stage)?;
-    match tokio::time::timeout(deadline, exchange(&mut child, input)).await {
-        Ok(Ok(output)) => Ok(output),
-        _ => {
-            let _ = child.kill().await;
-            Err(stage)
-        }
+    if let Ok(Ok(output)) = tokio::time::timeout(deadline, exchange(&mut child, input)).await {
+        Ok(output)
+    } else {
+        let _ = child.kill().await;
+        Err(stage)
     }
 }
 
