@@ -21,7 +21,7 @@ home.joinpath("routing.json").write_text(json.dumps({
     "config": overrides, "proxy": {key: os.environ[key] for key in routing_keys if key in os.environ}}))
 assert "OPENAI_API_KEY" not in os.environ
 assert "OPENAI_ACCESS_TOKEN" not in os.environ
-screen_recovery = home.joinpath("mode").read_text() == "screen-recovery"
+screen_recovery = home.joinpath("screen-recovery").is_file()
 if screen_recovery and home.joinpath("peer-pid").exists():
     # Linux leaves an exited but unreaped process in /proc.
     previous = int(home.joinpath("peer-pid").read_text())
@@ -167,7 +167,7 @@ for line in sys.stdin:
             "loginId": "local-login", "success": success, "error": "synthetic private error"}})
     elif method == "account/logout":
         assert request.get("params") is None
-        assert home.joinpath("mode").read_text() in ("screen-account", "screen-recovery")
+        assert home.joinpath("mode").read_text() == "screen-account"
         home.joinpath("auth.json").unlink()
         emit({"id": request["id"], "result": {}})
     elif method == "account/read":
@@ -204,7 +204,7 @@ for line in sys.stdin:
             continue
         account = {"type": "apiKey"} if mode == "api_key" else {
             "type": "chatgpt", "email": "synthetic@example.invalid", "planType": "synthetic"}
-        if mode == "signed-out" or (mode in ("screen-account", "screen-recovery") and not home.joinpath("auth.json").is_file()):
+        if mode == "signed-out" or (mode == "screen-account" and not home.joinpath("auth.json").is_file()):
             account = None
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
     elif method == "thread/realtime/listVoices":

@@ -158,17 +158,14 @@ impl<'a> SettingsLink<'a> {
 /// publish Connected; played settlement precedes Ready. All device/call/process
 /// cleanup finishes while presentation remains owned.
 ///
-/// Configured delegation discovers MCP tools after authentication and retains
-/// policy, consent and the effect ledger across calls. The service monitors
-/// the nominated kill file; the caller supplies a peer factory.
+/// Configured delegation retains policy, consent and the effect ledger across calls.
 ///
 /// After first readiness no failure ends this owner: a failed generation is
 /// traced, shown on health and screen, and replaced after bounded backoff while
 /// the device link is kept (see `voice_recovery`).
 ///
 /// # Errors
-/// A stop that was not requested, the kill path, and configuration or
-/// credentials that are unusable before first readiness, in fixed categories.
+/// Fixed startup, credential and control failures.
 pub async fn execute<C: LinkConnector, P: MediaPeer>(
     options: RuntimeOptions<'_>,
     connector: C,
@@ -417,7 +414,10 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
         let mut host = options.host.clone();
         host.deadline = Instant::now() + self.budget;
         let mut voice = options.voice.clone();
-        voice.session.muted = link.muted().unwrap_or(voice.session.muted);
+        let recovering = grant.health.state.borrow().relink_required && grant.account.is_some();
+        voice.session.muted = link
+            .muted()
+            .unwrap_or_else(|| voice.session.muted || (recovering && view.screen.muted().unwrap_or(true)));
         let result = with_capture(
             host,
             link,

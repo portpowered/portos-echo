@@ -22,7 +22,8 @@ impl Journey {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         restart::binary_home(&fixture, listener.local_addr().unwrap().port());
         if mode == "chatgpt" {
-            std::fs::write(fixture.home.join("mode"), "screen-recovery").unwrap();
+            std::fs::write(fixture.home.join("mode"), "screen-account").unwrap();
+            std::fs::write(fixture.home.join("screen-recovery"), "").unwrap();
             if initially_linked {
                 std::fs::write(fixture.home.join("auth.json"), "synthetic account").unwrap();
             }
@@ -301,9 +302,7 @@ async fn t3_bridge_screen_signin_respects_mode_and_preserves_microphone_privacy(
             204
         );
         journey.fixture.control().await.write_all(b"success").await.unwrap();
-        let _satellite = journey.ready().await;
-        assert_eq!(state(&mut events, "muted").await, json!({"state":"muted"}));
-        assert_eq!(journey.health().await["relink_required"], false);
+        assert_muted_readmission(&mut journey, &mut events, ready).await;
         drop(events);
         journey.finish(0).await;
     }
@@ -312,4 +311,25 @@ async fn t3_bridge_screen_signin_respects_mode_and_preserves_microphone_privacy(
         "Healthy ChatGPT and API-key Relink add zero RPCs; paired ChatGPT challenge and recovered screen retain mute"
     )
     .unwrap();
+}
+
+async fn assert_muted_readmission(journey: &mut Journey, events: &mut bridge_wire_screen::ScreenEvents, ready: Value) {
+    let mut recovered = journey.ready().await;
+    assert_eq!(state(events, "muted").await, json!({"state":"muted"}));
+    assert_eq!(journey.health().await["relink_required"], false);
+    bridge_short::send(
+        &mut recovered,
+        "run-pipeline",
+        json!({"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"synthetic"}),
+    )
+    .await;
+    bridge_short::send(&mut recovered, "hassmic-mute", json!({"muted":false})).await;
+    assert_eq!(state(events, "ready").await, ready);
+    assert_eq!(
+        trace(&journey.trace)
+            .iter()
+            .filter(|row| row["event"] == "run.started")
+            .count(),
+        0
+    );
 }

@@ -28,7 +28,7 @@ enum MouthActivity {
 }
 
 pub(super) struct View<'a> {
-    screen: &'a Screen,
+    pub(super) screen: &'a Screen,
     health: &'a Health,
     trace: &'a mut Trace,
     sequence: u64,

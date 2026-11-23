@@ -115,7 +115,10 @@ impl Account {
             {
                 return false;
             }
-            state.attempt = state.attempt.wrapping_add(1);
+            let Some(attempt) = state.attempt.checked_add(1) else {
+                return false;
+            };
+            state.attempt = attempt;
             state.snapshot.operation_state = active;
             state.queued = Some(action);
             let _ = self.project(state);
@@ -230,7 +233,9 @@ impl Account {
         }
         let result = screen_account(host, command, cancelled, |prompt, remaining| {
             let code = prompt.code.as_ref().ok_or(AccountError::InvalidResponse)?;
-            let expires_at_unix = (crate::bridge_time::now() + remaining)
+            let expires_at_unix = crate::bridge_time::now()
+                .checked_add(remaining)
+                .ok_or(AccountError::Output)?
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map_err(|_| AccountError::Output)?
                 .as_secs();
