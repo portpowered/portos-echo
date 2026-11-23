@@ -61,6 +61,15 @@ impl ModelCredential for Providers {
     }
 }
 
+/// The one API-key rule for the credential file and every writer of it:
+/// drop one trailing LF or CRLF, then require a non-blank header value.
+///
+/// # Errors
+/// `CredentialFile` for empty, control or non-header text; never the text.
+pub fn api_key(text: String) -> Result<Secret<String>, SigninError> {
+    key(text)
+}
+
 fn key(mut text: String) -> Result<Secret<String>, SigninError> {
     if text.ends_with('\n') {
         text.pop();

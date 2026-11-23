@@ -2,6 +2,7 @@
 # Manual: .\install.ps1 -Version VERSION [-Config FILE]
 # Paired release: irm https://github.com/portpowered/portos-echo/releases/download/vVERSION/install.ps1 | iex
 # With irm|iex, set $env:ECHO_SETUP_CONFIG to the optional config file first.
+# For an OpenAI API key, set $env:ECHO_SETUP_OPENAI_API_KEY_FILE to the key file's path (never the key).
 function Get-EchoReleaseFile {
     param([Uri]$Uri, [string]$Destination)
     $elapsed = [Diagnostics.Stopwatch]::StartNew()
@@ -39,30 +40,33 @@ function Invoke-EchoRelease {
     param([object[]]$Arguments)
     $version = '@ECHO_VERSION@'
     $config = $env:ECHO_SETUP_CONFIG
+    $apiKeyFile = $env:ECHO_SETUP_OPENAI_API_KEY_FILE
     $seen = @{}
     for ($i = 0; $i -lt $Arguments.Count; $i++) {
         $flag = [string]$Arguments[$i]
         if ($flag -in @('-Help', '--help') -and $Arguments.Count -eq 1) {
-            [Console]::Out.WriteLine('Usage: install.ps1 [-Version VERSION] [-Config FILE]')
+            [Console]::Out.WriteLine('Usage: install.ps1 [-Version VERSION] [-Config FILE] [-OpenAIApiKeyFile FILE]')
             [Console]::Out.WriteLine('Windows x86_64; requires adb. Source bootstrap requires -Version.')
             [Console]::Out.WriteLine('With irm|iex, set ECHO_SETUP_CONFIG to the optional config file first.')
+            [Console]::Out.WriteLine('Set ECHO_SETUP_OPENAI_API_KEY_FILE to an API key file path to skip ChatGPT sign-in.')
             return 0
         }
-        $key = switch ($flag) { { $_ -in @('-Version', '--version') } { 'version' } { $_ -in @('-Config', '--config') } { 'config' } default { '' } }
+        $key = switch ($flag) { { $_ -in @('-Version', '--version') } { 'version' } { $_ -in @('-Config', '--config') } { 'config' } { $_ -in @('-OpenAIApiKeyFile', '--openai-api-key-file') } { 'apikey' } default { '' } }
         if (-not $key -or $seen.ContainsKey($key) -or $i + 1 -ge $Arguments.Count) { throw 'invalid usage' }
         $seen[$key] = $true
         $i++
         $value = [string]$Arguments[$i]
         if (-not $value -or $value.StartsWith('-')) { throw 'invalid usage' }
-        if ($key -eq 'version') { $version = $value -creplace '^v', '' } else { $config = $value }
+        if ($key -eq 'version') { $version = $value -creplace '^v', '' } elseif ($key -eq 'config') { $config = $value } else { $apiKeyFile = $value }
     }
     if ($version -cnotmatch '\A[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+(\.[A-Za-z0-9]+)*)?\z') { throw 'invalid usage' }
     if ($config -and -not [IO.File]::Exists($config)) { throw 'config is not readable' }
-    Invoke-EchoVerifiedInstaller $version $config
+    if ($apiKeyFile -and -not [IO.File]::Exists($apiKeyFile)) { throw 'API key file is not readable' }
+    Invoke-EchoVerifiedInstaller $version $config $apiKeyFile
 }
 
 function Invoke-EchoVerifiedInstaller {
-    param([string]$Version, [string]$Config)
+    param([string]$Version, [string]$Config, [string]$ApiKeyFile)
     $temporary = $null
     try {
         $temporary = Join-Path ([IO.Path]::GetTempPath()) ('echo-setup-' + [Guid]::NewGuid().ToString('N'))
@@ -90,6 +94,8 @@ function Invoke-EchoVerifiedInstaller {
         }
         $installerArguments = @('install', '--version', $Version)
         if ($Config) { $installerArguments += @('--config', $Config) }
+        # Only the path crosses argv; echo-setup reads the key itself.
+        if ($ApiKeyFile) { $installerArguments += @('--openai-api-key-file', $ApiKeyFile) }
         $global:LASTEXITCODE = $null
         $ErrorActionPreference = 'Continue'
         # Windows PowerShell otherwise decorates native stderr with this private
@@ -115,7 +121,7 @@ try {
     exit $result
 } catch {
     $message = $_.Exception.Message
-    if ($message -notin @('invalid usage', 'config is not readable', 'download failed', 'invalid installer checksum', 'installer checksum mismatch')) {
+    if ($message -notin @('invalid usage', 'config is not readable', 'API key file is not readable', 'download failed', 'invalid installer checksum', 'installer checksum mismatch')) {
         $message = 'bootstrap failed'
     }
     [Console]::Error.WriteLine('echo-release: ' + $message)

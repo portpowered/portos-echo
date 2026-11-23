@@ -6,13 +6,15 @@ use std::path::PathBuf;
 
 pub const VERSION: &str = env!("ECHO_SETUP_RELEASE_VERSION");
 pub const HELP: &str = "echo-setup --help | --version
-echo-setup install [--version VERSION | --from-dir DIR] [--config FILE [--force]] [OPTIONS]
-echo-setup update [--version VERSION | --from-dir DIR] [--config FILE] [OPTIONS]
+echo-setup install [--version VERSION | --from-dir DIR] [--config FILE [--force]] [--openai-api-key-file FILE] [OPTIONS]
+echo-setup update [--version VERSION | --from-dir DIR] [--config FILE] [--openai-api-key-file FILE] [OPTIONS]
 echo-setup status|rollback|doctor [OPTIONS]
 echo-setup uninstall [--purge] [OPTIONS]
 OPTIONS: --adb PATH --serial DEVICE --json --timeout-seconds N --release-base URL
 Default release matches this executable; never latest. Versions omit leading v.
 Install --force requires a readable --config FILE and replaces only the base config.
+--openai-api-key-file writes the key to live.credential_file and skips ChatGPT sign-in;
+the installed config must set [live] mode = api_key. The key is never printed.
 Downloads require HTTPS; explicit http://127.0.0.1:PORT mirrors are for local tests.
 Exit 0: completed; 1: prerequisite/integrity/device failure; 2: usage; 3: setup timeout.
 Expired provider codes also exit 3. Run install again to resume with a fresh code.
@@ -32,6 +34,8 @@ pub struct Options {
     pub from_dir: Option<PathBuf>,
     pub config: Option<PathBuf>,
     pub force: bool,
+    /// Local key file path only; the key itself is read later into `Secret`.
+    pub openai_api_key_file: Option<PathBuf>,
     pub adb: Option<PathBuf>,
     // Device identifiers deliberately implement neither Debug nor Display.
     pub serial: Option<OsString>,
@@ -87,6 +91,7 @@ impl Options {
             from_dir: None,
             config: None,
             force: false,
+            openai_api_key_file: None,
             adb: None,
             serial: None,
             json: false,
@@ -104,6 +109,7 @@ impl Options {
             "--adb" => self.adb = Some(value.into()),
             "--serial" => self.serial = Some(value),
             "--config" => self.config = Some(value.into()),
+            "--openai-api-key-file" => self.openai_api_key_file = Some(value.into()),
             "--from-dir" => self.from_dir = Some(value.into()),
             "--version" => self.version = version(value.to_str().ok_or(Failure("usage"))?)?,
             "--release-base" => self.release_base = value.into_string().map_err(|_| Failure("usage"))?,
@@ -124,9 +130,15 @@ impl Options {
         if (self.purge && self.command != "uninstall")
             || (self.force && (self.command != "install" || self.config.is_none()))
             || (!install
-                && ["--version", "--from-dir", "--config", "--release-base"]
-                    .iter()
-                    .any(|v| seen.contains(*v)))
+                && [
+                    "--version",
+                    "--from-dir",
+                    "--config",
+                    "--release-base",
+                    "--openai-api-key-file",
+                ]
+                .iter()
+                .any(|v| seen.contains(*v)))
             || (self.from_dir.is_some() && seen.contains("--version"))
             || (self.from_dir.is_some() && seen.contains("--release-base"))
         {
@@ -178,6 +190,11 @@ mod tests {
             vec!["install", "--config", "x", "--force", "true"],
             vec!["update", "--config", "x", "--force"],
             vec!["status", "--force"],
+            vec!["status", "--openai-api-key-file", "key"],
+            vec!["doctor", "--openai-api-key-file", "key"],
+            vec!["install", "--openai-api-key-file"],
+            vec!["install", "--openai-api-key-file", "--json"],
+            vec!["install", "--openai-api-key-file", "a", "--openai-api-key-file", "b"],
             vec![
                 "install",
                 "--config",
@@ -191,6 +208,19 @@ mod tests {
         ] {
             assert!(parse(&args).is_err());
         }
+    }
+
+    #[test]
+    fn api_key_file_is_an_install_or_update_path() -> Result<()> {
+        assert_eq!(parse(&["install"])?.openai_api_key_file, None);
+        for command in ["install", "update"] {
+            let options = parse(&[command, "--openai-api-key-file", "key ü ' ; $.txt"])?;
+            assert_eq!(options.openai_api_key_file, Some(PathBuf::from("key ü ' ; $.txt")));
+        }
+        let forced = parse(&["install", "--config", "c", "--force", "--openai-api-key-file", "k"])?;
+        assert!(forced.force);
+        assert_eq!(forced.openai_api_key_file, Some(PathBuf::from("k")));
+        Ok(())
     }
 
     #[test]

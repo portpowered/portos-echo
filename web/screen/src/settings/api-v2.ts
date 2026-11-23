@@ -1,5 +1,6 @@
 import {
     assertShape,
+    decodeSaved,
     decodeShared,
     decodeSnapshot,
     readResponse,
@@ -13,7 +14,11 @@ import {
     type Snapshot,
     type SnapshotV2,
 } from "./api";
-import type { OpenAiAccountV2, PortosOperationV2 } from "./model";
+import type {
+    OpenAiAccountV2,
+    OpenAiApiKeyRequestV2,
+    PortosOperationV2,
+} from "./model";
 import { validateMuseStatus } from "./muse/api";
 
 export async function loadSettings(
@@ -113,7 +118,7 @@ export async function readOpenAI(actions: string, signal: AbortSignal) {
     assertShape(
         data,
         ["version", "link_status", "operation_state"],
-        ["challenge"],
+        ["challenge", "api_key"],
     );
     if (
         data.version !== 2 ||
@@ -124,7 +129,28 @@ export async function readOpenAI(actions: string, signal: AbortSignal) {
     )
         invalid();
     if ("challenge" in data) validateChallenge(data.challenge);
+    if ("api_key" in data) {
+        const key = record(data.api_key);
+        assertShape(key, ["configured"]);
+        if (typeof key.configured !== "boolean") invalid();
+    }
     return data as OpenAiAccountV2;
+}
+
+// The key travels once, in this request body; responses never carry it.
+export async function saveOpenAIKey(
+    actions: string,
+    signal: AbortSignal,
+    key: string,
+) {
+    const body: OpenAiApiKeyRequestV2 = { version: 2, api_key: key };
+    const response = await send(
+        settingsUrl(actions, "/openai/api-key", 2),
+        signal,
+        "POST",
+        body,
+    );
+    return decodeSaved(await readResponse(response, 2), 2);
 }
 
 function invalid(): never {

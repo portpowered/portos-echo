@@ -202,6 +202,12 @@ export type OpenAiAccountV2 = {
     link_status: OpenAiLinkStatusV2;
     operation_state: PortosOperationStateV2;
     challenge?: PortosChallengeV2;
+    api_key?: OpenAiApiKeyStatusV2;
+};
+export type OpenAiApiKeyStatusV2 = { configured: boolean };
+export type OpenAiApiKeyRequestV2 = {
+    version: SettingsVersionV2;
+    api_key: string;
 };
 export type MuseProbeRequestV2 = {
     operation: "probe";

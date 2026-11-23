@@ -280,7 +280,8 @@ fn t3_doctor_text_prints_safe_fix_for_each_failed_check() -> Result {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(output.stderr, [] as [u8; 0]);
     let text = String::from_utf8(output.stdout)?;
-    assert_eq!(text.lines().count(), 7);
+    assert_eq!(text.lines().count(), 8);
+    assert_eq!(text.lines().last(), Some("auth_mode: unavailable"));
     assert!(!text.contains("SYNTHETIC"));
     assert!(text.contains("hassmic: FAIL Install hassmic separately"));
     assert!(text.contains("disk_free: FAIL Free at least 256 MiB"));

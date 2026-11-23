@@ -3,10 +3,13 @@ use crate::adb::Adb;
 use crate::cli::Options;
 use crate::integrity::{self, OfflineBundle};
 use crate::{Failure, Result};
+use echo_contracts::secret::Secret;
 use std::fmt::Write;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+pub mod api_key;
 
 const ADAPTER: &str = crate::DEVICE_SCRIPT;
 static NONCE: AtomicU64 = AtomicU64::new(0);
@@ -62,14 +65,7 @@ pub async fn install(
     cancelled: &crate::Cancellation,
 ) -> Result<String> {
     cancelled.until(async { Ok(()) }).await?;
-    if options.force
-        && !options
-            .config
-            .as_ref()
-            .is_some_and(|path| path.is_file() && fs::File::open(path).is_ok())
-    {
-        return Err(Failure("config_unreadable"));
-    }
+    let key = local_inputs(options)?;
     let scratch = Scratch::create()?;
     let input = if let Some(directory) = &options.from_dir {
         Input::Offline(integrity::offline(directory, scratch.0.join("bundle"))?)
@@ -106,7 +102,8 @@ pub async fn install(
     .await?;
     let result = async {
         let version = stage_install(&adb, &scratch, &stage, &adapter, &input, options).await?;
-        guide_installed(&adb, &stage, &version, options, &mut present, &mut ask_wake, cancelled).await?;
+        let setup = (&mut present, &mut ask_wake);
+        guide_installed(&adb, (&stage, key.as_ref()), &version, options, setup, cancelled).await?;
         Ok(version)
     }
     .await;
@@ -123,11 +120,13 @@ pub async fn install(
 #[allow(clippy::disallowed_methods, reason = "Existing host time")]
 async fn guide_installed(
     adb: &Adb,
-    stage: &str,
+    (stage, key): (&str, Option<&Secret<String>>),
     version: &str,
     options: &Options,
-    present: impl FnMut(&crate::setup::Prompt) -> Result<()>,
-    ask_wake: impl FnMut() -> Result<()>,
+    (present, ask_wake): (
+        impl FnMut(&crate::setup::Prompt) -> Result<()>,
+        impl FnMut() -> Result<()>,
+    ),
     cancelled: &crate::Cancellation,
 ) -> Result<()> {
     cancelled.until(async { Ok(()) }).await?;
@@ -137,11 +136,39 @@ async fn guide_installed(
     let start = format!("sh '{stage}/bundle/scripts/echo-install.sh' --device start");
     let connection =
         crate::setup::InstalledConnection::selected(adb.clone(), deadline, Some((start, version.to_owned()))).await?;
+    if let Some(key) = key {
+        // The installed config decides the mode and path; the bridge is stopped.
+        connection.install_api_key(stage, key).await?;
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| Failure("setup_clock_invalid"))?
         .as_secs();
     connection.guide_cancellable(now, present, ask_wake, cancelled).await
+}
+
+/// Check local inputs before any download or device effect: a forced config
+/// must be readable, and a key needs a config that does not keep `ChatGPT` sign-in.
+fn local_inputs(options: &Options) -> Result<Option<Secret<String>>> {
+    if options.force
+        && !options
+            .config
+            .as_ref()
+            .is_some_and(|path| path.is_file() && fs::File::open(path).is_ok())
+    {
+        return Err(Failure("config_unreadable"));
+    }
+    let Some(path) = &options.openai_api_key_file else {
+        return Ok(None);
+    };
+    let key = api_key::read(path)?;
+    if let Some(config) = &options.config {
+        let raw = fs::read_to_string(config).map_err(|_| Failure("config_unreadable"))?;
+        if api_key::project(&raw)?.0 != api_key::AuthMode::ApiKey {
+            return Err(Failure("api_key_config_mode_chatgpt"));
+        }
+    }
+    Ok(Some(key))
 }
 
 async fn stage_install(
