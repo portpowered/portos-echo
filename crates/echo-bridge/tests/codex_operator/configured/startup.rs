@@ -282,3 +282,68 @@ async fn startup_network_stalled_account_deadline_retries_to_ready() {
     assert_eq!(count(&rows, "bridge.recovering"), 1);
     assert_eq!(count(&rows, "bridge.ready"), 1);
 }
+
+// Exercise each rejected file through the delivered CLI, paired SSE and loopback peers.
+#[tokio::test]
+#[ignore = "T3 requires prebuilt echo-bridge and local Python"]
+async fn t3_settings_overlay_invalid_startup_reports_and_ignores_entire_file() {
+    const BAD_VALUE: &str = "[voice]\nsession_listen_seconds=1\n[agent]\ndaily_request_cap=3\n";
+    const VALUE_REASON: &str = "voice.session_listen_seconds: must be within 3..=300";
+    for (overlay, reason, deprecated) in [
+        (BAD_VALUE, VALUE_REASON, false),
+        ("[voice", "settings.toml: invalid TOML syntax", false),
+        (BAD_VALUE, VALUE_REASON, true),
+    ] {
+        rejected_overlay(overlay, reason, deprecated).await;
+    }
+}
+
+async fn rejected_overlay(overlay: &str, reason: &str, deprecated: bool) {
+    use super::restart::{binary_home, binary_ready, binary_snapshot};
+
+    let fixture = Fixture::new("chatgpt");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    binary_home(&fixture, listener.local_addr().unwrap().port());
+    let base = fixture.directory.path().join("bridge.toml");
+    let home = fixture.directory.path().join("agent-home");
+    std::fs::create_dir(&home).unwrap();
+    let overlay_path = home.join("settings.toml");
+    std::fs::write(&overlay_path, overlay).unwrap();
+    let mut text = std::fs::read_to_string(&base).unwrap();
+    if deprecated {
+        text = text.replace("[agent]", "[agent]\nmax_tool_calls = 1");
+        std::fs::write(&base, &text).unwrap();
+    }
+    let mut process = Process::spawn(&mut super::super::voice_entry::command(&fixture));
+    let _satellite = binary_ready(&listener, &mut process).await;
+    let path = fixture.directory.path().join("trace");
+    let address = screen_address(&path, 0).await;
+    let message = format!("settings.toml: ignored overlay: {reason}");
+    let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
+    assert_eq!(
+        bridge_wire_screen::state(&mut screen).await,
+        json!({"state":"error", "relink":false, "message": message})
+    );
+    let snapshot = binary_snapshot(address).await;
+    assert_eq!(snapshot["settings"]["agent"]["daily_request_cap"], "500");
+    process.finish(0).await;
+    let deprecation = if deprecated {
+        "echo-bridge: agent.max_tool_calls: deprecated and ignored\n"
+    } else {
+        ""
+    };
+    assert_eq!(process.stderr().await, format!("{deprecation}echo-bridge: {message}\n"));
+    super::super::host::released(&fixture).await;
+    assert_eq!(std::fs::read(&base).unwrap(), text.as_bytes());
+    assert_eq!(std::fs::read(&overlay_path).unwrap(), overlay.as_bytes());
+    let rows = trace(&path);
+    let warnings: Vec<_> = rows.iter().filter(|row| row["event"] == "settings.ignored").collect();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0]["reason"], "invalid_config");
+    assert_eq!(warnings[0].as_object().unwrap().len(), 4);
+    assert!(
+        !serde_json::to_string(&rows)
+            .unwrap()
+            .contains(&home.display().to_string())
+    );
+}
