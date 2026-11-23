@@ -14,6 +14,7 @@ use echo_boot::{
 
 use super::super::{device_io::DeviceIo, jobs::Jobs};
 use super::filter_fixture::{FilterFixture, golden};
+use super::fixture_result;
 
 pub(super) struct Fake<'a> {
     pub state: &'a Path,
@@ -83,7 +84,10 @@ impl<'a> Fake<'a> {
     }
 
     pub(super) fn journal(&mut self) -> Selection {
-        self.load_selection().unwrap().unwrap()
+        fixture_result(
+            self.load_selection()
+                .and_then(|state| state.ok_or("missing fake selection journal")),
+        )
     }
 
     pub(super) fn times(&self, role: Role) -> Vec<u64> {
@@ -100,40 +104,45 @@ impl<'a> Fake<'a> {
 }
 
 impl FakeChild {
-    fn spawn(state: &Path, line: &str, now: Duration) -> Self {
-        let mut child = Command::new("/bin/sh")
+    fn spawn(state: &Path, line: &str, now: Duration) -> Result<Self> {
+        let child = Command::new("/bin/sh")
             .args([
                 "-c",
                 "printf '%s\\n' \"$1\"; IFS= read -r status; exit \"${status:-0}\"",
                 "fake-role",
                 line,
             ])
-            .current_dir(state.parent().unwrap())
+            .current_dir(state.parent().ok_or("missing fake installation directory")?)
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
-            .unwrap();
-        let mut line = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        let receipt = OnceLock::new();
-        super::super::receipt::drain(line.as_bytes(), &receipt).unwrap();
-        Self {
+            .map_err(|_| "spawn fake role")?;
+        let mut fixture = Self {
             child,
-            ready_at: receipt.get().map(|_| now),
+            ready_at: None,
             exit: None,
-        }
+        };
+        let mut line = String::new();
+        let stdout = fixture.child.stdout.take().ok_or("missing fake role output")?;
+        BufReader::new(stdout)
+            .read_line(&mut line)
+            .map_err(|_| "read fake role output")?;
+        let receipt = OnceLock::new();
+        super::super::receipt::drain(line.as_bytes(), &receipt).map_err(|_| "read fake role receipt")?;
+        fixture.ready_at = receipt.get().map(|_| now);
+        Ok(fixture)
     }
 
-    fn finish(&mut self, code: u8) -> String {
-        self.exit
-            .get_or_insert_with(|| {
-                writeln!(self.child.stdin.take().unwrap(), "{code}").unwrap();
-                self.child.wait().unwrap().to_string()
-            })
-            .clone()
+    fn finish(&mut self, code: u8) -> Result<String> {
+        if let Some(status) = &self.exit {
+            return Ok(status.clone());
+        }
+        let mut input = self.child.stdin.take().ok_or("missing fake role input")?;
+        writeln!(input, "{code}").map_err(|_| "signal fake role exit")?;
+        let status = self.child.wait().map_err(|_| "wait for fake role")?.to_string();
+        self.exit = Some(status.clone());
+        Ok(status)
     }
 }
 
@@ -152,7 +161,8 @@ impl HostOps for Fake<'_> {
     }
 
     fn sleep(&mut self, duration: Duration) {
-        let mut next = self.time + u64::try_from(duration.as_millis()).unwrap();
+        let millis = fixture_result(u64::try_from(duration.as_millis()));
+        let mut next = self.time + millis;
         if let Some((from, to)) = self.jump
             && self.time == from
         {
@@ -210,7 +220,7 @@ impl HostOps for Fake<'_> {
     }
 
     fn save_selection(&mut self, selection: &Selection) -> Result<()> {
-        fs::write(self.state, selection.encode()?).unwrap();
+        fs::write(self.state, selection.encode()?).map_err(|_| "write fake selection journal")?;
         let tries = selection.failed_tries();
         if self.tries.last().is_none_or(|last| last.1 != tries) {
             self.tries.push((self.time, tries));
@@ -228,7 +238,7 @@ impl HostOps for Fake<'_> {
         } else {
             r#"{"event":"unrelated"}"#
         };
-        let child = FakeChild::spawn(self.state, line, self.now());
+        let child = FakeChild::spawn(self.state, line, self.now())?;
         assert!(self.child(role).replace(child).is_none());
         self.starts.push((self.time, role, slot, identity));
         Ok(())
@@ -236,9 +246,9 @@ impl HostOps for Fake<'_> {
 
     fn observe(&mut self, role: Role) -> Result<ChildStatus> {
         let should_exit = self.exits.contains(&(self.time, role));
-        let child = self.child(role).as_mut().unwrap();
+        let child = self.child(role).as_mut().ok_or("missing fake role")?;
         if should_exit {
-            child.finish(7);
+            child.finish(7)?;
             Ok(ChildStatus::Exited)
         } else {
             Ok(ChildStatus::Running {
@@ -248,8 +258,8 @@ impl HostOps for Fake<'_> {
     }
 
     fn stop(&mut self, role: Role, why: Stop) -> Result<String> {
-        let mut child = self.child(role).take().unwrap();
-        let status = child.finish(0);
+        let mut child = self.child(role).take().ok_or("missing fake role")?;
+        let status = child.finish(0)?;
         self.stops.push((self.time, role, why, status.clone()));
         Ok(status)
     }
@@ -270,7 +280,10 @@ impl HostOps for Fake<'_> {
     fn resolvers(&mut self) -> Result<Vec<IpAddr>> {
         match &self.firewall {
             Some(firewall) => firewall.io.resolvers(&firewall.runtime),
-            None => Ok(["192.0.2.53", "2001:db8::53"].map(|s| s.parse().unwrap()).to_vec()),
+            None => Ok(vec![
+                IpAddr::from([192, 0, 2, 53]),
+                IpAddr::from([0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x53]),
+            ]),
         }
     }
 
@@ -282,12 +295,16 @@ impl HostOps for Fake<'_> {
     }
 
     fn restore_filter(&mut self, family: Family, transaction: &str) -> Result<()> {
-        let firewall = self.firewall.as_ref().unwrap();
+        let firewall = self.firewall.as_ref().ok_or("missing fake filter commands")?;
         firewall.io.restore(&firewall.runtime, family, transaction)
     }
 
     fn ipv6_disabled(&mut self, enforce: bool) -> Result<bool> {
-        self.firewall.as_ref().unwrap().io.ipv6_disabled(enforce)
+        self.firewall
+            .as_ref()
+            .ok_or("missing fake filter commands")?
+            .io
+            .ipv6_disabled(enforce)
     }
 
     fn usb_adb_only(&mut self, enforce: bool) -> Result<bool> {
@@ -356,7 +373,7 @@ impl HostOps for Fake<'_> {
     }
 
     fn write_rtc(&mut self) -> Result<()> {
-        let device = self.services.as_ref().unwrap();
+        let device = self.services.as_ref().ok_or("missing fake Android services")?;
         device.commands.write_rtc(&device.runtime)
     }
 }

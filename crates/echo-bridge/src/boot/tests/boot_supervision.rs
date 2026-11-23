@@ -24,6 +24,10 @@ const CORE: Identity = Identity {
     domain: None,
 };
 
+fn fixture_result<T, E: std::fmt::Debug>(result: std::result::Result<T, E>) -> T {
+    result.unwrap_or_else(|error| unreachable!("boot fixture error: {error:?}"))
+}
+
 #[test]
 fn boot_supervision_restarts_each_role_ten_times() {
     let dir = tempfile::tempdir().unwrap();
@@ -152,7 +156,7 @@ fn boot_supervision_parks_during_backoff_and_reopens_a_stopped_attempt() {
     let mut stopped = Fake::new(&path, 1000);
     stopped.parked = Some((0, 2000));
     supervise(&mut stopped).unwrap();
-    assert!(stopped.starts.is_empty());
+    assert_eq!(stopped.starts.as_slice(), &[]);
     assert_eq!(stopped.journal().failed_tries(), 2);
 
     let mut reopened = Fake::new(&path, 200);
@@ -190,7 +194,7 @@ fn boot_supervision_bad_layout_and_privileges_fail_closed() {
     let mut host = Fake::new(&path, 150);
     host.deny = Some(Role::Core);
     assert_eq!(supervise(&mut host), Err("denied role setup"));
-    assert!(host.times(Role::Core).is_empty());
+    assert_eq!(host.times(Role::Core), Vec::<u64>::new());
     assert_eq!(host.stops.iter().map(|stop| stop.1).collect::<Vec<_>>(), [Role::Device]);
 
     let mut host = Fake::new(&path, 200_000);
@@ -203,12 +207,12 @@ fn boot_supervision_bad_layout_and_privileges_fail_closed() {
     let mut again = Fake::new(&path, 200_000);
     again.previous = None;
     assert_eq!(supervise(&mut again), Err("open selected binary"));
-    assert!(again.starts.is_empty());
+    assert_eq!(again.starts.as_slice(), &[]);
 
     std::fs::write(&path, b"{invalid").unwrap();
     let mut corrupt = Fake::new(&path, 200);
     assert_eq!(supervise(&mut corrupt), Err("invalid selection journal"));
-    assert!(corrupt.starts.is_empty());
+    assert_eq!(corrupt.starts.as_slice(), &[]);
 }
 
 #[test]

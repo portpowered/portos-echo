@@ -8,6 +8,7 @@ use super::{
     boot_device_services,
     fake::Fake,
     filter_fixture::{FilterFixture, STOCK},
+    fixture_result,
 };
 use crate::boot::{Mode, execute};
 
@@ -79,7 +80,7 @@ fn assert_journey(runner: &mut Fake<'_>) {
             .filter(|start| start.0 >= 189_000)
             .all(|start| start.2 == Slot::Previous)
     );
-    let filter = runner.firewall.as_ref().unwrap();
+    let filter = fixture_result(runner.firewall.as_ref().ok_or("missing assembled firewall fixture"));
     assert_eq!(
         filter.restores(),
         [

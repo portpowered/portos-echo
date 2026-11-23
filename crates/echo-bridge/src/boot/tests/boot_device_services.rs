@@ -10,7 +10,7 @@ use echo_boot::{Role, Slot};
 use serde_json::{Value, json};
 use tokio::runtime::Builder;
 
-use super::{fake::Fake, filter_fixture::FilterFixture};
+use super::{fake::Fake, filter_fixture::FilterFixture, fixture_result};
 use crate::boot::{Mode, device_io::DeviceIo, execute, firewall_io::FirewallIo};
 
 const CANDIDATE: &str = "fixture-apk:version2";
@@ -21,10 +21,10 @@ const USER_SETTING: &str = "synthetic owner setting";
 pub(super) fn fixture(root: &Path) -> (FilterFixture, DeviceIo) {
     let filter = FilterFixture::new(root);
     let program = root.join("bin/device-command");
-    fs::write(&program, include_str!("device-command.py")).unwrap();
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+    fixture_result(fs::write(&program, include_str!("device-command.py")));
+    fixture_result(fs::set_permissions(&program, fs::Permissions::from_mode(0o700)));
     for name in ["pm", "dumpsys", "am", "settings", "hwclock"] {
-        symlink("device-command", root.join("bin").join(name)).unwrap();
+        fixture_result(symlink("device-command", root.join("bin").join(name)));
     }
     filter.write("device-commands", "");
     filter.write("device.json", &original().to_string());
@@ -35,7 +35,7 @@ pub(super) fn fixture(root: &Path) -> (FilterFixture, DeviceIo) {
 fn open(root: &Path) -> DeviceIo {
     DeviceIo {
         commands: FirewallIo::fixture(root),
-        runtime: Builder::new_current_thread().enable_all().build().unwrap(),
+        runtime: fixture_result(Builder::new_current_thread().enable_all().build()),
         journal: root.join("alexa.json"),
         apk: root.join("bin/echo-screen.apk"),
     }
@@ -51,7 +51,7 @@ fn original() -> Value {
 }
 
 fn state(filter: &FilterFixture) -> Value {
-    serde_json::from_str(&filter.read("device.json")).unwrap()
+    fixture_result(serde_json::from_str(&filter.read("device.json")))
 }
 
 fn actions(filter: &FilterFixture, action: &str) -> usize {
@@ -70,7 +70,7 @@ fn prepare(device: &DeviceIo) {
 
 fn restore(device: &DeviceIo) {
     let mut stages = Vec::new();
-    device.restore(|stage| stages.push(stage)).unwrap();
+    fixture_result(device.restore(|stage| stages.push(stage)));
     assert!(stages.is_empty(), "{stages:?}");
 }
 
@@ -81,17 +81,7 @@ fn boot_device_services_restores_default_enabled_disabled_and_unset_values() {
     for _ in 0..2 {
         device.prepare(|stage| assert_eq!(stage, "screen APK unavailable"));
     }
-    let disabled = state(&filter);
-    assert_eq!(
-        disabled["packages"],
-        json!({"com.amazon.bishop":3,"com.amazon.paladin":3,"com.amazon.whad":2})
-    );
-    assert_eq!(disabled["settings"]["system"]["smartconn_status"], "enabled");
-    assert_eq!(disabled["settings"]["system"]["screen_off_timeout"], "300000");
-    assert_eq!(disabled["settings"]["global"]["auto_time_zone"], "1");
-    assert_eq!(actions(&filter, "pm disable-user"), 2);
-    assert_eq!(actions(&filter, "settings --user 0 put"), 5);
-    assert_eq!(actions(&filter, "--ez val false"), 2);
+    assert_disabled(&filter);
 
     let restarted = open(dir.path());
     for _ in 0..2 {
@@ -104,6 +94,20 @@ fn boot_device_services_restores_default_enabled_disabled_and_unset_values() {
     assert_eq!(actions(&filter, "--ez val true"), 2);
     let journal: Value = serde_json::from_str(&filter.read("alexa.json")).unwrap();
     assert_eq!(journal, json!({"version":1,"packages":{},"settings":[]}));
+}
+
+fn assert_disabled(filter: &FilterFixture) {
+    let disabled = state(filter);
+    assert_eq!(
+        disabled["packages"],
+        json!({"com.amazon.bishop":3,"com.amazon.paladin":3,"com.amazon.whad":2})
+    );
+    assert_eq!(disabled["settings"]["system"]["smartconn_status"], "enabled");
+    assert_eq!(disabled["settings"]["system"]["screen_off_timeout"], "300000");
+    assert_eq!(disabled["settings"]["global"]["auto_time_zone"], "1");
+    assert_eq!(actions(filter, "pm disable-user"), 2);
+    assert_eq!(actions(filter, "settings --user 0 put"), 5);
+    assert_eq!(actions(filter, "--ez val false"), 2);
 }
 
 #[test]
@@ -194,7 +198,7 @@ fn boot_device_services_settles_new_resolver_and_writes_rtc_on_clock_adjustment(
     assert_eq!(host.times(Role::Device), [0]);
     assert_eq!(host.times(Role::Core), [7000]);
     assert_eq!(host.clock_starts, [7000, 21_607_000]);
-    assert!(host.clock_stops.is_empty());
+    assert_eq!(host.clock_stops, Vec::<u64>::new());
     let timeline = host.service_timeline.unwrap();
     let transcript = timeline.read("device-commands");
     let rtc_writes: Vec<_> = transcript
@@ -254,7 +258,7 @@ fn boot_device_services_starts_offline_core_at_ten_seconds_and_accepts_ready() {
     execute(Mode::Run, &mut host).unwrap();
     assert_eq!(host.times(Role::Device), [0]);
     assert_eq!(host.times(Role::Core), [10_000]);
-    assert!(host.clock_starts.is_empty());
+    assert_eq!(host.clock_starts, Vec::<u64>::new());
     assert_eq!(host.tries, [(0, 0)]);
     assert_eq!(host.journal().slot(), Slot::Current);
     let journal: Value = serde_json::from_slice(&host.journal().encode().unwrap()).unwrap();
