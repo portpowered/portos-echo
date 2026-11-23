@@ -1,11 +1,11 @@
-use super::{FRAMES, ResultRow, WARM, core::Witness, measure, screen::Screen};
+use super::{FRAME_TIME, FRAMES, ResultRow, WARM, core::Witness, measure, screen::Screen};
 use echo_bridge::bridge_codex::CaptureAudio;
 use echo_contracts::wyoming::{Event, Header, encode};
 use echo_core_api::{PacerEvent, ReplyFrame, SessionEvent};
-use echo_link::{EchoLink, LinkConnector, LinkEvent, LinkEvents, MicrophoneRun, PcmFormat, PlayOutcome, ReplySink};
+use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun, PcmFormat, PlayOutcome, ReplySink};
 use echo_wyoming::{ClientOptions, Run, WyomingClient, adapter::Events};
 use serde_json::{Value, json};
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{net::Ipv4Addr, num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
@@ -33,13 +33,10 @@ pub(super) struct Device {
 
 impl Device {
     pub(super) async fn open(world: Arc<Witness>) -> Self {
-        let listener = TcpListener::bind(([127, 0, 0, 1], 0)).await.unwrap();
-        let connector = echo_wyoming::adapter::controlled_connector(
-            listener.local_addr().unwrap().into(),
-            ClientOptions::default(),
-            world,
-        );
-        let (link, accepted) = tokio::join!(connector.connect(), listener.accept());
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let connect =
+            WyomingClient::connect_endpoint(listener.local_addr().unwrap().into(), ClientOptions::default(), world);
+        let (link, accepted) = tokio::join!(connect, listener.accept());
         let mut link = link.unwrap();
         let events = EchoLink::events(&mut link).unwrap();
         let (socket, _) = accepted.unwrap();
@@ -95,6 +92,7 @@ impl Device {
             assert_eq!(samples, &[[4096; 320]]);
             *scratch = samples[0];
             scratch = world.microphone(scratch);
+            world.advance(FRAME_TIME);
             assert!(matches!(self.events.recv().await.unwrap(), Some(LinkEvent::Other)));
         }
         assert_eq!(world.microphone_peak(), 4096);
@@ -113,7 +111,7 @@ impl Device {
         );
         assert_eq!(run.stats().received, u64::try_from(WARM + FRAMES).unwrap());
         assert_eq!(run.stats().dropped, 0);
-        assert_eq!(capture.finish().unwrap(), &[]);
+        assert!(capture.finish().unwrap().is_empty());
         assert_eq!(capture.tail_samples(), 0);
         let mute = wire("hassmic-mute", json!({"muted":true}), vec![]);
         let unmute = wire("hassmic-mute", json!({"muted":false}), vec![]);
