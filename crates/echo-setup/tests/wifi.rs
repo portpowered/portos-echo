@@ -59,10 +59,10 @@ impl Drop for Fixture {
     }
 }
 
-fn result(output: &Output, code: i32, expected: Value) -> Result {
+fn result(output: &Output, code: i32, expected: &Value) -> Result {
     assert_eq!(output.status.code(), Some(code));
     assert_eq!(output.stderr.len(), 0);
-    assert_eq!(serde_json::from_slice::<Value>(&output.stdout)?, expected);
+    assert_eq!(&serde_json::from_slice::<Value>(&output.stdout)?, expected);
     Ok(())
 }
 
@@ -102,14 +102,14 @@ fn t3_wifi_status_and_legacy_binary_absence() -> Result {
     result(
         &fixture.command(&["status", "--json"]).output()?,
         0,
-        report("status", None, false, None),
+        &report("status", None, false, None),
     )?;
     fs::write(&output, "wifi-unsupported\n")?;
     fs::write(fixture.0.join("wifi-fail"), "")?;
     result(
         &fixture.command(&["status", "--json"]).output()?,
         1,
-        failure("status", "wifi-unsupported"),
+        &failure("status", "wifi-unsupported"),
     )
 }
 
@@ -128,7 +128,7 @@ fn t3_wifi_usage_and_missing_input_fail_before_remote_shell() -> Result {
     result(
         &fixture.command(&["join", "--ssid", "Fixture A", "--json"]).output()?,
         1,
-        failure("join", "wifi-input-failed"),
+        &failure("join", "wifi-input-failed"),
     )?;
     assert_eq!(
         fs::read_to_string(fixture.0.join("ledger"))?.trim_end(),
@@ -161,7 +161,7 @@ fn t3_wifi_rejects_reflected_child_output_in_both_input_modes() -> Result {
     )?;
     for output in [via_file, via_stdin] {
         fixture.no_password(&output, &private)?;
-        result(&output, 1, failure("join", "wifi-device-failed"))?;
+        result(&output, 1, &failure("join", "wifi-device-failed"))?;
     }
     Ok(())
 }
@@ -182,7 +182,7 @@ fn t3_wifi_deadline_covers_waiting_for_input() -> Result {
     let keep_input_open = child.stdin.take().ok_or("missing stdin")?;
     let output = child.wait_with_output()?;
     drop(keep_input_open);
-    result(&output, 3, failure("join", "wifi-timeout"))?;
+    result(&output, 3, &failure("join", "wifi-timeout"))?;
     assert_eq!(
         fs::read_to_string(fixture.0.join("ledger"))?.trim_end(),
         "[\"devices\"]"
@@ -203,9 +203,8 @@ mod assembled {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn bridge() -> Result<PathBuf> {
-        Ok(std::env::current_exe()?
+        Ok(Path::new(env!("CARGO_BIN_EXE_echo-setup"))
             .parent()
-            .and_then(Path::parent)
             .ok_or("missing Cargo target root")?
             .join("echo-bridge"))
     }
@@ -275,18 +274,18 @@ mod assembled {
         let fixture = Fixture::new()?;
         let command = |args: &[&str]| command(&fixture, &bridge, args);
         let status = || command(&["status", "--json"]).output();
-        result(&status()?, 1, failure("status", "wifi-unsupported"))?;
+        result(&status()?, 1, &failure("status", "wifi-unsupported"))?;
         let _device = Device::launch(&fixture, &bridge)?;
-        result(&status()?, 0, report("status", Some("Fixture A"), true, None))?;
+        result(&status()?, 0, &report("status", Some("Fixture A"), true, None))?;
         let wrong = ["fixture", "wrong"].join("-");
         let rejected = send(&mut command(&["join", "--ssid", "Fixture B", "--json"]), &wrong)?;
         fixture.no_password(&rejected, &wrong)?;
         result(
             &rejected,
             1,
-            report("join", Some("Fixture A"), true, Some("wifi-join-failed")),
+            &report("join", Some("Fixture A"), true, Some("wifi-join-failed")),
         )?;
-        result(&status()?, 0, report("status", Some("Fixture A"), true, None))?;
+        result(&status()?, 0, &report("status", Some("Fixture A"), true, None))?;
         for (ssid, file) in [("Fixture B", true), ("Fixture A", false)] {
             let private = format!("join-{ssid}");
             let mut join = command(&["join", "--ssid", ssid, "--json"]);
@@ -298,8 +297,8 @@ mod assembled {
                 send(&mut join, &private)?
             };
             fixture.no_password(&joined, &private)?;
-            result(&joined, 0, report("join", Some(ssid), true, None))?;
-            result(&status()?, 0, report("status", Some(ssid), true, None))?;
+            result(&joined, 0, &report("join", Some(ssid), true, None))?;
+            result(&status()?, 0, &report("status", Some(ssid), true, None))?;
         }
         Ok(())
     }
@@ -329,7 +328,7 @@ mod assembled {
         assert_eq!(radio.read_u8().await?, b'J');
         let output = child.wait_with_output().await?;
         fixture.no_password(&output, &password)?;
-        result(&output, 3, failure("join", "wifi-timeout"))?;
+        result(&output, 3, &failure("join", "wifi-timeout"))?;
         radio.write_all(b"R").await?;
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
@@ -337,9 +336,9 @@ mod assembled {
                     .output()
                     .await?;
                 if output.status.success() {
-                    return result(&output, 0, report("status", Some("Fixture A"), true, None));
+                    return result(&output, 0, &report("status", Some("Fixture A"), true, None));
                 }
-                result(&output, 1, failure("status", "wifi-unavailable"))?;
+                result(&output, 1, &failure("status", "wifi-unavailable"))?;
                 tokio::task::yield_now().await;
             }
         })
