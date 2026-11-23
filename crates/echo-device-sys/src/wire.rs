@@ -3,9 +3,25 @@
 #![expect(unsafe_code, reason = "Wyoming reader and writer C ABI")]
 
 use std::{
-    ffi::{CStr, c_char, c_int, c_long, c_void},
+    ffi::{CStr, c_char, c_int, c_long, c_short, c_void},
     ptr, slice,
 };
+
+// Bionic declares nfds_t as unsigned int, glibc as unsigned long.
+#[cfg(target_os = "android")]
+type PollCount = std::ffi::c_uint;
+#[cfg(not(target_os = "android"))]
+type PollCount = std::ffi::c_ulong;
+const POLLOUT: c_short = 4;
+const POLLERR: c_short = 8;
+const POLLHUP: c_short = 0x10;
+
+#[repr(C)]
+struct PollFd {
+    fd: c_int,
+    events: c_short,
+    revents: c_short,
+}
 
 const MAX_JSON: usize = 8192;
 pub(super) const MAX_PAYLOAD: usize = 1 << 20;
@@ -29,6 +45,7 @@ unsafe extern "C" {
     fn wy_reader_free(reader: *mut NativeReader);
     fn wy_read(reader: *mut NativeReader, event: *mut NativeEvent) -> c_int;
     fn wy_write(fd: c_int, kind: *const c_char, data: *const c_char, payload: *const c_void, len: usize) -> c_int;
+    fn poll(fds: *mut PollFd, count: PollCount, timeout: c_int) -> c_int;
     fn wy_json_int(json: *const c_char, key: *const c_char, out: *mut c_long) -> c_int;
     fn wy_json_str(json: *const c_char, key: *const c_char, out: *mut c_char, size: usize) -> c_int;
     fn wy_failsafe_seconds(json: *const c_char) -> c_int;
@@ -167,12 +184,28 @@ pub(super) fn write(fd: c_int, kind: &CStr, data: Option<&CStr>, payload: &[u8])
     unsafe { wy_write(fd, kind.as_ptr(), data, payload.as_ptr().cast(), payload.len()) >= 0 }
 }
 
+/// Whether a short frame goes out within `wait_ms` without blocking on the
+/// peer. Linux reports a Unix stream writable while at most a quarter of its
+/// send buffer is queued, and TCP while a third of it is free; a frame of a
+/// few KB then fits. A failed link reads as writable, so that the write
+/// reports it.
+pub(super) fn writable(fd: c_int, wait_ms: c_int) -> bool {
+    let mut entry = PollFd {
+        fd,
+        events: POLLOUT,
+        revents: 0,
+    };
+    // SAFETY: One initialized entry, valid for the call.
+    let ready = unsafe { poll(&raw mut entry, 1, wait_ms) };
+    ready < 0 || (ready > 0 && entry.revents & (POLLOUT | POLLERR | POLLHUP) != 0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::write;
+    use super::{writable, write};
     use std::{
         fs::{self, OpenOptions},
-        io::{Read, Seek},
+        io::{Read, Seek, Write},
         os::fd::AsRawFd,
     };
 
@@ -203,5 +236,24 @@ mod tests {
               {\"type\":\"audio-chunk\",\"version\":\"1.5.4\",\"data_length\":2,\"payload_length\":2}\n{}\x13\x00\
               {\"type\":\"pong\",\"version\":\"1.5.4\"}\n"
         );
+    }
+
+    #[test]
+    fn a_backed_up_unix_stream_is_not_writable_until_the_peer_reads() {
+        let (sender, mut receiver) = std::os::unix::net::UnixStream::pair().unwrap();
+        sender.set_nonblocking(true).unwrap();
+        assert!(writable(sender.as_raw_fd(), 0));
+        let mut queued = 0;
+        while (&sender).write(&[0; 1700]).is_ok() {
+            queued += 1700;
+        }
+        assert!(queued > 0);
+        assert!(!writable(sender.as_raw_fd(), 0));
+        assert!(!writable(sender.as_raw_fd(), 20));
+        let mut drained = vec![0; queued];
+        receiver.read_exact(&mut drained).unwrap();
+        assert!(writable(sender.as_raw_fd(), 0));
+        drop(receiver);
+        assert!(writable(sender.as_raw_fd(), 0));
     }
 }
