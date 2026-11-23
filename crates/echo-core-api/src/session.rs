@@ -292,11 +292,16 @@ pub enum FollowUp {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "read-only World projection of session phase and receipts; see decisions.md 2026-11-23"
+)]
 pub struct SessionView {
     pub session: Option<SessionHandle>,
     pub closing: bool,
     pub speaking: bool,
     pub microphone_finished: bool,
+    pub accepts_reply_audio: bool,
     pub idle_deadline: Option<Instant>,
     pub next_deadline: Option<(Instant, SessionTimer)>,
 }
