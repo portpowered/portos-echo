@@ -37,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: 552fa1571bedfa1fc1cf6c9645aea18a170560fa
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -55,6 +56,7 @@ jobs:
           python - <<'PY'
           import os
           import re
+          import shlex
           import subprocess
           import tempfile
           from pathlib import Path
@@ -74,9 +76,21 @@ jobs:
               if not path.is_file() or path.resolve().parent != Path("tests/scenarios").resolve():
                   raise SystemExit("targeted: missing or unsafe scenario")
               paths.append(path)
-          subprocess.run(["cargo", "build", "--locked", "-p", "echo-lab", "-p", "echo-bridge",
-                          "-p", "echo-muse-bridge", "--bins"], check=True)
-          report_root = Path(tempfile.mkdtemp(prefix="targeted-reports-", dir=os.environ["RUNNER_TEMP"])).resolve()
+          original_home = Path.home()
+          root = Path(tempfile.mkdtemp(prefix="review-359-", dir=os.environ["RUNNER_TEMP"])).resolve()
+          home = root / "home"
+          home.mkdir(mode=0o700)
+          os.environ.update(HOME=str(home), USERPROFILE=str(home), TMPDIR=str(root), ECHO_CODEX_OFFLINE="1")
+          for name, subdir in (("RUSTUP_HOME", ".rustup"), ("CARGO_HOME", ".cargo"), ("XDG_CACHE_HOME", ".cache")):
+              os.environ.setdefault(name, str(original_home / subdir))
+          report_root = root / "reports"
+          report_root.mkdir()
+          build = ["cargo", "build", "--locked", "-p", "echo-lab", "-p", "echo-bridge", "-p", "echo-muse-bridge", "--bins"]
+          print("+ " + shlex.join(build), flush=True)
+          rc = subprocess.run(build).returncode
+          print(f"BUILD_EXIT={rc}", flush=True)
+          if rc:
+              raise SystemExit(rc)
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print(f"report_root={report_root}", file=output)
           failed = False
@@ -93,8 +107,18 @@ jobs:
                   parent = report_root / ("repeat-" + str(number))
                   parent.mkdir(parents=True, exist_ok=True)
                   destination = parent / (str(index) + "-" + path.stem)
-                  result = subprocess.run(["target/debug/echo-lab", "run", str(path),
-                                           "--driver", "sim", "--out", str(destination)]).returncode
+                  command = ["target/debug/echo-lab", "run", str(path), "--driver", "sim", "--out", str(destination)]
+                  print("+ " + shlex.join(command), flush=True)
+                  with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as child:
+                      for line in child.stdout:
+                          print(line, end="", flush=True)
+                          if line.startswith("Runtime log:"):
+                              log_path = Path(line.split(":", 1)[1].strip()).resolve()
+                              if not log_path.is_relative_to(root):
+                                  child.terminate()
+                                  raise SystemExit("Runtime log path escaped the scratch directory")
+                      result = child.wait()
+                  print(f"SCENARIO_EXIT {path.stem}={result}", flush=True)
                   if result and not code:
                       code = result
               print(f"TARGETED_RESULT repeat={number} exit={code}", flush=True)
