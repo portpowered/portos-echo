@@ -167,6 +167,45 @@ fn boot_firewall_retries_installed_tool_failures_without_disabling_ipv6() {
 }
 
 #[test]
+fn boot_firewall_installs_baseline_rules_when_the_resolver_read_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("selection.json");
+    let mut host = Fake::new(&journal, 5100);
+    let mut fixture = FilterFixture::new(dir.path());
+    fixture.write("resolvers.fail", "");
+    fixture.events.push((4999, |fixture| {
+        for (table, golden) in [("iptables", GOLDEN4), ("ip6tables", GOLDEN6)] {
+            let expected: Vec<_> = canonical(golden)
+                .into_iter()
+                .filter(|rule| !rule.contains("--dport 53 "))
+                .collect();
+            assert_eq!(canonical(&fixture.read(table)), expected);
+        }
+        fixture.remove("resolvers.fail");
+    }));
+    host.firewall = Some(fixture);
+
+    execute(Mode::Firewall, &mut host).unwrap();
+
+    let fixture = host.firewall.unwrap();
+    assert_eq!(canonical(&fixture.read("iptables")), canonical(GOLDEN4));
+    assert_eq!(canonical(&fixture.read("ip6tables")), canonical(GOLDEN6));
+    assert_eq!(
+        fixture.restores(),
+        [
+            format!("0 {RESTORE4}"),
+            format!("0 {RESTORE6}"),
+            format!("5000 {RESTORE4}"),
+            format!("5000 {RESTORE6}")
+        ]
+    );
+    assert_eq!(
+        host.logs,
+        ["firewall unhealthy: read Android resolver properties", "firewall ready"]
+    );
+}
+
+#[test]
 fn boot_firewall_run_withholds_both_roles_until_live_protection_is_confirmed() {
     let dir = tempfile::tempdir().unwrap();
     let journal = dir.path().join("selection.json");

@@ -66,7 +66,10 @@ pub(crate) fn check_firewall(host: &mut impl HostOps) -> Result<()> {
 }
 
 fn inspect(host: &mut impl HostOps, enforce: bool) -> Result<()> {
-    let mut resolvers = host.resolvers()?;
+    let (mut resolvers, resolver_status) = match host.resolvers() {
+        Ok(resolvers) => (resolvers, Ok(())),
+        Err(stage) => (Vec::new(), Err(stage)),
+    };
     resolvers.sort_unstable();
     resolvers.dedup();
     let v4 = inspect_family(host, Family::V4, &resolvers, enforce);
@@ -78,7 +81,7 @@ fn inspect(host: &mut impl HostOps, enforce: bool) -> Result<()> {
             Err("USB-only adb unconfirmed")
         }
     });
-    v4.and(v6).and(adb)
+    v4.and(v6).and(adb).and(resolver_status)
 }
 
 fn inspect_family(host: &mut impl HostOps, family: Family, resolvers: &[IpAddr], enforce: bool) -> Result<()> {

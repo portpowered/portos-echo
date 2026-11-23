@@ -57,7 +57,8 @@ The writer restricts TCP/5555 to root-local traffic and configures adbd
 for USB only. If ip6tables is absent, it verifies IPv6 is disabled on all
 interfaces and by default. A failed installed tool or an unconfirmed apply
 produces an unhealthy log and is retried on the watch cadence. The supervisor
-checks the live protections before startup and resume.
+checks the live protections before startup and resume. A resolver read failure
+still applies the baseline lock with no resolver exceptions.
 
 ## Deferred
 

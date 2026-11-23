@@ -42,6 +42,8 @@ def restore(table, listing, commands):
 
 if name == "getprop":
     if not args:
+        if (root / "resolvers.fail").exists():
+            sys.exit(7)
         sys.stdout.write((root / "resolvers").read_text())
     elif args == ["service.adb.tcp.port"]:
         sys.stdout.write((root / "adb-port").read_text())
