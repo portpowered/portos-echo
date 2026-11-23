@@ -244,6 +244,12 @@ async fn codex_operator_api_key_status_and_invalid_argv_do_not_acquire_legacy_cr
         fixture.invoke(&args, 2, "", "echo-bridge: invalid input\n").await;
     }
     assert!(!fixture.directory.path().join("credential").exists());
+    assert!(!fixture.configured_home.join("launches").exists());
+    assert_eq!(
+        std::fs::read_to_string(fixture.home.join("launches")).unwrap(),
+        "started\n"
+    );
+    host::released(&fixture).await;
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 22
+last modified: 2026, november, 23
 status: active; accepted bridge configuration reference
 ---
 
@@ -283,6 +283,21 @@ the app server refuses the login). To go back, copy the `.previous` file over th
 bridge stopped. The bridge does not start without a well-formed key file, so Settings can replace a key but not
 recover a missing one: run the installer with `--openai-api-key-file` instead.
 
+Keep `live.credential_file` in a private location outside both app-server homes. ChatGPT keeps its
+sign-in in `<codex.home>/auth.json`. For example, with `codex.home = "/srv/echo/private/codex-home"`,
+API-key mode uses `/srv/echo/private/codex-home-api-key`. Each home keeps its own model cache, logs
+database and working directory.
+
+To switch modes, stop the bridge, change `live.mode`, and start it again. On ChatGPT startup the bridge
+removes the app-server copy of the API key from the sibling's `auth.json`, if present. The nominated key
+file stays available for a later API-key start. An unsafe or busy sibling, or an auth file that cannot be
+safely removed, stops startup with `codex.home: private ownership unavailable`. Correct the path or
+stop the process holding the home before retrying.
+
+Existing ChatGPT sign-ins work in place. If an older API-key trial already replaced the ChatGPT auth file,
+stop the bridge, select `chatgpt`, and run `echo-bridge signin --config PATH` to restore the sign-in. Before
+rolling back to an older bridge, select `chatgpt` to avoid that older binary writing API auth to the shared home.
+
 There is no bridge `signout` verb. To remove local ChatGPT access, stop the bridge, remove only
 `<codex.home>/auth.json` using the operator's private file management, then repeat sign-in if needed.
 Do not edit the credential while the app server owns the home. Removing a file or purging the installation
@@ -418,7 +433,7 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `chatgpt_auth.device_redirect_uri` | Default `https://auth.openai.com/deviceauth/callback`; safe endpoint URL. | restart / no |
 | `chatgpt_auth.browser_redirect_uri` | Default `http://localhost:1455/auth/callback`; HTTP loopback (`localhost` or literal IPv4 loopback), path exactly /auth/callback. | restart / no |
 | `codex` | Optional app-server table in decoder; current voice runtime requires home. | restart / no |
-| `codex.home` | Default unset; absolute private directory, required at runtime, mode exactly 0700. | restart / no |
+| `codex.home` | Default unset; absolute private directory, required at runtime, mode 0700. API-key mode uses a sibling named with the `-api-key` suffix. | restart / no |
 | `codex.binary` | Default unset (pinned host helper resolves multi-tool); if set absolute path. Device must name installed standalone app server. | restart / no |
 | `codex.launch` | `subcommand` default (`app-server --listen stdio://`) or `standalone` (`--listen stdio://`); standalone requires binary. | restart / no |
 | `codex.ca_file` | Default unset; absolute PEM path, child SSL_CERT_FILE and bridge Port OS OAuth/MCP additional trust roots. | restart / no |

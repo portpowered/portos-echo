@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 22
+last modified: 2026, november, 23
 status: current main overview; W4 deployment and in-progress changes are labelled
 ---
 
@@ -338,8 +338,17 @@ delegated agent turns. It is distinct from both our `echo-codex` client library 
 
 [echo-codex's supervisor](../crates/echo-codex/src/codex_supervisor/mod.rs) starts
 `codex app-server --listen stdio://` (or, with `codex.launch = "standalone"`, the named binary with
-`--listen stdio://` alone) with an exclusively leased external `CODEX_HOME` and empty working
-directory. It exchanges newline-delimited JSON-RPC without a `jsonrpc` field: `initialize` enables the
+`--listen stdio://` alone) with an exclusively leased external `CODEX_HOME` and a dedicated working
+directory. ChatGPT uses `codex.home`. API-key mode appends `-api-key` to the configured directory's
+name and uses that sibling. Each child uses its selected home for `HOME`, credentials, model cache,
+logs database and the `work/` directory.
+
+Both modes hold the configured home's installation lease. The supervisor also leases the sibling when it
+uses it or cleans it. At ChatGPT startup it removes the sibling's `auth.json` if present before spawning
+the child. If it cannot safely lease the sibling or remove the file, startup fails with the private-home
+error. The rest of the sibling's state stays available for the next API-key run.
+
+The child exchanges newline-delimited JSON-RPC without a `jsonrpc` field: `initialize` enables the
 experimental API, then `initialized` completes the handshake. Account commands use `account/read` and
 `account/login/start`. A voice call starts an ephemeral `thread/start` with the bridge's `dynamicTools`,
 then `thread/realtime/start` with a WebRTC SDP offer and explicit `version: v3`.

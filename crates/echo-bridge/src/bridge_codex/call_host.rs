@@ -114,7 +114,7 @@ pub async fn with_host_options<T>(
         () = &mut cancelled => return Err(Error::Control),
         result = timeout_at(deadline, async {
             if Instant::now() >= deadline { return Err(Error::Deadline); }
-            codex_host::routed_supervisor(config, routes).await
+            codex_host::routed_supervisor(config, mode, routes).await
         }) => {
             result.map_err(|_| Error::Deadline)??
         },

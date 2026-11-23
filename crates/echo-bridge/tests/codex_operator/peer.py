@@ -8,6 +8,21 @@ import sys
 import tomllib
 
 home = pathlib.Path(os.environ["CODEX_HOME"])
+isolated_restart = pathlib.Path(__file__).name == "auth-mode-peer"
+auth_file = home.joinpath("auth.json")
+mode_file = home.joinpath("mode")
+if isolated_restart:
+    mode_file = pathlib.Path(__file__).with_name("auth-mode-fixture")
+    cache = home.joinpath("models_cache.json")
+    logs = home.joinpath("logs_1.sqlite")
+    work = pathlib.Path("work-fixture")
+    for path, value in ((cache, "API model cache"), (logs, "API logs fixture"), (work, "API work state")):
+        if not path.exists():
+            path.write_text(value)
+    home.joinpath("home-state.json").write_text(json.dumps({
+        "codex_home": os.environ["CODEX_HOME"], "home": os.environ["HOME"],
+        "cwd": os.getcwd(), "cache": cache.read_text(), "logs": logs.read_text(), "work": work.read_text(),
+    }))
 overrides = {}
 for index, argument in enumerate(sys.argv):
     if argument == "-c":
@@ -27,7 +42,8 @@ control.listen(1)
 # Kept for the entire child lifetime, never used by a protocol handler. The
 # test holds the other end; EOF identifies this child rather than a reusable
 # listening address. The supervisor also joins/reaps before releasing home.
-lifetime = socket.create_connection(("127.0.0.1", int(home.joinpath("lifetime-port").read_text())))
+lifetime_port = mode_file.with_name("lifetime-port")
+lifetime = socket.create_connection(("127.0.0.1", int(lifetime_port.read_text())))
 lifetime.sendall(b"O")
 assert lifetime.recv(1) == b"A"
 home.joinpath("peer-port").write_text(str(control.getsockname()[1]))
@@ -125,7 +141,7 @@ for line in sys.stdin:
         methods.write(method + "\n")
     if method == "initialize":
         assert request["params"]["capabilities"]["experimentalApi"] is True
-        if home.joinpath("mode").read_text() == "blocked-initialize":
+        if mode_file.read_text() == "blocked-initialize":
             connection, _ = control.accept()
             with connection:
                 connection.recv(64)
@@ -136,6 +152,9 @@ for line in sys.stdin:
         kind = request["params"]["type"]
         if kind == "apiKey":
             assert request["params"]["apiKey"] == "synthetic-nominated-key"
+            if isolated_restart:
+                auth_file.write_text(json.dumps({
+                    "auth_mode": "api_key", "OPENAI_API_KEY": request["params"]["apiKey"]}))
             emit({"id": request["id"], "result": {"type": "apiKey"}})
             continue
         assert kind in ("chatgptDeviceCode", "chatgpt")
@@ -164,7 +183,13 @@ for line in sys.stdin:
         emit({"id": request["id"], "result": {}})
     elif method == "account/read":
         assert request["params"] == {"refreshToken": False}
-        mode = home.joinpath("mode").read_text()
+        mode = mode_file.read_text()
+        if isolated_restart:
+            state = json.loads(auth_file.read_text()) if auth_file.is_file() else {}
+            if state.get("auth_mode") == "api_key" and state.get("OPENAI_API_KEY") == "synthetic-nominated-key":
+                mode = "api_key"
+            elif state.get("auth_mode") != "chatgpt" or state.get("tokens") != {"access_token": "synthetic-chat-session"}:
+                mode = "signed-out"
         if mode == "startup-network":
             try:
                 with socket.create_connection(("127.0.0.1", int(home.joinpath("provider-port").read_text()))):
