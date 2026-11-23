@@ -28,27 +28,39 @@ pub(super) fn run_bounded(
     stage: &'static str,
     deadline: Duration,
 ) -> Result<String> {
-    runtime.block_on(async {
-        let mut child = Command::new(tool)
-            .args(args)
-            .env_clear()
-            .env("PATH", "/system/bin:/system/xbin:/vendor/bin")
-            .env("ANDROID_ROOT", "/system")
-            .env("ANDROID_DATA", "/data")
-            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|_| stage)?;
-        match tokio::time::timeout(deadline, exchange(&mut child, input)).await {
-            Ok(Ok(output)) => Ok(output),
-            _ => {
-                let _ = child.kill().await;
-                Err(stage)
-            }
+    runtime.block_on(invoke(tool, args, input, stage, deadline))
+}
+
+pub(super) async fn query(tool: &Path, stage: &'static str) -> Result<String> {
+    invoke(tool, &[], None, stage, DEADLINE).await
+}
+
+async fn invoke(
+    tool: &Path,
+    args: &[&str],
+    input: Option<&str>,
+    stage: &'static str,
+    deadline: Duration,
+) -> Result<String> {
+    let mut child = Command::new(tool)
+        .args(args)
+        .env_clear()
+        .env("PATH", "/system/bin:/system/xbin:/vendor/bin")
+        .env("ANDROID_ROOT", "/system")
+        .env("ANDROID_DATA", "/data")
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| stage)?;
+    match tokio::time::timeout(deadline, exchange(&mut child, input)).await {
+        Ok(Ok(output)) => Ok(output),
+        _ => {
+            let _ = child.kill().await;
+            Err(stage)
         }
-    })
+    }
 }
 
 async fn exchange(child: &mut Child, input: Option<&str>) -> std::io::Result<String> {

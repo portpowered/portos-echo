@@ -14,6 +14,7 @@ use tokio::runtime::{Builder, Runtime};
 use super::{command_io, firewall_io::FirewallIo, layout_io};
 
 const SCREEN: &str = "org.portos.echoscreen";
+const ANDROID_LIMIT: Duration = Duration::from_secs(10);
 const INSTALL_LIMIT: Duration = Duration::from_secs(30);
 const JOURNAL_LIMIT: u64 = 16 * 1024;
 
@@ -49,7 +50,7 @@ impl DeviceIo {
 
     fn command(&self, name: &str, args: &[&str], stage: &'static str) -> Result<String> {
         let tool = self.commands.find(name)?.ok_or(stage)?;
-        command_io::run(&self.runtime, &tool, args, None, stage)
+        command_io::run_bounded(&self.runtime, &tool, args, None, stage, ANDROID_LIMIT)
     }
 
     fn load(&self) -> Result<Journal> {

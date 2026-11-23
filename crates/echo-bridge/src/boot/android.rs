@@ -1,20 +1,16 @@
-use std::{
-    io::Write,
-    net::IpAddr,
-    process::Stdio,
-    time::{Duration, Instant},
-};
+use std::{io::Write, net::IpAddr, process::Stdio, time::Duration};
 
 use echo_boot::{
     ChildStatus, ClockStatus, Digest, Family, HostOps, Identity, Log, Result, Role, Selection, Slot, Stop,
 };
+use echo_core_api::{Clock, SystemClock};
 use tokio::{
     runtime::{Builder, Runtime},
     signal::unix::{Signal, SignalKind, signal},
 };
 
 use super::{
-    firewall_io::FirewallIo,
+    firewall_io::{FirewallIo, WifiProbe},
     jobs::Jobs,
     launcher,
     layout_io::{self, Layout},
@@ -24,8 +20,8 @@ use super::{
 pub(super) struct Android {
     layout: Option<Layout>,
     firewall: FirewallIo,
+    wifi: WifiProbe,
     jobs: Jobs,
-    origin: Instant,
     device: Option<RoleChild>,
     core: Option<RoleChild>,
     signals: Runtime,
@@ -54,8 +50,8 @@ impl Android {
         Ok(Self {
             layout,
             firewall: FirewallIo::default(),
+            wifi: WifiProbe::default(),
             jobs: Jobs::default(),
-            origin: Instant::now(),
             device: None,
             core: None,
             signals,
@@ -75,7 +71,7 @@ impl Android {
 
 impl HostOps for Android {
     fn now(&self) -> Duration {
-        self.origin.elapsed()
+        SystemClock.now().monotonic
     }
 
     fn sleep(&mut self, duration: Duration) {
@@ -129,8 +125,7 @@ impl HostOps for Android {
     }
 
     fn observe(&mut self, role: Role) -> Result<ChildStatus> {
-        let origin = self.origin;
-        self.child(role).as_ref().ok_or("missing role process")?.observe(origin)
+        self.child(role).as_ref().ok_or("missing role process")?.observe()
     }
 
     fn stop(&mut self, role: Role, why: Stop) -> Result<String> {
@@ -163,7 +158,11 @@ impl HostOps for Android {
     }
 
     fn resolvers(&mut self) -> Result<Vec<IpAddr>> {
-        self.firewall.resolvers(&self.signals)
+        let resolvers = self.firewall.resolvers(&self.signals)?;
+        if self.layout.is_some() {
+            self.wifi.last.clone_from(&resolvers);
+        }
+        Ok(resolvers)
     }
 
     fn filter(&mut self, family: Family) -> Result<Option<String>> {
@@ -191,11 +190,12 @@ impl HostOps for Android {
     }
 
     fn stop_device(&mut self) -> Result<()> {
+        self.wifi.clear();
         self.jobs.stop_device()
     }
 
     fn network(&mut self) -> Result<Vec<IpAddr>> {
-        self.firewall.network(&self.signals)
+        self.wifi.sample(&self.firewall, &self.signals)
     }
 
     fn start_clock(&mut self) -> Result<()> {

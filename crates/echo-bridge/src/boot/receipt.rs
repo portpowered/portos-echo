@@ -1,12 +1,14 @@
 use std::{
     io::{self, BufRead, BufReader, Read},
     sync::OnceLock,
-    time::Instant,
+    time::Duration,
 };
+
+use echo_core_api::{Clock, SystemClock};
 
 // A pipe belongs to exactly one child attempt. An oversized or malformed line
 // is discarded up to its newline; it cannot supply a suffix interpreted as a receipt.
-pub(super) fn drain(source: impl Read, ready: &OnceLock<Instant>) -> io::Result<()> {
+pub(super) fn drain(source: impl Read, ready: &OnceLock<Duration>) -> io::Result<()> {
     const LIMIT: usize = 4096;
     let mut reader = BufReader::new(source);
     let mut line = Vec::new();
@@ -29,7 +31,7 @@ pub(super) fn drain(source: impl Read, ready: &OnceLock<Instant>) -> io::Result<
                 && serde_json::from_slice::<serde_json::Value>(&line)
                     .is_ok_and(|value| value.get("event").and_then(serde_json::Value::as_str) == Some("bridge.ready"))
             {
-                let _ = ready.set(Instant::now());
+                let _ = ready.set(SystemClock.now().monotonic);
             }
             line.clear();
             oversized = false;

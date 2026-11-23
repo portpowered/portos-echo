@@ -5,11 +5,49 @@ use std::{
 };
 
 use echo_boot::{Family, Result};
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, task::JoinHandle};
 
 use super::command_io;
 
 const ADB_PORT: &str = "service.adb.tcp.port";
+const RESOLVER_STAGE: &str = "read Android resolver properties";
+
+#[derive(Default)]
+pub(super) struct WifiProbe {
+    pub(super) last: Vec<IpAddr>,
+    pending: Option<JoinHandle<Result<Vec<IpAddr>>>>,
+}
+
+impl WifiProbe {
+    pub(super) fn sample(&mut self, io: &FirewallIo, runtime: &Runtime) -> Result<Vec<IpAddr>> {
+        if !io.wifi_link()? {
+            self.clear();
+            return Ok(Vec::new());
+        }
+        if let Some(task) = self.pending.take_if(|task| task.is_finished()) {
+            self.last = runtime
+                .block_on(task)
+                .map_err(|_| RESOLVER_STAGE)?
+                .inspect_err(|_| self.last.clear())?;
+        }
+        if self.pending.is_none() {
+            let tool = io.find("getprop")?.ok_or(RESOLVER_STAGE)?;
+            self.pending = Some(runtime.spawn(async move {
+                command_io::query(&tool, RESOLVER_STAGE)
+                    .await
+                    .map(|output| parse_resolvers(&output))
+            }));
+        }
+        Ok(self.last.clone())
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.last.clear();
+        if let Some(task) = self.pending.take() {
+            task.abort();
+        }
+    }
+}
 
 pub(super) struct FirewallIo {
     bin_dirs: Vec<PathBuf>,
@@ -41,22 +79,27 @@ impl FirewallIo {
     }
 
     pub(super) fn resolvers(&self, runtime: &Runtime) -> Result<Vec<IpAddr>> {
-        Ok(self
-            .required(runtime, "getprop", &[], None, "read Android resolver properties")?
-            .lines()
-            .filter_map(resolver)
-            .collect())
+        self.required(runtime, "getprop", &[], None, RESOLVER_STAGE)
+            .map(|output| parse_resolvers(&output))
     }
 
+    #[cfg(test)]
     pub(super) fn network(&self, runtime: &Runtime) -> Result<Vec<IpAddr>> {
+        if self.wifi_link()? {
+            self.resolvers(runtime)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    fn wifi_link(&self) -> Result<bool> {
         match fs::read_to_string(self.sys.join("class/net/wlan0/carrier")) {
-            Ok(carrier) if carrier.trim() == "1" => self.resolvers(runtime),
-            Ok(_) => Ok(Vec::new()),
+            Ok(carrier) => Ok(carrier.trim() == "1"),
             Err(error)
                 if error.kind() == io::ErrorKind::NotFound
                     || error.raw_os_error() == Some(rustix::io::Errno::INVAL.raw_os_error()) =>
             {
-                Ok(Vec::new())
+                Ok(false)
             }
             Err(_) => Err("inspect Wi-Fi link"),
         }
@@ -170,6 +213,10 @@ impl FirewallIo {
         }
         Ok(None)
     }
+}
+
+fn parse_resolvers(output: &str) -> Vec<IpAddr> {
+    output.lines().filter_map(resolver).collect()
 }
 
 fn resolver(line: &str) -> Option<IpAddr> {

@@ -26,6 +26,7 @@ pub(super) struct Fake<'a> {
     pub exits: Vec<(u64, Role)>,
     pub parked: Option<(u64, u64)>,
     pub samples: Vec<u64>,
+    pub jump: Option<(u64, u64)>,
     pub starts: Vec<(u64, Role, Slot, Identity)>,
     pub stops: Vec<(u64, Role, Stop, String)>,
     pub acks: Vec<(u64, bool)>,
@@ -62,6 +63,7 @@ impl<'a> Fake<'a> {
             exits: vec![],
             parked: None,
             samples: vec![],
+            jump: None,
             starts: vec![],
             stops: vec![],
             acks: vec![],
@@ -151,6 +153,11 @@ impl HostOps for Fake<'_> {
 
     fn sleep(&mut self, duration: Duration) {
         let mut next = self.time + u64::try_from(duration.as_millis()).unwrap();
+        if let Some((from, to)) = self.jump
+            && self.time == from
+        {
+            next = to;
+        }
         for &sample in &self.samples {
             if sample > self.time {
                 next = next.min(sample);

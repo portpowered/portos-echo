@@ -66,6 +66,7 @@ impl Services {
                 let stage = if online {
                     "clock sync timed out"
                 } else {
+                    self.clock_due = now;
                     "clock sync lost network"
                 };
                 host.log(Log::DeviceService(stage));
@@ -102,6 +103,7 @@ impl Services {
         self.clock_started = None;
         self.prepared = false;
         self.sample_at = Duration::ZERO;
+        self.resolvers.clear();
         Ok(())
     }
 }

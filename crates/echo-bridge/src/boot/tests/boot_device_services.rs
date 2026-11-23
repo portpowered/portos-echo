@@ -174,17 +174,19 @@ fn boot_device_services_settles_new_resolver_and_writes_rtc_on_clock_adjustment(
         .events
         .push((2000, |fixture| fixture.write("resolvers", RESOLVER)));
     let path = dir.path().join("selection.json");
-    let mut host = Fake::new(&path, 10_100);
+    let mut host = Fake::new(&path, 21_607_200);
     host.services = Some(device);
     host.service_timeline = Some(timeline);
+    host.jump = Some((7100, 21_606_900));
     execute(Mode::Run, &mut host).unwrap();
     assert_eq!(host.times(Role::Device), [0]);
     assert_eq!(host.times(Role::Core), [7000]);
-    assert_eq!(host.clock_starts, [7000]);
+    assert_eq!(host.clock_starts, [7000, 21_607_000]);
     assert!(host.clock_stops.is_empty());
     let timeline = host.service_timeline.unwrap();
     assert_eq!(actions(&timeline, "7100 hwclock -w -u"), 1);
-    assert_eq!(actions(&timeline, "hwclock"), 1);
+    assert_eq!(actions(&timeline, "21607100 hwclock -w -u"), 1);
+    assert_eq!(actions(&timeline, "hwclock"), 2);
     assert_eq!(state(&timeline)["settings"]["global"]["auto_time_zone"], "1");
 }
 
@@ -240,4 +242,6 @@ fn boot_device_services_starts_offline_core_at_ten_seconds_and_accepts_ready() {
     assert!(host.clock_starts.is_empty());
     assert_eq!(host.tries, [(0, 0)]);
     assert_eq!(host.journal().slot(), Slot::Current);
+    let journal: Value = serde_json::from_slice(&host.journal().encode().unwrap()).unwrap();
+    assert_eq!(journal["attempt_in_progress"], false);
 }

@@ -3,10 +3,11 @@ use std::{
     process::{Child, Stdio},
     sync::{Arc, OnceLock},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use echo_boot::{ChildStatus, Identity, Result, Role, Slot, Stop};
+use echo_core_api::{Clock, SystemClock};
 use rustix::{
     io::Errno,
     process::{self, Pid, Signal, WaitId, WaitIdOptions, WaitOptions},
@@ -19,7 +20,7 @@ const REAP: Duration = Duration::from_secs(2);
 
 pub(super) struct RoleChild {
     child: Child,
-    ready: Arc<OnceLock<Instant>>,
+    ready: Arc<OnceLock<Duration>>,
 }
 
 impl RoleChild {
@@ -51,7 +52,7 @@ impl RoleChild {
 
     fn admit(&mut self, identity: Identity) -> Result<()> {
         let pid = self.pid()?;
-        let deadline = Instant::now() + LAUNCH;
+        let deadline = SystemClock.now().monotonic + LAUNCH;
         loop {
             let state = process::waitid(
                 WaitId::Pid(pid),
@@ -64,7 +65,7 @@ impl RoleChild {
                 }
                 break;
             }
-            if Instant::now() >= deadline {
+            if SystemClock.now().monotonic >= deadline {
                 return Err("role setup timed out");
             }
             thread::sleep(CHECK);
@@ -82,12 +83,12 @@ impl RoleChild {
         process::kill_process(pid, Signal::CONT).map_err(|_| "resume role launch")
     }
 
-    pub(super) fn observe(&self, origin: Instant) -> Result<ChildStatus> {
+    pub(super) fn observe(&self) -> Result<ChildStatus> {
         if exited(self.pid()?)? {
             Ok(ChildStatus::Exited)
         } else {
             Ok(ChildStatus::Running {
-                ready_at: self.ready.get().map(|at| at.duration_since(origin)),
+                ready_at: self.ready.get().copied(),
             })
         }
     }
@@ -100,11 +101,11 @@ impl RoleChild {
             if !core {
                 signal(pid, grouped, Signal::TERM)?;
             }
-            let _ = until(Instant::now() + GRACE, || exited(pid))?;
+            let _ = until(SystemClock.now().monotonic + GRACE, || exited(pid))?;
         }
         // The unreaped leader reserves this PID across the last group signal.
         signal(pid, grouped, Signal::KILL)?;
-        let reap_deadline = Instant::now() + REAP;
+        let reap_deadline = SystemClock.now().monotonic + REAP;
         if !until(reap_deadline, || exited(pid))? {
             return Err("role did not exit");
         }
@@ -183,12 +184,12 @@ fn group_reaped(pid: Pid) -> Result<bool> {
     }
 }
 
-fn until(deadline: Instant, mut ready: impl FnMut() -> Result<bool>) -> Result<bool> {
+fn until(deadline: Duration, mut ready: impl FnMut() -> Result<bool>) -> Result<bool> {
     loop {
         if ready()? {
             return Ok(true);
         }
-        if Instant::now() >= deadline {
+        if SystemClock.now().monotonic >= deadline {
             return Ok(false);
         }
         thread::sleep(CHECK);
@@ -201,7 +202,7 @@ pub(super) fn kill_job(child: &mut Child) -> Result<()> {
         .and_then(Pid::from_raw)
         .ok_or("invalid boot job process")?;
     signal(pid, true, Signal::KILL)?;
-    let deadline = Instant::now() + REAP;
+    let deadline = SystemClock.now().monotonic + REAP;
     if !until(deadline, || exited(pid))? {
         return Err("boot job did not exit");
     }
