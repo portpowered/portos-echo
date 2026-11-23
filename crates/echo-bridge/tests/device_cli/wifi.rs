@@ -95,11 +95,12 @@ async fn t3_device_wifi_busy_and_disconnected_client_reconcile_once() -> Result 
     .await?;
     let origin = format!("http://{}", screen.bound_addr);
     let client = reqwest::Client::builder().no_proxy().build()?;
+    let input = ["incorrect", "gate"].join("-");
     let join = tokio::spawn(request(
         client.clone(),
         origin.clone(),
         json!({
-            "op":"join","ssid":"Fixture B","password":["incorrect","gate"].join("-")
+            "op":"join","ssid":"Fixture B","password":input
         }),
     ));
     let (mut radio, _) = tokio::time::timeout(Duration::from_secs(2), gate.accept()).await??;

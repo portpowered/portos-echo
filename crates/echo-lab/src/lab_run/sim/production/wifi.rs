@@ -118,9 +118,10 @@ fn save(path: &Path, radio: &Value) -> Result<(), String> {
 }
 
 async fn joined(addr: SocketAddr) -> Result<Value, String> {
+    let input = ["join", "Fixture B"].join("-");
     let reply = expect(
         addr,
-        json!({"op":"join","ssid":"Fixture B","password":["join","Fixture B"].join("-")}),
+        json!({"op":"join","ssid":"Fixture B","password":input}),
         json!({"ok":true,"ssid":"Fixture B","reachable":true}),
     )
     .await?;
@@ -134,9 +135,10 @@ async fn joined(addr: SocketAddr) -> Result<Value, String> {
 }
 
 async fn rejected(addr: SocketAddr) -> Result<Value, String> {
+    let input = ["incorrect", "42"].join("-");
     let reply = expect(
         addr,
-        json!({"op":"join","ssid":"Fixture B","password":["incorrect","42"].join("-")}),
+        json!({"op":"join","ssid":"Fixture B","password":input}),
         json!({"ok":false,"error":"wifi-join-failed","ssid":"Fixture A","reachable":true}),
     )
     .await?;

@@ -239,16 +239,14 @@ public final class EchoWifi {
             boolean open = password.isEmpty();
             int key = open ? WifiConfiguration.KeyMgmt.NONE : WifiConfiguration.KeyMgmt.WPA_PSK;
             WifiConfiguration existing = matchingProfile(ssid, key);
-            candidate = new WifiConfiguration();
             if (existing != null) {
                 saved = open ? existing : profile(wifi, existing.networkId, true);
                 if (saved == null || (!open && (saved.preSharedKey == null || "*".equals(saved.preSharedKey)))) {
                     return false;
                 }
-                candidate.networkId = saved.networkId;
-                candidate.SSID = saved.SSID;
-                candidate.hiddenSSID = saved.hiddenSSID;
+                candidate = WifiConfiguration.class.getConstructor(WifiConfiguration.class).newInstance(saved);
             } else {
+                candidate = new WifiConfiguration();
                 StringBuilder hex = new StringBuilder();
                 for (byte value : ssid.getBytes(StandardCharsets.UTF_8)) {
                     hex.append(Character.forDigit((value & 0xff) >> 4, 16));
@@ -256,8 +254,8 @@ public final class EchoWifi {
                 }
                 candidate.SSID = hex.toString();
                 candidate.hiddenSSID = true;
+                candidate.allowedKeyManagement.set(key);
             }
-            candidate.allowedKeyManagement.set(key);
             if (!open) {
                 candidate.preSharedKey = password.matches("[0-9a-fA-F]{64}") ? password : "\"" + password + "\"";
             }
@@ -268,10 +266,18 @@ public final class EchoWifi {
             for (Object item : profiles(wifi, false)) {
                 WifiConfiguration config = (WifiConfiguration) item;
                 if (ssid.equals(ssid(config.SSID)) && config.allowedKeyManagement.get(key)
-                    && config.preSharedKey == null && config.wepKeys != null && config.wepKeys[0] != null) continue;
-                if (ssid.equals(ssid(config.SSID)) && config.allowedKeyManagement.get(key)) return config;
+                    && (key != WifiConfiguration.KeyMgmt.NONE || !hasWepKey(config))) return config;
             }
             return null;
+        }
+
+        private boolean hasWepKey(WifiConfiguration profile) {
+            if (profile.wepKeys != null) {
+                for (String key : profile.wepKeys) {
+                    if (key != null) return true;
+                }
+            }
+            return false;
         }
 
         Object associate() throws Exception {
@@ -288,7 +294,12 @@ public final class EchoWifi {
 
         Object restore() throws Exception {
             if (!triedUpdate) return JSONObject.NULL;
-            boolean restored = restoreProfile();
+            boolean restored;
+            try {
+                restored = restoreProfile();
+            } catch (Exception e) {
+                restored = false;
+            }
             // Reselect the previous profile once the failed candidate is gone.
             if (selected && previous.id >= 0) {
                 restored = disconnect() && select(previous.id) && restored;
