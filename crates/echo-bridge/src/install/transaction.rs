@@ -107,6 +107,7 @@ pub(super) enum Volume {
     Vendor,
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum RebootFailure {
     Rejected(&'static str),
     Unknown,
@@ -219,35 +220,73 @@ struct Plan {
     fork: Fork,
     release: Release,
     wake: Wake,
-    system_readonly: bool,
-    vendor_readonly: bool,
+    mounts: Mounts,
     private_missing: bool,
     home_missing: bool,
 }
 
+struct Mounts {
+    system_readonly: bool,
+    vendor_readonly: bool,
+}
+
 impl Plan {
     fn inspect(files: &Files<'_>, ops: &mut impl System, paths: &Paths, release: Release) -> Result<Self> {
-        let [system_backup, vendor_backup] = paths.backup_directories()?;
+        paths.check_fresh()?;
+        files.protected(paths.hook.parent().ok_or("missing init hook directory")?)?;
+        files.trusted_file(&paths.policy)?;
+        let fork = Fork::inspect(files, ops, paths)?;
+        let private = paths.root.join(layout::PRIVATE);
+        let home = paths.root.join(layout::HOME);
+        let private_missing = !files::exists(&private)?;
+        let home_missing = !files::exists(&home)?;
+        if !private_missing {
+            payload::validate_retained_private(files, &private)?;
+        }
+        if !home_missing {
+            payload::validate_retained_home(files, &home)?;
+        }
+        Ok(Self {
+            fork,
+            release,
+            wake: Wake::plan(files)?,
+            mounts: Mounts {
+                system_readonly: ops.readonly(Volume::System)?,
+                vendor_readonly: ops.readonly(Volume::Vendor)?,
+            },
+            private_missing,
+            home_missing,
+        })
+    }
+}
+
+impl Paths {
+    fn check_fresh(&self) -> Result<()> {
+        let [system_backup, vendor_backup] = self.backup_directories()?;
         for path in [
-            paths.hook.clone(),
-            paths.hook.with_extension("new"),
-            paths.next_policy.clone(),
+            self.hook.clone(),
+            self.hook.with_extension("new"),
+            self.next_policy.clone(),
             system_backup.to_path_buf(),
             vendor_backup.to_path_buf(),
-            paths.bin.join("boot"),
-            paths.bin.join(layout::CURRENT),
-            paths.bin.join(layout::PREVIOUS),
-            paths.bin.join(layout::BOOT_STATE),
+            self.bin.join("boot"),
+            self.bin.join(layout::CURRENT),
+            self.bin.join(layout::PREVIOUS),
+            self.bin.join(layout::BOOT_STATE),
         ]
         .into_iter()
-        .chain(ASSETS.iter().map(|(_, name, _)| paths.bin.join(name)))
+        .chain(ASSETS.iter().map(|(_, name, _)| self.bin.join(name)))
         {
             if files::exists(&path)? {
                 return Err("conflicting install ownership");
             }
         }
-        files.protected(paths.hook.parent().ok_or("missing init hook directory")?)?;
-        files.trusted_file(&paths.policy)?;
+        Ok(())
+    }
+}
+
+impl Fork {
+    fn inspect(files: &Files<'_>, ops: &mut impl System, paths: &Paths) -> Result<Self> {
         let hook_present = files::exists(&paths.legacy_hook)?;
         if hook_present {
             let hook = files::read_text(files.trusted_file(&paths.legacy_hook)?, 16 * 1024)?;
@@ -273,25 +312,7 @@ impl Plan {
         {
             return Err("legacy services have no owned init hook");
         }
-        let private = paths.root.join(layout::PRIVATE);
-        let home = paths.root.join(layout::HOME);
-        let private_missing = !files::exists(&private)?;
-        let home_missing = !files::exists(&home)?;
-        if !private_missing {
-            payload::validate_retained_private(files, &private)?;
-        }
-        if !home_missing {
-            payload::validate_retained_home(files, &home)?;
-        }
-        Ok(Self {
-            fork: Fork { hook_present, services },
-            release,
-            wake: Wake::plan(files)?,
-            system_readonly: ops.readonly(Volume::System)?,
-            vendor_readonly: ops.readonly(Volume::Vendor)?,
-            private_missing,
-            home_missing,
-        })
+        Ok(Self { hook_present, services })
     }
 }
 

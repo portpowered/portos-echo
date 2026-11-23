@@ -96,8 +96,8 @@ pub(super) fn restore_policy(ops: &mut impl System, p: &Paths) -> Result<()> {
 }
 
 pub(super) fn restore_mounts(ops: &mut impl System, plan: &Plan) -> Result<()> {
-    let system = mount(ops, Volume::System, plan.system_readonly);
-    let vendor = mount(ops, Volume::Vendor, plan.vendor_readonly);
+    let system = mount(ops, Volume::System, plan.mounts.system_readonly);
+    let vendor = mount(ops, Volume::Vendor, plan.mounts.vendor_readonly);
     system.and(vendor)
 }
 

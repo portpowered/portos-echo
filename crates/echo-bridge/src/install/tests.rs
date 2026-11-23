@@ -145,15 +145,13 @@ impl Fixture {
 
 struct Fake {
     fork: bool,
-    system_ro: bool,
-    vendor_ro: bool,
+    mounts: (bool, bool),
     services: BTreeMap<&'static str, Service>,
     calls: Vec<String>,
     rules: Vec<String>,
     undo: Vec<Step>,
     fail: Option<Step>,
-    fail_reboot: bool,
-    ambiguous_reboot: bool,
+    reboot_failure: Option<RebootFailure>,
     fail_stop: bool,
 }
 
@@ -166,15 +164,13 @@ impl Fake {
         };
         Self {
             fork,
-            system_ro: true,
-            vendor_ro: true,
+            mounts: (true, true),
             services: BTreeMap::from([("hassmic", initial.0), ("hassmic_fw", initial.1)]),
             calls: Vec::new(),
             rules: Vec::new(),
             undo: Vec::new(),
             fail: None,
-            fail_reboot: false,
-            ambiguous_reboot: false,
+            reboot_failure: None,
             fail_stop: false,
         }
     }
@@ -210,15 +206,15 @@ impl Tool for Fake {
 impl System for Fake {
     fn readonly(&mut self, volume: Volume) -> Result<bool> {
         Ok(match volume {
-            Volume::System => self.system_ro,
-            Volume::Vendor => self.vendor_ro,
+            Volume::System => self.mounts.0,
+            Volume::Vendor => self.mounts.1,
         })
     }
 
     fn remount(&mut self, volume: Volume, readonly: bool) -> Result<()> {
         let (name, current) = match volume {
-            Volume::System => ("system", &mut self.system_ro),
-            Volume::Vendor => ("vendor", &mut self.vendor_ro),
+            Volume::System => ("system", &mut self.mounts.0),
+            Volume::Vendor => ("vendor", &mut self.mounts.1),
         };
         *current = readonly;
         self.calls.push(format!("mount {name} {readonly}"));
@@ -243,11 +239,8 @@ impl System for Fake {
     }
 
     fn reboot(&mut self) -> std::result::Result<(), RebootFailure> {
-        if self.fail_reboot {
-            return Err(RebootFailure::Rejected("seeded reboot rejection"));
-        }
-        if self.ambiguous_reboot {
-            return Err(RebootFailure::Unknown);
+        if let Some(failure) = self.reboot_failure {
+            return Err(failure);
         }
         self.calls.push("reboot".into());
         Ok(())
@@ -393,7 +386,7 @@ fn t3_a2_device_install_rolls_back_each_failed_step() {
     }
     let mut fixture = Fixture::new(true);
     let before = snapshot(fixture.root.path());
-    fixture.host.fail_reboot = true;
+    fixture.host.reboot_failure = Some(RebootFailure::Rejected("seeded reboot rejection"));
     assert_eq!(fixture.call(true), Err("seeded reboot rejection"));
     assert_restored(&fixture, &before);
     fixture.host.fail_stop = true;
@@ -426,7 +419,7 @@ fn t3_a2_device_install_rejects_symlink_and_parallel_writer() {
 #[test]
 fn t3_a2_device_install_keeps_receipt_when_reboot_is_ambiguous() {
     let mut fixture = Fixture::new(false);
-    fixture.host.ambiguous_reboot = true;
+    fixture.host.reboot_failure = Some(RebootFailure::Unknown);
     assert_eq!(
         fixture.call(true),
         Err("reboot outcome unknown; inspect active installer receipt")
@@ -460,7 +453,7 @@ fn snapshot(root: &Path) -> Snapshot {
 
 fn assert_restored(fixture: &Fixture, before: &Snapshot) {
     assert_eq!(&snapshot(fixture.root.path()), before);
-    assert_eq!((fixture.host.system_ro, fixture.host.vendor_ro), (true, true));
+    assert_eq!(fixture.host.mounts, (true, true));
     assert_eq!(fixture.host.services["hassmic"], Service::Running);
     assert_eq!(fixture.host.services["hassmic_fw"], Service::Stopped);
     assert!(!fixture.host.calls.iter().any(|event| event == "reboot"));
