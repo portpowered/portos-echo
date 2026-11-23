@@ -9,6 +9,7 @@ pub enum PacerEvent {
     RunOpened { lead_ms: u16, adaptive: bool },
     ReplyOpened,
     PeerFrameArrived { audible: bool },
+    PeerFrameDiscarded,
     PcmPushed(Box<ReplyFrame>),
     MicrophoneFrame(Box<[i16; 320]>),
     InputFinished,
@@ -19,7 +20,9 @@ pub enum PacerEvent {
     MouthSettled,
     Played,
     Cut,
+    RemoteEnd,
     ReplySettled,
+    LipStatsCollected,
     RunClosed,
 }
 

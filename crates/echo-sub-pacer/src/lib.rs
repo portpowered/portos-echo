@@ -131,22 +131,13 @@ impl State {
         self.ear.measurement()
     }
 
-    pub fn take_lip_stats(&mut self) -> LipStats {
-        self.lips.as_mut().map_or_else(LipStats::default, Lips::take_stats)
-    }
-
-    /// Seed a new native call with the cushion measured on the device.
-    pub fn expect_jitter(&mut self) {
-        self.jitter = Jitter::expecting(EXPECTED_MS);
-    }
-
-    /// A discarded frame breaks the arrival chain and retains learned jitter.
-    pub fn break_arrival_chain(&mut self) {
-        self.jitter.rest();
+    #[must_use]
+    pub fn lip_stats(&self) -> LipStats {
+        self.lips.as_ref().map_or_else(LipStats::default, Lips::stats)
     }
 
     /// Retire unsent PCM on remote end. The voice owner still settles the lip window.
-    pub fn discard_output(&mut self) {
+    fn discard_output(&mut self) {
         self.queue.discard();
         self.wait = None;
         self.staged = None;
@@ -243,6 +234,8 @@ impl Subsystem for Pacer {
                 state.lead_ms = *lead_ms;
                 state.adaptive = *adaptive;
                 state.close_run();
+                // The first arrival starts with the cushion measured on the Echo.
+                state.jitter = Jitter::expecting(EXPECTED_MS);
                 state.input = Input::Open;
             }
             PacerEvent::ReplyOpened => state.reset_reply(),
@@ -251,6 +244,7 @@ impl Subsystem for Pacer {
                 state.jitter.arrived(now);
                 state.clock.retarget(state.jitter.target(now));
             }
+            PacerEvent::PeerFrameDiscarded => state.jitter.rest(),
             PacerEvent::PcmPushed(frame) => state.queue.push(frame),
             PacerEvent::MicrophoneFrame(frame) => {
                 state.ear.heard(frame.as_slice(), now);
@@ -278,7 +272,13 @@ impl Subsystem for Pacer {
                 state.input = Input::Cut;
                 out.publish_lips(state.lips.as_mut().and_then(|lips| lips.cut(now)));
             }
+            PacerEvent::RemoteEnd => state.discard_output(),
             PacerEvent::ReplySettled => state.settle(now, out),
+            PacerEvent::LipStatsCollected => {
+                if let Some(lips) = &mut state.lips {
+                    lips.clear_stats();
+                }
+            }
             PacerEvent::RunClosed => state.close_run(),
         }
     }

@@ -13,7 +13,9 @@ const JITTER: [u64; 20] = [
 async fn reply_playout_measured_jitter_keeps_the_primed_queue_wet() {
     assert_eq!(JITTER.iter().sum::<u64>(), 20 * 20);
     let script: Vec<_> = JITTER.into_iter().cycle().take(1000).map(|gap| (gap, 0)).collect();
-    let quality = reply(&mut paced(), &mut ReplyMeter::default(), &script).await.quality;
+    let quality = reply(&mut warmed_pacer().await, &mut ReplyMeter::default(), &script)
+        .await
+        .quality;
     assert_eq!((quality.arrival_gap_max_ms, quality.late_arrivals), (62, 99));
     assert_eq!((quality.underruns, quality.underrun_max_ms), (0, 0));
     assert!(quality.depth_min_ms >= 20, "{quality:?}");
@@ -108,6 +110,15 @@ fn paced() -> ReplyAudio {
     ReplyAudio::new(200).unwrap()
 }
 
+async fn warmed_pacer() -> ReplyAudio {
+    let pacer = paced();
+    assert_eq!(pacer.arrived(false), Duration::from_millis(300));
+    // Let the first-arrival estimate decay before measuring a smooth reply
+    // or a stall that the pacer has yet to learn from actual arrivals.
+    tokio::time::advance(Duration::from_secs(180)).await;
+    pacer
+}
+
 fn playout(quality: &ReplyQuality) -> [u32; 4] {
     [
         quality.reprimes,
@@ -122,9 +133,26 @@ fn target(quality: &ReplyQuality) -> [u32; 3] {
 }
 
 #[tokio::test(start_paused = true)]
+async fn reply_playout_discarded_peer_frame_restarts_arrivals_without_losing_the_cushion() {
+    let pacer = paced();
+    let reference = paced();
+    let cushion = Duration::from_millis(300);
+    assert_eq!(pacer.arrived(false), cushion);
+    assert_eq!(reference.arrived(false), cushion);
+
+    tokio::time::advance(Duration::from_millis(200)).await;
+    pacer.discarded();
+    tokio::time::advance(Duration::from_millis(200)).await;
+
+    assert_eq!(pacer.arrived(false), cushion);
+    assert_eq!(reference.arrived(false), Duration::from_millis(320));
+    assert!(!pacer.has_frames() && !pacer.spoken());
+}
+
+#[tokio::test(start_paused = true)]
 async fn reply_playout_steady_arrivals_stay_at_the_floor_untouched() {
     let script = talk(500);
-    let heard = reply(&mut paced(), &mut ReplyMeter::default(), &script).await;
+    let heard = reply(&mut warmed_pacer().await, &mut ReplyMeter::default(), &script).await;
     let quality = heard.quality;
     assert_eq!((quality.underruns, quality.arrival_gap_max_ms), (0, 20));
     // The five frames of the prime stack up to 80 ms; each later frame finds 80.
@@ -156,7 +184,7 @@ fn stalled() -> Vec<(u64, i16)> {
 #[tokio::test(start_paused = true)]
 async fn reply_playout_first_stall_fades_out_reprimes_and_fades_in() {
     let script = stalled();
-    let mut pacer = paced();
+    let mut pacer = warmed_pacer().await;
     let mut meter = ReplyMeter::default();
     let heard = reply(&mut pacer, &mut meter, &script).await;
     let quality = heard.quality;
@@ -192,10 +220,11 @@ async fn reply_playout_first_reply_of_a_call_rides_out_a_stall_in_its_first_seco
     let mut script = talk(30);
     script.extend(stall());
     script.extend(talk(100));
-    let before = reply(&mut paced(), &mut ReplyMeter::default(), &script).await.quality;
+    let before = reply(&mut warmed_pacer().await, &mut ReplyMeter::default(), &script)
+        .await
+        .quality;
     assert_eq!((before.underruns, before.reprimes), (1, 1));
     let mut pacer = paced();
-    pacer.expect_jitter();
     let heard = reply(&mut pacer, &mut ReplyMeter::default(), &script).await;
     let quality = heard.quality;
     assert_eq!((quality.underruns, quality.reprimes, quality.concealment_ms), (0, 0, 0));
@@ -209,7 +238,7 @@ async fn reply_playout_next_reply_rides_out_the_stall_the_call_has_shown() {
     let mut script = talk(50);
     script.extend(stall());
     script.extend(talk(100));
-    let mut pacer = paced();
+    let mut pacer = warmed_pacer().await;
     let mut meter = ReplyMeter::default();
     let first = reply(&mut pacer, &mut meter, &script).await.quality;
     assert_eq!((first.underruns, playout(&first)), (1, [1, 20, 1, 0]));
@@ -237,7 +266,7 @@ async fn reply_playout_keeps_the_cushion_between_stalls_of_one_call() {
     let mut script = talk(50);
     script.extend(stall());
     script.extend(talk(100));
-    let mut pacer = paced();
+    let mut pacer = warmed_pacer().await;
     let mut meter = ReplyMeter::default();
     let first = reply(&mut pacer, &mut meter, &script).await.quality;
     assert_eq!(first.underruns, 1);

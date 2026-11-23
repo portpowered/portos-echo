@@ -81,12 +81,19 @@ The voice service resamples PCM and recovers the same boxed input scratch
 after each synchronous event. It releases a staged frame to the existing
 transport, then reports that hand-off to the pacer. A cut clears the ring and
 staged frame before the existing device flush. Playback completion requires
-the accepted device receipt. The voice loop waits on pacer deadlines, and
-the trace writer uses its separate deadline. The screen adapter publishes
-each lip batch through the existing sender and reports whether it was taken.
-An endpoint remote end drops queued and staged PCM before the device flush.
-The ordinary reply settlement still handles pending lip samples. Barge-in
-uses the cut event to publish an immediate closing sample.
+the accepted device receipt. Run opening seeds the measured jitter cushion
+for the first peer arrival. The voice loop wakes separately for PCM offers
+and the World's mouth tick. The trace writer uses its own deadline. The
+screen adapter publishes each lip batch through the existing sender and
+reports whether it was taken.
+`PeerFrameDiscarded` restarts the arrival chain and keeps the learned jitter.
+`RemoteEnd` drops queued and staged PCM before the device flush. Ordinary
+reply settlement still handles its pending lip samples. Barge-in uses the
+cut event to publish an immediate closing sample. `LipStatsCollected` clears
+the counters after the screen delivery receipt and the service's stats read.
+The binding mailbox answer for `sb-a2-pacer-subsystem` limited the new variants
+to these three inputs. [Coordinator ruling](https://github.com/portpowered/portos-echo/pull/357#issuecomment-7091032723)
+
 `echo-sub-pacer` depends on `echo-core-api` and the existing `echo-audio` DSP.
 
 ## Deferred
