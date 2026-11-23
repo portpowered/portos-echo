@@ -43,10 +43,15 @@ jobs:
         with:
           target: test-sim
           sim: 'true'
+      - name: Run focused call unit tests and Rust lint
+        run: |
+          cargo test -p echo-sub-call --locked -- --nocapture
+          make lint-rust
       - name: Execute requested selections
         id: selections
         shell: sh
         env:
+          ECHO_LAB_WORLD_SEED: '101'
           TARGETED_FILTER: ${{ inputs.nextest_filter }}
           TARGETED_SCENARIOS: ${{ inputs.scenarios }}
           TARGETED_REPEAT: ${{ inputs.repeat }}
