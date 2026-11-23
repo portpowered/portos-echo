@@ -12,7 +12,7 @@ async fn delegation_trace_configured_declined_and_failed_tools_resolve_once_with
             .unwrap();
         let mut config = config(&fixture, spoof.url());
         config.trace.payloads = payloads;
-        let output = generation(&fixture, config, Some(accepted)).await;
+        let output = generation(&fixture, config, 0, Some(accepted)).await;
         assert_eq!(output["success"], false);
         let snapshot = spoof.snapshot().unwrap();
         assert_eq!(snapshot.calls.len(), usize::from(accepted));

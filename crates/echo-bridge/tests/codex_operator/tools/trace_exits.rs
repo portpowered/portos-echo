@@ -87,7 +87,8 @@ async fn inspect(
     lost: &tokio::sync::Notify,
     stop: tokio::sync::oneshot::Sender<()>,
 ) {
-    let (mut control, mut screen) = ready(fixture).await;
+    let address = screen_address(&fixture.directory.path().join("tool-trace"), 0).await;
+    let (mut control, mut screen) = ready(fixture, address).await;
     observer.wake("native trace exit", vec![]);
     wait(fixture, "delegation.created").await;
     control.write_all(b"exit").await.unwrap();

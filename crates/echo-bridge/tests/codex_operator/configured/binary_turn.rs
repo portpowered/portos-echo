@@ -63,44 +63,56 @@ async fn t3_settings_binary_followup_off_settles_delegation_before_one_exec() {
 async fn exercise(finish: Finish, delegated: bool) {
     let fixture = Fixture::new("chatgpt");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    configure(&fixture, listener.local_addr().unwrap().port());
-    configure_delegation(&fixture, delegated);
-    let mut command = super::super::voice_entry::command(&fixture);
-    command.args([
-        "--live-loopback",
-        "http://127.0.0.1:1",
-        "--model-loopback",
-        "http://127.0.0.1:1",
-    ]);
-    let mut process = Process::spawn(&mut command);
+    let mut process = launch(&fixture, listener.local_addr().unwrap().port(), delegated);
     let pid = process.child.id().unwrap();
     let mut satellite = binary_ready(&listener, &mut process).await;
     let identity = process_identity(pid);
+    let address = screen_address(&fixture.directory.path().join("trace"), 0).await;
     let control = fixture.control().await;
     wake(&mut satellite).await;
     let mut signal = BufReader::new(control);
     let media = remote(&mut signal).await;
-    held_playback(&fixture, &mut satellite, &mut signal).await;
+    held_playback(&fixture, address, &mut satellite, &mut signal).await;
     bridge_short::send(&mut satellite, "played", json!({})).await;
-    complete_delegation(&fixture, &mut signal, delegated).await;
-    closing(&mut signal).await;
-    assert_eq!(
-        process.line().await,
-        r#"{"event":"bridge.run_completed","run_id":"run-1"}"#
-    );
-    cleanup_control(&fixture, &mut process, finish);
-    signal.get_mut().write_all(b"close\n").await.unwrap();
-    drop(signal);
+    complete_delegation(&fixture, address, &mut signal, delegated).await;
+    finish_run(&fixture, &mut process, finish, signal).await;
     media.abort();
     finish_generation(&fixture, &listener, &mut process, finish, (pid, identity)).await;
     settled(&fixture, &mut process, finish).await;
 }
 
-async fn complete_delegation(fixture: &Fixture, signal: &mut BufReader<TcpStream>, delegated: bool) {
+async fn finish_run(fixture: &Fixture, process: &mut Process, finish: Finish, mut signal: BufReader<TcpStream>) {
+    closing(&mut signal).await;
+    assert_eq!(
+        process.line().await,
+        r#"{"event":"bridge.run_completed","run_id":"run-1"}"#
+    );
+    cleanup_control(fixture, process, finish);
+    signal.get_mut().write_all(b"close\n").await.unwrap();
+}
+
+fn launch(fixture: &Fixture, port: u16, delegated: bool) -> Process {
+    configure(fixture, port);
+    configure_delegation(fixture, delegated);
+    let mut command = super::super::voice_entry::command(fixture);
+    Process::spawn(command.args([
+        "--live-loopback",
+        "http://127.0.0.1:1",
+        "--model-loopback",
+        "http://127.0.0.1:1",
+    ]))
+}
+
+async fn complete_delegation(
+    fixture: &Fixture,
+    address: SocketAddr,
+    signal: &mut BufReader<TcpStream>,
+    delegated: bool,
+) {
     if !delegated {
         return;
     }
-    let snapshot = binary_snapshot(fixture).await;
+    let snapshot = binary_snapshot(address).await;
     assert_eq!(snapshot["restart_pending"], true);
     let rows = trace(&fixture.directory.path().join("trace"));
     for event in [PREPARED, ATTEMPT, "bridge.run_completed"] {
@@ -162,7 +174,8 @@ async fn finish_generation(
         assert_eq!(process.line().await, READY_LINE);
         let replacement = binary_ready(listener, process).await;
         assert_eq!(process_identity(pid), identity);
-        after_cleanup(fixture, finish).await;
+        let address = screen_address(&fixture.directory.path().join("trace"), 1).await;
+        after_cleanup(address, finish).await;
         drop(process.input.take());
         process.collect(0).await;
         drop(replacement);
@@ -244,18 +257,23 @@ async fn step(peer: &mut LivePeer) {
     }
 }
 
-async fn held_playback(fixture: &Fixture, satellite: &mut TcpStream, signal: &mut BufReader<TcpStream>) {
+async fn held_playback(
+    fixture: &Fixture,
+    address: SocketAddr,
+    satellite: &mut TcpStream,
+    signal: &mut BufReader<TcpStream>,
+) {
     receive_playback(satellite, signal).await;
     for patch in [
         json!({"agent":{"daily_request_cap":"3"}}),
         json!({"codex":{"voice":"maple"}}),
     ] {
         assert_eq!(
-            settings_runtime_patch(fixture, patch).await,
+            settings_runtime_patch(address, patch).await,
             json!({"version":1,"restart_pending":true})
         );
     }
-    let snapshot = binary_snapshot(fixture).await;
+    let snapshot = binary_snapshot(address).await;
     assert_eq!(snapshot["restart_pending"], true);
     assert_eq!(snapshot["settings"]["agent"]["daily_request_cap"], "3");
     assert_eq!(snapshot["settings"]["codex"]["voice"], "maple");
@@ -308,13 +326,13 @@ async fn playback_frame(satellite: &mut TcpStream) -> (Value, Vec<u8>) {
     }
 }
 
-async fn after_cleanup(fixture: &Fixture, finish: Finish) {
-    let snapshot = binary_snapshot(fixture).await;
+async fn after_cleanup(address: SocketAddr, finish: Finish) {
+    let snapshot = binary_snapshot(address).await;
     assert_eq!(snapshot["restart_pending"], finish == Finish::Kill);
     assert_eq!(snapshot["settings"]["agent"]["daily_request_cap"], "3");
     assert_eq!(snapshot["settings"]["codex"]["voice"], "maple");
     if finish == Finish::Kill {
-        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
         assert_eq!(
             bridge_wire_screen::state(&mut screen).await,
             json!({

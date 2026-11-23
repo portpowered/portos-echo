@@ -95,16 +95,17 @@ fn media(closed: &Arc<AtomicUsize>) -> Media {
     }
 }
 
-async fn generation(fixture: &Fixture, config: echo_config::BridgeConfig, accepted: Option<bool>) -> Value {
+async fn generation(
+    fixture: &Fixture,
+    config: echo_config::BridgeConfig,
+    generation: usize,
+    accepted: Option<bool>,
+) -> Value {
     let observer = Observer::default();
     let closed = Arc::new(AtomicUsize::new(0));
     let (stop, stopping) = tokio::sync::oneshot::channel();
-    let prepared = Configured::new(
-        config,
-        fixture.directory.path().join("tool-trace"),
-        ([127, 0, 0, 1], 0).into(),
-    )
-    .unwrap();
+    let path = fixture.directory.path().join("tool-trace");
+    let prepared = Configured::new(config, path.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
     let work = prepared.execute(
         FakeConnector::new(observer.clone()),
         async || Ok(media(&closed)),
@@ -114,13 +115,14 @@ async fn generation(fixture: &Fixture, config: echo_config::BridgeConfig, accept
         },
     );
     let inspect = async {
-        let (_control, mut screen) = ready(fixture).await;
+        let address = screen_address(&path, generation).await;
+        let (_control, mut screen) = ready(fixture, address).await;
         observer.wake("tool fixture", vec![]);
         if let Some(accepted) = accepted {
             loop {
                 let state = bridge_wire_screen::state(&mut screen).await;
                 if state["state"] == "approval" {
-                    approve(fixture, &state, accepted).await;
+                    approve(address, &state, accepted).await;
                     break;
                 }
             }
@@ -150,9 +152,12 @@ async fn generation(fixture: &Fixture, config: echo_config::BridgeConfig, accept
     output
 }
 
-pub(super) async fn ready(fixture: &Fixture) -> (tokio::net::TcpStream, Lines<BufReader<tokio::net::TcpStream>>) {
+pub(super) async fn ready(
+    fixture: &Fixture,
+    address: SocketAddr,
+) -> (tokio::net::TcpStream, Lines<BufReader<tokio::net::TcpStream>>) {
     let control = fixture.control().await;
-    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
     loop {
         let state = bridge_wire_screen::state(&mut screen).await;
         if state["state"] == "ready" && state["message"] == "Echo Live ready" {
@@ -187,9 +192,9 @@ async fn wait_resolution(fixture: &Fixture) {
     }
 }
 
-async fn approve(fixture: &Fixture, state: &Value, accepted: bool) {
+async fn approve(address: SocketAddr, state: &Value, accepted: bool) {
     let action = json!({"action":if accepted { "approve" } else { "deny" }, "id":state["id"]});
-    let mut stream = tokio::net::TcpStream::connect(fixture.screen).await.unwrap();
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
     let body = action.to_string();
     stream.write_all(format!("POST /actions?token=synthetic-screen-pair HTTP/1.1\r\nHost: local\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
     let mut response = String::new();
@@ -206,7 +211,7 @@ async fn codex_configured_tools_correlate_catalog_mcp_and_persist_no_replay() {
         .await
         .unwrap();
     let config = config(&fixture, spoof.url());
-    let first = generation(&fixture, config.clone(), None).await;
+    let first = generation(&fixture, config.clone(), 0, None).await;
     assert_eq!(
         first,
         json!({"contentItems":[{"type":"inputText","text":"[{\"text\":\"delegated echo\",\"type\":\"text\"}]"}],"success":true})
@@ -220,7 +225,7 @@ async fn codex_configured_tools_correlate_catalog_mcp_and_persist_no_replay() {
     );
     std::fs::remove_file(fixture.home.join("tool-result")).unwrap();
     std::fs::remove_file(fixture.home.join("peer-port")).unwrap();
-    let second = generation(&fixture, config, None).await;
+    let second = generation(&fixture, config, 1, None).await;
     assert_eq!(
         second,
         json!({"contentItems":[{"type":"inputText","text":"tool request denied"}],"success":false})
@@ -255,7 +260,7 @@ async fn codex_configured_tools_approval_denial_has_no_mcp_and_acceptance_has_on
         let spoof = echo_spoof_mcp::Spoof::start(echo_spoof_mcp::Options::default())
             .await
             .unwrap();
-        let output = generation(&fixture, config(&fixture, spoof.url()), Some(accepted)).await;
+        let output = generation(&fixture, config(&fixture, spoof.url()), 0, Some(accepted)).await;
         assert_eq!(output["success"], false);
         assert_eq!(spoof.snapshot().unwrap().calls.len(), usize::from(accepted));
         let mut expected = vec![receipt("item/tool/call", "test.requires_approval")];
@@ -299,7 +304,8 @@ async fn codex_configured_tools_exhausted_call_admission_never_opens_media_or_mo
         },
     );
     let inspect = async {
-        let (_control, _screen) = ready(&fixture).await;
+        let address = screen_address(&fixture.directory.path().join("trace"), 0).await;
+        let (_control, _screen) = ready(&fixture, address).await;
         observer.wake("refused", vec![]);
         // The refused wake ends on the device and the bridge stays up.
         let refusal = echo_link::fake::Command::FailRun(echo_link::RunFailure::Unavailable);
@@ -365,7 +371,7 @@ async fn delegation_trace_configured_search_and_mcp_complete_once_with_payload_s
         let mut config = config(&fixture, spoof.url());
         config.mcp.server[0].name = "spoof-trace".into();
         config.trace.payloads = payloads;
-        let output = generation(&fixture, config, None).await;
+        let output = generation(&fixture, config, 0, None).await;
         assert_eq!(output["success"], true);
         assert_eq!(
             spoof

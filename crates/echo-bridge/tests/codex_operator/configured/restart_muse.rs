@@ -16,7 +16,7 @@ async fn t3_settings_muse_clear_withdraws_next_catalog_after_failed_replacement(
     let home = base.home.as_ref().unwrap().dir.clone();
     let trace = fixture.directory.path().join("runtime-muse");
     let mut runtime = Configured::from_effective(startup, trace.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
-    let first = catalog_turn(&fixture, &mut runtime, None, true).await;
+    let first = catalog_turn(&fixture, &trace, &mut runtime, None, true).await;
     assert!(first.restart_requested);
     let mut retained = first.settings.unwrap();
     let overlay = std::fs::read_to_string(home.join("settings.toml")).unwrap();
@@ -33,7 +33,7 @@ async fn t3_settings_muse_clear_withdraws_next_catalog_after_failed_replacement(
     assert!(muse.ca_file.is_file());
     assert_eq!(std::fs::read(&muse.credential_file).unwrap(), [b'x'; 32]);
     runtime.replacement_failed(&mut retained).unwrap();
-    let recovered = catalog_turn(&fixture, &mut runtime, Some(retained), false).await;
+    let recovered = catalog_turn(&fixture, &trace, &mut runtime, Some(retained), false).await;
     assert!(!recovered.restart_requested);
     let events = super::trace(&trace);
     for event in ["settings.reexec_failed", "settings.restart_recovered"] {
@@ -94,6 +94,7 @@ fn configure(fixture: &Fixture, startup: &mut EffectiveConfig) -> MuseConfig {
 
 async fn catalog_turn(
     fixture: &Fixture,
+    path: &Path,
     runtime: &mut Configured,
     retained: Option<Box<SettingsHost>>,
     before_clear: bool,
@@ -127,7 +128,8 @@ async fn catalog_turn(
         retained,
     );
     let journey = async {
-        let (_control, _screen) = settings_ready(fixture, before_clear).await;
+        let address = screen_address(path, usize::from(!before_clear)).await;
+        let (_control, _screen) = settings_ready(fixture, address, before_clear).await;
         observer.wake("catalog fixture", vec![]);
         while !observer.commands().contains(&Command::Stop) {
             tokio::task::yield_now().await;
@@ -140,7 +142,7 @@ async fn catalog_turn(
             usize::from(before_clear)
         );
         if before_clear {
-            clear(fixture).await;
+            clear(address).await;
             observer.finish(Ok(()));
         } else {
             observer.finish(Ok(()));
@@ -159,10 +161,11 @@ async fn catalog_turn(
 
 async fn settings_ready(
     fixture: &Fixture,
+    address: SocketAddr,
     before_clear: bool,
 ) -> (tokio::net::TcpStream, Lines<BufReader<tokio::net::TcpStream>>) {
     let control = fixture.control().await;
-    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
     let message = if before_clear {
         "Echo Live ready"
     } else {
@@ -172,8 +175,8 @@ async fn settings_ready(
     (control, screen)
 }
 
-async fn clear(fixture: &Fixture) {
-    let url = settings_runtime_url(fixture, "/settings/v2");
+async fn clear(address: SocketAddr) {
+    let url = settings_runtime_url(address, "/settings/v2");
     let client = reqwest::Client::new();
     let receipt = client
         .patch(url.clone())

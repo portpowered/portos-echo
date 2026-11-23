@@ -16,7 +16,7 @@ async fn owner(server: &str) {
     let mut config = config(&fixture, spoof.url());
     config.mcp.server[0].name = server.into();
     for generation_number in 0..2 {
-        let result = generation(&fixture, config.clone(), None).await;
+        let result = generation(&fixture, config.clone(), 0, None).await;
         assert_eq!(result["success"], generation_number == 0);
         // The durable policy ledger survives generation replacement: reused
         // external identities produce fresh diagnostic rows, never replayed MCP.

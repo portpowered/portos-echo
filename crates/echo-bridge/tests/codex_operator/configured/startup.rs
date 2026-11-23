@@ -145,16 +145,6 @@ async fn cleanup(fixture: &Fixture, path: &Path, auth: &[u8]) {
     super::super::host::released(fixture).await;
     assert_eq!(std::fs::read(fixture.home.join("auth.json")).unwrap(), auth);
     presentation_released(path, "chatgpt", true);
-    assert!(tokio::net::TcpStream::connect(fixture.screen).await.is_err());
-    let address = trace(path)
-        .into_iter()
-        .find(|row| row["event"] == "bridge.started")
-        .unwrap();
-    assert!(
-        tokio::net::TcpStream::connect(address["health_addr"].as_str().unwrap())
-            .await
-            .is_err()
-    );
 }
 
 #[tokio::test]

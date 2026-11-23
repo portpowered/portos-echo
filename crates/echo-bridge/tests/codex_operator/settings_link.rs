@@ -5,6 +5,9 @@ use echo_link::fake::{FakeConnector, Observer};
 use echo_mcp_auth::mock::Mock;
 use std::{future::Future, task::Poll};
 
+mod replacement;
+pub(super) use replacement::{controlled_grant, replacement_grant};
+
 #[tokio::test(start_paused = true)]
 #[ignore = "T3 controlled Python child and loopback OAuth/settings"]
 async fn t3_settings_runtime_projects_link_unlink_without_token_acquisition() {
@@ -25,19 +28,20 @@ async fn t3_settings_runtime_projects_link_unlink_without_token_acquisition() {
         );
         let inspect = async {
             let _control = fixture.control().await;
-            let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+            let address = screen_address(&path, 0).await;
+            let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
             while bridge_wire_screen::state(&mut screen).await["message"] != "Echo Live ready" {}
             let client = reqwest::Client::new();
-            snapshot(&client, &fixture, &mock, "link_required").await;
+            snapshot(&client, address, &mock, "link_required").await;
             let url = operator_url(&path);
             let approve = async {
                 while bridge_wire_screen::state(&mut screen).await["state"] != "link_code" {}
                 tokio::time::advance(Duration::from_secs(5)).await;
             };
             let ((), ()) = tokio::join!(operate(&client, &url, "link", "linked"), approve);
-            snapshot(&client, &fixture, &mock, "linked").await;
+            snapshot(&client, address, &mock, "linked").await;
             operate(&client, &url, "unlink", "unlinked").await;
-            snapshot(&client, &fixture, &mock, "link_required").await;
+            snapshot(&client, address, &mock, "link_required").await;
             assert_eq!(mock.state.lock().unwrap().generation, 1);
             stop.send(()).unwrap();
         };
@@ -99,6 +103,7 @@ fn portos_startup(fixture: &Fixture, base_url: &str, client_id: &str) -> echo_co
 }
 struct PairedGrant<'a> {
     fixture: &'a Fixture,
+    address: SocketAddr,
     mock: &'a echo_lab::lab_mcp::Fixture,
     client: reqwest::Client,
     captured: Vec<String>,
@@ -107,7 +112,7 @@ struct PairedGrant<'a> {
 impl PairedGrant<'_> {
     fn post(&self, body: &Value) -> reqwest::RequestBuilder {
         self.client
-            .post(configured::settings_runtime_url(self.fixture, "/settings/v2/portos"))
+            .post(configured::settings_runtime_url(self.address, "/settings/v2/portos"))
             .json(body)
     }
 
@@ -125,7 +130,7 @@ impl PairedGrant<'_> {
     }
 
     async fn portos(&mut self) -> Value {
-        let url = configured::settings_runtime_url(self.fixture, "/settings/v2");
+        let url = configured::settings_runtime_url(self.address, "/settings/v2");
         self.capture(self.client.get(url), 200).await["portos"].clone()
     }
 
@@ -187,10 +192,12 @@ async fn paired_grant_journey(fixture: &Fixture, expected: &str) {
     );
     let inspect = async {
         let _control = fixture.control().await;
-        let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+        let address = screen_address(&path, 0).await;
+        let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
         while bridge_wire_screen::state(&mut screen).await["message"] != "Echo Live ready" {}
         let mut journey = PairedGrant {
             fixture,
+            address,
             mock: &mock,
             client: reqwest::Client::new(),
             captured: vec![],
@@ -263,7 +270,7 @@ async fn refuse_unpaired_link(journey: &mut PairedGrant<'_>) {
     assert_eq!(status["server"]["requested_scopes"], json!(["endpoint:read"]));
     let link = json!({"version":2,"operation":"link"});
     journey.capture(journey.post(&link).header("Origin", "null"), 403).await;
-    let url = configured::settings_runtime_url(journey.fixture, "/settings/v2/portos");
+    let url = configured::settings_runtime_url(journey.address, "/settings/v2/portos");
     journey
         .capture(journey.client.post(url).query(&[("token", "wrong")]).json(&link), 401)
         .await;
@@ -298,7 +305,7 @@ async fn approve_paired_link(journey: &mut PairedGrant<'_>, path: &std::path::Pa
 async fn refuse_permission_save(journey: &mut PairedGrant<'_>) {
     let overlay = journey.fixture.directory.path().join("agent-home/settings.toml");
     let bytes = std::fs::read(&overlay).unwrap();
-    let url = configured::settings_runtime_url(journey.fixture, "/settings/v2");
+    let url = configured::settings_runtime_url(journey.address, "/settings/v2");
     let before = journey.capture(journey.client.get(url.clone()), 200).await;
     let save = journey.client.patch(url.clone()).json(&json!({
         "version":2,"settings":{"portos":{"scopes":["endpoint:write"],"allow_tools":["control"]}}
@@ -328,80 +335,6 @@ async fn unlink_paired_grant(journey: &mut PairedGrant<'_>) {
     assert_eq!(unlinked["server"]["granted_scopes"], json!([]));
     let counts = journey.mock.counts().unwrap();
     assert_eq!((counts.links, counts.revokes), (1, 1));
-}
-
-pub(super) async fn replacement_grant(fixture: &Fixture, mock: &echo_lab::lab_mcp::Fixture, epoch: u64) {
-    tokio::select! {
-        biased;
-        () = follow_subprocess_clock(mock, epoch) => unreachable!("the fixture clock runs until the grant journey ends"),
-        () = replacement_journey(fixture, mock, async |expires| {
-            // The normal process takes its clock origin after the mock was started.
-            let now = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
-            assert!((epoch + 1800..=now + 1800).contains(&expires));
-        }) => {}
-    }
-}
-
-pub(super) async fn controlled_grant(
-    fixture: &Fixture,
-    mock: &echo_lab::lab_mcp::Fixture,
-    epoch: u64,
-    process: &mut Process,
-) {
-    replacement_journey(fixture, mock, async |expires| {
-        assert_eq!(expires, epoch + 1800);
-        mock.advance(5).unwrap();
-        process
-            .input
-            .as_mut()
-            .unwrap()
-            .write_all(b"{\"action\":\"advance_clock\",\"milliseconds\":5000}\n")
-            .await
-            .unwrap();
-        assert_eq!(
-            process.line().await,
-            r#"{"event":"bridge.clock_advanced","milliseconds":5000}"#
-        );
-    })
-    .await;
-}
-
-async fn follow_subprocess_clock(mock: &echo_lab::lab_mcp::Fixture, mut epoch: u64) {
-    // Align the mock's DPoP validator with the normal subprocess clock.
-    let mut ticks = tokio::time::interval(Duration::from_millis(50));
-    loop {
-        ticks.tick().await;
-        let now = std::time::UNIX_EPOCH.elapsed().unwrap().as_secs();
-        if now > epoch {
-            mock.advance(now - epoch).unwrap();
-            epoch = now;
-        }
-    }
-}
-
-async fn replacement_journey(
-    fixture: &Fixture,
-    mock: &echo_lab::lab_mcp::Fixture,
-    observe_expiry: impl AsyncFnOnce(u64),
-) {
-    let mut journey = PairedGrant {
-        fixture,
-        mock,
-        client: reqwest::Client::new(),
-        captured: vec![],
-    };
-    let status = journey.portos().await;
-    assert_eq!(status["link_status"], "link_required");
-    assert_eq!(status["link_waiting_for_restart"], false);
-    assert_eq!(status["server"]["requested_scopes"], json!(["endpoint:read"]));
-    let expires = journey.begin().await;
-    mock.approve(echo_lab::lab_mcp::Approval::Approved).unwrap();
-    observe_expiry(expires).await;
-    wait_for_link(&mut journey).await;
-    unlink_paired_grant(&mut journey).await;
-    let grant: Value =
-        serde_json::from_slice(&std::fs::read(fixture.directory.path().join("grant/grant.json")).unwrap()).unwrap();
-    assert_eq!(grant["grant"], Value::Null);
 }
 
 async fn wait_for_link(journey: &mut PairedGrant<'_>) {
@@ -462,10 +395,10 @@ async fn t3_settings_v2_portos_expiry_clears_challenge() {
     drive(async { paired_grant_journey(&Fixture::new("chatgpt"), "expired").await }).await;
 }
 
-async fn snapshot(client: &reqwest::Client, fixture: &Fixture, mock: &Mock, expected: &str) {
+async fn snapshot(client: &reqwest::Client, address: SocketAddr, mock: &Mock, expected: &str) {
     let requests = mock.state.lock().unwrap().requests.len();
     let response = client
-        .get(configured::settings_runtime_url(fixture, "/settings/v1"))
+        .get(configured::settings_runtime_url(address, "/settings/v1"))
         .send()
         .await
         .unwrap();

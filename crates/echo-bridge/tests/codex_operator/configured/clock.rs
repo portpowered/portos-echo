@@ -101,7 +101,7 @@ async fn t3_clock_configured_call_tells_the_models_the_measured_time() {
 }
 
 async fn corrected_call(fixture: &Fixture, observer: &Observer, path: &Path) {
-    let (_control, _screen) = ready(fixture).await;
+    let (_control, _screen) = ready(fixture, screen_address(path, 0).await).await;
     let before = system_seconds();
     observer.wake("clock fixture", vec![]);
     while !observer.commands().contains(&Command::Stop) {

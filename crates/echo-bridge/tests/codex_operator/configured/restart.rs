@@ -10,7 +10,7 @@ async fn t3_settings_configured_recovery_keeps_pending_edits_and_old_active_conf
     let home = startup.config.home.as_ref().unwrap().dir.clone();
     let path = fixture.directory.path().join("runtime-trace");
     let mut configured = Configured::from_effective(startup, path.clone(), ([127, 0, 0, 1], 0).into()).unwrap();
-    let first = generation(&fixture, &mut configured, None).await;
+    let first = generation(&fixture, &path, &mut configured, None).await;
     assert!(first.restart_requested);
     std::fs::remove_file(fixture.home.join("peer-port")).unwrap();
     let mut host = first.settings.unwrap();
@@ -19,7 +19,7 @@ async fn t3_settings_configured_recovery_keeps_pending_edits_and_old_active_conf
     std::fs::write(fixture.directory.path().join("bridge.toml"), "invalid").unwrap();
     std::fs::write(home.join("settings.toml"), "invalid").unwrap();
     std::fs::write(home.join("prompts/voice.md"), " \n").unwrap();
-    let second = generation(&fixture, &mut configured, Some(host)).await;
+    let second = generation(&fixture, &path, &mut configured, Some(host)).await;
     assert!(!second.restart_requested);
     let mut host = second.settings.unwrap();
     retained_settings(&mut host, true);
@@ -39,6 +39,7 @@ async fn t3_settings_configured_recovery_keeps_pending_edits_and_old_active_conf
 
 async fn generation(
     fixture: &Fixture,
+    path: &Path,
     configured: &mut Configured,
     retained: Option<Box<echo_bridge::bridge_settings::SettingsHost>>,
 ) -> RuntimeCompletion {
@@ -52,7 +53,7 @@ async fn generation(
         async { stopping.await.unwrap() },
         retained,
     );
-    let inspect = inspect(fixture, recovering, stop);
+    let inspect = inspect(fixture, path, recovering, stop);
     let (result, ()) = Box::pin(tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         tokio::join!(work, inspect)
     }))
@@ -66,9 +67,10 @@ async fn generation(
     result.unwrap()
 }
 
-async fn inspect(fixture: &Fixture, recovering: bool, stop: tokio::sync::oneshot::Sender<()>) {
+async fn inspect(fixture: &Fixture, path: &Path, recovering: bool, stop: tokio::sync::oneshot::Sender<()>) {
     let _control = fixture.control().await;
-    let mut stream = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    let address = screen_address(path, usize::from(recovering)).await;
+    let mut stream = bridge_wire_screen::stream(&address.to_string()).await;
     let expected = if recovering {
         json!({"state":"error","relink":false,"message":"Could not restart bridge; saved settings remain pending"})
     } else {
@@ -76,13 +78,13 @@ async fn inspect(fixture: &Fixture, recovering: bool, stop: tokio::sync::oneshot
     };
     while bridge_wire_screen::state(&mut stream).await != expected {}
     if recovering {
-        recovered_surface(fixture).await;
+        recovered_surface(address).await;
         stop.send(()).unwrap();
     } else {
         let home = fixture.directory.path().join("agent-home");
-        settings_runtime_requests(fixture, &home).await;
+        settings_runtime_requests(address, &home).await;
         assert_eq!(
-            settings_runtime_patch(fixture, json!({"agent":{"daily_request_cap":"3"}})).await,
+            settings_runtime_patch(address, json!({"agent":{"daily_request_cap":"3"}})).await,
             json!({"version":1,"restart_pending":true})
         );
         assert_eq!(
@@ -92,9 +94,9 @@ async fn inspect(fixture: &Fixture, recovering: bool, stop: tokio::sync::oneshot
     }
 }
 
-async fn recovered_surface(fixture: &Fixture) {
+async fn recovered_surface(address: SocketAddr) {
     let value: Value = reqwest::Client::new()
-        .get(settings_runtime_url(fixture, "/settings/v1"))
+        .get(settings_runtime_url(address, "/settings/v1"))
         .send()
         .await
         .unwrap()
@@ -129,14 +131,16 @@ async fn t3_settings_binary_idle_save_execs_same_image_argv_and_held_stdin_once(
     let pid = process.child.id().unwrap();
     let original = process_identity(pid);
     let mut satellite = binary_ready(&listener, &mut process).await;
-    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    let trace_path = fixture.directory.path().join("trace");
+    let address = screen_address(&trace_path, 0).await;
+    let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await["message"],
         "Echo Live ready"
     );
-    assert_eq!(binary_snapshot(&fixture).await["restart_pending"], false);
+    assert_eq!(binary_snapshot(address).await["restart_pending"], false);
     assert_eq!(
-        settings_runtime_patch(&fixture, json!({"voice":{"session_listen_seconds":4}})).await,
+        settings_runtime_patch(address, json!({"voice":{"session_listen_seconds":4}})).await,
         json!({"version":1,"restart_pending":true})
     );
     assert_eq!(
@@ -151,7 +155,8 @@ async fn t3_settings_binary_idle_save_execs_same_image_argv_and_held_stdin_once(
         .await
         .unwrap()
         .unwrap();
-    let value = binary_snapshot(&fixture).await;
+    super::super::voice_entry::screen_ended(&mut screen).await;
+    let value = binary_snapshot(screen_address(&trace_path, 1).await).await;
     assert_eq!(value["restart_pending"], false);
     assert_eq!(value["settings"]["voice"]["session_listen_seconds"], 4);
     assert_eq!(std::fs::read_to_string(&base).unwrap(), text);
@@ -216,9 +221,9 @@ pub(super) async fn binary_ready(listener: &tokio::net::TcpListener, process: &m
     satellite
 }
 
-pub(super) async fn binary_snapshot(fixture: &Fixture) -> Value {
+pub(super) async fn binary_snapshot(address: SocketAddr) -> Value {
     reqwest::Client::new()
-        .get(settings_runtime_url(fixture, "/settings/v1"))
+        .get(settings_runtime_url(address, "/settings/v1"))
         .send()
         .await
         .unwrap()
@@ -243,23 +248,26 @@ async fn t3_settings_binary_failed_exec_remounts_pending_surface_without_retry()
     let pid = process.child.id().unwrap();
     let original = process_identity(pid);
     let satellite = binary_ready(&listener, &mut process).await;
+    let trace_path = fixture.directory.path().join("trace");
+    let address = screen_address(&trace_path, 0).await;
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(
-        settings_runtime_patch(&fixture, json!({"voice":{"session_listen_seconds":4}})).await,
+        settings_runtime_patch(address, json!({"voice":{"session_listen_seconds":4}})).await,
         json!({"version":1,"restart_pending":true})
     );
     let recovery = binary_ready(&listener, &mut process).await;
     assert_eq!(process_identity(pid), original);
-    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    let address = screen_address(&trace_path, 1).await;
+    let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await,
         json!({"state":"error","relink":false,
             "message":"Could not restart bridge; saved settings remain pending"})
     );
-    binary_pending_surface(&fixture).await;
+    binary_pending_surface(&fixture, address).await;
     binary_failed_trace(&fixture);
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let replacement = binary_retry(&fixture, &listener, &mut process).await;
+    let replacement = binary_retry(&fixture, address, &listener, &mut process).await;
     assert_eq!(process_identity(pid), original);
     drop(process.input.take());
     process.collect(0).await;
@@ -271,15 +279,16 @@ async fn t3_settings_binary_failed_exec_remounts_pending_surface_without_retry()
 
 async fn binary_retry(
     fixture: &Fixture,
+    address: SocketAddr,
     listener: &tokio::net::TcpListener,
     process: &mut Process,
 ) -> tokio::net::TcpStream {
     assert_eq!(
-        settings_runtime_patch(fixture, json!({"agent":{"daily_request_cap":"3"}})).await,
+        settings_runtime_patch(address, json!({"agent":{"daily_request_cap":"3"}})).await,
         json!({"version":1,"restart_pending":true})
     );
     let replacement = binary_ready(listener, process).await;
-    let snapshot = binary_snapshot(fixture).await;
+    let snapshot = binary_snapshot(screen_address(&fixture.directory.path().join("trace"), 2).await).await;
     assert_eq!(snapshot["restart_pending"], false);
     assert_eq!(snapshot["warnings"], json!([]));
     assert_eq!(snapshot["settings"]["voice"]["session_listen_seconds"], 4);
@@ -341,9 +350,9 @@ pub(super) fn binary_home(fixture: &Fixture, port: u16) {
     std::fs::write(base, text).unwrap();
 }
 
-async fn binary_pending_surface(fixture: &Fixture) {
+async fn binary_pending_surface(fixture: &Fixture, address: SocketAddr) {
     for _ in 0..2 {
-        let snapshot = binary_snapshot(fixture).await;
+        let snapshot = binary_snapshot(address).await;
         assert_eq!(snapshot["restart_pending"], true);
         assert_eq!(snapshot["settings"]["voice"]["session_listen_seconds"], 4);
         assert_eq!(
@@ -352,7 +361,7 @@ async fn binary_pending_surface(fixture: &Fixture) {
         );
     }
     let saved = reqwest::Client::new()
-        .post(settings_runtime_url(fixture, "/settings/v1/prompts/voice"))
+        .post(settings_runtime_url(address, "/settings/v1/prompts/voice"))
         .json(&json!({"version":1,"text":"accepted after failed exec\n"}))
         .send()
         .await

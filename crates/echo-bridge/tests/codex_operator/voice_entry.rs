@@ -92,11 +92,7 @@ async fn codex_voice_entry_binary_missing_configuration_never_dials_wyoming() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         configure(&fixture, listener.local_addr().unwrap().port());
         let path = fixture.directory.path().join("bridge.toml");
-        // This test never connects to the screen. Let the bridge bind an
-        // ephemeral port atomically so screen startup cannot mask admission.
-        let text = std::fs::read_to_string(&path)
-            .unwrap()
-            .replace(&fixture.screen.to_string(), "127.0.0.1:0");
+        let text = std::fs::read_to_string(&path).unwrap();
         let text = if missing == "binary" {
             text.replace(
                 &fixture.binary.display().to_string(),
@@ -165,20 +161,8 @@ async fn rejected_account(mode: &str) {
     let mut process = Process::spawn(&mut command(&fixture));
     // Auth rejection reaps the account child before presenting the relink
     // frame. Its control listener may already be closed; observe the screen.
-    tokio::time::timeout(OBSERVATION_TIMEOUT, async {
-        loop {
-            if std::fs::read_to_string(fixture.directory.path().join("trace"))
-                .is_ok_and(|text| text.contains("\"event\":\"screen.listening\""))
-            {
-                break;
-            }
-            assert!(process.child.try_wait().unwrap().is_none());
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    let address = wait_for_screen(&fixture.directory.path().join("trace"), &mut process).await;
+    let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
     relink(&mut screen).await;
     denied(&fixture, &listener, &mut process).await;
     completed(&mut process, 1, "echo-bridge: authorization\n").await;
@@ -189,6 +173,16 @@ async fn rejected_account(mode: &str) {
     rejected_trace(&fixture);
     recover(&fixture, &listener).await;
     assert_eq!(std::fs::read(fixture.home.join("auth.json")).unwrap(), auth);
+}
+
+async fn wait_for_screen(path: &Path, process: &mut Process) -> SocketAddr {
+    tokio::select! {
+        address = screen_address(path, 0) => Ok(address),
+        status = process.child.wait() => {
+            Err(format!("bridge exited before screen admission: {status:?}; {}", process.stderr().await))
+        }
+    }
+    .unwrap()
 }
 
 async fn denied(fixture: &Fixture, listener: &TcpListener, process: &mut Process) {
@@ -279,7 +273,9 @@ async fn recover(fixture: &Fixture, listener: &TcpListener) {
     std::fs::remove_file(fixture.directory.path().join("trace")).unwrap();
     let mut process = Process::spawn(&mut command(fixture));
     let _satellite = admitted(&mut process, listener).await;
-    let mut screen = bridge_wire_screen::stream(&fixture.screen.to_string()).await;
+    let path = fixture.directory.path().join("trace");
+    let address = screen_address(&path, 0).await;
+    let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await,
         json!({"state":"ready", "message":"Echo Live ready"})
