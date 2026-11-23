@@ -1,6 +1,10 @@
 //! One pending account operation for the lifetime of paired Settings.
-use crate::{Error, bridge_codex::HostOptions, bridge_operator::screen_account};
+use crate::{
+    Error, bridge_codex::HostOptions, bridge_mcp::bridge_presentation::Presentation, bridge_operator::screen_account,
+    bridge_trace::Trace,
+};
 use echo_config::LiveMode;
+use echo_screen_contract::UiState;
 use echo_screen_contract::settings_v2::{
     OpenAiAccountV2, OpenAiApiKeyStatusV2, OpenAiLinkStatusV2 as LinkStatus, PortosActionV2 as Action,
     PortosChallengeV2, PortosOperationStartedV2, PortosOperationStateV2 as OperationState, PortosOperationV2,
@@ -18,17 +22,26 @@ struct State {
     api_key: bool,
     /// The realtime voices the admitted app server listed, once it has.
     voices: Option<Vec<String>>,
+    recovery: Option<Recovery>,
+    attempt: u64,
 }
 
+struct Recovery {
+    message: &'static str,
+    checking: bool,
+}
+
+const RELINK: &str = "Relink to sign in to ChatGPT.";
+
 #[derive(Clone)]
-pub(crate) struct Account(watch::Sender<State>);
+pub(crate) struct Account(watch::Sender<State>, Presentation, Trace);
 
 tokio::task_local! {
     static CURRENT: Account;
 }
 
 impl Account {
-    pub fn new(mode: LiveMode) -> Self {
+    pub fn new(mode: LiveMode, presentation: Presentation, trace: Trace) -> Self {
         Self(
             watch::channel(State {
                 snapshot: OpenAiAccountV2 {
@@ -43,8 +56,12 @@ impl Account {
                 queued: None,
                 api_key: mode == LiveMode::ApiKey,
                 voices: None,
+                recovery: None,
+                attempt: 0,
             })
             .0,
+            presentation,
+            trace,
         )
     }
 
@@ -60,25 +77,11 @@ impl Account {
     }
 
     pub fn start(&self, request: PortosOperationV2) -> SettingsReply {
-        let (action, required, active) = match request {
-            PortosOperationV2::Link { .. } => (Action::Link, LinkStatus::LinkRequired, OperationState::Linking),
-            PortosOperationV2::Unlink { .. } => (Action::Unlink, LinkStatus::Linked, OperationState::Unlinking),
+        let action = match request {
+            PortosOperationV2::Link { .. } => Action::Link,
+            PortosOperationV2::Unlink { .. } => Action::Unlink,
         };
-        let accepted = self.0.send_if_modified(|state| {
-            if state.api_key
-                || state.snapshot.link_status != required
-                || matches!(
-                    state.snapshot.operation_state,
-                    OperationState::Linking | OperationState::Unlinking
-                )
-            {
-                return false;
-            }
-            state.snapshot.operation_state = active;
-            state.queued = Some(action);
-            true
-        });
-        if accepted {
+        if self.enqueue(action, false) {
             SettingsReply::AccountStarted(PortosOperationStartedV2 {
                 version: SettingsVersionV2,
                 operation: action,
@@ -89,6 +92,86 @@ impl Account {
                 message: "OpenAI account operation is unavailable in the current state".into(),
             })
         }
+    }
+
+    pub(crate) fn relink_start(&self) -> bool {
+        self.enqueue(Action::Link, true)
+    }
+
+    fn enqueue(&self, action: Action, recovery_only: bool) -> bool {
+        let (required, active) = match action {
+            Action::Link => (LinkStatus::LinkRequired, OperationState::Linking),
+            Action::Unlink => (LinkStatus::Linked, OperationState::Unlinking),
+        };
+        self.0.send_if_modified(|state| {
+            if state.api_key
+                || state.snapshot.link_status != required
+                || (recovery_only && state.recovery.is_none())
+                || state.recovery.as_ref().is_some_and(|recovery| recovery.checking)
+                || matches!(
+                    state.snapshot.operation_state,
+                    OperationState::Linking | OperationState::Unlinking
+                )
+            {
+                return false;
+            }
+            state.attempt = state.attempt.wrapping_add(1);
+            state.snapshot.operation_state = active;
+            state.queued = Some(action);
+            let _ = self.project(state);
+            true
+        })
+    }
+
+    /// The voice owner calls this only for the ChatGPT admission latch.
+    pub(crate) fn relink(&self, required: bool) -> Result<(), Error> {
+        let mut result = Ok(());
+        self.0.send_if_modified(|state| {
+            if required {
+                state.snapshot.link_status = LinkStatus::LinkRequired;
+                let recovery = state.recovery.get_or_insert(Recovery {
+                    message: RELINK,
+                    checking: false,
+                });
+                if recovery.checking {
+                    recovery.message = "ChatGPT still needs sign-in. Relink to try again.";
+                    recovery.checking = false;
+                }
+            } else if state.recovery.take().is_none() {
+                return false;
+            }
+            result = self.project(state);
+            true
+        });
+        result
+    }
+
+    fn project(&self, state: &State) -> Result<(), Error> {
+        self.1.openai(state.recovery.as_ref().map(|recovery| {
+            if let Some(challenge) = &state.snapshot.challenge {
+                UiState::OpenAiSignin {
+                    attempt_id: format!("attempt-{}", state.attempt),
+                    user_code: challenge.user_code.clone(),
+                    verification_uri: challenge.verification_uri.clone(),
+                    expires_at_unix: challenge.expires_at_unix,
+                    muted: false,
+                }
+            } else {
+                let linking = state.snapshot.operation_state == OperationState::Linking;
+                let message = if linking {
+                    "Getting a ChatGPT sign-in code…"
+                } else if recovery.checking {
+                    "Checking ChatGPT sign-in…"
+                } else {
+                    recovery.message
+                };
+                UiState::OpenAiRelink {
+                    message: message.into(),
+                    starting: linking || recovery.checking,
+                    muted: false,
+                }
+            }
+        }))
     }
 
     pub async fn scope<T>(&self, future: impl Future<Output = T>) -> T {
@@ -107,40 +190,47 @@ impl Account {
         signed_out: bool,
     ) -> bool {
         use super::settings_restart::replacement_requested;
-        tokio::select! {
-            biased;
-            () = cancelled.as_mut() => return false,
-            () = replacement_requested() => return false,
-            () = self.requested() => (),
-            () = std::future::ready(()), if !signed_out => return false,
-        }
-        let stopping = Cell::new(false);
-        self.operate(host, async {
+        loop {
             tokio::select! {
-                () = cancelled => (),
-                () = replacement_requested() => (),
+                biased;
+                () = cancelled.as_mut() => return false,
+                () = replacement_requested() => return false,
+                () = self.requested() => (),
+                () = std::future::ready(()), if !signed_out => return false,
             }
-            stopping.set(true);
-        })
-        .await;
-        !stopping.get()
+            let stopping = Cell::new(false);
+            let readmit = self
+                .operate(host, async {
+                    tokio::select! {
+                        () = cancelled.as_mut() => (),
+                        () = replacement_requested() => (),
+                    }
+                    stopping.set(true);
+                })
+                .await;
+            if stopping.get() || readmit {
+                return !stopping.get();
+            }
+        }
     }
 
-    #[allow(clippy::disallowed_methods, reason = "Existing host time")]
-    async fn operate(&self, host: &HostOptions<'_>, cancelled: impl Future<Output = ()>) {
+    async fn operate(&self, host: &HostOptions<'_>, cancelled: impl Future<Output = ()>) -> bool {
         let mut action = None;
         self.0.send_if_modified(|state| {
             action = state.queued.take();
             action.is_some()
         });
-        let Some(action) = action else { return };
+        let Some(action) = action else { return false };
         let command = match action {
             Action::Link => OperatorCommand::Signin { browser: false },
             Action::Unlink => OperatorCommand::Signout,
         };
+        if action == Action::Link {
+            self.event("auth.signin_started", None);
+        }
         let result = screen_account(host, command, cancelled, |prompt, remaining| {
             let code = prompt.code.as_ref().ok_or(AccountError::InvalidResponse)?;
-            let expires_at_unix = (SystemTime::now() + remaining)
+            let expires_at_unix = (crate::bridge_time::now() + remaining)
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map_err(|_| AccountError::Output)?
                 .as_secs();
@@ -150,15 +240,32 @@ impl Account {
                     user_code: code.clone(),
                     expires_at_unix,
                 });
+                let _ = self.project(state);
             });
             Ok(())
         })
         .await;
+        self.settle(action, result)
+    }
+
+    fn settle(&self, action: Action, result: Result<(), Error>) -> bool {
+        let mut readmit = true;
         self.0.send_modify(|state| {
             state.snapshot.challenge = None;
+            if let Some(recovery) = &mut state.recovery {
+                recovery.checking = result.is_ok();
+                recovery.message = match result {
+                    Ok(()) => RELINK,
+                    Err(Error::Deadline) => "ChatGPT sign-in code expired. Relink for a new code.",
+                    Err(Error::Authorization) => "ChatGPT sign-in was rejected. Relink to try again.",
+                    Err(_) => "ChatGPT sign-in is unavailable. Relink to try again.",
+                };
+                readmit = recovery.checking;
+            }
             state.snapshot.operation_state = match result {
                 Ok(()) => {
                     state.snapshot.link_status = match action {
+                        Action::Link if state.recovery.is_some() => LinkStatus::Checking,
                         Action::Link => LinkStatus::Linked,
                         Action::Unlink => LinkStatus::LinkRequired,
                     };
@@ -167,8 +274,28 @@ impl Account {
                 Err(Error::Deadline) => OperationState::Expired,
                 Err(_) => OperationState::Failed,
             };
+            let _ = self.project(state);
         });
+        if action == Action::Link {
+            match result {
+                Ok(()) => self.event("auth.signin_completed", None),
+                Err(Error::Deadline) => self.event("auth.signin_expired", None),
+                Err(Error::Authorization) => self.event("auth.signin_failed", Some("authorization")),
+                Err(Error::Control) => self.event("auth.signin_failed", Some("cancelled")),
+                Err(_) => self.event("auth.signin_failed", Some("unavailable")),
+            }
+        }
+        readmit
     }
+
+    fn event(&self, event: &str, reason: Option<&str>) {
+        let fields = reason.map_or_else(|| serde_json::json!({}), |reason| serde_json::json!({"reason":reason}));
+        let _ = self.2.clone().record(event, None, fields);
+    }
+}
+
+pub(crate) fn owns_relink() -> bool {
+    CURRENT.try_with(|account| !account.0.borrow().api_key).unwrap_or(false)
 }
 
 /// Status comes from the same account read that admits the voice generation.

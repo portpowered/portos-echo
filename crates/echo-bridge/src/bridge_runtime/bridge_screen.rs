@@ -1,6 +1,7 @@
 //! The bridge owns screen lifetime and publishes bounded activity updates.
 use crate::bridge_mcp::bridge_presentation::Presentation;
 use crate::bridge_runtime::bridge_pacing::reply_lips::Lips;
+use crate::bridge_settings::openai_account::Account;
 use crate::{Error, bridge_input::loopback, bridge_trace::Trace};
 use echo_config::ScreenConfig;
 use echo_contracts::secret::Secret;
@@ -214,7 +215,11 @@ impl Screen {
         ))
     }
 
-    pub fn supervise_actions(&mut self, health: tokio::sync::watch::Receiver<crate::bridge_health::Links>) {
+    pub fn supervise_actions(
+        &mut self,
+        health: tokio::sync::watch::Receiver<crate::bridge_health::Links>,
+        account: Option<Account>,
+    ) {
         let Some(server) = &mut self.server else {
             return;
         };
@@ -257,15 +262,20 @@ impl Screen {
                         }
                     } => continue,
                 };
-                if !mute.lock().map_or(true, |mute| mute.muted) && approvals.answer(&action).is_err() {
+                let muted = mute.lock().map_or(true, |mute| mute.muted);
+                if !muted && approvals.answer(&action).is_err() {
                     break;
                 }
                 if action == echo_screen_contract::UiAction::Relink {
-                    // This is an instruction, never an implicit sign-in request.
-                    if mute.lock().map_or(true, |mute| mute.muted) {
-                        continue;
-                    }
-                    let result = if health.borrow().relink_required {
+                    let result = if let Some(account) = &account {
+                        if account.relink_start() {
+                            Ok(())
+                        } else {
+                            presentation.refresh()
+                        }
+                    } else if muted {
+                        Ok(())
+                    } else if health.borrow().relink_required {
                         presentation.publish(failure_state(true))
                     } else {
                         presentation.refresh()

@@ -17,13 +17,21 @@ pub(crate) struct Presentation {
 struct Projection {
     activity: UiState,
     overlay: Option<UiState>,
+    openai: Option<UiState>,
     muted: bool,
     emotion: Option<(UiState, Instant)>,
 }
 
 impl Projection {
     fn visible(&self) -> UiState {
-        if self.muted {
+        if let Some(recovery) = &self.openai {
+            let mut state = recovery.clone();
+            match &mut state {
+                UiState::OpenAiRelink { muted, .. } | UiState::OpenAiSignin { muted, .. } => *muted = self.muted,
+                _ => (),
+            }
+            state
+        } else if self.muted {
             UiState::Muted
         } else if let Some(overlay) = &self.overlay {
             overlay.clone()
@@ -46,6 +54,7 @@ impl Presentation {
                     message: "Ready".into(),
                 },
                 overlay: None,
+                openai: None,
                 muted: false,
                 emotion: None,
             })),
@@ -65,7 +74,7 @@ impl Presentation {
             return Ok(());
         }
         current.activity = UiState::Thinking;
-        if current.overlay.is_none() && current.emotion.is_none() {
+        if current.openai.is_none() && current.overlay.is_none() && current.emotion.is_none() {
             self.send(UiState::Thinking)?;
         }
         Ok(())
@@ -90,6 +99,16 @@ impl Presentation {
         self.send(current.visible())
     }
 
+    pub(crate) fn openai(&self, state: Option<UiState>) -> Result<(), Error> {
+        let mut current = self.current.lock().map_err(|_| Error::Screen)?;
+        if current.openai == state {
+            return Ok(());
+        }
+        current.openai = state;
+        current.emotion = None;
+        self.send(current.visible())
+    }
+
     pub(crate) fn clear_approval(&self, id: &str) -> Result<(), Error> {
         let mut current = self.current.lock().map_err(|_| Error::Screen)?;
         if matches!(&current.overlay, Some(UiState::Approval { id: active, .. }) if active == id) {
@@ -101,7 +120,7 @@ impl Presentation {
 
     pub(crate) fn approval(&self, state: UiState) -> Result<(), Error> {
         let mut current = self.current.lock().map_err(|_| Error::Screen)?;
-        if current.muted || current.overlay.is_some() {
+        if current.muted || current.openai.is_some() || current.overlay.is_some() {
             return Err(Error::Screen);
         }
         current.overlay = Some(state);
@@ -180,7 +199,10 @@ impl Presentation {
 
     fn send(&self, state: UiState) -> Result<(), Error> {
         if let Some(states) = &self.states {
-            let projected = self.clock.as_ref().map(|_| state.clone());
+            let projected = self
+                .clock
+                .as_ref()
+                .and_then(|_| (!matches!(state, UiState::OpenAiSignin { .. })).then(|| state.clone()));
             states.try_send(state).map_err(|_| Error::Screen)?;
             if let (Some(clock), Some(projected)) = (&self.clock, projected) {
                 clock.projected(&projected)?;

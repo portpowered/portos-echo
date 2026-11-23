@@ -74,6 +74,38 @@
       "required": [
         "action"
       ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "const": "cancel_open_ai_signin"
+        },
+        "attempt_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "attempt_id"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "const": "renew_open_ai_signin"
+        },
+        "attempt_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "attempt_id"
+      ]
     }
   ]
 }

@@ -36,6 +36,12 @@ section {
     overflow: auto;
     min-height: 0;
 }
+.openai-code {
+    margin-block: 0.25em;
+    font-size: 56px;
+    font-weight: 700;
+    user-select: text;
+}
 .controls {
     display: flex;
     gap: 24px;

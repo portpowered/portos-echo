@@ -8,6 +8,8 @@ mod restart;
 mod restart_muse;
 #[path = "configured/restart_v2.rs"]
 mod restart_v2;
+#[path = "configured/screen_signin.rs"]
+mod screen_signin;
 mod startup;
 #[path = "configured/turn.rs"]
 mod turn;

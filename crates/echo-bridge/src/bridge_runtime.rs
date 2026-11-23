@@ -148,7 +148,7 @@ async fn execute_controlled_in<C: LinkConnector>(
     screen.download_packs(settings.config.as_ref(), &trace);
     screen.settings_warning(settings.settings_warning.as_deref(), &mut trace)?;
     let health = Health::bind(settings.health).await?;
-    screen.supervise_actions(health.state.subscribe());
+    screen.supervise_actions(health.state.subscribe(), None);
     trace.record(
         "bridge.started",
         None,

@@ -52,6 +52,20 @@ pub enum UiState {
     },
     /// Failure presentation, optionally offering relinking.
     Error { message: String, relink: bool },
+    /// An explicit OpenAI recovery is available or preparing a challenge.
+    OpenAiRelink {
+        message: String,
+        starting: bool,
+        muted: bool,
+    },
+    /// The current ChatGPT device-code challenge.
+    OpenAiSignin {
+        attempt_id: String,
+        user_code: String,
+        verification_uri: String,
+        expires_at_unix: u64,
+        muted: bool,
+    },
 }
 
 /// An ordered presentation. Sequence lifecycle is owned by the screen server.
@@ -71,6 +85,8 @@ pub enum UiAction {
     Deny { id: String },
     Relink,
     Dismiss,
+    CancelOpenAiSignin { attempt_id: String },
+    RenewOpenAiSignin { attempt_id: String },
 }
 
 #[cfg(test)]

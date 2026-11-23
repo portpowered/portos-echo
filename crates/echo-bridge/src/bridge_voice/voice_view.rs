@@ -1,6 +1,7 @@
 //! Project only service facts, never transcript bodies or provider payloads.
 use super::voice_wait::run_marks::MarkFields;
 use super::{BargeTrigger, Notice, ServeNotice, SessionNotice, Stats};
+use crate::bridge_settings::openai_account::Account;
 use crate::{Error, bridge_health::Health, bridge_runtime::bridge_screen::Screen, bridge_trace::Trace};
 use echo_screen_contract::UiState;
 use serde_json::json;
@@ -36,7 +37,7 @@ pub(super) struct View<'a> {
     pending_connected: bool,
     mouth: MouthActivity,
     startup: Startup,
-    account_relink: Option<&'static str>,
+    account: Option<Account>,
 }
 
 impl<'a> View<'a> {
@@ -85,23 +86,22 @@ impl<'a> View<'a> {
             pending_connected: false,
             mouth: MouthActivity::AwaitingReady,
             startup: Startup::Pending,
-            account_relink: None,
+            account: None,
         }
     }
 
-    pub(super) fn with_screen_account(mut self, enabled: bool) -> Self {
-        self.account_relink = enabled.then_some("Open Settings and link OpenAI under Accounts.");
+    pub(super) fn with_screen_account(mut self, account: Option<Account>) -> Self {
+        self.account = account;
         self
     }
 
-    fn failure_state(&self, relink: bool) -> UiState {
-        if relink && let Some(message) = self.account_relink {
-            UiState::Error {
-                message: message.into(),
-                relink: true,
-            }
+    fn show_relink(&self) -> Result<(), Error> {
+        if let Some(account) = &self.account {
+            account.relink(true)
         } else {
-            crate::bridge_runtime::bridge_screen::failure_state(relink)
+            self.screen
+                .presentation
+                .overlay(Some(crate::bridge_runtime::bridge_screen::failure_state(true)))
         }
     }
 
@@ -373,10 +373,11 @@ impl<'a> View<'a> {
 
     /// A recovered generation withdraws a relink instruction it no longer needs.
     fn relinked(&mut self) -> Result<(), Error> {
-        // Health is the one record of a relink this view asked for.
         if self.health.state.borrow().relink_required {
             self.health.state.send_modify(|state| state.relink_required = false);
-            if !self.health.state.borrow().kill_switch {
+            if let Some(account) = &self.account {
+                account.relink(false)?;
+            } else if !self.health.state.borrow().kill_switch {
                 self.screen.presentation.overlay(None)?;
             }
         }
@@ -388,7 +389,8 @@ impl<'a> View<'a> {
     pub fn recovering(&mut self, error: &Error, retry: (u32, std::time::Duration), linked: bool) -> Result<(), Error> {
         let run = self.run.take();
         self.closed("failed")?;
-        let relink = *error == Error::Authorization;
+        let authorization = *error == Error::Authorization;
+        let relink = authorization || (self.account.is_some() && self.health.state.borrow().relink_required);
         if !relink {
             self.relinked()?;
         }
@@ -401,11 +403,11 @@ impl<'a> View<'a> {
                 state.wyoming = "connecting";
             }
         });
-        let state = self.failure_state(relink);
-        if relink {
-            self.screen.presentation.overlay(Some(state))?;
-        } else {
-            self.screen.publish(state)?;
+        if authorization {
+            self.show_relink()?;
+        } else if !relink {
+            self.screen
+                .publish(crate::bridge_runtime::bridge_screen::failure_state(false))?;
         }
         self.trace.record(
             "bridge.recovering",
@@ -422,12 +424,13 @@ impl<'a> View<'a> {
             state.relink_required = relink;
             state.startup_waiting_reason = None;
         });
-        let state = self.failure_state(relink);
         if relink {
-            self.screen.presentation.overlay(Some(state))?;
+            self.show_relink()?;
             self.screen.flush().await?;
         } else {
-            self.screen.publish_confirmed(state).await?;
+            self.screen
+                .publish_confirmed(crate::bridge_runtime::bridge_screen::failure_state(false))
+                .await?;
         }
         self.trace.record(
             if relink { "auth.relink_required" } else { "bridge.error" },

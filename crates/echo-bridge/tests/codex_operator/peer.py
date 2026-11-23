@@ -21,6 +21,11 @@ home.joinpath("routing.json").write_text(json.dumps({
     "config": overrides, "proxy": {key: os.environ[key] for key in routing_keys if key in os.environ}}))
 assert "OPENAI_API_KEY" not in os.environ
 assert "OPENAI_ACCESS_TOKEN" not in os.environ
+screen_recovery = home.joinpath("mode").read_text() == "screen-recovery"
+if screen_recovery and home.joinpath("peer-pid").exists():
+    # Linux leaves an exited but unreaped process in /proc.
+    previous = int(home.joinpath("peer-pid").read_text())
+    assert not pathlib.Path(f"/proc/{previous}").exists()
 control = socket.socket()
 control.bind(("127.0.0.1", 0))
 control.listen(1)
@@ -141,7 +146,10 @@ for line in sys.stdin:
         assert kind in ("chatgptDeviceCode", "chatgpt")
         result = {"type": kind, "loginId": "local-login"}
         if kind == "chatgptDeviceCode":
-            result.update(verificationUrl="http://127.0.0.1:12345/verify", userCode="TEST-CODE")
+            uri = "https://example.invalid/verify" if screen_recovery else "http://127.0.0.1:12345/verify"
+            result.update(verificationUrl=uri, userCode="TEST-CODE")
+        if screen_recovery:
+            home.joinpath("login-type").write_text(kind)
         else:
             result.update(authUrl="http://127.0.0.1:12345/authorize")
         emit({"id": request["id"], "result": result})
@@ -152,14 +160,14 @@ for line in sys.stdin:
             outcome = connection.recv(64)
         if outcome == b"eof":
             break
-        success = outcome == b"success"
-        if success:
+        success = outcome in (b"success", b"success-no-account")
+        if outcome == b"success":
             home.joinpath("auth.json").write_bytes(b'{"synthetic":"local-only"}\n')
         emit({"method": "account/login/completed", "params": {
             "loginId": "local-login", "success": success, "error": "synthetic private error"}})
     elif method == "account/logout":
         assert request.get("params") is None
-        assert home.joinpath("mode").read_text() == "screen-account"
+        assert home.joinpath("mode").read_text() in ("screen-account", "screen-recovery")
         home.joinpath("auth.json").unlink()
         emit({"id": request["id"], "result": {}})
     elif method == "account/read":
@@ -196,7 +204,7 @@ for line in sys.stdin:
             continue
         account = {"type": "apiKey"} if mode == "api_key" else {
             "type": "chatgpt", "email": "synthetic@example.invalid", "planType": "synthetic"}
-        if mode == "signed-out" or (mode == "screen-account" and not home.joinpath("auth.json").is_file()):
+        if mode == "signed-out" or (mode in ("screen-account", "screen-recovery") and not home.joinpath("auth.json").is_file()):
             account = None
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
     elif method == "thread/realtime/listVoices":

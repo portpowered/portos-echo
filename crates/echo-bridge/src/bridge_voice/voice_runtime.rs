@@ -169,8 +169,6 @@ impl<'a> SettingsLink<'a> {
 /// # Errors
 /// A stop that was not requested, the kill path, and configuration or
 /// credentials that are unusable before first readiness, in fixed categories.
-/// A startup authorization failure publishes the existing relink instruction
-/// and keeps the screen available until cancellation; no implicit login occurs.
 pub async fn execute<C: LinkConnector, P: MediaPeer>(
     options: RuntimeOptions<'_>,
     connector: C,
@@ -239,7 +237,11 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
             return Err(error);
         }
     };
-    screen.supervise_actions(health.state.subscribe());
+    let account = service
+        .as_ref()
+        .map(|_| Account::new(options.host.mode, screen.presentation.clone(), trace.clone()));
+    let recovery = account.clone().filter(|_| options.host.mode == LiveMode::Chatgpt);
+    screen.supervise_actions(health.state.subscribe(), recovery.clone());
     let settings_trace = trace.clone();
     let world = trace.world();
     if let Some(config) = options.delegation {
@@ -248,10 +250,8 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
             local_cut: config.voice.local_barge_cut,
         })?;
     }
-    let mut view = View::new(&screen, &health, &mut trace)
-        .with_screen_account(service.is_some() && options.host.mode == LiveMode::Chatgpt);
+    let mut view = View::new(&screen, &health, &mut trace).with_screen_account(recovery);
     let requested = Cell::new(false);
-    let account = service.as_ref().map(|_| Account::new(options.host.mode));
     let local_muse = options.host.routes.is_some();
     let mut link = SettingsLink::new(
         options.delegation,

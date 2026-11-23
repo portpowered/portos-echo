@@ -472,12 +472,10 @@ async fn link_openai(fixture: &Fixture, client: &reqwest::Client, url: &reqwest:
     );
     let value = wait_account(client, url, |state| state.get("challenge").is_some()).await;
     assert_eq!(value["operation_state"], "linking");
-    let expires = value["challenge"]["expires_at_unix"].as_u64().unwrap();
-    assert!((295..=300).contains(&(expires - std::time::UNIX_EPOCH.elapsed().unwrap().as_secs())));
     assert_eq!(
         value["challenge"],
         json!({
-            "verification_uri":"http://127.0.0.1:12345/verify","user_code":"TEST-CODE","expires_at_unix":expires
+            "verification_uri":"http://127.0.0.1:12345/verify","user_code":"TEST-CODE","expires_at_unix":1_800_000_300_u64
         })
     );
     assert_eq!(start().send().await.unwrap().status(), reqwest::StatusCode::CONFLICT);

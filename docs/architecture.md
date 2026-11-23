@@ -1170,8 +1170,13 @@ app-server configuration and screen page.
 
 #### Limits and plans — Authentication
 
-Auth failure requires relink, not automatic interactive sign-in. W4 moves private stores to the Echo's
-bridge user; screen-app exclusion still needs device proof. No real credential is used to validate this page.
+When the Settings account owner is mounted, an explicit Relink on the paired
+screen requests sign-in and shows the active device-code challenge. The bridge
+settles each app-server child before another opens the same private home.
+Matching completion is followed by an account read and normal voice admission
+in the same bridge process. The ready signal clears the relink latch.
+W4 moves private stores to the Echo's bridge user.
+The coordinator owns device proof of screen-app exclusion.
 
 ### Screen and mouth state
 

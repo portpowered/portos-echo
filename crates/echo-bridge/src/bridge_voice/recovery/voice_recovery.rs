@@ -99,6 +99,9 @@ pub(super) async fn supervise<C: LinkConnector>(
         ever_ready |= round.ready.is_some();
         let stopped = stage.requested() || round.killed;
         let error = match round.result {
+            Err(Error::Authorization) if crate::bridge_settings::openai_account::owns_relink() => {
+                break Err(Error::Authorization);
+            }
             Err(error) if !terminal(&error, ever_ready, stopped) => error,
             result => break result,
         };
