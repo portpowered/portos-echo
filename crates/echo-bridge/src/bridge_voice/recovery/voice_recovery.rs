@@ -10,6 +10,14 @@ use tokio::time::Instant;
 const FIRST_DELAY: Duration = Duration::from_secs(1);
 pub(super) const DELAY_CAP: Duration = Duration::from_secs(60);
 
+pub(super) async fn stopped(mut stopping: tokio::sync::watch::Receiver<bool>) {
+    loop {
+        if *stopping.borrow_and_update() || stopping.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
 /// 1 s doubling to the 60 s cap per consecutive failed generation.
 #[derive(Default)]
 pub(super) struct Backoff {

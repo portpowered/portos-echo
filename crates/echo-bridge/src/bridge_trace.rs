@@ -39,13 +39,13 @@
 //! milliseconds on the bridge clock from the endpoint to the first reply frame
 //! handed to the Echo, and `endpoint` is `user_transcript` or `delegated_turn`,
 //! the Live session's first sign that the user's turn was over.
-use crate::Error;
-use serde_json::{Map, Value};
+use crate::{Error, bridge_world::Controller};
+use echo_core_api::{PendingTrace, TraceRow};
+use echo_svc_trace::Writer;
+use serde_json::Value;
 use std::{
-    fs::{File, OpenOptions},
-    io::Write,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, mpsc::sync_channel},
 };
 use tokio::time::Instant;
 mod delegation_payload;
@@ -56,28 +56,83 @@ pub(crate) use tool_receipts::{PortosReceipts, ToolTrace};
 
 #[derive(Clone)]
 pub struct Trace {
-    writer: Arc<Mutex<File>>,
+    owner: Arc<Owner>,
     started: Instant,
     mode: &'static str,
-    active_run: Arc<Mutex<Option<String>>>,
     payloads: bool,
+}
+
+struct Owner {
+    world: Arc<Controller>,
+    writer: Arc<Writer>,
+    ticker: Option<tokio::task::JoinHandle<()>>,
+    tick_needed: Arc<tokio::sync::Notify>,
+}
+
+impl Owner {
+    fn finish(&self) -> Result<(), Error> {
+        self.world.close_trace();
+        if let Some(ticker) = &self.ticker {
+            ticker.abort();
+        }
+        self.writer.finish().map_err(|_| Error::Trace)
+    }
+}
+
+impl Drop for Owner {
+    fn drop(&mut self) {
+        let _ = self.finish();
+    }
+}
+
+fn ticker(
+    world: Arc<Controller>,
+    writer: &Arc<Writer>,
+    tick_needed: Arc<tokio::sync::Notify>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let handle = tokio::runtime::Handle::try_current().ok()?;
+    let writer = Arc::downgrade(writer);
+    Some(handle.spawn(async move {
+        loop {
+            tick_needed.notified().await;
+            if let Some(deadline) = world.trace_deadline() {
+                tokio::time::sleep_until(deadline).await;
+                let Some(writer) = writer.upgrade() else { break };
+                if world.trace_tick() {
+                    writer.wake();
+                }
+            }
+        }
+    }))
 }
 
 impl Trace {
     /// # Errors
     /// Returns a safe I/O category; paths never enter diagnostics.
     pub fn open(path: &Path, mode: &'static str) -> Result<Self, Error> {
-        let mut options = OpenOptions::new();
-        let writer = crate::bridge_private::file(options.create(true).append(true))
-            .open(path)
-            .map_err(|_| Error::Trace)?;
+        Self::open_in(path, mode, Controller::new())
+    }
+
+    pub(crate) fn open_in(path: &Path, mode: &'static str, world: Arc<Controller>) -> Result<Self, Error> {
+        let writer = Arc::new(Writer::open(path, world.clone()).map_err(|_| Error::Trace)?);
+        let started = Instant::now();
+        let tick_needed = Arc::new(tokio::sync::Notify::new());
+        let ticker = ticker(world.clone(), &writer, tick_needed.clone());
         Ok(Self {
-            writer: Arc::new(Mutex::new(writer)),
-            started: Instant::now(),
+            owner: Arc::new(Owner {
+                writer,
+                world,
+                ticker,
+                tick_needed,
+            }),
+            started,
             mode,
-            active_run: Arc::default(),
             payloads: true,
         })
+    }
+
+    pub(crate) fn finish(&self) -> Result<(), Error> {
+        self.owner.finish()
     }
 
     pub(crate) fn with_payloads(mut self, payloads: bool) -> Self {
@@ -86,12 +141,11 @@ impl Trace {
     }
 
     pub(crate) fn current_run(&self) -> Result<Option<String>, Error> {
-        Ok(self.active_run.lock().map_err(|_| Error::Trace)?.clone())
+        self.owner.world.current_run()
     }
 
     pub(crate) fn tool_run(&self, run: Option<&str>) -> Result<(), Error> {
-        *self.active_run.lock().map_err(|_| Error::Trace)? = run.map(str::to_owned);
-        Ok(())
+        self.owner.world.set_run(run)
     }
 
     /// Callers supply authored event names and safe metadata. Delegation payload
@@ -99,45 +153,58 @@ impl Trace {
     /// # Errors
     /// A serialization/write/flush failure prevents claiming completion.
     pub fn record(&mut self, event: &str, run: Option<&str>, fields: Value) -> Result<(), Error> {
-        let mut writer = self.writer.lock().map_err(|_| Error::Trace)?;
-        let mut entry = Map::new();
-        entry.insert("event".into(), event.into());
-        entry.insert(
-            "elapsed_ms".into(),
-            u64::try_from(self.started.elapsed().as_millis())
-                .unwrap_or(u64::MAX)
-                .into(),
-        );
-        entry.insert("provider_auth_mode".into(), self.mode.into());
-        if let Some(run) = run {
-            entry.insert("run_id".into(), run.into());
-        }
-        if let Value::Object(mut fields) = fields {
-            if delegation_payload::event(event) {
-                delegation_payload::prepare(
-                    &mut fields,
-                    self.payloads && !crate::bridge_endpoint::remote_start::remote(),
-                )?;
-            }
-            entry.extend(fields);
-        }
-        if delegation_payload::event(event) && !delegation_payload::metadata_fits(&entry)? {
-            return Err(Error::Trace);
-        }
-        let bytes = serde_json::to_vec(&entry).map_err(|_| Error::Trace)?;
-        let limit = if delegation_payload::event(event) {
-            2 * 65536 + 4096
+        let (receipt, completion) = sync_channel(1);
+        self.enqueue(PendingTrace {
+            row: self.row(event, run, fields)?,
+            receipt: Some(receipt),
+        })?;
+        completion.recv().map_err(|_| Error::Trace)?.map_err(|_| Error::Trace)
+    }
+
+    /// Periodic clock diagnostics have no dependent effect or completion receipt.
+    pub(crate) fn buffer_clock_offset(&self, fields: Value) -> Result<(), Error> {
+        self.enqueue(PendingTrace {
+            row: self.row("clock.offset", None, fields)?,
+            receipt: None,
+        })
+    }
+
+    fn enqueue(&self, pending: PendingTrace) -> Result<(), Error> {
+        if self.owner.world.enqueue(pending, self.started)? {
+            self.owner.writer.wake();
+        } else if self.owner.ticker.is_some() {
+            self.owner.tick_needed.notify_one();
         } else {
-            4096
-        };
-        if bytes.len() > limit {
-            return Err(Error::Trace);
+            self.owner.writer.wake();
         }
-        writer
-            .write_all(&bytes)
-            .and_then(|()| writer.write_all(b"\n"))
-            .and_then(|()| writer.flush())
-            .map_err(|_| Error::Trace)
+        Ok(())
+    }
+
+    fn row(&self, event: &str, run: Option<&str>, fields: Value) -> Result<TraceRow, Error> {
+        let delegation = delegation_payload::event(event);
+        let mut fields = match fields {
+            Value::Object(fields) => fields,
+            _ => serde_json::Map::new(),
+        };
+        if delegation {
+            delegation_payload::prepare(
+                &mut fields,
+                self.payloads && !crate::bridge_endpoint::remote_start::remote(),
+            )?;
+        }
+        Ok(TraceRow {
+            event: event.to_owned(),
+            elapsed_ms: 0,
+            mode: self.mode,
+            run: run.map(str::to_owned),
+            fields,
+            payload_fields: if delegation { &delegation_payload::FIELDS } else { &[] },
+            limit: if delegation {
+                2 * delegation_payload::CAP + 4096
+            } else {
+                4096
+            },
+        })
     }
 }
 
@@ -203,22 +270,43 @@ mod bridge_spine_tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn bridge_trace_a_lone_buffered_row_drains_at_the_paused_tick() {
+        use echo_core_api::{Clock, SystemClock};
+        use std::time::Duration;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace");
+        let trace = Trace::open(&path, "api_key").unwrap();
+        trace
+            .buffer_clock_offset(json!({"synced":false,"reason":"unreachable"}))
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+        tokio::time::advance(echo_sub_trace::TICK).await;
+        tokio::task::yield_now().await;
+        let deadline = SystemClock.now().monotonic + Duration::from_secs(2);
+        let expected = b"{\"elapsed_ms\":0,\"event\":\"clock.offset\",\"provider_auth_mode\":\"api_key\",\"reason\":\"unreachable\",\"synced\":false}\n";
+        loop {
+            if std::fs::read(&path).unwrap() == expected {
+                break;
+            }
+            assert!(
+                SystemClock.now().monotonic < deadline,
+                "row was not flushed on the first trace tick"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(trace.started.elapsed(), echo_sub_trace::TICK);
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
-    fn bridge_spine_trace_write_failure_is_sanitized_and_keeps_existing_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("trace");
-        std::fs::write(&path, b"prior record\n").unwrap();
-        let mut trace = Trace {
-            writer: Arc::new(Mutex::new(File::open(&path).unwrap())), // Read-only sink injects an actual write error.
-            started: Instant::now(),
-            mode: "chatgpt",
-            active_run: Arc::default(),
-            payloads: true,
-        };
+    fn bridge_spine_trace_write_failure_is_sanitized() {
+        let mut trace = Trace::open(Path::new("/dev/full"), "chatgpt").unwrap();
         let error = trace.record("run.started", Some("run-1"), json!({})).unwrap_err();
         assert_eq!(error, Error::Trace);
         assert_eq!(error.to_string(), "trace");
-        assert_eq!(std::fs::read(path).unwrap(), b"prior record\n");
     }
 
     #[test]

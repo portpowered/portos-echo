@@ -94,7 +94,7 @@ struct Reporter {
 impl Reporter {
     /// Adopt a good measurement, trace it, and say whether it was one.
     #[allow(clippy::disallowed_methods, reason = "Existing host time")]
-    fn observe(&mut self, outcome: Outcome) -> bool {
+    fn observe(&mut self, outcome: Outcome, startup: bool) -> bool {
         let fields = match outcome {
             Outcome::Synced { offset_ms, hosts } => {
                 if let Ok(mut anchor) = ANCHOR.lock() {
@@ -114,7 +114,11 @@ impl Reporter {
             fields.insert("servers".into(), self.servers.into());
             fields.insert("corrected".into(), corrected.into());
             // The trace is evidence only: a full disk must not take the bridge down.
-            let _ = trace.record("clock.offset", None, fields.into());
+            if startup || !self.unsynced {
+                let _ = trace.record("clock.offset", None, fields.into());
+            } else {
+                let _ = trace.buffer_clock_offset(fields.into());
+            }
         }
         !self.unsynced
     }
@@ -137,11 +141,11 @@ pub(crate) async fn start(servers: Vec<String>, interval: Duration, trace: Optio
             reason: "timeout",
             answered: 0,
         });
-    let mut synced = reporter.observe(first);
+    let mut synced = reporter.observe(first, true);
     Watch(Some(tokio::spawn(async move {
         loop {
             tokio::time::sleep(if synced { interval } else { RETRY.min(interval) }).await;
-            synced = reporter.observe(sntp::measure(&servers, QUERY_TIMEOUT).await);
+            synced = reporter.observe(sntp::measure(&servers, QUERY_TIMEOUT).await, false);
         }
     })))
 }

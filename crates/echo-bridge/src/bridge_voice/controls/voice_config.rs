@@ -24,6 +24,7 @@ pub struct Configured {
     startup: Option<Box<EffectiveConfig>>,
     settings_restart_allowed: bool,
     time_servers: Vec<String>,
+    world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
 }
 
 impl Configured {
@@ -57,6 +58,7 @@ impl Configured {
             settings_warning: None,
             startup: None,
             settings_restart_allowed: true,
+            world: None,
             utc_day: std::sync::Arc::new(|| {
                 crate::bridge_time::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -130,6 +132,10 @@ impl Configured {
         self
     }
 
+    pub(super) fn set_world(&mut self, world: Option<std::sync::Arc<crate::bridge_world::Controller>>) {
+        self.world = world;
+    }
+
     /// Run configured voice ownership with caller-owned tools and media factory.
     /// The executable's connector/factory and controlled component ports share
     /// this boundary. Authentication always precedes device admission.
@@ -138,7 +144,7 @@ impl Configured {
     pub async fn execute<C: LinkConnector, P: MediaPeer>(
         self,
         connector: C,
-        peer: impl AsyncFnMut() -> Result<P, Error>,
+        mut peer: impl AsyncFnMut() -> Result<P, Error>,
         tools: Vec<DynamicTool>,
         cancelled: impl Future<Output = ()>,
     ) -> Result<(), Error> {
@@ -148,8 +154,17 @@ impl Configured {
                 let api_key = self.api_key()?;
                 let _time = self.watch_time().await;
                 let options = self.options(api_key.as_ref(), tools);
-                super::voice_wait::run_marks::scope(self.knobs(), super::execute(options, connector, peer, cancelled))
+                let work = super::voice_runtime::execute_owned(
+                    options,
+                    connector,
+                    &mut peer,
+                    cancelled,
+                    None,
+                    self.world.clone(),
+                );
+                super::voice_wait::run_marks::scope(self.knobs(), work)
                     .await
+                    .map(|_| ())
             },
         ))
         .await
@@ -181,7 +196,7 @@ impl Configured {
     pub async fn execute_generation<C: LinkConnector, P: MediaPeer>(
         &mut self,
         connector: C,
-        peer: impl AsyncFnMut() -> Result<P, Error>,
+        mut peer: impl AsyncFnMut() -> Result<P, Error>,
         tools: Vec<DynamicTool>,
         cancelled: impl Future<Output = ()>,
         retained: Option<Box<crate::bridge_settings::SettingsHost>>,
@@ -206,25 +221,23 @@ impl Configured {
                         .transpose()?
                 };
                 let options = self.options(api_key.as_ref(), tools);
-                if let Some((service, send)) = settings {
+                let settings = settings.map(|(service, send)| {
                     let service = if self.settings_restart_allowed {
                         service
                     } else {
                         service.without_restart()
                     };
-                    Box::pin(super::execute_with_settings(
-                        options,
-                        connector,
-                        peer,
-                        cancelled,
-                        (service, send),
-                    ))
-                    .await
-                } else {
-                    Box::pin(super::execute(options, connector, peer, cancelled))
-                        .await
-                        .map(|()| super::RuntimeCompletion::default())
-                }
+                    (service, send)
+                });
+                Box::pin(super::voice_runtime::execute_owned(
+                    options,
+                    connector,
+                    &mut peer,
+                    cancelled,
+                    settings,
+                    self.world.clone(),
+                ))
+                .await
             },
         ));
         super::voice_wait::run_marks::scope(knobs, generation).await

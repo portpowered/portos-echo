@@ -30,12 +30,23 @@ deterministic fixture uses SplitMix64 and an explicitly advanced clock. The
 device subsystem depends only on the core API. The transport service consumes
 that same API, and the session controller supplies the concrete subsystem.
 
+The World steps the device reducer before the trace reducer. The trace reducer
+admits prepared descriptors to a fixed-capacity FIFO. The writer service owns
+the append handle, JSONL encoding, flush and join. Each writer creates files
+with mode 0600 and reopens on the existing generation boundary. Synchronous
+audit callers receive a result only after each row is flushed. Periodic clock
+failure diagnostics can wait for the 100 ms trace tick because they carry no completion
+receipt. A checked write can wake the writer earlier. Close stops admission and
+joins the drain. The clock monitor and replacement receipts keep their separate
+open lifetimes and elapsed-time origins.
+
 ## Deferred
 
-- A1's next slices move trace IO to its service and join the World to the T3
-  scenario finalizer. The device step currently receives wake and mute events.
+- A1's next slice joins the World to the T3 scenario finalizer. The device step
+  currently receives wake and mute events.
   Wyoming has no separate button report in the current wire contract.
 - A2 owns the Wyoming service rename, session, pacer and call subsystems,
   playback clock, slot table and allocation proof.
 - A2 and B2 own migration of existing direct randomness consumers. The later
   service tracks own record and replay.
+- Trace rotation policy remains with later lifecycle work.

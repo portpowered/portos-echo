@@ -9,9 +9,10 @@ impl Subsystem for Device {
     const INPUTS: &'static [EventKind] = &[EventKind::Device];
     const OUTPUTS: &'static [CommandKind] = &[CommandKind::ApplyDeviceView];
 
-    fn on_event(state: &mut Self::State, event: &Event, _now: Now, out: &mut Commands) {
-        let Event::Device { generation, change } = *event;
-        if let Some(view) = state.apply(generation, change) {
+    fn on_event(state: &mut Self::State, event: &mut Event, _now: Now, out: &mut Commands) {
+        if let Event::Device { generation, change } = *event
+            && let Some(view) = state.apply(generation, change)
+        {
             out.publish_device_view(generation, view);
         }
     }

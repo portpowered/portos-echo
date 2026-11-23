@@ -70,7 +70,8 @@ fn process_generation(
         let shutdown = settings_process::shutdown()?;
         let clean_stop = Cell::new(true);
         let cancelled = async { clean_stop.set(matches!(shutdown.await, Ok(true))) };
-        let connector = crate::bridge_world::connector(endpoint);
+        let (connector, world) = crate::bridge_world::connector(endpoint);
+        configured.set_world(Some(world));
         let result = configured
             .execute_generation(
                 connector,
@@ -88,10 +89,16 @@ fn process_generation(
     })
 }
 
-pub(crate) async fn execute<C: LinkConnector>(settings: Settings, control: Control, connector: C) -> Result<(), Error> {
+pub(crate) async fn execute<C: LinkConnector>(
+    settings: Settings,
+    control: Control,
+    connector: C,
+    world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
+) -> Result<(), Error> {
     let local = settings.model_url.is_some();
     let settings_witness = settings.sim_epoch.is_some();
-    let configured = prepare(settings)?.with_clock(control.utc_day);
+    let mut configured = prepare(settings)?.with_clock(control.utc_day);
+    configured.set_world(world);
     let media = media_config(local);
     let clean_stop = Cell::new(true);
     let cancelled = async {

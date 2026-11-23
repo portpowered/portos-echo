@@ -149,3 +149,13 @@ kind = "lib"
 name = "echo-sub-device"
 path = "crates/echo-sub-device"
 kind = "lib"
+
+[[crate]]
+name = "echo-sub-trace"
+path = "crates/echo-sub-trace"
+kind = "lib"
+
+[[crate]]
+name = "echo-svc-trace"
+path = "crates/echo-svc-trace"
+kind = "lib"

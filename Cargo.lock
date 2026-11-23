@@ -837,6 +837,8 @@ dependencies = [
  "echo-signin",
  "echo-spoof-mcp",
  "echo-sub-device",
+ "echo-sub-trace",
+ "echo-svc-trace",
  "echo-wyoming",
  "futures-util",
  "hex",
@@ -917,6 +919,7 @@ name = "echo-core-api"
 version = "0.1.0"
 dependencies = [
  "rand_core 0.6.4",
+ "serde_json",
 ]
 
 [[package]]
@@ -1151,6 +1154,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-sub-trace"
+version = "0.1.0"
+dependencies = [
+ "echo-core-api",
+]
+
+[[package]]
 name = "echo-svc-muse"
 version = "0.1.0"
 dependencies = [
@@ -1173,6 +1183,14 @@ dependencies = [
  "tokio-tungstenite",
  "x25519-dalek",
  "x509-parser 0.18.1",
+]
+
+[[package]]
+name = "echo-svc-trace"
+version = "0.1.0"
+dependencies = [
+ "echo-core-api",
+ "serde_json",
 ]
 
 [[package]]

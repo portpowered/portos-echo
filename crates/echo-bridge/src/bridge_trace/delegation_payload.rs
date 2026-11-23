@@ -2,8 +2,8 @@
 use crate::Error;
 use serde_json::{Map, Value, json};
 
-const FIELDS: [&str; 4] = ["task", "request", "response", "answer"];
-const CAP: usize = 65536;
+pub(super) const FIELDS: [&str; 4] = ["task", "request", "response", "answer"];
+pub(super) const CAP: usize = 65536;
 
 pub(super) fn event(event: &str) -> bool {
     matches!(
@@ -31,14 +31,6 @@ pub(super) fn prepare(fields: &mut Map<String, Value>, enabled: bool) -> Result<
     }
     fields.extend(payloads);
     Ok(())
-}
-
-pub(super) fn metadata_fits(entry: &Map<String, Value>) -> Result<bool, Error> {
-    let mut metadata = entry.clone();
-    for key in FIELDS {
-        metadata.remove(key);
-    }
-    Ok(serde_json::to_vec(&metadata).map_err(|_| Error::Trace)?.len() <= 4096)
 }
 
 fn sensitive(key: &str) -> bool {
@@ -286,8 +278,11 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(prepare(&mut fields, true), Err(Error::Trace));
-        let mut fields = json!({"metadata":"x".repeat(4096)}).as_object().unwrap().clone();
-        prepare(&mut fields, true).unwrap();
-        assert!(!metadata_fits(&fields).unwrap());
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("trace");
+        let mut trace = crate::bridge_trace::Trace::open(&path, "api_key").unwrap();
+        let fields = json!({"metadata":"x".repeat(4096), "response":"synthetic"});
+        assert_eq!(trace.record("delegation.tool", None, fields), Err(Error::Trace));
+        assert_eq!(std::fs::read(path).unwrap(), b"");
     }
 }
