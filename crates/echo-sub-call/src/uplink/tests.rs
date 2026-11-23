@@ -24,7 +24,7 @@ fn step(state: &mut State, run: SessionHandle, event: UplinkEvent<'_>) -> CallCo
 fn offer(commands: CallCommands, owner: SessionHandle, marker: i16) -> u64 {
     let (action, frame) = commands.into_parts();
     let Some(CallCommand::SendUplinkFrame { run, attempt }) = action else {
-        panic!("expected an uplink send command");
+        unreachable!("expected an uplink send command");
     };
     assert_eq!(run, owner);
     assert_eq!(frame, Some([marker; 320]));

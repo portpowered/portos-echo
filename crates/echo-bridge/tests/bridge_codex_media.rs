@@ -165,7 +165,7 @@ async fn audio_round_trip<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWr
             }
         }
     }
-    assert_eq!(capture.finish().unwrap(), &[]);
+    assert!(capture.finish().unwrap().is_empty());
     assert_eq!(capture.tail_samples(), 0);
     let mut reply = ReplyAudio::new(200).unwrap();
     let mut samples = Vec::new();
