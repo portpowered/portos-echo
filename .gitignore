@@ -40,3 +40,4 @@
 !/factory/inputs/**/
 !/factory/inputs/**/.gitkeep
 __pycache__/
+/crates/echo-bridge/logs/

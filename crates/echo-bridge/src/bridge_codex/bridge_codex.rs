@@ -203,7 +203,8 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
         if thread.is_empty() || thread.chars().any(char::is_control) {
             return Err(Error::Decode);
         }
-        self.record_tier(requested, response.service_tier.as_deref())?;
+        // The downgrade note is advisory: a trace failure never fails the call.
+        let _ = self.record_tier(requested, response.service_tier.as_deref());
         self.thread = Some(thread);
         self.time_zone = options.time_zone.map(str::to_owned);
         Ok(())

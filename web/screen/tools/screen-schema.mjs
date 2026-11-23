@@ -115,6 +115,7 @@ for (const name of [
     "portos_operation_v2",
     "portos_operation_started_v2",
     "openai_account_v2",
+    "openai_api_key_request_v2",
     "muse_probe_request_v2",
     "muse_probe_result_v2",
 ]) {

@@ -245,14 +245,15 @@ setup_api_key() {
   # Its bytes never reach argv, the log or any output.
   safe_paths=true
   run_adb shell "source='${api_key_source:?}' target='${api_key_file:?}' stage='${device:?}/private/.install-stage'
-test ! -L '${api_key_stage:?}' && test -d '${api_key_stage:?}'
-test ! -L \"\$source\" && test -f \"\$source\"
+test ! -L '${api_key_stage:?}' && test -d '${api_key_stage:?}' || exit 1
+test \"\$(stat -c %u:%a '${api_key_stage:?}')\" = 0:700 || exit 1
+test ! -L \"\$source\" && test -f \"\$source\" || exit 1
 bytes=\$(wc -c < \"\$source\")
-test \"\$bytes\" -gt 0 && test \"\$bytes\" -le 16384
-test ! -L \"\$target\" && { test ! -e \"\$target\" || test -f \"\$target\"; }
-test ! -e \"\$stage\" && test ! -L \"\$stage\"
+test \"\$bytes\" -gt 0 && test \"\$bytes\" -le 16384 || exit 1
+test ! -L \"\$target\" && { test ! -e \"\$target\" || test -f \"\$target\"; } || exit 1
+test ! -e \"\$stage\" && test ! -L \"\$stage\" || exit 1
 umask 077
-cat \"\$source\" > \"\$stage\"
+cat \"\$source\" > \"\$stage\" || exit 1
 rm -f \"\$source\"
 chown '${ECHO_RUN_OWNER:?}' \"\$stage\" && chmod 600 \"\$stage\" && mv -f \"\$stage\" \"\$target\""
   printf '%s\n' 'echo-install: api-key completed'

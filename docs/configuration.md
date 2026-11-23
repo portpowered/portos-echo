@@ -276,8 +276,9 @@ To replace the key later, open **Settings > Accounts > OpenAI (GPT Live)** on th
 shows whether a key is set, and a **Save key** field in place of Link and Remove. The bridge applies the same rule
 as the installer, keeps the replaced key beside the new one as `<live.credential_file>.previous` (mode 0600), and
 restarts at the next settled boundary so the app server logs in with the new key. Neither the screen nor any
-response, log or trace shows the key. OpenAI first checks a key at the next call: a rejected key shows as "not
-accepted" and as the relink error on the voice screen. To go back, copy the `.previous` file over the key with the
+response, log or trace shows the key. OpenAI first checks a key when it is used, so a
+wrong key may still show as set; it surfaces as a failed voice call or delegated turn (and as "not accepted" when
+the app server refuses the login). To go back, copy the `.previous` file over the key with the
 bridge stopped. The bridge does not start without a well-formed key file, so Settings can replace a key but not
 recover a missing one: run the installer with `--openai-api-key-file` instead.
 
