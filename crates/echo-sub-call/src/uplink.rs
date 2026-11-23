@@ -49,7 +49,6 @@ impl Backlog {
             return;
         }
         match event {
-            UplinkEvent::CaptureOpened => (),
             UplinkEvent::MicFrame(frame) => self.push(run, frame, out),
             UplinkEvent::Writable => self.offer(run, out),
             UplinkEvent::Result { attempt, receipt } if self.offered == Some(attempt) => {
@@ -58,7 +57,7 @@ impl Backlog {
                     self.pop();
                 }
             }
-            UplinkEvent::Result { .. } => (),
+            UplinkEvent::CaptureOpened | UplinkEvent::Result { .. } => (),
             UplinkEvent::DropBacklog | UplinkEvent::CaptureClosed => {
                 self.head = 0;
                 self.depth = 0;
