@@ -21,7 +21,7 @@ fn boot_firewall_matches_athena_golden_and_closes_network_adb() {
     fixture.write("adb-port", "5555");
     fixture.write(
         "proc/net/tcp6",
-        " 0: 00000000000000000000000000000000:15B3 00000000:0000 0A\n",
+        " 0: 00000000000000000000000000000000:15B3 00000000:0000 0A\n", // lint-rules: allow-literal synthetic proc TCP table row
     );
     host.firewall = Some(fixture);
 

@@ -250,8 +250,8 @@ mod tests {
             "-A echo_out -d 2001:db8::53/128 -p udp -m udp --dport 53 -j RETURN"
         );
         assert_eq!(
-            normalize("-A echo_out -d 192.0.2.53 -j RETURN"),
-            "-A echo_out -d 192.0.2.53/32 -j RETURN"
+            normalize("-A echo_out -d 192.0.2.53 -j RETURN"), // lint-rules: allow-literal inert filter input, parsed only
+            "-A echo_out -d 192.0.2.53/32 -j RETURN" // lint-rules: allow-literal inert filter output, compared only
         );
         assert_eq!(normalize("-A OUTPUT -o lo -j ACCEPT"), "-A OUTPUT -o lo -j ACCEPT");
     }
