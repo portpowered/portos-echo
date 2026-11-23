@@ -141,16 +141,7 @@ async fn execute_controlled_in<C: LinkConnector>(
 ) -> Result<(), Error> {
     validate_sim(&settings)?;
     let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day);
-    let mode = match settings.mode {
-        LiveAuthMode::Chatgpt => "chatgpt",
-        LiveAuthMode::ApiKey => "api_key",
-    };
-    let mut trace = Trace::open_in(
-        &settings.trace,
-        mode,
-        world.unwrap_or_else(crate::bridge_world::Controller::new),
-    )?
-    .with_payloads(settings.config.as_ref().is_none_or(|config| config.trace.payloads));
+    let mut trace = sim_trace(&settings, world)?;
     let mut screen = bridge_screen::Screen::bind(settings.screen.as_ref()).await?;
     screen.download_packs(settings.config.as_ref(), &trace);
     screen.settings_warning(settings.settings_warning.as_deref(), &mut trace)?;
@@ -202,6 +193,22 @@ async fn execute_controlled_in<C: LinkConnector>(
     let cleanup = screen.close().await;
     let drain = trace.finish();
     result.and(report).and(cleanup).and(drain)
+}
+
+fn sim_trace(
+    settings: &Settings,
+    world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
+) -> Result<Trace, Error> {
+    let mode = match settings.mode {
+        LiveAuthMode::Chatgpt => "chatgpt",
+        LiveAuthMode::ApiKey => "api_key",
+    };
+    let trace = Trace::open_in(
+        &settings.trace,
+        mode,
+        world.unwrap_or_else(crate::bridge_world::Controller::new),
+    )?;
+    Ok(trace.with_payloads(settings.config.as_ref().is_none_or(|config| config.trace.payloads)))
 }
 
 async fn stop_link<L: EchoLink>(client: &L, screen: &bridge_screen::Screen) -> Result<(), Error> {
