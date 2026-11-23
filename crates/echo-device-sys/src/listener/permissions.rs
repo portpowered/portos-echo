@@ -51,7 +51,10 @@ const SYSTEM: u32 = 1000;
 const BRIDGE_GROUP: u32 = 3990;
 
 fn managed(path: &Path) -> bool {
-    cfg!(target_os = "android") && path == Path::new(crate::WYOMING_SOCKET)
+    cfg!(target_os = "android")
+        && [crate::WYOMING_SOCKET, crate::WIFI_SOCKET]
+            .iter()
+            .any(|p| path == Path::new(p))
 }
 
 #[cfg(target_os = "android")]

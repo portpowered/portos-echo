@@ -305,6 +305,9 @@ main.settings-open {
 .settings-section > section {
     max-height: none;
 }
+.wifi-settings {
+    overflow-wrap: anywhere;
+}
 .settings-choices {
     margin: 0;
     padding: 0;

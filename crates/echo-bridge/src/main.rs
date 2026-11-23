@@ -30,7 +30,7 @@ fn main() -> ExitCode {
 }
 
 fn device(args: impl IntoIterator<Item = OsString>) -> ExitCode {
-    match echo_device::run(args) {
+    match echo_device::run_with_wifi(args, echo_bridge::device_wifi::HANDLER) {
         Ok(never) => match never {},
         Err(error) => {
             let _ = writeln!(std::io::stderr(), "echo-bridge device: {error}");

@@ -85,9 +85,17 @@ impl Screen {
             return Err(Error::Screen);
         }
         let (states, input) = mpsc::channel(32);
-        let server = echo_screen_server::serve_with_camera(bind, Secret::new(token.into()), input, settings, camera)
-            .await
-            .map_err(|_| Error::Screen)?;
+        let wifi = if cfg!(target_os = "android") && settings.is_some() {
+            Some(crate::device_wifi::relay(Some(std::path::Path::new(
+                echo_device::WIFI_SOCKET,
+            ))))
+        } else {
+            None
+        };
+        let server =
+            echo_screen_server::serve_with_wifi(bind, Secret::new(token.into()), input, settings, camera, wifi)
+                .await
+                .map_err(|_| Error::Screen)?;
         let screen = Self {
             mute: Arc::default(),
             settings_warning: None,

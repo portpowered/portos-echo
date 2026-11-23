@@ -19,6 +19,19 @@ pub const NOTICES: &str = include_str!(concat!(env!("OUT_DIR"), "/notices.txt"))
 pub const VERSION: &str = env!("HASSMIC_VERSION");
 /// Filesystem endpoint shared by the device role and the on-Echo bridge.
 pub const WYOMING_SOCKET: &str = "/data/misc/portos-echo-device/wyoming.sock";
+/// Sibling endpoint for Wi-Fi requests from the on-Echo bridge.
+pub const WIFI_SOCKET: &str = "/data/misc/portos-echo-device/wifi.sock";
+
+/// Handles a bounded Wi-Fi frame on the device worker. The path is the local
+/// endpoint, whose parent is owned by the device role.
+#[derive(Clone, Copy)]
+pub struct WifiHandler {
+    pub respond: fn(&std::path::Path, &[u8]) -> Vec<u8>,
+    pub monotonic: fn() -> std::time::Duration,
+}
+
+#[cfg(target_os = "android")]
+pub const WIFI_DEX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
 
 static ENTERED: AtomicBool = AtomicBool::new(false);
 
@@ -43,6 +56,7 @@ pub fn run(
     arguments: impl IntoIterator<Item = OsString>,
     socket: Option<PathBuf>,
     protocol: &'static dyn Protocol,
+    wifi: Option<WifiHandler>,
 ) -> Result<Infallible, Error> {
     let mut storage = std::iter::once(OsString::from("hassmic"))
         .chain(arguments)
@@ -58,7 +72,7 @@ pub fn run(
     if ENTERED.swap(true, Ordering::AcqRel) {
         return Err(Error::AlreadyEntered);
     }
-    listener::select(socket);
+    listener::select(socket, wifi);
     core::register(protocol);
     #[expect(unsafe_code, reason = "Enter the C satellite once with owned mutable argv")]
     // SAFETY: argc is the checked count before the NULL sentinel. C may reorder

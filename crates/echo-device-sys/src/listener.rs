@@ -4,6 +4,7 @@
 
 mod os;
 mod permissions;
+mod wifi;
 
 use std::{
     ffi::c_int,
@@ -28,9 +29,12 @@ static ENDPOINT: Mutex<Option<Endpoint>> = Mutex::new(None);
 static STOP: OnceLock<UnixDatagram> = OnceLock::new();
 static NOTIFY: AtomicI32 = AtomicI32::new(-1);
 
-pub(super) fn select(path: Option<PathBuf>) {
+pub(super) fn select(path: Option<PathBuf>, handler: Option<crate::WifiHandler>) {
     if let Some(path) = path {
         let _ = PATH.set(path);
+    }
+    if let Some(handler) = handler {
+        wifi::select(handler);
     }
 }
 
@@ -63,6 +67,7 @@ fn prepare(path: &Path) -> io::Result<c_int> {
             .map_err(|_| io::Error::other("listener owner poisoned"))?;
         *owner = Some(endpoint);
     }
+    wifi::start(&path.with_file_name("wifi.sock"));
     watch_stop()?;
     Ok(fd)
 }
@@ -80,6 +85,7 @@ fn log(message: std::fmt::Arguments<'_>) {
 }
 
 pub(super) fn cleanup() {
+    wifi::cleanup();
     if let Ok(mut owner) = ENDPOINT.lock() {
         // Release the lease only after unlinking the endpoint it protects.
         drop(owner.take());

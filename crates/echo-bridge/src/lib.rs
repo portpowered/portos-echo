@@ -24,6 +24,8 @@ pub mod bridge_voice;
 #[path = "bridge_voice/controls/world/mod.rs"]
 mod bridge_world;
 #[doc(hidden)]
+pub mod device_wifi;
+#[doc(hidden)]
 pub use bridge_world::witness as world_witness;
 
 /// Fixed diagnostics never contain input, credentials, audio or provider bodies.
