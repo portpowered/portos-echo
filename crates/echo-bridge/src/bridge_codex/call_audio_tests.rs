@@ -101,17 +101,20 @@ fn capture_maximum_chunks_and_finish_reuse_scratch_at_every_supported_format() {
             let frame_base = capture.frames.as_ptr();
             let capacity = capture.frames.capacity();
             let chunks = [CAPTURE_BYTES - 4, CAPTURE_BYTES, CAPTURE_BYTES, CAPTURE_BYTES];
-            let mut framed = 0;
+            let mut completed_samples = 0;
             for size in chunks {
                 let frames = capture.process(&format, &[0; CAPTURE_BYTES][..size]).unwrap();
-                framed += frames.len() * 320;
+                completed_samples += frames.len() * 320;
                 assert_eq!(frames.as_ptr(), frame_base);
                 assert!(frames.iter().all(|frame| frame == &[0; 320]));
             }
-            framed += capture.finish().unwrap().len() * 320;
+            completed_samples += capture.finish().unwrap().len() * 320;
             let expected =
                 chunks.iter().sum::<usize>() / (2 * usize::from(channels)) * 16_000 / usize::try_from(rate).unwrap();
-            assert_eq!((framed, capture.tail_samples()), (expected / 320 * 320, expected % 320));
+            assert_eq!(
+                (completed_samples, capture.tail_samples()),
+                (expected / 320 * 320, expected % 320)
+            );
             assert_eq!(capture.samples.as_ptr(), sample_base);
             assert_eq!(capture.frames.as_ptr(), frame_base);
             assert_eq!(capture.frames.capacity(), capacity);
