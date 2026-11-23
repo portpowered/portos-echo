@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: df67aed70be4b4b57f477bead22a3857f8b06638
+          ref: d67cc68c694bcb77fc83a5e5674024e79a52f409
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -23,6 +23,7 @@ jobs:
       - name: Prepare rule lint tools
         shell: sh
         run: |
+          npm --prefix web/screen ci --offline=false
           cargo deny fetch
           directory=$(mktemp -d)
           curl --fail --location --retry 3 https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz -o "$directory/gitleaks.tar.gz"
@@ -42,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: df67aed70be4b4b57f477bead22a3857f8b06638
+          ref: d67cc68c694bcb77fc83a5e5674024e79a52f409
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
