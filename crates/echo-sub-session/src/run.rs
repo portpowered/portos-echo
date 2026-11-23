@@ -15,6 +15,16 @@ enum Phase {
     Closed,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Receipt {
+    Waiting,
+    Played,
+    /// Replacement playback ended without writing any audio.
+    Retired {
+        acknowledged: bool,
+    },
+}
+
 /// A cut acknowledgment belongs to the retired playback, even when its ordered
 /// device event arrives after the replacement playback has started.
 #[derive(Debug)]
@@ -28,9 +38,7 @@ pub(crate) struct Run {
     pub(crate) playback: SessionPlayback,
     pub(crate) playback_observed: Instant,
     state: Phase,
-    played: bool,
-    /// The device closed a replacement playback that nothing was written to.
-    unanswered: bool,
+    receipt: Receipt,
     cut_receipts: usize,
     microphone_finished: bool,
     response_window: Option<Duration>,
@@ -59,8 +67,7 @@ impl Run {
             playback: SessionPlayback::default(),
             playback_observed: now,
             state: Phase::Listening,
-            played: false,
-            unanswered: false,
+            receipt: Receipt::Waiting,
             cut_receipts: 0,
             microphone_finished: false,
             response_window: None,
@@ -90,8 +97,7 @@ impl Run {
         if matches!(self.state, Phase::Closing | Phase::Closed) {
             return Err(Error::Control);
         }
-        self.played = false;
-        self.unanswered = false;
+        self.receipt = Receipt::Waiting;
         Ok(())
     }
 
@@ -161,14 +167,17 @@ impl Run {
 
     pub(crate) fn cut_settled(&mut self) {
         self.state = Phase::Retired;
-        self.cut_receipts += usize::from(!self.played);
-        self.played = false;
+        self.cut_receipts += usize::from(!self.has_played());
+        self.receipt = match self.receipt {
+            Receipt::Retired { .. } => Receipt::Retired { acknowledged: false },
+            _ => Receipt::Waiting,
+        };
     }
 
     /// A persistent run settles a cut reply as over: nothing more of it will
     /// play, and the next reply opens its own playback.
     pub(crate) fn cut_played(&mut self) {
-        (self.played, self.unanswered) = (true, true);
+        self.receipt = Receipt::Retired { acknowledged: true };
     }
 
     /// False consumes a delayed cut receipt; true acknowledges this reply.
@@ -180,11 +189,16 @@ impl Run {
             self.cut_receipts -= 1;
             return Ok(false);
         }
-        self.unanswered = self.state == Phase::Retired;
-        if !stopped && !self.unanswered {
+        if self.state == Phase::Retired {
+            self.receipt = Receipt::Retired { acknowledged: true };
+        } else if stopped || self.has_played() {
+            self.receipt = Receipt::Played;
+        } else {
+            self.receipt = Receipt::Waiting;
+        }
+        if !stopped && self.state != Phase::Retired {
             return Err(Error::Playback);
         }
-        self.played = true;
         Ok(true)
     }
 
@@ -201,7 +215,7 @@ impl Run {
     }
 
     pub(crate) fn has_played(&self) -> bool {
-        self.played
+        matches!(self.receipt, Receipt::Played | Receipt::Retired { acknowledged: true })
     }
 
     pub(crate) fn pending_cut_receipts(&self) -> usize {
@@ -219,7 +233,10 @@ impl Run {
     }
 
     fn playback_settled(&self, stopped: bool, mouth_drained: bool) -> bool {
-        !self.cutting() && self.played && (stopped || self.unanswered) && mouth_drained
+        !self.cutting()
+            && self.has_played()
+            && (stopped || matches!(self.receipt, Receipt::Retired { .. }))
+            && mouth_drained
     }
 }
 

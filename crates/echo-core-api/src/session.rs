@@ -222,7 +222,6 @@ pub struct SessionView {
     pub closing: bool,
     pub speaking: bool,
     pub microphone_finished: bool,
-    pub accepts_reply_audio: bool,
     pub idle_deadline: Option<Instant>,
     pub next_deadline: Option<(Instant, SessionTimer)>,
 }
