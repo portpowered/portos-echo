@@ -239,7 +239,11 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
         .map(|_| Account::new(options.host.mode, screen.presentation.clone(), trace.clone()));
     let recovery = account.clone().filter(|_| options.host.mode == LiveMode::Chatgpt);
     screen.supervise_actions(health.state.subscribe(), recovery.clone());
-    let settings_trace = trace.clone();
+    let service = service.map(|service| {
+        service
+            .with_local_muse(options.host.routes.is_some())
+            .with_trace(trace.clone())
+    });
     let world = trace.world();
     if let Some(config) = options.delegation {
         world.configure_session(echo_core_api::SessionKnobs {
@@ -249,7 +253,6 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
     }
     let mut view = View::new(&screen, &health, &mut trace).with_screen_account(recovery);
     let requested = Cell::new(false);
-    let local_muse = options.host.routes.is_some();
     let mut link = SettingsLink::new(
         options.delegation,
         &health,
@@ -266,8 +269,6 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
     let (result, settings) = if let Some((service, account)) = service.zip(account) {
         let (result, completion) = Box::pin(
             service
-                .with_local_muse(local_muse)
-                .with_trace(settings_trace)
                 .with_account(account)
                 .with_screen_camera(&screen)
                 .scope_with_grant(work, || link.status(), || link.health.mcp_grant()),

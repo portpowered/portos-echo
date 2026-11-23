@@ -250,10 +250,10 @@ impl Account {
             Ok(())
         })
         .await;
-        self.settle(action, result)
+        self.settle(action, &result)
     }
 
-    fn settle(&self, action: Action, result: Result<(), Error>) -> bool {
+    fn settle(&self, action: Action, result: &Result<(), Error>) -> bool {
         let mut readmit = true;
         self.0.send_modify(|state| {
             state.snapshot.challenge = None;
