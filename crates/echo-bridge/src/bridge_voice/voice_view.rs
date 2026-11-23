@@ -372,7 +372,6 @@ impl<'a> View<'a> {
         Ok(())
     }
 
-    /// A recovered generation withdraws a relink instruction it no longer needs.
     fn relinked(&mut self) -> Result<(), Error> {
         if self.health.state.borrow().relink_required {
             self.health.state.send_modify(|state| state.relink_required = false);

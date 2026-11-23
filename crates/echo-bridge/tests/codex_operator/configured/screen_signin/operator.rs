@@ -285,9 +285,17 @@ async fn t3_bridge_screen_signin_operator_refuses_healthy_and_api_key_modes() {
     for (mode, expected, login_count) in [("chatgpt", "ready", 0), ("api_key", "unavailable", 1)] {
         let mut journey = Journey::configured(mode, true, Some(&mock.base)).await;
         let _satellite = journey.ready().await;
+        assert_eq!(journey.health().await["mcp"], "unlinked");
+        let mut events = journey.events().await;
+        journey.relink().await;
+        assert_eq!(
+            state(&mut events, "ready").await,
+            json!({"state":"ready","message":"Echo Live ready"})
+        );
         assert_eq!(journey.operator(STATUS, 200).await, json!({"state":expected}));
         assert_eq!(journey.operator(START, 409).await, Value::Null);
         assert_eq!(journey.login_count(), login_count);
+        drop(events);
         journey.finish(0).await;
         assert_trace(&journey, &[]);
     }
