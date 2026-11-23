@@ -191,21 +191,19 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
                 self.session_answer_pending = true;
                 Ok(MediaEvent::control(Event::Session(request)))
             },
-            // Keep nested real-media polling off the Windows main stack.
-            event = Box::pin(self.port.next()) => match event?.into_parts() {
-                (Some(event @ (Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. })), _) => {
+            // Keep nested real-media polling off the main stack.
+            event = Box::pin(self.port.next()) => event?.map_control(|event| match event {
+                event @ (Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. }) => {
                     self.observed_control(event)
                 },
-                (Some(Event::ReplyHandoff(id)), _) => {
+                Event::ReplyHandoff(id) => {
                     if let Some(muse) = &mut self.muse {
                         muse.handoff(id.clone());
                     }
                     Ok(MediaEvent::control(Event::ReplyHandoff(id)))
                 },
-                (Some(event), _) => Ok(MediaEvent::control(event)),
-                (None, Some(frame)) => Ok(MediaEvent::audio(frame)),
-                (None, None) => Err(Error::Input),
-            },
+                event => Ok(MediaEvent::control(event)),
+            }),
         }
     }
 

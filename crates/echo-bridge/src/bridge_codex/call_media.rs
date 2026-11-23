@@ -50,6 +50,13 @@ impl MediaEvent {
         self.control.as_ref()
     }
 
+    pub(super) fn map_control(mut self, map: impl FnOnce(Event) -> Result<Self, Error>) -> Result<Self, Error> {
+        match self.control.take() {
+            Some(event) => map(event),
+            None => Ok(self),
+        }
+    }
+
     #[must_use]
     pub fn into_parts(self) -> (Option<Event>, Option<PcmFrame>) {
         (self.control, self.audio)

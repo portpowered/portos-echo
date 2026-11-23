@@ -100,9 +100,9 @@ pub struct CallCommands {
 }
 
 impl CallCommands {
-    pub fn emit(&mut self, action: CallCommand, frame: Option<CallPcmFrame>) {
+    pub fn emit(&mut self, action: CallCommand, frame: Option<&CallPcmFrame>) {
         self.action = Some(action);
-        self.frame = frame;
+        self.frame = frame.copied();
     }
 
     #[must_use]

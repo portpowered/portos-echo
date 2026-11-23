@@ -131,7 +131,7 @@ impl State {
                 && generation == self.view.receive_generation
                 && self.view.receive != CallReceive::Resetting =>
             {
-                out.emit(CallCommand::DeliverRemoteAudio { call, generation }, Some(*frame));
+                out.emit(CallCommand::DeliverRemoteAudio { call, generation }, Some(frame));
             }
             _ => (),
         }
