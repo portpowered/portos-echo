@@ -283,7 +283,7 @@ impl State {
 
     #[must_use]
     pub fn run_ceiling(&self) -> Option<Instant> {
-        self.run.as_ref().and_then(|run| run.run_ceiling)
+        self.run.as_ref().and_then(|run| run.ceiling)
     }
 
     #[must_use]

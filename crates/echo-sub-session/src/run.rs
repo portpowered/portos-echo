@@ -31,7 +31,7 @@ enum Receipt {
 pub(crate) struct Run {
     pub(crate) handle: SessionHandle,
     pub(crate) epoch: Instant,
-    pub(crate) run_ceiling: Option<Instant>,
+    pub(crate) ceiling: Option<Instant>,
     pub(crate) response_due: Instant,
     pub(crate) follow_up: FollowUp,
     pub(crate) turn: Turn,
@@ -56,11 +56,11 @@ struct ToolWindow {
 }
 
 impl Run {
-    pub(crate) fn new(handle: SessionHandle, epoch: Instant, run_ceiling: Option<Instant>, now: Instant) -> Self {
+    pub(crate) fn new(handle: SessionHandle, epoch: Instant, ceiling: Option<Instant>, now: Instant) -> Self {
         Self {
             handle,
             epoch,
-            run_ceiling,
+            ceiling,
             response_due: now,
             follow_up: FollowUp::First,
             turn: Turn::default(),
@@ -345,7 +345,7 @@ impl Run {
         match timer {
             SessionTimer::Listen => idle.is_some_and(|idle| now >= due && due <= idle),
             SessionTimer::Response => now >= due && due >= self.response_due,
-            SessionTimer::RunCeiling => self.run_ceiling.is_some_and(|cap| now >= due && due >= cap),
+            SessionTimer::RunCeiling => self.ceiling.is_some_and(|cap| now >= due && due >= cap),
             SessionTimer::Playback => self
                 .playback
                 .played_due

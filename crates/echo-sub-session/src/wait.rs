@@ -98,7 +98,7 @@ impl Run {
 
     /// Speech defers the run cap by at most one latch expiry.
     fn run_cap(&self, knobs: SessionKnobs) -> Option<Instant> {
-        let cap = self.run_ceiling?;
+        let cap = self.ceiling?;
         Some(if self.turn.speaking() {
             cap.checked_add(knobs.expiry).unwrap_or(cap)
         } else {
@@ -136,7 +136,7 @@ impl Run {
             return SessionOutcome::Applied;
         }
         if listening {
-            if self.run_ceiling.is_some_and(|ceiling| now >= ceiling) {
+            if self.ceiling.is_some_and(|ceiling| now >= ceiling) {
                 self.turn.marks.push(Mark::Capped("listen"));
             }
         } else {
