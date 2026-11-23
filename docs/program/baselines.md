@@ -27,6 +27,16 @@ for pauseable scheduling.
 | `SystemTime::now` | 18 | 19 |
 | `Instant::now` | 25 | 55 |
 
+## A2 warmed audio allocations (2026-11-23)
+
+Counts cover Rust allocation and reallocation calls on the current Tokio thread. The fenced
+column includes runtime, local peer and probe work in each window. Native Opus allocations
+and work on other threads are outside the measurement.
+
+| Command and revision | Host and profile | Frames per path | Core allocations | Fenced allocations |
+| --- | --- | ---: | --- | --- |
+| `make test-alloc`, `bc0da236` | Hosted Linux x86_64, Rust 1.100.0, nextest `ci`, 64 warm-up frames | 500 | Capture 0, uplink 0, downlink 0, pacing 0, playback 0, mute 0, barge-in 0 | Capture 2, uplink 195,587, downlink 68,127, pacing 101, playback 4,576, mute 44,501, barge-in 501 |
+
 ## Development profile size (2026-11-17)
 
 The owner requested smaller dev/test output. These initial measurements use source `707282e`, Rust 1.100.0

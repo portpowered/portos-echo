@@ -3,6 +3,7 @@ use echo_contracts::wyoming::{AudioChunkData, Decoder, Event, Header, WyomingEve
 use echo_link::{MicPayload, MicPool};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
+use std::collections::BTreeMap;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 const CAPTURE_BYTES: usize = 8192;
@@ -59,7 +60,7 @@ impl From<AudioFields> for AudioChunkData {
             width: fields.width,
             channels: fields.channels,
             timestamp: fields.timestamp,
-            extra: Default::default(),
+            extra: BTreeMap::new(),
         }
     }
 }
@@ -302,7 +303,7 @@ mod tests {
         };
         let read = async {
             let Frame::Audio(data, held) = reader.read(&mut socket).await.unwrap() else {
-                panic!("missing audio")
+                unreachable!("missing audio")
             };
             assert_eq!(
                 (data.rate, data.width, data.channels, data.timestamp),
@@ -310,7 +311,7 @@ mod tests {
             );
             assert_eq!(&*held, &[1; 8192]);
             let Frame::Audio(data, payload) = reader.read(&mut socket).await.unwrap() else {
-                panic!("missing audio")
+                unreachable!("missing audio")
             };
             assert_eq!(WyomingEvent::AudioChunk(data), expected);
             assert_eq!(&*payload, &[3; 8194]);
@@ -330,7 +331,7 @@ mod tests {
                 channels: 1,
                 width: 2,
                 timestamp,
-                extra: Default::default(),
+                extra: BTreeMap::new(),
             };
             let payload = vec![4; 960];
             let data = serde_json::to_value(&chunk).unwrap();

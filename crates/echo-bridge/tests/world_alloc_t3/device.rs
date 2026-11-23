@@ -75,10 +75,10 @@ impl Device {
 
     async fn wake(&mut self) -> Run {
         self.socket.get_mut().write_all(&self.pipeline).await.unwrap();
-        match self.events.recv().await.unwrap() {
-            Some(LinkEvent::Wake(run)) => run,
-            _ => panic!("missing microphone run"),
-        }
+        let Some(LinkEvent::Wake(run)) = self.events.recv().await.unwrap() else {
+            unreachable!("missing microphone run")
+        };
+        run
     }
 
     async fn capture_frames(&mut self, world: &Witness, run: &mut Run, capture: &mut CaptureAudio, count: usize) {

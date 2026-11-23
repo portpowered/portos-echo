@@ -45,10 +45,11 @@ impl Core {
     }
 
     fn observe(&mut self, generation: u64, change: DeviceEvent) -> DeviceView {
-        match self.step(&mut Event::Device { generation, change }).take() {
-            Some(Command::ApplyDeviceView { view, .. }) => view,
-            _ => panic!("missing device view"),
-        }
+        let Some(Command::ApplyDeviceView { view, .. }) = self.step(&mut Event::Device { generation, change }).take()
+        else {
+            unreachable!("missing device view")
+        };
+        view
     }
 }
 
@@ -159,7 +160,7 @@ impl Witness {
         let mut input = Event::Pacer(PacerEvent::MicrophoneFrame(scratch));
         self.core().step(&mut input);
         let Event::Pacer(PacerEvent::MicrophoneFrame(scratch)) = input else {
-            panic!("microphone scratch was not returned");
+            unreachable!("microphone scratch was not returned");
         };
         scratch
     }
@@ -177,7 +178,7 @@ impl Witness {
             .take_call()
             .into_parts();
         let Some(CallCommand::SendUplinkFrame { run: RUN, attempt }) = command else {
-            panic!("missing uplink offer");
+            unreachable!("missing uplink offer");
         };
         (attempt, frame.unwrap())
     }
@@ -230,7 +231,7 @@ impl Witness {
         let mut input = Event::Pacer(PacerEvent::PcmPushed(scratch));
         self.core().step(&mut input);
         let Event::Pacer(PacerEvent::PcmPushed(scratch)) = input else {
-            panic!("playback scratch was not returned");
+            unreachable!("playback scratch was not returned");
         };
         scratch
     }
@@ -286,7 +287,7 @@ fn trace_tick(world: &Witness) {
             elapsed_ms: 0,
             mode: "sim",
             run: None,
-            fields: Default::default(),
+            fields: serde_json::Map::new(),
             payload_fields: &[],
             limit: 1024,
         },
@@ -389,7 +390,7 @@ fn retire_reply(world: &Witness, call: CallHandle) -> u64 {
         .take_call()
         .into_parts();
     let Some(CallCommand::ResetReceive { generation, .. }) = out else {
-        panic!("missing receive reset")
+        unreachable!("missing receive reset")
     };
     assert_eq!(
         world

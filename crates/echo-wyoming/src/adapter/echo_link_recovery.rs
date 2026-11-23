@@ -18,7 +18,7 @@ async fn default_queue_wrap_keeps_fifo_and_a_held_frame() {
     )
     .await;
     let Some(LinkEvent::Wake(mut run)) = events.recv().await.unwrap() else {
-        panic!("missing wake");
+        unreachable!("missing wake");
     };
     let format = json!({"rate":16000,"width":2,"channels":1});
     send(&mut peer, "audio-chunk", format.clone(), vec![0, 0]).await;
