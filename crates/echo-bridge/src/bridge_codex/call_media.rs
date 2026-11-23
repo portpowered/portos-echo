@@ -1,11 +1,12 @@
 //! Joint signaling/media owner; readiness requires ICE, DTLS and the data channel.
 use super::{Call, Event, Options};
-use crate::Error;
+use crate::{Error, bridge_world::CallPort};
 use echo_codex::{
     DynamicTool,
     codex_io::RpcIo,
     codex_protocol::{RequestId, ToolResult, TurnInterrupt},
 };
+use echo_core_api::{CallCommand, CallEvent, CallPhase, CallReceive, CallSetupStage, CallView};
 use echo_media::{DropCounts, MediaPeer, PcmFrame, Peer, PeerState, SetupStage};
 use std::collections::VecDeque;
 use tokio::{
@@ -22,17 +23,37 @@ pub(crate) trait RetainedCall: crate::bridge_voice::VoicePort {
 }
 
 /// Media and signaling remain independently observable. `ReplyDone` does not drain PCM.
-pub enum MediaEvent {
-    Control(Event),
-    Audio(Box<PcmFrame>),
+pub struct MediaEvent {
+    control: Option<Event>,
+    audio: Option<PcmFrame>,
 }
 
-#[derive(Default, PartialEq, Eq)]
-enum ReceiveState {
-    #[default]
-    Current,
-    Retired,
-    Resetting,
+impl MediaEvent {
+    #[must_use]
+    pub fn control(event: Event) -> Self {
+        Self {
+            control: Some(event),
+            audio: None,
+        }
+    }
+
+    #[must_use]
+    pub fn audio(frame: PcmFrame) -> Self {
+        Self {
+            control: None,
+            audio: Some(frame),
+        }
+    }
+
+    #[must_use]
+    pub fn control_event(&self) -> Option<&Event> {
+        self.control.as_ref()
+    }
+
+    #[must_use]
+    pub fn into_parts(self) -> (Option<Event>, Option<PcmFrame>) {
+        (self.control, self.audio)
+    }
 }
 
 /// One call owns its media peer and exclusively borrows initialized app-server IO.
@@ -41,12 +62,8 @@ pub struct MediaCall<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPe
     call: Call<'a, R, W>,
     peer: P,
     early: VecDeque<Event>,
-    receive_state: ReceiveState,
-    started: bool,
-    active: bool,
-    closed: bool,
+    state: CallPort,
     trace: Option<crate::bridge_trace::Trace>,
-    stage: &'static str,
     trace_failed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -112,12 +129,8 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
             call: Call::new(io),
             peer,
             early: VecDeque::new(),
-            receive_state: ReceiveState::Current,
-            started: false,
-            active: false,
-            closed: false,
+            state: CallPort::attach(),
             trace: None,
-            stage: "new",
             trace_failed: std::sync::Arc::default(),
         }
     }
@@ -131,10 +144,10 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
         tools: Vec<DynamicTool>,
         deadline: Instant,
     ) -> Result<(), Error> {
-        if self.started || self.closed {
+        let (action, _) = self.state.send(|call| CallEvent::OpenRequested { call }).into_parts();
+        if !matches!(action, Some(CallCommand::OpenPeer(_))) {
             return Err(Error::Input);
         }
-        self.started = true;
         let result = if Instant::now() >= deadline {
             Err(Error::Deadline)
         } else {
@@ -148,14 +161,9 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
             Ok(())
         };
         if result.is_err() {
-            self.call.fail();
-            let _ = self.peer.close().await;
-            self.closed = true;
+            self.fail().await;
         } else {
-            self.active = true;
-        }
-        if result.is_ok() {
-            self.stage = "media_ready";
+            self.state.send(|call| CallEvent::PeerConnected { call });
         }
         if self.trace_failed.load(std::sync::atomic::Ordering::Acquire) {
             return Err(Error::Trace);
@@ -182,12 +190,12 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
             },
             self.call.prepare(options, tools, deadline),
         )?;
-        self.stage = "signaling_started";
+        self.setup_stage(CallSetupStage::SignalingStarted);
         let answer = self.call.start_prepared(options, &offer, deadline).await?;
-        self.stage = "answer_received";
+        self.setup_stage(CallSetupStage::AnswerReceived);
         self.peer.apply_answer(&answer).await.map_err(media_error)?;
         self.record_stage("call.answer_applied")?;
-        self.stage = "answer_applied";
+        self.setup_stage(CallSetupStage::AnswerApplied);
         let mut states = self.peer.states();
         loop {
             match *states.borrow_and_update() {
@@ -213,22 +221,41 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
 
     fn diagnostic(&mut self, event: &'static str) -> Result<(), Error> {
         if let Some(trace) = &mut self.trace {
+            let stage = self.state.view().unwrap_or_default().setup_stage.diagnostic();
             trace.record(
                 event,
                 None,
-                serde_json::json!({"stage":self.stage, "media_state":format!("{:?}", *self.peer.states().borrow())}),
+                serde_json::json!({"stage":stage, "media_state":format!("{:?}", *self.peer.states().borrow())}),
             )?;
         }
         Ok(())
+    }
+
+    fn setup_stage(&self, stage: CallSetupStage) {
+        self.state.send(|call| CallEvent::SetupStage { call, stage });
+    }
+
+    fn active(&self) -> Result<CallView, Error> {
+        self.state
+            .view()
+            .filter(|view| view.phase == CallPhase::Connected)
+            .ok_or(Error::Unavailable)
+    }
+
+    async fn fail(&mut self) {
+        let (action, _) = self.state.send(|call| CallEvent::PeerFailed { call }).into_parts();
+        if matches!(action, Some(CallCommand::ClosePeer(_))) {
+            self.call.fail();
+            let _ = self.peer.close().await;
+            self.state.send(|call| CallEvent::PeerClosed { call });
+        }
     }
 
     /// Forward a complete 20 ms mono/16 kHz frame. No bridge Opus encoding.
     /// # Errors
     /// Rejects nonactive sessions or the peer's fixed failure category.
     pub fn send(&self, frame: PcmFrame) -> Result<(), Error> {
-        if !self.active {
-            return Err(Error::Unavailable);
-        }
+        self.active()?;
         self.peer.send(frame).map_err(media_error)
     }
 
@@ -237,9 +264,7 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
     /// # Errors
     /// Rejects nonactive sessions or the peer's fixed failure category.
     pub fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
-        if !self.active {
-            return Err(Error::Unavailable);
-        }
+        self.active()?;
         self.peer.try_send(frame).map_err(media_error)
     }
 
@@ -252,78 +277,76 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
     /// # Errors
     /// Transport/media failure closes the generation; EOF is never reply completion.
     pub async fn next(&mut self) -> Result<MediaEvent, Error> {
-        if !self.active {
-            return Err(Error::Unavailable);
-        }
-        if self.receive_state == ReceiveState::Resetting {
-            self.finish_receive_reset().await?;
+        let view = self.active()?;
+        if view.receive == CallReceive::Resetting {
+            self.finish_receive_reset(view.receive_generation).await?;
         }
         if let Some(event) = self.early.pop_front() {
-            return self.accept_media(MediaEvent::Control(event)).await;
+            return self.accept_media(MediaEvent::control(event)).await;
         }
         let (result, source) = tokio::select! {
-            event = self.call.next() => (event.map(MediaEvent::Control), "call.control_failed"),
-            frame = self.peer.recv() => (match frame.map_err(media_error) {
-                Ok(Some(frame)) => Ok(MediaEvent::Audio(Box::new(frame))),
-                Ok(None) => Err(Error::Unavailable),
-                Err(error) => Err(error),
-            }, "call.media_failed"),
+            event = self.call.next() => (event.map(MediaEvent::control), "call.control_failed"),
+            frame = self.peer.recv() => (
+                frame.map_err(media_error)
+                    .and_then(|frame| frame.ok_or(Error::Unavailable))
+                    .and_then(|frame| remote_audio(&self.state, view.receive_generation, &frame))
+                    .map(MediaEvent::audio),
+                "call.media_failed",
+            ),
         };
-        if result.is_err() || matches!(&result, Ok(MediaEvent::Control(Event::Closed))) {
+        if result.is_err()
+            || matches!(
+                result.as_ref().ok().and_then(MediaEvent::control_event),
+                Some(Event::Closed)
+            )
+        {
             let diagnostic = self.diagnostic(source);
-            self.active = false;
             if source == "call.media_failed"
                 && let Some(trace) = &mut self.call.tool_trace
             {
                 let _ = trace.close("failed", Some("media_failed"));
             }
-            self.call.fail();
-            let _ = self.peer.close().await;
-            self.closed = true;
+            self.fail().await;
             return result.and_then(|event| diagnostic.map(|()| event));
         }
         self.accept_media(result?).await
     }
 
     pub(crate) fn retire_audio(&mut self) {
-        if self.receive_state == ReceiveState::Current {
-            self.receive_state = ReceiveState::Retired;
-        }
+        self.state.send(|call| CallEvent::RetireReceive { call });
     }
 
-    async fn finish_receive_reset(&mut self) -> Result<(), Error> {
+    async fn finish_receive_reset(&mut self, generation: u64) -> Result<(), Error> {
         self.peer.reset_receive().await.map_err(media_error)?;
-        self.receive_state = ReceiveState::Current;
+        self.state.send(|call| CallEvent::ReceiveReset { call, generation });
         self.record_stage("call.receive_reset")
     }
 
-    async fn accept_media(&mut self, event: MediaEvent) -> Result<MediaEvent, Error> {
-        if self.receive_state == ReceiveState::Retired
-            && matches!(&event, MediaEvent::Control(Event::Transcript { role, done: false, .. }) if role == "assistant")
-        {
-            let MediaEvent::Control(event) = event else {
-                return Err(Error::Input);
-            };
-            // Retain the boundary across cancelled next() polls. Replacement
-            // control and PCM cannot escape until the receive task acknowledges.
-            self.early.push_front(event);
-            self.receive_state = ReceiveState::Resetting;
-            self.finish_receive_reset().await?;
-            return self
-                .early
-                .pop_front()
-                .map(MediaEvent::Control)
-                .ok_or(Error::Unavailable);
+    async fn accept_media(&mut self, mut event: MediaEvent) -> Result<MediaEvent, Error> {
+        if !matches!(event.control_event(), Some(Event::Transcript { role, done: false, .. }) if role == "assistant") {
+            return Ok(event);
         }
-        Ok(event)
+        let (action, _) = self
+            .state
+            .send(|call| CallEvent::BumpReceiveGeneration { call })
+            .into_parts();
+        let Some(CallCommand::ResetReceive { generation, .. }) = action else {
+            return Ok(event);
+        };
+        // Retain the boundary across cancelled next() polls. Replacement
+        // control and PCM cannot escape until the receive task acknowledges.
+        self.early.push_front(event.control.take().ok_or(Error::Input)?);
+        self.finish_receive_reset(generation).await?;
+        self.early
+            .pop_front()
+            .map(MediaEvent::control)
+            .ok_or(Error::Unavailable)
     }
 
     /// # Errors
     /// Retains the signaling adapter's original-ID and one-answer restrictions.
     pub fn answer_tool(&mut self, id: &RequestId, result: &ToolResult) -> Result<(), Error> {
-        if !self.active {
-            return Err(Error::Unavailable);
-        }
+        self.active()?;
         self.call.answer_tool(id, result)
     }
 
@@ -339,18 +362,14 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
     /// # Errors
     /// Retains the signaling owner's lifecycle and correlation restrictions.
     pub fn interrupt(&mut self, params: &TurnInterrupt, deadline: Instant) -> Result<(), Error> {
-        if !self.active {
-            return Err(Error::Unavailable);
-        }
+        self.active()?;
         self.call.interrupt(params, deadline)
     }
 
     /// # Errors
     /// As `interrupt`; a missed acknowledgement never closes the call.
     pub fn interrupt_after_end(&mut self, params: &TurnInterrupt, deadline: Instant) -> Result<(), Error> {
-        if !self.active {
-            return Err(Error::Unavailable);
-        }
+        self.active()?;
         self.call.interrupt_after_end(params, deadline)
     }
 
@@ -364,14 +383,18 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
     /// # Errors
     /// Closed/failed media is not a successful drain. The host must close on error.
     pub async fn ready_audio(&mut self) -> Result<Option<PcmFrame>, Error> {
-        if !self.active {
-            return Err(Error::Unavailable);
+        let view = self.active()?;
+        if view.receive == CallReceive::Resetting {
+            return Ok(None);
         }
+        let state = &self.state;
         let receive = self.peer.recv();
         tokio::pin!(receive);
         std::future::poll_fn(|cx| match std::future::Future::poll(receive.as_mut(), cx) {
             std::task::Poll::Pending => std::task::Poll::Ready(Ok(None)),
-            std::task::Poll::Ready(Ok(Some(frame))) => std::task::Poll::Ready(Ok(Some(frame))),
+            std::task::Poll::Ready(Ok(Some(frame))) => {
+                std::task::Poll::Ready(remote_audio(state, view.receive_generation, &frame).map(Some))
+            }
             std::task::Poll::Ready(Ok(None)) => std::task::Poll::Ready(Err(Error::Unavailable)),
             std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Err(media_error(error))),
         })
@@ -382,23 +405,40 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer> MediaCall<'a
     /// # Errors
     /// Cleanup of either side still runs when the other fails.
     pub async fn close(&mut self, deadline: Instant) -> Result<(), Error> {
-        if self.closed {
+        let Some(view) = self.state.view() else {
+            return self.peer.close().await.map_err(media_error);
+        };
+        if view.phase == CallPhase::Closed {
             return Ok(());
         }
         self.early.clear();
-        if !self.active {
-            if self.started {
-                self.call.fail();
-            }
-            let result = self.peer.close().await.map_err(media_error);
-            self.closed = true;
-            return result;
-        }
-        self.active = false;
-        let (control, media) = tokio::join!(self.call.stop(deadline), self.peer.close());
-        self.closed = true;
+        let (action, _) = self.state.send(|call| CallEvent::CloseRequested { call }).into_parts();
+        let (control, media) =
+            if view.phase == CallPhase::Connected && matches!(action, Some(CallCommand::ClosePeer(_))) {
+                tokio::join!(self.call.stop(deadline), self.peer.close())
+            } else {
+                if view.phase != CallPhase::Fresh {
+                    self.call.fail();
+                }
+                (Ok(()), self.peer.close().await)
+            };
+        self.state.send(|call| CallEvent::PeerClosed { call });
         control.and(media.map_err(media_error))
     }
+}
+
+fn remote_audio(state: &CallPort, generation: u64, frame: &PcmFrame) -> Result<PcmFrame, Error> {
+    let (action, frame) = state
+        .send(|call| CallEvent::RemoteAudioFrame {
+            call,
+            generation,
+            frame,
+        })
+        .into_parts();
+    if matches!(action, Some(CallCommand::DeliverRemoteAudio { .. })) {
+        return frame.ok_or(Error::Unavailable);
+    }
+    Err(Error::Unavailable)
 }
 
 fn media_error(error: echo_media::Error) -> Error {

@@ -369,7 +369,7 @@ async fn listening_step<E: LinkEvents>(
             let event = event?;
             // The runner can start before the native hand-off identifies the
             // request. Keep Played until the hand-off or speech opens a reply.
-            if !source.stale() && matches!(event, MediaEvent::Control(Event::TurnStarted { .. })) {
+            if !source.stale() && matches!(event.control_event(), Some(Event::TurnStarted { .. })) {
                 source.controller.turn(|session| SessionTurnEvent::DispatchWhileListening { session });
                 *turn_started = true;
                 super::media(event, port, source, observe).await?;
@@ -389,16 +389,16 @@ async fn listening_step<E: LinkEvents>(
                 super::media(event, port, source, observe).await?;
                 return Ok(true);
             }
-            match event {
-                MediaEvent::Control(Event::Session(request)) => {
+            match event.into_parts().0 {
+                Some(Event::Session(request)) => {
                     super::session_tools::answer(request, &source.controller, observe)?;
                     end_if_ended(port, source).await?;
                 }
-                MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
-                MediaEvent::Control(Event::TurnCompleted { .. }) => source.dispatch_completed(),
-                MediaEvent::Control(Event::SpeechStopped) => source.user_quiet(),
+                Some(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
+                Some(Event::TurnCompleted { .. }) => source.dispatch_completed(),
+                Some(Event::SpeechStopped) => source.user_quiet(),
                 // Continuous RTP and stale done frames cannot renew listening.
-                MediaEvent::Control(_) | MediaEvent::Audio(_) => (),
+                Some(_) | None => (),
             }
         },
     }
@@ -407,9 +407,9 @@ async fn listening_step<E: LinkEvents>(
 
 fn activity(event: &MediaEvent) -> bool {
     matches!(
-        event,
-        MediaEvent::Control(Event::SpeechStarted | Event::ReplyHandoff(_) | Event::TurnStarted { .. })
-    ) || matches!(event, MediaEvent::Control(Event::Transcript { role, done, .. })
+        event.control_event(),
+        Some(Event::SpeechStarted | Event::ReplyHandoff(_) | Event::TurnStarted { .. })
+    ) || matches!(event.control_event(), Some(Event::Transcript { role, done, .. })
             if role == "user" || (role == "assistant" && !done))
 }
 
@@ -426,9 +426,9 @@ fn window(source: &Source, options: &Options) -> Result<std::time::Duration, Err
 /// Activity that is the model's own: a delegated turn or assistant speech.
 fn answer(event: &MediaEvent) -> bool {
     matches!(
-        event,
-        MediaEvent::Control(Event::ReplyHandoff(_) | Event::TurnStarted { .. })
-    ) || matches!(event, MediaEvent::Control(Event::Transcript { role, .. }) if role == "assistant")
+        event.control_event(),
+        Some(Event::ReplyHandoff(_) | Event::TurnStarted { .. })
+    ) || matches!(event.control_event(), Some(Event::Transcript { role, .. }) if role == "assistant")
 }
 
 #[cfg(test)]

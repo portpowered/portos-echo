@@ -1,4 +1,5 @@
 use echo_core_api::{Broken, CommandKind, Commands, Event, EventKind, Now, Subsystem};
+use echo_sub_call::LiveCall;
 use echo_sub_pacer::Pacer;
 use echo_sub_session::Session;
 use std::time::Duration;
@@ -8,13 +9,14 @@ pub(super) struct VoiceReducers;
 pub(super) struct State {
     pub(super) playback: echo_sub_pacer::State,
     pub(super) session: echo_sub_session::State,
+    pub(super) call: echo_sub_call::State,
 }
 
 // The generic World has one voice slot. Keep each reducer's state and timer
-// independent while stepping session before pacer. The call slot follows pacer.
+// independent while stepping session, pacer and call in that order.
 impl Subsystem for VoiceReducers {
     type State = State;
-    const INPUTS: &'static [EventKind] = &[EventKind::Session, EventKind::Pacer];
+    const INPUTS: &'static [EventKind] = &[EventKind::Session, EventKind::Pacer, EventKind::Call];
     const OUTPUTS: &'static [CommandKind] = &[
         CommandKind::StartCapture,
         CommandKind::StopCapture,
@@ -27,11 +29,16 @@ impl Subsystem for VoiceReducers {
         CommandKind::LipBatch,
         CommandKind::MouthChanged,
         CommandKind::PlayoutFinished,
+        CommandKind::OpenPeer,
+        CommandKind::ClosePeer,
+        CommandKind::ResetReceive,
+        CommandKind::DeliverRemoteAudio,
     ];
 
     fn on_event(state: &mut State, event: &mut Event, now: Now, out: &mut Commands) {
         Session::on_event(&mut state.session, event, now, out);
         Pacer::on_event(&mut state.playback, event, now, out);
+        LiveCall::on_event(&mut state.call, event, now, out);
     }
 
     fn on_tick(state: &mut State, now: Now, out: &mut Commands) {
@@ -46,6 +53,7 @@ impl Subsystem for VoiceReducers {
 
     fn check(state: &State) -> Result<(), Broken> {
         Session::check(&state.session)?;
-        Pacer::check(&state.playback)
+        Pacer::check(&state.playback)?;
+        LiveCall::check(&state.call)
     }
 }

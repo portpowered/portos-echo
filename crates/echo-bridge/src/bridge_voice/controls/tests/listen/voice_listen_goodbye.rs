@@ -247,10 +247,10 @@ async fn handoff(tx: &mpsc::Sender<MediaEvent>, turn_first: bool) {
 /// Half of the audio `reply` sends.
 async fn farewell_audio(tx: &mpsc::Sender<MediaEvent>) {
     for _ in 0..6 {
-        tx.send(MediaEvent::Audio(Box::new([5000; 320]))).await.unwrap();
+        tx.send(MediaEvent::audio([5000; 320])).await.unwrap();
     }
 }
 
 async fn send_control(tx: &mpsc::Sender<MediaEvent>, event: Event) {
-    tx.send(MediaEvent::Control(event)).await.unwrap();
+    tx.send(MediaEvent::control(event)).await.unwrap();
 }

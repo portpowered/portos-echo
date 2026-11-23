@@ -102,7 +102,7 @@ async fn poll(work: Pin<&mut impl Future<Output = Result<super::super::Stats, Er
 }
 
 async fn reply(tx: &mpsc::Sender<MediaEvent>, level: i16) {
-    tx.send(MediaEvent::Control(Event::Transcript {
+    tx.send(MediaEvent::control(Event::Transcript {
         role: "assistant".into(),
         text: "fixture".into(),
         done: false,
@@ -110,9 +110,9 @@ async fn reply(tx: &mpsc::Sender<MediaEvent>, level: i16) {
     .await
     .unwrap();
     for _ in 0..12 {
-        tx.send(MediaEvent::Audio(Box::new([level; 320]))).await.unwrap();
+        tx.send(MediaEvent::audio([level; 320])).await.unwrap();
     }
-    tx.send(MediaEvent::Control(Event::ReplyDone { text: "fixture".into() }))
+    tx.send(MediaEvent::control(Event::ReplyDone { text: "fixture".into() }))
         .await
         .unwrap();
 }
@@ -192,7 +192,7 @@ async fn two_replies(
         );
         if number == 1 {
             tokio::time::advance(Duration::from_secs(2)).await;
-            tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+            tx.send(MediaEvent::control(Event::SpeechStarted)).await.unwrap();
             poll(work.as_mut()).await;
         }
     }
@@ -261,8 +261,8 @@ async fn settle(
 }
 
 async fn idle_noise(tx: &mpsc::Sender<MediaEvent>) {
-    tx.send(MediaEvent::Audio(Box::new([7000; 320]))).await.unwrap();
-    tx.send(MediaEvent::Control(Event::ReplyDone { text: "stale".into() }))
+    tx.send(MediaEvent::audio([7000; 320])).await.unwrap();
+    tx.send(MediaEvent::control(Event::ReplyDone { text: "stale".into() }))
         .await
         .unwrap();
 }
@@ -439,7 +439,7 @@ async fn voice_listen_empty_reply_requires_receipt_then_waits_without_audible_fr
             Ok(())
         },
     ));
-    tx.send(MediaEvent::Control(Event::ReplyDone { text: "empty".into() }))
+    tx.send(MediaEvent::control(Event::ReplyDone { text: "empty".into() }))
         .await
         .unwrap();
     poll(work.as_mut()).await;

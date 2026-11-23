@@ -392,7 +392,7 @@ async fn replacement_waits_for_receive_ack_across_cancelled_polls_and_reuses_cal
         for expected in 1..=3 {
             call.retire_audio();
             call.retire_audio();
-            let boundary = MediaEvent::Control(Event::Transcript {
+            let boundary = MediaEvent::control(Event::Transcript {
                 role: "assistant".into(),
                 text: "same replacement".into(),
                 done: false,
@@ -409,12 +409,12 @@ async fn replacement_waits_for_receive_ack_across_cancelled_polls_and_reuses_cal
             assert_eq!(state.resets.load(Ordering::SeqCst), expected - 1);
             gate.notify_one();
             assert!(
-                matches!(call.next().await.unwrap(), MediaEvent::Control(Event::Transcript { text, .. }) if text == "same replacement")
+                matches!(call.next().await.unwrap().into_parts().0, Some(Event::Transcript { text, .. }) if text == "same replacement")
             );
             assert_eq!(state.resets.load(Ordering::SeqCst), expected);
             assert_eq!(call.ready_audio().await.unwrap(), None);
             tx.send([456; 320]).await.unwrap();
-            assert!(matches!(call.next().await.unwrap(), MediaEvent::Audio(frame) if *frame == [456;320]));
+            assert!(matches!(call.next().await.unwrap().into_parts().1, Some(frame) if frame == [456;320]));
         }
         call.close(deadline()).await.unwrap();
         assert_eq!(state.offers.load(Ordering::SeqCst), 1);
@@ -438,22 +438,22 @@ async fn ordinary_single_and_tool_replies_preserve_pcm_without_receive_reset() {
         for delegated in [false, true] {
             if delegated {
                 assert!(matches!(
-                    call.next().await.unwrap(),
-                    MediaEvent::Control(Event::TurnStarted { .. })
+                    call.next().await.unwrap().into_parts().0,
+                    Some(Event::TurnStarted { .. })
                 ));
                 assert!(matches!(
-                    call.next().await.unwrap(),
-                    MediaEvent::Control(Event::TurnCompleted { .. })
+                    call.next().await.unwrap().into_parts().0,
+                    Some(Event::TurnCompleted { .. })
                 ));
             }
             assert!(matches!(
-                call.next().await.unwrap(),
-                MediaEvent::Control(Event::Transcript { .. })
+                call.next().await.unwrap().into_parts().0,
+                Some(Event::Transcript { .. })
             ));
             let mut reply = crate::bridge_codex::ReplyAudio::new(200).unwrap();
             for _ in 0..10 {
                 tx.send([456; 320]).await.unwrap();
-                let MediaEvent::Audio(frame) = call.next().await.unwrap() else {
+                let Some(frame) = call.next().await.unwrap().into_parts().1 else {
                     unreachable!()
                 };
                 reply.push(&frame).unwrap();

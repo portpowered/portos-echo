@@ -176,7 +176,7 @@ async fn media_call_waits_for_connected_sends_pcm_and_preserves_generation_after
         assert_eq!(call.start(&options(), vec![], deadline()).await, Ok(()));
         call.send([123; 320]).unwrap();
         tx.send([-456; 320]).await.unwrap();
-        assert!(matches!(call.next().await.unwrap(), MediaEvent::Audio(frame) if *frame == [-456;320]));
+        assert!(matches!(call.next().await.unwrap().into_parts().1, Some(frame) if frame == [-456;320]));
         assert_eq!(call.dropped_frames(), DropCounts::default());
         assert_eq!(call.close(deadline()).await, Ok(()));
         assert_eq!(call.close(deadline()).await, Ok(()));
@@ -226,7 +226,7 @@ async fn media_call_early_events_flow_during_ice_and_survive_connection() {
         let mut call = MediaCall::new(&mut io, peer);
         call.start(&options(), vec![], deadline()).await.unwrap();
         assert!(
-            matches!(call.next().await.unwrap(), MediaEvent::Control(Event::ReplyDone { text }) if text == "early")
+            matches!(call.next().await.unwrap().into_parts().0, Some(Event::ReplyDone { text }) if text == "early")
         );
         call.close(deadline()).await.unwrap();
     };
@@ -322,9 +322,9 @@ async fn media_call_transcript_end_does_not_consume_or_close_accepted_audio() {
     let client = async {
         let mut call = MediaCall::new(&mut io, peer);
         call.start(&options(), vec![], deadline()).await.unwrap();
-        assert!(matches!(call.next().await.unwrap(), MediaEvent::Control(Event::ReplyDone { text }) if text == "done"));
+        assert!(matches!(call.next().await.unwrap().into_parts().0, Some(Event::ReplyDone { text }) if text == "done"));
         tx.send([777; 320]).await.unwrap();
-        assert!(matches!(call.next().await.unwrap(), MediaEvent::Audio(frame) if *frame == [777;320]));
+        assert!(matches!(call.next().await.unwrap().into_parts().1, Some(frame) if frame == [777;320]));
         assert_eq!(state.closes.load(Ordering::SeqCst), 0);
         call.close(deadline()).await.unwrap();
     };
@@ -457,7 +457,7 @@ async fn media_call_forwards_tool_response_under_original_id_while_media_is_live
             Err(Error::Unavailable)
         );
         call.start(&options(), vec![], deadline()).await.unwrap();
-        let MediaEvent::Control(Event::Tool { id, call: tool }) = call.next().await.unwrap() else {
+        let Some(Event::Tool { id, call: tool }) = call.next().await.unwrap().into_parts().0 else {
             unreachable!()
         };
         assert_eq!(id, RequestId::Number(42));
@@ -465,8 +465,8 @@ async fn media_call_forwards_tool_response_under_original_id_while_media_is_live
         call.answer_tool(&id, &result).unwrap();
         assert_eq!(call.answer_tool(&id, &result), Err(Error::Unavailable));
         assert!(matches!(
-            call.next().await.unwrap(),
-            MediaEvent::Control(Event::ReplyDone { .. })
+            call.next().await.unwrap().into_parts().0,
+            Some(Event::ReplyDone { .. })
         ));
         call.close(deadline()).await.unwrap();
     };

@@ -1,4 +1,4 @@
-//! The session controller composes the ordered device, session, pacer and trace World.
+//! The session controller composes the ordered device, session, pacer, call and trace World.
 use echo_core_api::{
     Broken, Clock, Command, Commands, DeviceControl, DeviceEvent, DeviceState, DeviceView, EntropyUnavailable, Event,
     Now, OsRng, PendingTrace, Rng, SeededRng, TraceDrain, TraceFailure, World,
@@ -9,12 +9,14 @@ use echo_wyoming::{ClientOptions, Endpoint};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::time::Instant;
 
+mod call;
 mod pacer;
 mod session;
 mod slots;
 mod tools;
 mod voice_reducers;
 pub mod witness;
+pub(crate) use call::CallPort;
 pub(crate) use pacer::{PacerPort, scope};
 pub(crate) use session::{SessionPort, close_call, open_call};
 use slots::Slots;
@@ -92,6 +94,7 @@ impl Controller {
                     pacer: voice_reducers::State {
                         playback: pacer,
                         session: echo_sub_session::State::new(start.into_std()),
+                        call: echo_sub_call::State::default(),
                     },
                     trace: echo_sub_trace::State::default(),
                     clock: BridgeClock {

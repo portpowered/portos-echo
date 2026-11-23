@@ -1,4 +1,5 @@
 //! The synchronous World interface shared by the controller and its services.
+mod call;
 mod clock;
 mod device;
 mod pacer;
@@ -6,6 +7,7 @@ mod rng;
 mod session;
 mod trace;
 
+pub use call::*;
 pub use clock::{Clock, Now, PausedClock, SystemClock};
 pub use device::{CapturePrivacy, DeviceControl, DeviceEvent, DeviceState, DeviceView, LinkState};
 pub use pacer::*;
@@ -15,13 +17,14 @@ pub use trace::{PendingTrace, TraceDrain, TraceFailure, TraceRow};
 
 use std::time::Duration;
 
-pub enum Event {
+pub enum Event<'a> {
     Device { generation: u64, change: DeviceEvent },
     TraceRow(Option<PendingTrace>),
     TraceFlushed { through: u64 },
     TraceFailed,
     Pacer(PacerEvent),
     Session(SessionEvent),
+    Call(CallEvent<'a>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -32,12 +35,14 @@ pub enum EventKind {
     TraceFailed,
     Pacer,
     Session,
+    Call,
 }
 
 pub enum Command {
     ApplyDeviceView { generation: u64, view: DeviceView },
     Pacer(PacerCommand),
     Session(SessionCommand),
+    Call(CallCommand),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -55,6 +60,10 @@ pub enum CommandKind {
     OpenCall,
     CloseCall,
     SessionToolDecision,
+    OpenPeer,
+    ClosePeer,
+    ResetReceive,
+    DeliverRemoteAudio,
 }
 
 #[derive(Default)]
@@ -63,6 +72,7 @@ pub struct Commands {
     drain_trace: bool,
     pacer: PacerCommands,
     session: SessionCommands,
+    call: CallCommands,
 }
 
 impl Commands {
@@ -96,6 +106,14 @@ impl Commands {
 
     pub fn take_pacer(&mut self) -> PacerCommands {
         std::mem::take(&mut self.pacer)
+    }
+
+    pub fn call(&mut self) -> &mut CallCommands {
+        &mut self.call
+    }
+
+    pub fn take_call(&mut self) -> CallCommands {
+        std::mem::take(&mut self.call)
     }
 }
 

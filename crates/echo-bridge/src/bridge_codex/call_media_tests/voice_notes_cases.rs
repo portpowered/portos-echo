@@ -75,12 +75,12 @@ where
     H: ToolHost + 'static,
 {
     loop {
-        match session.next().await.unwrap() {
-            MediaEvent::Control(Event::ReplyDone { text }) => {
+        match session.next().await.unwrap().into_parts().0 {
+            Some(Event::ReplyDone { text }) => {
                 assert_eq!(text, "done");
                 return;
             }
-            MediaEvent::Control(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. }) => (),
+            Some(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. }) => (),
             _ => unreachable!("unexpected session event"),
         }
     }

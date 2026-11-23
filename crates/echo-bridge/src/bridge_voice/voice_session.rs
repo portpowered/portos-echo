@@ -4,7 +4,7 @@ use super::{Notice, Options, Stats, VoicePort, run_opened};
 use crate::bridge_world::{SessionPort, close_call, open_call};
 use crate::{
     Error,
-    bridge_codex::{Event, MediaCall, MediaEvent, RetainedCall},
+    bridge_codex::{Event, MediaCall, RetainedCall},
 };
 use echo_codex::{DynamicTool, codex_io::RpcIo};
 use echo_link::{EchoLink, LinkEvent, LinkEvents};
@@ -468,13 +468,13 @@ async fn idle_step<E: LinkEvents>(
                 observe(SessionNotice::Run(Notice::Device(LinkEvent::MicrophoneDropped(count))))?;
             }
         },
-        event = call.next() => match event? {
-            MediaEvent::Control(Event::Session(request)) => {
+        event = call.next() => match event?.into_parts().0 {
+            Some(Event::Session(request)) => {
                 super::session_tools::inactive(request, |notice| observe(SessionNotice::Run(notice)))?;
             }
-            MediaEvent::Control(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
+            Some(Event::Closed | Event::Tool { .. }) => return Err(Error::Unavailable),
             // Neither an idle transcript nor old PCM starts a new reply.
-            MediaEvent::Control(_) | MediaEvent::Audio(_) => (),
+            Some(_) | None => (),
         },
     }
     Ok(None)

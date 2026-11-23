@@ -127,7 +127,7 @@ pub struct ReplyAudio {
     port: PacerPort,
     scratch: Option<Box<ReplyFrame>>,
     partial: usize,
-    microphone: Option<Box<PcmFrame>>,
+    microphone: PacerEvent,
 }
 
 pub(crate) struct ReplySettlement {
@@ -154,7 +154,7 @@ impl ReplyAudio {
             port: PacerPort::open(lead_ms, adaptive),
             scratch: Some(Box::new([0; 960])),
             partial: 0,
-            microphone: Some(Box::new([0; 320])),
+            microphone: PacerEvent::MicrophoneFrame(Box::new([0; 320])),
         })
     }
 
@@ -207,14 +207,9 @@ impl ReplyAudio {
     }
 
     pub(crate) fn microphone(&mut self, frame: &PcmFrame) {
-        let Some(mut scratch) = self.microphone.take() else {
-            return;
-        };
-        *scratch = *frame;
-        let mut event = PacerEvent::MicrophoneFrame(scratch);
-        self.port.dispatch(&mut event);
-        if let PacerEvent::MicrophoneFrame(scratch) = event {
-            self.microphone = Some(scratch);
+        if let PacerEvent::MicrophoneFrame(scratch) = &mut self.microphone {
+            **scratch = *frame;
+            self.port.dispatch(&mut self.microphone);
         }
     }
 

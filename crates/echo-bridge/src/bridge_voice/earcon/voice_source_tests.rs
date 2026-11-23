@@ -162,7 +162,7 @@ async fn first_audio_is_timed_from_the_user_transcript_or_the_delegated_turn() {
     for (event, endpoint) in [(user, Endpoint::UserTranscript), (turn, Endpoint::DelegatedTurn)] {
         let mut source = Source::new(200, false).unwrap();
         let mut port = Narrow::default();
-        super::super::media(MediaEvent::Control(event), &mut port, &mut source, &mut |_| Ok(()))
+        super::super::media(MediaEvent::control(event), &mut port, &mut source, &mut |_| Ok(()))
             .await
             .unwrap();
         tokio::time::advance(Duration::from_millis(730)).await;

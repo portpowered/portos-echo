@@ -3,7 +3,7 @@
 //! Controlled signaling and real pinned-server signaling; neither is a milestone witness.
 #[path = "pinned_media/mod.rs"]
 mod pinned_media;
-use echo_bridge::bridge_codex::{CaptureAudio, Event, MediaCall, MediaEvent, Options, ReplyAudio};
+use echo_bridge::bridge_codex::{CaptureAudio, Event, MediaCall, Options, ReplyAudio};
 use echo_codex::{codex_io::RpcIo, codex_rpc::Limits};
 use echo_live::LivePeer;
 use echo_media::{DropCounts, MediaPeer, Peer, PeerConfig};
@@ -170,12 +170,13 @@ async fn audio_round_trip<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWr
     let mut reply = ReplyAudio::new(200).unwrap();
     let mut samples = Vec::new();
     while samples.len() < 3 * 320 {
-        match call.next().await.unwrap() {
-            MediaEvent::Audio(frame) => {
+        match call.next().await.unwrap().into_parts() {
+            (None, Some(frame)) => {
                 reply.push(&frame).unwrap();
-                samples.extend(*frame);
+                samples.extend(frame);
             }
-            MediaEvent::Control(event) => assert!(matches!(event, Event::Other)),
+            (Some(event), _) => assert!(matches!(event, Event::Other)),
+            (None, None) => unreachable!("empty media observation"),
         }
     }
     let energy: i64 = samples.iter().map(|s| i64::from(*s).pow(2)).sum();

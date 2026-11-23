@@ -252,14 +252,14 @@ async fn transcripts<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite +
 ) {
     let mut transcript = vec![];
     loop {
-        match call.next().await.unwrap() {
-            MediaEvent::Control(Event::Transcript { role, text, done }) => transcript.push(json!([role, text, done])),
-            MediaEvent::Control(Event::ReplyDone { text }) => {
+        match call.next().await.unwrap().into_parts().0 {
+            Some(Event::Transcript { role, text, done }) => transcript.push(json!([role, text, done])),
+            Some(Event::ReplyDone { text }) => {
                 transcript.push(json!(["assistant", text, true]));
                 break;
             }
-            MediaEvent::Control(Event::Other) | MediaEvent::Audio(_) => (),
-            MediaEvent::Control(
+            Some(Event::Other) | None => (),
+            Some(
                 Event::Closed
                 | Event::Tool { .. }
                 | Event::TurnStarted { .. }
