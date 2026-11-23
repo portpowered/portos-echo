@@ -133,13 +133,15 @@ export function watchBuild(
     stream: StreamEvents,
     href: string,
     busy: () => boolean,
-    unavailable: (started: number) => void,
+    unavailable: () => void,
 ) {
     const loaded = document.querySelector(BUILD_META)?.getAttribute("content");
     const index = new URL(href);
     index.search = index.hash = "";
     let active: AbortController | undefined;
     let live = false;
+    let lastFrame = -Infinity;
+    let retryAfterFrame = false;
     let periodic: ReturnType<typeof setTimeout> | undefined;
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let wanted = "";
@@ -167,7 +169,16 @@ export function watchBuild(
         clearTimeout(periodic);
         periodic = undefined;
         const started = performance.now();
-        deadline = setTimeout(() => request.abort(), PROBE_TIMEOUT_MS);
+        // A frame can invalidate the failure of an older probe. Its retry
+        // still has to finish within five seconds of that proof of life.
+        const remaining = retryAfterFrame
+            ? lastFrame + PROBE_INTERVAL_MS + PROBE_TIMEOUT_MS - started
+            : PROBE_TIMEOUT_MS;
+        deadline = setTimeout(
+            () => request.abort(),
+            Math.max(0, Math.min(PROBE_TIMEOUT_MS, remaining)),
+        );
+        retryAfterFrame = false;
         try {
             const response = await fetch(index.href, {
                 cache: "no-store",
@@ -185,7 +196,10 @@ export function watchBuild(
             wanted = served && served !== loaded ? served : "";
             if (timer === undefined) reload();
         } catch {
-            if (request === active && live) unavailable(started);
+            if (request === active && live) {
+                retryAfterFrame = lastFrame > started;
+                if (!retryAfterFrame) unavailable();
+            }
         } finally {
             if (request === active) {
                 clearTimeout(deadline);
@@ -210,6 +224,7 @@ export function watchBuild(
     function cancelCheck(): void {
         clearTimeout(periodic);
         clearTimeout(deadline);
+        retryAfterFrame = false;
         const request = active;
         active = undefined;
         request?.abort();
@@ -217,6 +232,9 @@ export function watchBuild(
     const opened = () => void check();
     if (loaded) stream.addEventListener("open", opened);
     return {
+        receivedFrame() {
+            lastFrame = performance.now();
+        },
         setLive,
         dispose() {
             if (loaded) stream.removeEventListener("open", opened);

@@ -193,7 +193,13 @@ function sample(band, times) {
     }, times);
 }
 
-test("B08: a silent established connection enters waiting within 5 seconds and the real stream recovers", async (t) => {
+test("B08: a silent established connection enters waiting within 5 seconds and the real stream recovers", (t) =>
+    verifyOutage(t, 0));
+
+test("B08: a frame during a hung probe keeps the band active and bounds the follow-up", (t) =>
+    verifyOutage(t, 500));
+
+async function verifyOutage(t, frameAfterProbeMs) {
     const context = await browser.newContext({ serviceWorkers: "block" });
     context.setDefaultTimeout(5000);
     t.after(() => context.close());
@@ -201,7 +207,8 @@ test("B08: a silent established connection enters waiting within 5 seconds and t
     await page.clock.install({ time: 0 });
     await page.clock.pauseAt(0);
     let unreachable = false;
-    const heldCheck = Promise.withResolvers();
+    const firstHeldCheck = Promise.withResolvers();
+    const heldChecks = [];
     const heldStream = Promise.withResolvers();
     let checks = 0;
     await context.route("**/*", (route) => {
@@ -211,7 +218,8 @@ test("B08: a silent established connection enters waiting within 5 seconds and t
         if (url.pathname === "/" && !request.isNavigationRequest()) {
             checks++;
             if (unreachable) {
-                heldCheck.resolve(route);
+                heldChecks.push(route);
+                firstHeldCheck.resolve();
                 return;
             }
         }
@@ -224,21 +232,27 @@ test("B08: a silent established connection enters waiting within 5 seconds and t
     const initialProbe = page.waitForResponse(
         (response) => response.url() === `${origin}/`,
     );
-    command({ state: { state: "speaking" } });
+    const initialState = frameAfterProbeMs ? "thinking" : "speaking";
+    command({ state: { state: initialState } });
     await page.goto(pairedUrl);
     await initialProbe;
-    await page.locator('[data-ui-state="speaking"]').waitFor();
+    await page.locator(`[data-ui-state="${initialState}"]`).waitFor();
     await page.locator("html").evaluate((node) => {
         node.dataset.echoScreenChrome = "page";
     });
-    await chromeState(page, "speaking").waitFor();
+    await chromeState(page, initialState).waitFor();
     const waiting = page
         .getByRole("status")
         .filter({ hasText: "Waiting for bridge" });
     unreachable = true;
     await page.clock.runFor(2000);
-    const probe = await heldCheck.promise;
-    await page.clock.runFor(2999);
+    await firstHeldCheck.promise;
+    if (frameAfterProbeMs) {
+        await page.clock.runFor(frameAfterProbeMs);
+        command({ state: { state: "speaking" } });
+        await chromeState(page, "speaking").waitFor();
+    }
+    await page.clock.runFor(frameAfterProbeMs ? 4999 : 2999);
     assert.equal(await waiting.count(), 0);
     assert.equal(await chromeState(page, "speaking").count(), 1);
     await page.clock.runFor(1);
@@ -247,10 +261,10 @@ test("B08: a silent established connection enters waiting within 5 seconds and t
         await page.locator(".screen-band").getAttribute("class"),
         "screen-band",
     );
-    assert.equal(checks, 2);
+    assert.equal(checks, frameAfterProbeMs ? 3 : 2);
     const reconnect = await heldStream.promise;
     unreachable = false;
-    await probe.abort().catch(() => {});
+    for (const probe of heldChecks) await probe.abort().catch(() => {});
     command({ state: { state: "listening" } });
     await reconnect.continue();
     await chromeState(page, "listening").waitFor();
@@ -262,9 +276,9 @@ test("B08: a silent established connection enters waiting within 5 seconds and t
     await chromeState(page, "muted").waitFor();
     assert.equal(await waiting.count(), 0);
     console.log(
-        "A2 outage: silent stream stays active through 4999ms, waiting at 5000ms, first valid SSE restores chrome, offline signal clears and recovers",
+        `A2 outage (frame ${frameAfterProbeMs ? "during" : "before"} probe): active through 4999ms, waiting at 5000ms, first valid SSE restores chrome, offline signal clears and recovers`,
     );
-});
+}
 
 test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and revoked refusal", async (t) => {
     const context = await browser.newContext({

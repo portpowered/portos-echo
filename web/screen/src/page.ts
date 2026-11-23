@@ -265,13 +265,11 @@ export function startPage(root: HTMLElement, href: string): () => void {
         diagnostic.textContent = "Screen configuration is invalid";
         return () => {};
     }
-    let lastFrame = -Infinity;
     const build = watchBuild(
         stream,
         href,
         () => settings?.dirty() ?? false,
-        (started) => {
-            if (lastFrame > started) return;
+        () => {
             chrome.wait();
             stream.restart();
         },
@@ -294,7 +292,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
             const changed = presentation.receive(event.data);
             const frame = presentation.current;
             if (frame && (changed || presentation.displays(event.data))) {
-                lastFrame = performance.now();
+                build.receivedFrame();
                 chrome.update(frame.state.state);
                 if (changed) render(frame);
             }
