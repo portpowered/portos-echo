@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*.json by tools/screen-schema.mjs.
-// Schema SHA-256: e11dc9f8cb6939a6b55ebc10bd0c5cb1dd0526924d0f635c42b712af9c68ab48
+// Schema SHA-256: afc8e9487999bab981398b502742268198c5ee61168dce448848666e0b38b87d
 export type UiState =
     | { state: "ready"; message: string }
     | { state: "connecting" }

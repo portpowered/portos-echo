@@ -206,7 +206,7 @@
       ]
     },
     {
-      "description": "An explicit OpenAI recovery is available or preparing a challenge.",
+      "description": "Sign-in is available or preparing a challenge.",
       "type": "object",
       "properties": {
         "message": {
@@ -231,7 +231,7 @@
       ]
     },
     {
-      "description": "The current ChatGPT device-code challenge.",
+      "description": "The current device-code challenge.",
       "type": "object",
       "properties": {
         "attempt_id": {

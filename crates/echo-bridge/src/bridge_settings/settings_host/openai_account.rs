@@ -126,7 +126,7 @@ impl Account {
         })
     }
 
-    /// The voice owner calls this only for the ChatGPT admission latch.
+    /// Update the latch after the voice account is rejected or admitted.
     pub(crate) fn relink(&self, required: bool) -> Result<(), Error> {
         let mut result = Ok(());
         self.0.send_if_modified(|state| {

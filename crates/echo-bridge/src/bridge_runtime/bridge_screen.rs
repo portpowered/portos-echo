@@ -267,18 +267,11 @@ impl Screen {
                     break;
                 }
                 if action == echo_screen_contract::UiAction::Relink {
-                    let result = if let Some(account) = &account {
-                        if account.relink_start() {
-                            Ok(())
-                        } else {
-                            presentation.refresh()
-                        }
-                    } else if muted {
-                        Ok(())
-                    } else if health.borrow().relink_required {
-                        presentation.publish(failure_state(true))
-                    } else {
-                        presentation.refresh()
+                    let result = match &account {
+                        Some(account) if account.relink_start() => Ok(()),
+                        None if muted => Ok(()),
+                        None if health.borrow().relink_required => presentation.publish(failure_state(true)),
+                        _ => presentation.refresh(),
                     };
                     if result.is_err() {
                         break;
