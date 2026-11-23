@@ -108,6 +108,10 @@ fn paced() -> ReplyAudio {
     ReplyAudio::new(200).unwrap()
 }
 
+async fn native_pacer() -> ReplyAudio {
+    crate::bridge_world::scope(crate::bridge_world::Controller::new(), None, async { paced() }).await
+}
+
 fn playout(quality: &ReplyQuality) -> [u32; 4] {
     [
         quality.reprimes,
@@ -119,6 +123,23 @@ fn playout(quality: &ReplyQuality) -> [u32; 4] {
 
 fn target(quality: &ReplyQuality) -> [u32; 3] {
     [quality.target_min_ms, quality.target_max_ms, quality.target_final_ms]
+}
+
+#[tokio::test(start_paused = true)]
+async fn reply_playout_discarded_peer_frame_restarts_arrivals_without_losing_the_cushion() {
+    let pacer = native_pacer().await;
+    let reference = native_pacer().await;
+    let cushion = Duration::from_millis(300);
+    assert_eq!(pacer.arrived(false), cushion);
+    assert_eq!(reference.arrived(false), cushion);
+
+    tokio::time::advance(Duration::from_millis(200)).await;
+    pacer.discarded();
+    tokio::time::advance(Duration::from_millis(200)).await;
+
+    assert_eq!(pacer.arrived(false), cushion);
+    assert_eq!(reference.arrived(false), Duration::from_millis(320));
+    assert!(!pacer.has_frames() && !pacer.spoken());
 }
 
 #[tokio::test(start_paused = true)]
@@ -194,8 +215,7 @@ async fn reply_playout_first_reply_of_a_call_rides_out_a_stall_in_its_first_seco
     script.extend(talk(100));
     let before = reply(&mut paced(), &mut ReplyMeter::default(), &script).await.quality;
     assert_eq!((before.underruns, before.reprimes), (1, 1));
-    let mut pacer = paced();
-    pacer.expect_jitter();
+    let mut pacer = native_pacer().await;
     let heard = reply(&mut pacer, &mut ReplyMeter::default(), &script).await;
     let quality = heard.quality;
     assert_eq!((quality.underruns, quality.reprimes, quality.concealment_ms), (0, 0, 0));

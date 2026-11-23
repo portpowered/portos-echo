@@ -194,7 +194,7 @@ impl ReplyAudio {
 
     pub(crate) fn discard_output(&mut self) {
         self.partial = 0;
-        self.port.discard_output();
+        self.port.send(PacerEvent::RemoteEnd);
     }
 
     pub(crate) fn arrived(&self, audible: bool) -> Duration {
@@ -203,7 +203,7 @@ impl ReplyAudio {
     }
 
     pub(crate) fn discarded(&self) {
-        self.port.discarded();
+        self.port.send(PacerEvent::PeerFrameDiscarded);
     }
 
     pub(crate) fn microphone(&mut self, frame: &PcmFrame) {
@@ -314,11 +314,6 @@ impl ReplyAudio {
     #[cfg(test)]
     pub(crate) fn mouth_fixture() -> Self {
         Self::with_pacing(u16::MAX, false).unwrap()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn expect_jitter(&self) {
-        self.port.expect_jitter();
     }
 
     #[cfg(test)]

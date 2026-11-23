@@ -66,12 +66,16 @@ impl Controller {
     }
 
     fn with_witness(witness: Option<Witness>) -> Arc<Self> {
+        Self::with_pacer(witness, echo_sub_pacer::State::default())
+    }
+
+    fn with_pacer(witness: Option<Witness>, pacer: echo_sub_pacer::State) -> Arc<Self> {
         let seed = witness.as_ref().and_then(|witness| witness.seed);
         Arc::new(Self {
             state: Mutex::new(State {
                 world: World {
                     device: DeviceState::default(),
-                    pacer: echo_sub_pacer::State::default(),
+                    pacer,
                     trace: echo_sub_trace::State::default(),
                     clock: BridgeClock {
                         start: Instant::now(),

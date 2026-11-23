@@ -41,6 +41,7 @@ pub struct State {
     wait: Option<Wait>,
     staged: Option<ReplyFrame>,
     jitter: Jitter,
+    prime_first_arrival: bool,
     ear: Ear,
     mouth: Mouth,
     lips: Option<Lips>,
@@ -53,12 +54,21 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl State {
+    /// Construct a pacer with the given first-arrival jitter policy.
+    #[must_use]
+    pub fn new(prime_first_arrival: bool) -> Self {
         Self {
             queue: Ring::default(),
             clock: ClockPacer::new(0, false),
             wait: None,
             staged: None,
             jitter: Jitter::default(),
+            prime_first_arrival,
             ear: Ear::default(),
             mouth: Mouth::default(),
             lips: None,
@@ -69,9 +79,7 @@ impl Default for State {
             last_frame_at: None,
         }
     }
-}
 
-impl State {
     #[must_use]
     pub fn view(&self) -> PacerView {
         PacerView {
@@ -131,22 +139,13 @@ impl State {
         self.ear.measurement()
     }
 
-    pub fn take_lip_stats(&mut self) -> LipStats {
-        self.lips.as_mut().map_or_else(LipStats::default, Lips::take_stats)
-    }
-
-    /// Seed a new native call with the cushion measured on the device.
-    pub fn expect_jitter(&mut self) {
-        self.jitter = Jitter::expecting(EXPECTED_MS);
-    }
-
-    /// A discarded frame breaks the arrival chain and retains learned jitter.
-    pub fn break_arrival_chain(&mut self) {
-        self.jitter.rest();
+    #[must_use]
+    pub fn lip_stats(&self) -> LipStats {
+        self.lips.as_ref().map_or_else(LipStats::default, Lips::stats)
     }
 
     /// Retire unsent PCM on remote end. The voice owner still settles the lip window.
-    pub fn discard_output(&mut self) {
+    fn discard_output(&mut self) {
         self.queue.discard();
         self.wait = None;
         self.staged = None;
@@ -184,6 +183,17 @@ impl State {
             // audio metadata. Preserve the screen's epoch across device runs.
             lips.abandon();
         }
+    }
+
+    fn open_run(&mut self, lead_ms: u16, adaptive: bool) {
+        self.lead_ms = lead_ms;
+        self.adaptive = adaptive;
+        self.close_run();
+        if self.prime_first_arrival {
+            // The first arrival starts with the cushion measured on the Echo.
+            self.jitter = Jitter::expecting(EXPECTED_MS);
+        }
+        self.input = Input::Open;
     }
 
     fn offer(&mut self, allow_fade: bool, now: Duration, out: &mut PacerCommands) {
@@ -239,18 +249,14 @@ impl Subsystem for Pacer {
         let out = out.pacer();
         match event {
             PacerEvent::ConfigureLips { delay } => state.lips = delay.map(|delay| Lips::new(delay, now)),
-            PacerEvent::RunOpened { lead_ms, adaptive } => {
-                state.lead_ms = *lead_ms;
-                state.adaptive = *adaptive;
-                state.close_run();
-                state.input = Input::Open;
-            }
+            PacerEvent::RunOpened { lead_ms, adaptive } => state.open_run(*lead_ms, *adaptive),
             PacerEvent::ReplyOpened => state.reset_reply(),
             PacerEvent::PeerFrameArrived { audible } => {
                 state.spoken |= *audible;
                 state.jitter.arrived(now);
                 state.clock.retarget(state.jitter.target(now));
             }
+            PacerEvent::PeerFrameDiscarded => state.jitter.rest(),
             PacerEvent::PcmPushed(frame) => state.queue.push(frame),
             PacerEvent::MicrophoneFrame(frame) => {
                 state.ear.heard(frame.as_slice(), now);
@@ -278,7 +284,13 @@ impl Subsystem for Pacer {
                 state.input = Input::Cut;
                 out.publish_lips(state.lips.as_mut().and_then(|lips| lips.cut(now)));
             }
+            PacerEvent::RemoteEnd => state.discard_output(),
             PacerEvent::ReplySettled => state.settle(now, out),
+            PacerEvent::LipStatsCollected => {
+                if let Some(lips) = &mut state.lips {
+                    lips.clear_stats();
+                }
+            }
             PacerEvent::RunClosed => state.close_run(),
         }
     }

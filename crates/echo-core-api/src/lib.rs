@@ -119,6 +119,11 @@ impl<D: Subsystem, P: Subsystem, T: Subsystem, C: Clock, R: Rng> World<D, P, T, 
         T::on_tick(&mut self.trace, self.clock.now(), out);
     }
 
+    /// Tick the mouth on its own wake, independent of PCM offers and trace flushes.
+    pub fn tick_pacer(&mut self, out: &mut Commands) {
+        P::on_tick(&mut self.pacer, self.clock.now(), out);
+    }
+
     #[must_use]
     pub fn trace_deadline(&self) -> Option<Duration> {
         T::next_deadline(&self.trace)

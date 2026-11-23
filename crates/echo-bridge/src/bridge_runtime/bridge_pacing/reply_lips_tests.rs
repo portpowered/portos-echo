@@ -158,6 +158,22 @@ async fn samples_already_heard_when_the_reply_settles_are_dropped_not_sent_late(
 }
 
 #[tokio::test(start_paused = true)]
+async fn lip_stats_include_the_final_delivery_receipt_then_clear() {
+    let (lips, sent) = lips(Some(true), false, 200);
+    scope(Some(lips), async {
+        let mut mouth = ReplyAudio::mouth_fixture();
+        speak(&mut mouth, &[8000; 2]).await;
+        assert_eq!(timeline(&sent), []);
+        let stats = mouth.settle().lip_stats;
+        assert_eq!((stats.batches, stats.samples, stats.dropped), (1, 2, 1));
+        assert_eq!(timeline(&sent), [(40, vec![(200, 70), (220, 91)])]);
+        assert_eq!(mouth.settle().lip_stats, LipStats::default());
+        assert_eq!(timeline(&sent).len(), 1);
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_cut_drops_what_is_pending_and_shuts_the_mouth_now() {
     let (lips, sent) = lips(Some(true), true, 200);
     let stats = scope(Some(lips), async {

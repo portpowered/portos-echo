@@ -171,8 +171,12 @@ impl Lips {
         self.flush(now)
     }
 
-    pub(crate) fn take_stats(&mut self) -> LipStats {
-        std::mem::take(&mut self.stats)
+    pub(crate) fn stats(&self) -> LipStats {
+        self.stats
+    }
+
+    pub(crate) fn clear_stats(&mut self) {
+        self.stats = LipStats::default();
     }
 
     pub(crate) fn has_pending(&self) -> bool {
@@ -182,6 +186,6 @@ impl Lips {
     pub(crate) fn abandon(&mut self) {
         self.clear_pending();
         self.moving = false;
-        self.stats = LipStats::default();
+        self.clear_stats();
     }
 }

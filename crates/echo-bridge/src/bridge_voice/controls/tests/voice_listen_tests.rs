@@ -57,6 +57,7 @@ async fn remote_end_discards_staged_and_queued_pcm_without_a_lip_cut() {
         assert_eq!(remote_cut(&mut port, &mut source), Err(Error::Control));
         assert!(source.session.ending());
         assert!(source.reply.drained());
+        assert_eq!(source.reply.stage(false).await, None);
         assert_eq!(*sent.lock().unwrap(), before);
 
         let quality = source.settle(0);
