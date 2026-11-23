@@ -117,6 +117,7 @@ async fn installation() -> (Fixture, TcpListener) {
     configure(&fixture, listener.local_addr().unwrap().port());
     let root = fixture.directory.path();
     let peer = root.join("auth-mode-peer");
+    fs::remove_file(fixture.home.join("work/app-server")).unwrap();
     fs::write(&peer, concat!("#!/usr/bin/env python3\n", include_str!("../peer.py"))).unwrap();
     fs::set_permissions(&peer, fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(root.join("auth-mode-fixture"), "read-stored-account").unwrap();
