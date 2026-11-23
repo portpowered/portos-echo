@@ -1,5 +1,6 @@
 //! T1: a settled call stops reuse without admitting a queued wake or media.
 use super::*;
+use crate::bridge_codex::MediaEvent;
 use crate::bridge_settings::settings_restart::Restart;
 use echo_link::{
     LinkConnector, MicrophoneRun,

@@ -392,10 +392,10 @@ async fn media(
     source: &mut Source,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    match event {
-        MediaEvent::Audio(frame) => source.audio(&frame),
-        MediaEvent::Control(Event::ReplyDone { text }) => voice_listen::finish_reply(text, port, source, observe).await,
-        MediaEvent::Control(Event::Transcript { role, text, done }) => {
+    match event.into_parts() {
+        (None, Some(frame)) => source.audio(&frame),
+        (Some(Event::ReplyDone { text }), _) => voice_listen::finish_reply(text, port, source, observe).await,
+        (Some(Event::Transcript { role, text, done }), _) => {
             let text = if role == "user" {
                 source.meter.endpoint(Instant::now(), Endpoint::UserTranscript);
                 source.user_transcript(text, done)
@@ -407,29 +407,27 @@ async fn media(
             };
             observe(Notice::Transcript { role, text, done })
         }
-        MediaEvent::Control(Event::TurnStarted { .. }) => {
+        (Some(Event::TurnStarted { .. }), _) => {
             source.meter.endpoint(Instant::now(), Endpoint::DelegatedTurn);
             source
                 .controller
                 .turn(|session| echo_core_api::SessionTurnEvent::DispatchStarted { session });
             Ok(())
         }
-        MediaEvent::Control(Event::TurnCompleted { answered, .. }) => {
-            voice_listen::complete_turn(answered, port, source).await
-        }
-        MediaEvent::Control(Event::SpeechStarted) => {
+        (Some(Event::TurnCompleted { answered, .. }), _) => voice_listen::complete_turn(answered, port, source).await,
+        (Some(Event::SpeechStarted), _) => {
             source.speech_started();
             Ok(())
         }
-        MediaEvent::Control(Event::SpeechStopped) => {
+        (Some(Event::SpeechStopped), _) => {
             source.user_quiet();
             Ok(())
         }
-        MediaEvent::Control(Event::Session(request)) => {
+        (Some(Event::Session(request)), _) => {
             session_tools::answer(request, &source.controller, observe)?;
             voice_listen::end_if_ended(port, source).await
         }
-        MediaEvent::Control(Event::Other | Event::ReplyHandoff(_)) => Ok(()),
-        MediaEvent::Control(Event::Closed | Event::Tool { .. }) => Err(Error::Unavailable),
+        (Some(Event::Other | Event::ReplyHandoff(_)), _) => Ok(()),
+        (Some(Event::Closed | Event::Tool { .. }), _) | (None, None) => Err(Error::Unavailable),
     }
 }

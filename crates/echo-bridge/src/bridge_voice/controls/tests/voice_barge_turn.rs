@@ -36,7 +36,7 @@ fn barge_rows(rows: &Rows) -> impl FnMut(Notice) -> Result<(), Error> + '_ {
 }
 
 fn speech(started: bool) -> MediaEvent {
-    MediaEvent::Control(if started {
+    MediaEvent::control(if started {
         Event::SpeechStarted
     } else {
         Event::SpeechStopped

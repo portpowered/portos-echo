@@ -32,7 +32,7 @@ async fn voice_barge_replacement_gets_a_fresh_response_window_after_settled_cut(
     send(&tx, [said("old reply")]).await;
     pending(work.as_mut()).await;
     tokio::time::advance(Duration::from_secs(9)).await;
-    send(&tx, [MediaEvent::Control(Event::SpeechStarted)]).await;
+    send(&tx, [MediaEvent::control(Event::SpeechStarted)]).await;
     pending(work.as_mut()).await;
     assert_eq!(command_count(&observer, false), 0);
     tokio::time::advance(BARGE_QUIET).await;
@@ -80,7 +80,7 @@ async fn voice_late_audible_media_after_done_is_discarded() {
         |_| Ok(()),
     ));
     pending(work.as_mut()).await;
-    tx.send(Ok(MediaEvent::Audio(Box::new([123; 320])))).await.unwrap();
+    tx.send(Ok(MediaEvent::audio([123; 320]))).await.unwrap();
     pending(work.as_mut()).await;
     observer.finish(Ok(()));
     assert_eq!(work.await.unwrap().reply_received, 1);
@@ -128,9 +128,9 @@ async fn voice_barge_retires_old_done_and_pcm_then_plays_the_same_text_answer() 
         observer.finish(Ok(()));
         pending(work.as_mut()).await;
         assert_eq!(command_count(&observer, true), 2);
-        send(&tx, [same_text_done(), MediaEvent::Control(Event::SpeechStarted)]).await;
+        send(&tx, [same_text_done(), MediaEvent::control(Event::SpeechStarted)]).await;
         send(&tx, audible(2)).await;
-        send(&tx, [MediaEvent::Audio(Box::new([0; 320]))]).await;
+        send(&tx, [MediaEvent::audio([0; 320])]).await;
         pending(work.as_mut()).await;
         assert_eq!(frames(&observer).len(), old_sent);
         send(&tx, [said("Yes")]).await;
@@ -208,7 +208,7 @@ async fn voice_barge_without_cut_receipt_never_opens_replacement_playback() {
         &tx,
         [
             said("old"),
-            MediaEvent::Control(Event::SpeechStarted),
+            MediaEvent::control(Event::SpeechStarted),
             said("new"),
             done(),
         ],
@@ -235,7 +235,7 @@ async fn voice_barge_without_cut_receipt_never_opens_replacement_playback() {
 /// first user turn transcribed since the reply before it; a later turn is
 /// the user talking over it.
 fn asked() -> MediaEvent {
-    MediaEvent::Control(Event::Transcript {
+    MediaEvent::control(Event::Transcript {
         role: "user".into(),
         text: "question".into(),
         done: true,
@@ -244,7 +244,7 @@ fn asked() -> MediaEvent {
 
 /// A sign of user speech: the speech-start item, or a transcript fragment.
 fn heard(signal: usize) -> MediaEvent {
-    MediaEvent::Control(if signal == 0 {
+    MediaEvent::control(if signal == 0 {
         Event::SpeechStarted
     } else {
         Event::Transcript {
@@ -312,7 +312,7 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
     source.reply.push_pcm(&[77; 960]);
     let mut pending_frame = source.reply.stage(false).await;
     assert_eq!(pending_frame, Some([77; 960]));
-    tx.send(Ok(MediaEvent::Control(Event::SpeechStarted))).await.unwrap();
+    tx.send(Ok(MediaEvent::control(Event::SpeechStarted))).await.unwrap();
     // This step only arms the barge-in; the quiet stretch fires it below.
     let (sink, observe) = (Some(&Stalled), &mut |_| Ok(()));
     let step = step(
@@ -369,7 +369,7 @@ async fn assert_retired_and_replacement(source: &mut Source, port: &mut Port) {
     assert!(!source.reply.has_frames());
 }
 fn same_text_done() -> MediaEvent {
-    MediaEvent::Control(Event::ReplyDone { text: "Yes.".into() })
+    MediaEvent::control(Event::ReplyDone { text: "Yes.".into() })
 }
 
 fn pcm(frame: &[u8]) -> Vec<i16> {

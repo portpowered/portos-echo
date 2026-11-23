@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 echo-core-api = { version = "0.1.0", path = "../echo-core-api" }
+echo-sub-call = { version = "0.1.0", path = "../echo-sub-call" }
 echo-sub-device = { version = "0.1.0", path = "../echo-sub-device" }
 echo-sub-pacer = { version = "0.1.0", path = "../echo-sub-pacer" }
 echo-sub-session = { version = "0.1.0", path = "../echo-sub-session" }

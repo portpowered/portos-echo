@@ -217,7 +217,7 @@ async fn talked_over(model: &mpsc::Sender<MediaEvent>, room: &Room) {
     stream(model, 5, 12000).await;
     let text = "New answer".into();
     model
-        .send(MediaEvent::Control(Event::ReplyDone { text }))
+        .send(MediaEvent::control(Event::ReplyDone { text }))
         .await
         .unwrap();
 }
@@ -270,7 +270,7 @@ async fn noisy(model: &mpsc::Sender<MediaEvent>, room: &Room) {
     stream(model, 100, TALK).await;
     let text = "A long answer".into();
     model
-        .send(MediaEvent::Control(Event::ReplyDone { text }))
+        .send(MediaEvent::control(Event::ReplyDone { text }))
         .await
         .unwrap();
 }

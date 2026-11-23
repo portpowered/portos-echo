@@ -79,7 +79,7 @@ async fn device(listener: tokio::net::TcpListener, wire: Wire) -> tokio::net::Tc
 }
 
 pub(super) fn said(role: &str, text: &str, done: bool) -> MediaEvent {
-    MediaEvent::Control(Event::Transcript {
+    MediaEvent::control(Event::Transcript {
         role: role.into(),
         text: text.into(),
         done,
@@ -88,7 +88,7 @@ pub(super) fn said(role: &str, text: &str, done: bool) -> MediaEvent {
 
 pub(super) async fn stream(model: &mpsc::Sender<MediaEvent>, count: usize, level: i16) {
     for _ in 0..count {
-        model.send(MediaEvent::Audio(Box::new([level; 320]))).await.unwrap();
+        model.send(MediaEvent::audio([level; 320])).await.unwrap();
         tokio::time::sleep(FRAME).await;
     }
 }
@@ -114,7 +114,7 @@ async fn interrupted(model: &mpsc::Sender<MediaEvent>, wire: &Wire) {
     model.send(said("assistant", "A long answer", false)).await.unwrap();
     // Faster than real time: the bridge queues what the device is not owed yet.
     for _ in 0..60 {
-        model.send(MediaEvent::Audio(Box::new([OLD; 320]))).await.unwrap();
+        model.send(MediaEvent::audio([OLD; 320])).await.unwrap();
     }
     stream(model, 30, OLD).await;
     // The user talks over the reply. The model talks on for 600 ms, then yields.
@@ -135,7 +135,7 @@ async fn answered(model: &mpsc::Sender<MediaEvent>, wire: &Wire) {
     stream(model, 5, NEW).await;
     let text = "New answer".into();
     model
-        .send(MediaEvent::Control(Event::ReplyDone { text }))
+        .send(MediaEvent::control(Event::ReplyDone { text }))
         .await
         .unwrap();
 }

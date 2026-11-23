@@ -1,17 +1,13 @@
 use super::{Error, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
 use crate::bridge_runtime::bridge_pacing::{Cut, Discard, QUIET, ReplyMeter, ReplyQuality};
-use echo_core_api::{SessionOutcome, SessionTurnEvent};
+use echo_core_api::{CallCommand, CallCommands, SessionOutcome, SessionTurnEvent, UplinkEvent, UplinkReceipt};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
-use std::collections::VecDeque;
 use tokio::time::Instant;
 
 #[path = "recovery/voice_floor.rs"]
 mod voice_floor;
-
-/// Thirty seconds of 20 ms frames: above the setup capture's own bound.
-const UPLINK_BACKLOG: usize = 1500;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
@@ -39,8 +35,6 @@ pub(super) struct Source {
     pub failure: &'static str,
     pub meter: ReplyMeter,
     pub stats: Stats,
-    /// Speech the bounded media sender has not taken yet, oldest first.
-    uplink: VecDeque<PcmFrame>,
     /// The device was told a dispatch is running in silence.
     thinking: bool,
 }
@@ -166,7 +160,6 @@ impl Source {
             thinking: false,
             meter: ReplyMeter::default(),
             stats: Stats::default(),
-            uplink: VecDeque::new(),
         })
     }
 
@@ -206,11 +199,12 @@ impl Source {
             self.controller.microphone_ended();
             self.user_quiet();
             if let Some(microphone) = &mut self.microphone {
-                let frames = microphone.finish()?;
+                let result = microphone
+                    .finish()?
+                    .iter()
+                    .try_for_each(|frame| forward(&self.controller, &mut self.stats, frame, port));
                 self.stats.microphone_tail = microphone.tail_samples();
-                for frame in frames {
-                    self.forward(&frame, port)?;
-                }
+                result?;
             }
             return Ok(false);
         };
@@ -224,48 +218,26 @@ impl Source {
         let microphone = self.microphone.as_mut().ok_or(Error::Audio)?;
         for frame in microphone.process(&frame.format, &frame.payload)? {
             // The microphone is measured, never judged: every frame goes up.
-            self.reply.microphone(&frame);
-            self.forward(&frame, port)?;
+            self.reply.microphone(frame);
+            forward(&self.controller, &mut self.stats, frame, port)?;
         }
         Ok(false)
     }
 
-    /// Speech captured while the call was set up is replayed as one burst, far
-    /// faster than the bounded media sender encodes it. Keep what the sender
-    /// refuses, in order, instead of letting it evict the start of the request.
-    fn forward(&mut self, frame: &PcmFrame, port: &impl VoicePort) -> Result<(), Error> {
-        self.flush_uplink(port)?;
-        if !self.uplink.is_empty() || !port.try_send(*frame)? {
-            if self.uplink.len() == UPLINK_BACKLOG {
-                self.uplink.pop_front();
-                self.stats.uplink_dropped += 1;
-            }
-            self.uplink.push_back(*frame);
-        }
-        self.stats.microphone_frames += 1;
-        Ok(())
-    }
-
     /// Hand the oldest waiting speech to the sender until it is full again.
     pub fn flush_uplink(&mut self, port: &impl VoicePort) -> Result<(), Error> {
-        while let Some(frame) = self.uplink.front() {
-            if !port.try_send(*frame)? {
-                break;
-            }
-            self.uplink.pop_front();
-        }
-        Ok(())
+        flush_uplink(&self.controller, port)
     }
 
     #[must_use]
     pub fn uplink_pending(&self) -> bool {
-        !self.uplink.is_empty()
+        self.controller.uplink_pending()
     }
 
     /// Mute withholds everything not yet handed to the media sender.
     pub fn mute_uplink(&mut self) {
         self.microphone = None;
-        self.uplink.clear();
+        self.controller.uplink(UplinkEvent::DropBacklog);
     }
 
     /// Continuous RTP received after a completed reply belongs to the retired
@@ -295,6 +267,36 @@ impl Source {
         self.reply.discarded();
         Ok(())
     }
+}
+
+/// Setup speech can arrive faster than the bounded sender encodes it. Give
+/// waiting speech the first opportunity, then queue or offer the new frame.
+fn forward(controller: &Controller, stats: &mut Stats, frame: &PcmFrame, port: &impl VoicePort) -> Result<(), Error> {
+    flush_uplink(controller, port)?;
+    let offer = controller.uplink(UplinkEvent::MicFrame(frame));
+    stats.uplink_dropped += u64::from(offer.uplink_evicted);
+    send_uplink(controller, offer, port)?;
+    stats.microphone_frames += 1;
+    Ok(())
+}
+
+fn flush_uplink(controller: &Controller, port: &impl VoicePort) -> Result<(), Error> {
+    while send_uplink(controller, controller.uplink(UplinkEvent::Writable), port)? {}
+    Ok(())
+}
+
+fn send_uplink(controller: &Controller, offer: CallCommands, port: &impl VoicePort) -> Result<bool, Error> {
+    let (Some(CallCommand::SendUplinkFrame { attempt, .. }), Some(frame)) = offer.into_parts() else {
+        return Ok(false);
+    };
+    let result = port.try_send(frame);
+    let receipt = match result {
+        Ok(true) => UplinkReceipt::Accepted,
+        Ok(false) => UplinkReceipt::Full,
+        Err(_) => UplinkReceipt::Failed,
+    };
+    controller.uplink(UplinkEvent::Result { attempt, receipt });
+    result
 }
 
 /// The call frame holds more than WebRTC silence.

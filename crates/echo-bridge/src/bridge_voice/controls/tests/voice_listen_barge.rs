@@ -108,7 +108,7 @@ async fn cut(
     paused: &Cell<usize>,
     prefix: usize,
 ) {
-    tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+    tx.send(MediaEvent::control(Event::SpeechStarted)).await.unwrap();
     poll(work.as_mut()).await;
     assert_eq!(cuts(observer), 0);
     tokio::time::advance(crate::bridge_runtime::bridge_pacing::BARGE_QUIET).await;
@@ -136,7 +136,7 @@ async fn before_expiry(
 }
 
 async fn unfinished(tx: &mpsc::Sender<MediaEvent>) {
-    tx.send(MediaEvent::Control(Event::Transcript {
+    tx.send(MediaEvent::control(Event::Transcript {
         role: "assistant".into(),
         text: "interrupted".into(),
         done: false,
@@ -144,7 +144,7 @@ async fn unfinished(tx: &mpsc::Sender<MediaEvent>) {
     .await
     .unwrap();
     for _ in 0..24 {
-        tx.send(MediaEvent::Audio(Box::new([9000; 320]))).await.unwrap();
+        tx.send(MediaEvent::audio([9000; 320])).await.unwrap();
     }
 }
 
@@ -212,7 +212,7 @@ fn assert_replacement_pcm(observer: &Observer) {
 
 fn turn(started: bool) -> MediaEvent {
     let (thread, turn) = ("thread-1".to_owned(), "turn-1".to_owned());
-    MediaEvent::Control(if started {
+    MediaEvent::control(if started {
         Event::TurnStarted { thread, turn }
     } else {
         Event::TurnCompleted {
@@ -264,11 +264,11 @@ async fn voice_listen_dispatch_in_flight_ignores_speech_and_holds_the_run_for_it
     reply(&tx, 5000).await;
     for done in [false, true] {
         let (role, text) = ("user".to_owned(), "What day is it?".to_owned());
-        tx.send(MediaEvent::Control(Event::Transcript { role, text, done }))
+        tx.send(MediaEvent::control(Event::Transcript { role, text, done }))
             .await
             .unwrap();
     }
-    tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+    tx.send(MediaEvent::control(Event::SpeechStarted)).await.unwrap();
     // A second utterance ends this reply with the turn still running.
     reply(&tx, 5000).await;
     settle(&mut work, &observer, &receipts, 1).await;

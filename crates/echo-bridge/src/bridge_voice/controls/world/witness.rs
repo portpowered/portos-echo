@@ -173,6 +173,10 @@ const PACER_DEPTH: &str = "pacer.reply_depth: expected 0..=128, actual out of ra
 const SESSION_CLOSING: &str = "session.idle_deadline: expected absent while closing, actual present";
 const SESSION_IDLE_DEADLINE: &str = "session.idle_deadline: expected absent without active run, actual present";
 const PACER_QUIESCENT: &str = "pacer.quiescent: expected true, actual false";
+const CALL_RECEIVE_CLOSED: &str = "call.receive_state: expected no reset after close, actual reset pending";
+const CALL_UPLINK_DEPTH: &str = "call.uplink_depth: expected at most 1500 frames, actual backlog exceeds capacity";
+const CALL_UPLINK_OWNER: &str =
+    "call.uplink_owner: expected an active run owns each pending frame and offer, actual unowned backlog or offer";
 
 impl Report {
     pub(super) fn from_state(state: &State) -> Self {
@@ -225,6 +229,9 @@ impl Report {
                 PACER_QUIESCENT,
                 SESSION_CLOSING,
                 SESSION_IDLE_DEADLINE,
+                CALL_RECEIVE_CLOSED,
+                CALL_UPLINK_DEPTH,
+                CALL_UPLINK_OWNER,
             ]
             .into_iter()
             .find(|known| *known == diff)

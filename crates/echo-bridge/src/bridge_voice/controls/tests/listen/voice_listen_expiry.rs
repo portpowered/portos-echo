@@ -134,7 +134,7 @@ async fn voice_listen_resumes_its_window_after_a_speech_start_expires() {
     let seen = Seen::default();
     let (mut work, settled) = replied(&client, &mut events, &mut port, &tx, &observer, &seen).await;
     tokio::time::advance(Duration::from_secs(4)).await;
-    tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+    tx.send(MediaEvent::control(Event::SpeechStarted)).await.unwrap();
     poll(work.as_mut()).await;
     let expired = Instant::now() + SPEECH_START_EXPIRY;
     tokio::time::advance(SPEECH_START_EXPIRY).await;
@@ -187,8 +187,8 @@ async fn voice_listen_expired_speech_start_keeps_a_running_hand_off() {
     let seen = Seen::default();
     let (mut work, _) = replied(&client, &mut events, &mut port, &tx, &observer, &seen).await;
     tokio::time::advance(Duration::from_secs(4)).await;
-    tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
-    tx.send(MediaEvent::Control(handoff(true))).await.unwrap();
+    tx.send(MediaEvent::control(Event::SpeechStarted)).await.unwrap();
+    tx.send(MediaEvent::control(handoff(true))).await.unwrap();
     poll(work.as_mut()).await;
     tokio::time::advance(SPEECH_START_EXPIRY).await;
     poll(work.as_mut()).await;
@@ -197,7 +197,7 @@ async fn voice_listen_expired_speech_start_keeps_a_running_hand_off() {
     tokio::time::advance(LISTEN * 2).await;
     poll(work.as_mut()).await;
     assert_eq!(end_runs(&observer), 0);
-    tx.send(MediaEvent::Control(handoff(false))).await.unwrap();
+    tx.send(MediaEvent::control(handoff(false))).await.unwrap();
     reply(&tx, -5000).await;
     settle(&mut work, &observer, &seen.played, 2).await;
     let settled = Instant::now();

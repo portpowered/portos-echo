@@ -146,6 +146,11 @@ path = "crates/echo-core-api"
 kind = "lib"
 
 [[crate]]
+name = "echo-sub-call"
+path = "crates/echo-sub-call"
+kind = "lib"
+
+[[crate]]
 name = "echo-sub-device"
 path = "crates/echo-sub-device"
 kind = "lib"

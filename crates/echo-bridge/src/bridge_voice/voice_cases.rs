@@ -382,7 +382,7 @@ async fn voice_backpressure_keeps_pending_pcm_and_continues_control() {
     assert_eq!(pending, Some([12; 960]));
     let mut notices = Vec::new();
     for text in ["first", "second"] {
-        tx.send(Ok(MediaEvent::Control(Event::Transcript {
+        tx.send(Ok(MediaEvent::control(Event::Transcript {
             role: "user".into(),
             text: text.into(),
             done: false,

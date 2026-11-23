@@ -42,7 +42,7 @@ impl VoicePort for Model {
 
 async fn speak(model: &mpsc::Sender<MediaEvent>, frames: usize, level: i16) {
     for _ in 0..frames {
-        model.send(MediaEvent::Audio(Box::new([level; 320]))).await.unwrap();
+        model.send(MediaEvent::audio([level; 320])).await.unwrap();
         tokio::time::sleep(FRAME).await;
     }
 }
@@ -74,7 +74,7 @@ async fn long_turn(model: mpsc::Sender<MediaEvent>, upstream: Arc<AtomicUsize>) 
     }
     let text = "Stopped".into();
     model
-        .send(MediaEvent::Control(Media::ReplyDone { text }))
+        .send(MediaEvent::control(Media::ReplyDone { text }))
         .await
         .unwrap();
     model.closed().await;

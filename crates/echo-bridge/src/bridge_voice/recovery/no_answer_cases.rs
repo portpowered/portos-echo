@@ -22,7 +22,7 @@ fn guard(listen_timeout: Option<Duration>) -> Options {
 }
 
 fn speech(started: bool) -> MediaEvent {
-    MediaEvent::Control(if started {
+    MediaEvent::control(if started {
         Event::SpeechStarted
     } else {
         Event::SpeechStopped
@@ -180,7 +180,7 @@ async fn no_answer_fires_after_a_silent_speech_start_expires() {
 }
 
 fn partial(text: &str) -> MediaEvent {
-    MediaEvent::Control(Event::Transcript {
+    MediaEvent::control(Event::Transcript {
         role: "user".into(),
         text: text.into(),
         done: false,

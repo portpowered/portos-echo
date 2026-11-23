@@ -16,7 +16,7 @@ pub(super) async fn stream<F: Future>(
     sample: i16,
 ) {
     for _ in 0..count {
-        send(tx, [MediaEvent::Audio(Box::new([sample; 320]))]).await;
+        send(tx, [MediaEvent::audio([sample; 320])]).await;
         tick(work.as_mut(), 1).await;
     }
 }
@@ -110,7 +110,7 @@ async fn voice_user_speech_cuts_and_flushes_once_the_model_has_been_quiet() {
         stream(&mut work, &tx, quiet - 2, 0).await;
         assert_eq!(cuts(&observer), 0);
         // A burst the pacer still holds when the stretch completes.
-        send(&tx, (0..20).map(|_| MediaEvent::Audio(Box::new([0; 320])))).await;
+        send(&tx, (0..20).map(|_| MediaEvent::audio([0; 320]))).await;
         tick(work.as_mut(), 1).await;
         assert_eq!(cuts(&observer), 0);
         let before = frames(&observer).len();

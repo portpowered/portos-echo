@@ -10,6 +10,7 @@ fn frame(level: i16) -> Vec<u8> {
 #[derive(Default)]
 struct Narrow {
     room: std::cell::Cell<usize>,
+    failed: std::cell::Cell<bool>,
     /// What the microphone hears of the reply frame last written.
     echo: std::cell::Cell<i16>,
     sent: std::cell::RefCell<Vec<i16>>,
@@ -21,6 +22,9 @@ impl VoicePort for Narrow {
         Err(Error::Audio)
     }
     fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
+        if self.failed.get() {
+            return Err(Error::Unavailable);
+        }
         if self.room.get() == 0 {
             return Ok(false);
         }
@@ -36,13 +40,17 @@ impl VoicePort for Narrow {
     }
 }
 
+fn forward_test(source: &mut Source, marker: i16, port: &Narrow) -> Result<(), Error> {
+    forward(&source.controller, &mut source.stats, &[marker; 320], port)
+}
+
 #[test]
 fn setup_burst_waits_for_the_sender_in_order_and_mute_withholds_the_rest() {
     let mut source = Source::new(200, false).unwrap();
     let port = Narrow::default();
     port.room.set(2);
     for marker in 1..=5 {
-        source.forward(&[marker; 320], &port).unwrap();
+        forward_test(&mut source, marker, &port).unwrap();
     }
     assert_eq!(*port.sent.borrow(), [1, 2]);
     assert!(source.uplink_pending());
@@ -52,7 +60,7 @@ fn setup_burst_waits_for_the_sender_in_order_and_mute_withholds_the_rest() {
     assert_eq!(*port.sent.borrow(), [1, 2, 3, 4]);
     // Room for one: waiting speech goes first, the new frame queues behind it.
     port.room.set(1);
-    source.forward(&[6; 320], &port).unwrap();
+    forward_test(&mut source, 6, &port).unwrap();
     assert_eq!(*port.sent.borrow(), [1, 2, 3, 4, 5]);
     assert!(source.uplink_pending());
     source.mute_uplink();
@@ -67,15 +75,30 @@ fn setup_burst_waits_for_the_sender_in_order_and_mute_withholds_the_rest() {
 fn stalled_sender_backlog_is_bounded_and_keeps_the_newest_speech() {
     let mut source = Source::new(200, false).unwrap();
     let port = Narrow::default();
-    for marker in 0..=UPLINK_BACKLOG {
-        source.forward(&[i16::try_from(marker).unwrap(); 320], &port).unwrap();
+    for marker in 0..=1500 {
+        forward_test(&mut source, marker, &port).unwrap();
     }
     port.room.set(usize::MAX);
     source.flush_uplink(&port).unwrap();
     let sent = port.sent.borrow();
-    assert_eq!(sent.len(), UPLINK_BACKLOG);
-    assert_eq!((sent[0], sent[UPLINK_BACKLOG - 1]), (1, 1500));
+    assert_eq!(sent.as_slice(), (1..=1500).collect::<Vec<_>>());
     assert_eq!(source.stats.uplink_dropped, 1);
+}
+
+#[test]
+fn sender_failure_leaves_the_oldest_unsent_frame_and_propagates_the_error() {
+    let mut source = Source::new(200, false).unwrap();
+    let port = Narrow::default();
+    forward_test(&mut source, 11, &port).unwrap();
+    port.failed.set(true);
+    assert_eq!(forward_test(&mut source, 22, &port), Err(Error::Unavailable));
+    assert!(source.uplink_pending());
+    assert_eq!(source.stats.microphone_frames, 1);
+    port.failed.set(false);
+    port.room.set(2);
+    source.flush_uplink(&port).unwrap();
+    assert_eq!(*port.sent.borrow(), [11]);
+    assert!(!source.uplink_pending());
 }
 
 #[tokio::test(start_paused = true)]
@@ -162,7 +185,7 @@ async fn first_audio_is_timed_from_the_user_transcript_or_the_delegated_turn() {
     for (event, endpoint) in [(user, Endpoint::UserTranscript), (turn, Endpoint::DelegatedTurn)] {
         let mut source = Source::new(200, false).unwrap();
         let mut port = Narrow::default();
-        super::super::media(MediaEvent::Control(event), &mut port, &mut source, &mut |_| Ok(()))
+        super::super::media(MediaEvent::control(event), &mut port, &mut source, &mut |_| Ok(()))
             .await
             .unwrap();
         tokio::time::advance(Duration::from_millis(730)).await;

@@ -24,7 +24,7 @@ fn echo_windows() -> Options {
 }
 
 fn user(text: &str, done: bool) -> MediaEvent {
-    MediaEvent::Control(Event::Transcript {
+    MediaEvent::control(Event::Transcript {
         role: "user".into(),
         text: text.into(),
         done,
@@ -32,7 +32,7 @@ fn user(text: &str, done: bool) -> MediaEvent {
 }
 
 fn speech_started() -> MediaEvent {
-    MediaEvent::Control(Event::SpeechStarted)
+    MediaEvent::control(Event::SpeechStarted)
 }
 
 /// The incident's tail: the barge's words, a speech start the session never
