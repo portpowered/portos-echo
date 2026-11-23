@@ -1,8 +1,10 @@
 use super::{Controller, State, pacer};
 use crate::Error;
+#[cfg(test)]
+use echo_core_api::SessionTimer;
 use echo_core_api::{
     Commands, Event, FollowUp, SessionChange, SessionCommand, SessionCommands, SessionError, SessionEvent,
-    SessionHandle, SessionOutcome, SessionTimer, SessionToolAction, SessionToolDecision, SessionToolEvent, SessionView,
+    SessionHandle, SessionOutcome, SessionToolAction, SessionToolDecision, SessionToolEvent, SessionView,
 };
 use std::{fmt, future::Future, sync::Arc, time::Duration};
 use tokio::time::Instant;
