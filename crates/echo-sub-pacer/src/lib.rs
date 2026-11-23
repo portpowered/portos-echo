@@ -7,18 +7,33 @@ mod reply_playout;
 mod ring;
 
 use echo_core_api::{
-    Broken, CommandKind, Commands, Event, EventKind, Now, PacerCommands, PacerEvent, PacerInput, PacerOutput,
-    PacerStatus, PacerView, REPLY_CAPACITY, ReplyFrame, Subsystem,
+    Broken, CommandKind, Commands, Event, EventKind, Now, PacerCommands, PacerEvent, PacerView, ReplyFrame, Subsystem,
 };
+pub use lips::LipStats;
 use lips::Lips;
 use mouth::Mouth;
 use reply_ear::Ear;
+pub use reply_ear::Heard;
 use reply_jitter::{EXPECTED_MS, Jitter};
+pub use reply_playout::Playout;
 use reply_playout::{ClockPacer, Wait};
 use ring::Ring;
 use std::time::Duration;
 
+const REPLY_CAPACITY: usize = 128;
+pub const PERIOD: Duration = Duration::from_millis(20);
+/// Samples at or below this level count as WebRTC silence.
+pub const QUIET: u16 = 64;
+
 pub struct Pacer;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Input {
+    Closed,
+    Open,
+    Finished,
+    Cut,
+}
 
 pub struct State {
     queue: Ring,
@@ -31,7 +46,7 @@ pub struct State {
     lips: Option<Lips>,
     lead_ms: u16,
     adaptive: bool,
-    input: PacerInput,
+    input: Input,
     spoken: bool,
     last_frame_at: Option<Duration>,
 }
@@ -49,7 +64,7 @@ impl Default for State {
             lips: None,
             lead_ms: 0,
             adaptive: false,
-            input: PacerInput::Closed,
+            input: Input::Closed,
             spoken: false,
             last_frame_at: None,
         }
@@ -58,34 +73,89 @@ impl Default for State {
 
 impl State {
     #[must_use]
-    pub fn status(&self) -> PacerStatus {
-        let depth = self.queue.len();
-        let output = if self.staged.is_some() {
-            PacerOutput::Staged
-        } else if depth == 0 && self.clock.conceals(self.input == PacerInput::Finished) {
-            PacerOutput::Stalled
-        } else {
-            PacerOutput::Idle
-        };
-        PacerStatus {
-            view: PacerView {
-                depth,
-                playing: self.mouth.voiced(),
-                last_frame_at: self.last_frame_at,
-            },
-            input: self.input,
-            output,
-            spoken: self.spoken,
-            sounded: self.ear.sounded(),
-            dropped: self.queue.dropped(),
-            deadline: Pacer::next_deadline(self),
-            mouth_due: self.mouth.due(),
+    pub fn view(&self) -> PacerView {
+        PacerView {
+            depth: self.queue.len(),
+            playing: self.mouth.voiced(),
+            last_frame_at: self.last_frame_at,
         }
     }
 
     #[must_use]
+    pub fn stalled(&self) -> bool {
+        self.staged.is_none() && self.queue.len() == 0 && self.clock.conceals(self.finished())
+    }
+
+    #[must_use]
+    pub fn finished(&self) -> bool {
+        self.input == Input::Finished
+    }
+
+    #[must_use]
+    pub fn drained(&self) -> bool {
+        self.finished() && self.queue.len() == 0 && self.staged.is_none()
+    }
+
+    #[must_use]
+    pub fn spoken(&self) -> bool {
+        self.spoken
+    }
+
+    #[must_use]
+    pub fn sounded(&self) -> bool {
+        self.ear.sounded()
+    }
+
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.queue.dropped()
+    }
+
+    #[must_use]
+    pub fn mouth_due(&self) -> Option<Duration> {
+        self.mouth.due()
+    }
+
+    #[must_use]
+    pub fn target(&self) -> Duration {
+        self.clock.target()
+    }
+
+    #[must_use]
+    pub fn playout(&self) -> Playout {
+        self.clock.playout()
+    }
+
+    #[must_use]
+    pub fn heard(&self) -> Heard {
+        self.ear.measurement()
+    }
+
+    pub fn take_lip_stats(&mut self) -> LipStats {
+        self.lips.as_mut().map_or_else(LipStats::default, Lips::take_stats)
+    }
+
+    /// Seed a new native call with the cushion measured on the device.
+    pub fn expect_jitter(&mut self) {
+        self.jitter = Jitter::expecting(EXPECTED_MS);
+    }
+
+    /// A discarded frame breaks the arrival chain and retains learned jitter.
+    pub fn break_arrival_chain(&mut self) {
+        self.jitter.rest();
+    }
+
+    /// Retire unsent PCM on remote end. The voice owner still settles the lip window.
+    pub fn discard_output(&mut self) {
+        self.queue.discard();
+        self.wait = None;
+        self.staged = None;
+        self.clock.discard_tail();
+    }
+
+    #[must_use]
     pub fn quiescent(&self) -> bool {
-        self.input == PacerInput::Closed
+        self.input == Input::Closed
             && self.queue.len() == 0
             && self.wait.is_none()
             && self.staged.is_none()
@@ -93,21 +163,20 @@ impl State {
             && !self.lips.as_ref().is_some_and(Lips::has_pending)
     }
 
-    fn reset_reply(&mut self, out: &mut PacerCommands) {
-        out.playout = self.clock.take_playout();
+    fn reset_reply(&mut self) {
         self.queue.clear();
         self.clock = ClockPacer::new(self.lead_ms, self.adaptive);
         self.wait = None;
         self.staged = None;
-        self.input = PacerInput::Open;
+        self.input = Input::Open;
         self.spoken = false;
         self.last_frame_at = None;
         self.mouth = Mouth::default();
     }
 
-    fn close_run(&mut self, out: &mut PacerCommands) {
-        self.reset_reply(out);
-        self.input = PacerInput::Closed;
+    fn close_run(&mut self) {
+        self.reset_reply();
+        self.input = Input::Closed;
         self.ear = Ear::default();
         self.jitter = Jitter::default();
         if let Some(lips) = &mut self.lips {
@@ -119,18 +188,16 @@ impl State {
 
     fn offer(&mut self, allow_fade: bool, now: Duration, out: &mut PacerCommands) {
         if self.staged.is_none() {
-            self.wait = self
-                .clock
-                .offer(self.queue.len(), self.input == PacerInput::Finished, allow_fade, now);
+            self.wait = self.clock.offer(self.queue.len(), self.finished(), allow_fade, now);
             self.tick(now, out);
         }
     }
 
     fn tick(&mut self, now: Duration, out: &mut PacerCommands) {
-        let flush = self.input == PacerInput::Finished;
+        let flush = self.finished();
         if let Some(frame) = self.clock.tick(&mut self.wait, &mut self.queue, flush, now) {
             self.staged = Some(frame);
-            out.frame = Some(frame);
+            out.write_frame(&frame);
         }
     }
 
@@ -139,19 +206,20 @@ impl State {
             self.last_frame_at = Some(now);
             self.ear.played(&frame, now);
             let start = self.mouth.wrote(&frame, now);
-            out.lips = self
-                .lips
-                .as_mut()
-                .and_then(|lips| lips.wrote(&frame, start, now, wanted));
+            out.publish_lips(
+                self.lips
+                    .as_mut()
+                    .and_then(|lips| lips.wrote(&frame, start, now, wanted)),
+            );
         }
     }
 
     fn settle(&mut self, now: Duration, out: &mut PacerCommands) {
         self.spoken = false;
         self.jitter.rest();
-        out.playout = self.clock.take_playout();
-        out.heard = self.ear.rest();
-        out.lips = self.lips.as_mut().and_then(|lips| lips.settle(now));
+        self.clock.take_playout();
+        self.ear.rest();
+        out.publish_lips(self.lips.as_mut().and_then(|lips| lips.settle(now)));
     }
 }
 
@@ -168,28 +236,26 @@ impl Subsystem for Pacer {
     fn on_event(state: &mut State, event: &mut Event, now: Now, out: &mut Commands) {
         let Event::Pacer(event) = event else { return };
         let now = now.monotonic;
-        let out = &mut out.pacer;
+        let out = out.pacer();
         match event {
             PacerEvent::ConfigureLips { delay } => state.lips = delay.map(|delay| Lips::new(delay, now)),
             PacerEvent::RunOpened { lead_ms, adaptive } => {
                 state.lead_ms = *lead_ms;
                 state.adaptive = *adaptive;
-                state.close_run(out);
-                state.input = PacerInput::Open;
+                state.close_run();
+                state.input = Input::Open;
             }
-            PacerEvent::ExpectJitter => state.jitter = Jitter::expecting(EXPECTED_MS),
-            PacerEvent::ReplyOpened => state.reset_reply(out),
+            PacerEvent::ReplyOpened => state.reset_reply(),
             PacerEvent::PeerFrameArrived { audible } => {
                 state.spoken |= *audible;
                 state.jitter.arrived(now);
-                out.target = Some(state.clock.retarget(state.jitter.target(now)));
+                state.clock.retarget(state.jitter.target(now));
             }
-            PacerEvent::PeerFrameDiscarded => state.jitter.rest(),
             PacerEvent::PcmPushed(frame) => state.queue.push(frame),
             PacerEvent::MicrophoneFrame(frame) => {
                 state.ear.heard(frame.as_slice(), now);
             }
-            PacerEvent::InputFinished => state.input = PacerInput::Finished,
+            PacerEvent::InputFinished => state.input = Input::Finished,
             PacerEvent::Offer { allow_fade } => state.offer(*allow_fade, now, out),
             PacerEvent::Tick => state.tick(now, out),
             PacerEvent::FrameHanded { screen_wanted } => state.handed(now, *screen_wanted, out),
@@ -199,25 +265,28 @@ impl Subsystem for Pacer {
                 }
             }
             PacerEvent::MouthSettled => state.mouth.settle(),
-            PacerEvent::MouthTick => out.mouth_changed = state.mouth.poll(now),
             PacerEvent::Played => {
-                out.finished = matches!(state.input, PacerInput::Finished | PacerInput::Cut)
+                if matches!(state.input, Input::Finished | Input::Cut)
                     && state.queue.len() == 0
-                    && state.staged.is_none();
-            }
-            PacerEvent::Cut => {
-                state.reset_reply(out);
-                state.input = PacerInput::Cut;
-                out.lips = state.lips.as_mut().and_then(|lips| lips.cut(now));
-            }
-            PacerEvent::ReplySettled => state.settle(now, out),
-            PacerEvent::TakeLipStats => {
-                if let Some(lips) = &mut state.lips {
-                    out.lip_stats = lips.take_stats();
+                    && state.staged.is_none()
+                {
+                    out.finish_playout();
                 }
             }
-            PacerEvent::RunClosed => state.close_run(out),
+            PacerEvent::Cut => {
+                state.reset_reply();
+                state.input = Input::Cut;
+                out.publish_lips(state.lips.as_mut().and_then(|lips| lips.cut(now)));
+            }
+            PacerEvent::ReplySettled => state.settle(now, out),
+            PacerEvent::RunClosed => state.close_run(),
         }
+    }
+
+    // Mouth notices have their own wake in the voice loop. The explicit Tick
+    // event resolves an outstanding audio offer and can stage PCM instead.
+    fn on_tick(state: &mut State, now: Now, out: &mut Commands) {
+        out.pacer().change_mouth(state.mouth.poll(now.monotonic));
     }
 
     fn next_deadline(state: &State) -> Option<Duration> {

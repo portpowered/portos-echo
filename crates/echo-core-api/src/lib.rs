@@ -49,7 +49,7 @@ pub enum CommandKind {
 pub struct Commands {
     device: Option<Command>,
     drain_trace: bool,
-    pub pacer: PacerCommands,
+    pacer: PacerCommands,
 }
 
 impl Commands {
@@ -67,6 +67,14 @@ impl Commands {
 
     pub fn take_trace_wake(&mut self) -> bool {
         std::mem::take(&mut self.drain_trace)
+    }
+
+    pub fn pacer(&mut self) -> &mut PacerCommands {
+        &mut self.pacer
+    }
+
+    pub fn take_pacer(&mut self) -> PacerCommands {
+        std::mem::take(&mut self.pacer)
     }
 }
 

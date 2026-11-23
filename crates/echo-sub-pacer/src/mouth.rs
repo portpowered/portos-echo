@@ -1,5 +1,5 @@
 //! The screen's mouth, timed from the audio written to the Echo.
-use echo_core_api::REPLY_QUIET as QUIET;
+use super::QUIET;
 use std::collections::VecDeque;
 use std::time::Duration;
 

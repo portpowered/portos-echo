@@ -1,6 +1,7 @@
 use super::Controller;
 use crate::bridge_runtime::bridge_pacing::reply_lips::Lips;
-use echo_core_api::{Command, Commands, Event, PacerCommand, PacerCommands, PacerEvent, PacerStatus};
+use echo_core_api::{Clock, Command, Commands, Event, PacerCommand, PacerCommands, PacerEvent, Subsystem};
+use echo_sub_pacer::{LipStats, Pacer, State};
 use std::{future::Future, sync::Arc, time::Duration};
 use tokio::time::Instant;
 
@@ -24,7 +25,7 @@ fn dispatch(world: &Controller, event: &mut PacerEvent) -> PacerCommands {
         *event = recovered;
     }
     world.check_step(&mut state);
-    out.pacer
+    out.take_pacer()
 }
 
 pub(crate) struct PacerPort(Arc<Controller>);
@@ -39,7 +40,7 @@ impl PacerPort {
         // The native call starts with the cushion measured on the Echo.
         // Component fixtures supply their own deterministic arrival schedules.
         #[cfg(not(test))]
-        port.send(PacerEvent::ExpectJitter);
+        port.expect_jitter();
         port
     }
 
@@ -50,7 +51,7 @@ impl PacerPort {
     pub(crate) fn send(&self, mut event: PacerEvent) -> PacerCommands {
         let mut out = self.dispatch(&mut event);
         if matches!(out.notification(), Some(Command::Pacer(PacerCommand::LipBatch)))
-            && let Some(batch) = out.lips.take()
+            && let Some(batch) = out.take_lips()
         {
             let taken = CURRENT
                 .try_with(|(_, lips)| lips.as_ref().is_some_and(|lips| lips.send(&batch)))
@@ -60,8 +61,42 @@ impl PacerPort {
         out
     }
 
-    pub(crate) fn status(&self) -> PacerStatus {
-        self.0.state().world.pacer.status()
+    pub(crate) fn read<T>(&self, read: impl FnOnce(&State) -> T) -> T {
+        read(&self.0.state().world.pacer)
+    }
+
+    pub(crate) fn expect_jitter(&self) {
+        self.0.state().world.pacer.expect_jitter();
+    }
+
+    pub(crate) fn discarded(&self) {
+        self.0.state().world.pacer.break_arrival_chain();
+    }
+
+    pub(crate) fn discard_output(&self) {
+        let mut state = self.0.state();
+        state.world.pacer.discard_output();
+        self.0.check_step(&mut state);
+    }
+
+    pub(crate) fn take_lip_stats(&self) -> LipStats {
+        self.0.state().world.pacer.take_lip_stats()
+    }
+
+    pub(crate) fn playout_due(&self) -> Option<Instant> {
+        self.instant(self.read(Pacer::next_deadline))
+    }
+
+    pub(crate) fn mouth_change(&self) -> Option<bool> {
+        let mut state = self.0.state();
+        let now = state.world.clock.now();
+        let mut out = Commands::default();
+        Pacer::on_tick(&mut state.world.pacer, now, &mut out);
+        self.0.check_step(&mut state);
+        match out.take_pacer().notification() {
+            Some(Command::Pacer(PacerCommand::MouthChanged(open))) => Some(open),
+            _ => None,
+        }
     }
 
     pub(crate) fn instant(&self, offset: Option<Duration>) -> Option<Instant> {

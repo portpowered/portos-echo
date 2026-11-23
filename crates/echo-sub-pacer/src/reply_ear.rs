@@ -1,6 +1,5 @@
 //! A passive measurement of the microphone under a reply, for `reply.quality`.
 //! It decides nothing: the Live session alone judges a barge-in (`Barge`).
-use echo_core_api::Heard;
 use std::collections::VecDeque;
 use std::time::Duration;
 
@@ -23,6 +22,17 @@ const REFERENCE_LOUD: u32 = 1500;
 const NEED: u8 = 4;
 /// Microphone frames heard under audible reply audio before the echo is known.
 const WARMUP: u32 = 25;
+
+/// What the microphone heard under one reply.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Heard {
+    pub onsets: u32,
+    pub echo_max: u32,
+    pub level_max: u32,
+    pub coupling: u32,
+    pub echo_mean: u32,
+    pub noise: u32,
+}
 
 /// A double-talk detector after Geigel: the microphone holds speech when it
 /// is louder than the loudest reply audio recently played could make it.
@@ -148,8 +158,15 @@ impl Ear {
         self.sounded = false;
         self.speaking = false;
         self.run = 0;
-        let mut heard = std::mem::take(&mut self.heard);
-        let (sum, count) = std::mem::take(&mut self.ratios);
+        let heard = self.measurement();
+        self.heard = Heard::default();
+        self.ratios = (0, 0);
+        heard
+    }
+
+    pub(crate) fn measurement(&self) -> Heard {
+        let mut heard = self.heard;
+        let (sum, count) = self.ratios;
         heard.echo_mean = u32::try_from(sum / u64::from(count.max(1))).unwrap_or(u32::MAX);
         heard.noise = self.noise;
         heard.coupling = self.coupling;

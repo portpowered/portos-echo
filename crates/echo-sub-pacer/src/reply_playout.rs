@@ -1,6 +1,6 @@
 //! Audio-clock playout of a reply that arrives in real time (the WebRTC peer).
-use super::ring::Ring;
-use echo_core_api::{Playout, REPLY_PERIOD as PERIOD, REPLY_QUIET as QUIET, ReplyFrame};
+use super::{PERIOD, QUIET, ring::Ring};
+use echo_core_api::ReplyFrame;
 use std::time::Duration;
 
 /// The cushion a dry Echo gets before playback starts. Frames from the call
@@ -10,6 +10,15 @@ use std::time::Duration;
 const PRIME: Duration = super::reply_jitter::FLOOR;
 /// Delay this far above the target is left alone, so the drain never hunts.
 const SLACK: Duration = Duration::from_millis(40);
+
+/// What the pacer did to keep one reply's audio whole.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Playout {
+    pub reprimes: u32,
+    pub concealed: u32,
+    pub fade_ins: u32,
+    pub drained: u32,
+}
 
 fn audible(frame: &ReplyFrame) -> bool {
     frame
@@ -113,6 +122,18 @@ impl ClockPacer {
 
     pub(crate) fn take_playout(&mut self) -> Playout {
         std::mem::take(&mut self.playout)
+    }
+
+    pub(crate) fn playout(&self) -> Playout {
+        self.playout
+    }
+
+    pub(crate) fn target(&self) -> Duration {
+        self.target
+    }
+
+    pub(crate) fn discard_tail(&mut self) {
+        self.tail = None;
     }
 
     /// With nothing queued, the device is owed a fade-out if the reply stalls.

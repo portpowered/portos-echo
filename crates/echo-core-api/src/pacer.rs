@@ -2,19 +2,13 @@ use std::time::Duration;
 
 use crate::Command;
 
-pub const REPLY_CAPACITY: usize = 128;
-pub const REPLY_PERIOD: Duration = Duration::from_millis(20);
-/// Samples at or below this level count as WebRTC silence.
-pub const REPLY_QUIET: u16 = 64;
 pub type ReplyFrame = [u8; 960];
 
 pub enum PacerEvent {
     ConfigureLips { delay: Option<Duration> },
     RunOpened { lead_ms: u16, adaptive: bool },
-    ExpectJitter,
     ReplyOpened,
     PeerFrameArrived { audible: bool },
-    PeerFrameDiscarded,
     PcmPushed(Box<ReplyFrame>),
     MicrophoneFrame(Box<[i16; 320]>),
     InputFinished,
@@ -23,11 +17,9 @@ pub enum PacerEvent {
     FrameHanded { screen_wanted: Option<bool> },
     LipDelivered { taken: bool },
     MouthSettled,
-    MouthTick,
     Played,
     Cut,
     ReplySettled,
-    TakeLipStats,
     RunClosed,
 }
 
@@ -40,18 +32,37 @@ pub enum PacerCommand {
 
 #[derive(Default)]
 pub struct PacerCommands {
-    pub frame: Option<ReplyFrame>,
-    pub lips: Option<PacerLipBatch>,
-    pub mouth_changed: Option<bool>,
-    pub finished: bool,
-    /// Measurements emitted at admission, reply reset, or settlement.
-    pub target: Option<Duration>,
-    pub playout: Playout,
-    pub heard: Heard,
-    pub lip_stats: LipStats,
+    frame: Option<ReplyFrame>,
+    lips: Option<PacerLipBatch>,
+    mouth_changed: Option<bool>,
+    finished: bool,
 }
 
 impl PacerCommands {
+    pub fn write_frame(&mut self, frame: &ReplyFrame) {
+        self.frame = Some(*frame);
+    }
+
+    pub fn publish_lips(&mut self, batch: Option<PacerLipBatch>) {
+        self.lips = batch;
+    }
+
+    pub fn change_mouth(&mut self, open: Option<bool>) {
+        self.mouth_changed = open;
+    }
+
+    pub fn finish_playout(&mut self) {
+        self.finished = true;
+    }
+
+    pub fn take_frame(&mut self) -> Option<ReplyFrame> {
+        self.frame.take()
+    }
+
+    pub fn take_lips(&mut self) -> Option<PacerLipBatch> {
+        self.lips.take()
+    }
+
     /// The fixed-size payloads are drained separately from their notifications.
     #[must_use]
     pub fn notification(&self) -> Option<Command> {
@@ -77,34 +88,6 @@ pub struct PacerView {
     pub last_frame_at: Option<Duration>,
 }
 
-/// The voice owner's readiness predicates and absolute World deadlines.
-#[derive(Clone, Copy)]
-pub struct PacerStatus {
-    pub view: PacerView,
-    pub input: PacerInput,
-    pub output: PacerOutput,
-    pub spoken: bool,
-    pub sounded: bool,
-    pub dropped: u64,
-    pub deadline: Option<Duration>,
-    pub mouth_due: Option<Duration>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PacerInput {
-    Closed,
-    Open,
-    Finished,
-    Cut,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PacerOutput {
-    Idle,
-    Staged,
-    Stalled,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PacerVowel {
     None,
@@ -125,35 +108,4 @@ pub struct PacerLipSample {
 pub struct PacerLipBatch {
     pub sent_ms: u64,
     pub samples: [Option<PacerLipSample>; 5],
-}
-
-/// What the pacer did to keep one reply's audio whole.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Playout {
-    pub reprimes: u32,
-    pub concealed: u32,
-    pub fade_ins: u32,
-    pub drained: u32,
-}
-
-/// What the microphone heard under one reply.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Heard {
-    pub onsets: u32,
-    pub echo_max: u32,
-    pub level_max: u32,
-    pub coupling: u32,
-    pub echo_mean: u32,
-    pub noise: u32,
-}
-
-/// What the screen was sent to move the mouth with one reply.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LipStats {
-    pub batches: u32,
-    pub samples: u32,
-    pub dropped: u32,
-    pub publish_max_ms: u32,
-    pub lead_min_ms: u32,
-    pub late: u32,
 }

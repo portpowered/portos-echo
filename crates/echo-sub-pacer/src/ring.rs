@@ -1,4 +1,5 @@
-use echo_core_api::{REPLY_CAPACITY, ReplyFrame};
+use super::REPLY_CAPACITY;
+use echo_core_api::ReplyFrame;
 
 pub(crate) struct Ring {
     slots: Box<[ReplyFrame]>,
@@ -44,9 +45,13 @@ impl Ring {
     }
 
     pub(crate) fn clear(&mut self) {
+        self.discard();
+        self.dropped = 0;
+    }
+
+    pub(crate) fn discard(&mut self) {
         self.head = 0;
         self.len = 0;
-        self.dropped = 0;
     }
 
     pub(crate) fn len(&self) -> usize {

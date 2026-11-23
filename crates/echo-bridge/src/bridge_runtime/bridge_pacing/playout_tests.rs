@@ -18,6 +18,13 @@ async fn reply_playout_measured_jitter_keeps_the_primed_queue_wet() {
     assert_eq!((quality.underruns, quality.underrun_max_ms), (0, 0));
     assert!(quality.depth_min_ms >= 20, "{quality:?}");
     assert!(quality.depth_max_ms <= 200, "{quality:?}");
+
+    // The same arrival gaps forwarded without a cushion run the speaker dry.
+    let stepped = crate::bridge_mcp::bridge_clock::receipt::Context::for_voice_test();
+    let mut unprimed = stepped.owning(async { paced() }).await;
+    let quality = reply(&mut unprimed, &mut ReplyMeter::default(), &script).await.quality;
+    assert!(quality.underruns >= 40, "{quality:?}");
+    assert_eq!(quality.depth_min_ms, 0);
 }
 
 const SPEECH: i16 = 8000;

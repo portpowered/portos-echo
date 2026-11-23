@@ -1,10 +1,21 @@
 //! Fixed-size batches of mouth samples timed against the modeled speaker.
 use echo_audio::{LipAnalyser, LipOptions, Vowel};
-use echo_core_api::{LipStats, PacerLipBatch, PacerLipSample, PacerVowel};
+use echo_core_api::{PacerLipBatch, PacerLipSample, PacerVowel};
 use std::time::Duration;
 
 const BATCH_MAX: usize = 5;
 const STALE_MS: u64 = 1000;
+
+/// What the screen was sent to move the mouth with one reply.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LipStats {
+    pub batches: u32,
+    pub samples: u32,
+    pub dropped: u32,
+    pub publish_max_ms: u32,
+    pub lead_min_ms: u32,
+    pub late: u32,
+}
 
 pub(crate) struct Lips {
     delay: Duration,

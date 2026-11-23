@@ -3,8 +3,8 @@
 use super::{LipSink, Lips};
 use crate::{bridge_codex::ReplyAudio, bridge_runtime::bridge_pacing::LeadPacer, bridge_world::Controller};
 use echo_audio::FrameQueue;
-use echo_core_api::LipStats;
 use echo_screen_contract::mouth::MouthBatch;
+use echo_sub_pacer::LipStats;
 use std::future::Future;
 use std::{
     num::NonZeroUsize,

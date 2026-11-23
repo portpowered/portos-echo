@@ -7,8 +7,8 @@ mod playout_tests;
 mod reply_barge;
 pub(crate) mod reply_lips;
 
-pub use echo_core_api::{Heard, LipStats};
-pub(crate) use echo_core_api::{Playout, REPLY_PERIOD as PERIOD, REPLY_QUIET as QUIET};
+pub use echo_sub_pacer::{Heard, LipStats};
+pub(crate) use echo_sub_pacer::{PERIOD, Playout, QUIET};
 pub use reply_barge::BargeTrigger;
 #[cfg(test)]
 pub(crate) use reply_barge::{BARGE_QUIET, BARGE_WINDOW};

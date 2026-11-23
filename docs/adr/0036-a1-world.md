@@ -84,6 +84,9 @@ staged frame before the existing device flush. Playback completion requires
 the accepted device receipt. The voice loop waits on pacer deadlines, and
 the trace writer uses its separate deadline. The screen adapter publishes
 each lip batch through the existing sender and reports whether it was taken.
+An endpoint remote end drops queued and staged PCM before the device flush.
+The ordinary reply settlement still handles pending lip samples. Barge-in
+uses the cut event to publish an immediate closing sample.
 `echo-sub-pacer` depends on `echo-core-api` and the existing `echo-audio` DSP.
 
 ## Deferred

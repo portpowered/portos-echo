@@ -33,7 +33,7 @@ fn world() -> TestWorld {
 fn step(world: &mut TestWorld, event: PacerEvent) -> PacerCommands {
     let mut commands = Commands::default();
     world.step(&mut Event::Pacer(event), &mut commands);
-    commands.pacer
+    commands.take_pacer()
 }
 
 fn open(world: &mut TestWorld, lead_ms: u16, adaptive: bool) {
@@ -76,7 +76,7 @@ fn pacer_ring_300_keeps_capacity_and_matches_old_release_clock() {
     let mut scratch = check_overflow(&mut world);
     step(&mut world, PacerEvent::ReplyOpened);
     assert_eq!(world.pacer.queue.storage(), storage);
-    assert_eq!(world.pacer.status().dropped, 0);
+    assert_eq!(world.pacer.dropped(), 0);
     let start = world.clock.now().monotonic;
     for marker in 0..300 {
         *scratch = frame(marker);
@@ -109,21 +109,23 @@ fn check_overflow(world: &mut TestWorld) -> Box<ReplyFrame> {
         assert_eq!(world.pacer.queue.storage(), storage);
         assert_eq!(std::ptr::from_ref(scratch.as_ref()), scratch_ptr);
     }
-    let status = world.pacer.status();
-    assert_eq!((storage.0, status.view.depth, status.dropped), (128, 128, 172));
+    assert_eq!(
+        (storage.0, world.pacer.view().depth, world.pacer.dropped()),
+        (128, 128, 172)
+    );
     step(world, PacerEvent::InputFinished);
     for marker in 172..300 {
         assert_eq!(release(world), frame(marker));
         assert_eq!(world.pacer.queue.storage(), storage);
     }
-    assert_eq!(world.pacer.status().view.depth, 0);
+    assert_eq!(world.pacer.view().depth, 0);
     scratch
 }
 
 fn release(world: &mut TestWorld) -> ReplyFrame {
     let mut commands = offer(world);
-    if commands.frame.is_none() {
-        let due = world.pacer.status().deadline.unwrap();
+    if commands.notification().is_none() {
+        let due = Pacer::next_deadline(&world.pacer).unwrap();
         let delay = due.checked_sub(world.clock.now().monotonic).unwrap();
         world.clock.advance(delay);
         commands = step(world, PacerEvent::Tick);
@@ -132,7 +134,7 @@ fn release(world: &mut TestWorld) -> ReplyFrame {
         commands.notification(),
         Some(Command::Pacer(PacerCommand::WriteFrame))
     ));
-    let frame = commands.frame.unwrap();
+    let frame = commands.take_frame().unwrap();
     handed(world);
     frame
 }
@@ -156,13 +158,13 @@ fn pacer_cut_discards_a_staged_and_a_queued_frame_then_accepts_receipt() {
     open(&mut world, 200, false);
     push(&mut world, Box::new(frame(1)));
     push(&mut world, Box::new(frame(2)));
-    assert_eq!(offer(&mut world).frame, Some(frame(1)));
-    assert!(!step(&mut world, PacerEvent::Played).finished);
-    assert_eq!(world.pacer.status().view.depth, 1);
+    assert_eq!(offer(&mut world).take_frame(), Some(frame(1)));
+    assert!(step(&mut world, PacerEvent::Played).notification().is_none());
+    assert_eq!(world.pacer.view().depth, 1);
     step(&mut world, PacerEvent::Cut);
-    assert_eq!(world.pacer.status().view, PacerView::default());
-    assert!(offer(&mut world).frame.is_none());
-    assert!(step(&mut world, PacerEvent::Tick).frame.is_none());
+    assert_eq!(world.pacer.view(), PacerView::default());
+    assert!(offer(&mut world).take_frame().is_none());
+    assert!(step(&mut world, PacerEvent::Tick).take_frame().is_none());
     assert!(matches!(
         step(&mut world, PacerEvent::Played).notification(),
         Some(Command::Pacer(PacerCommand::PlayoutFinished))
@@ -170,30 +172,54 @@ fn pacer_cut_discards_a_staged_and_a_queued_frame_then_accepts_receipt() {
     step(&mut world, PacerEvent::ReplyOpened);
     push(&mut world, Box::new(frame(3)));
     assert_eq!(release(&mut world), frame(3));
-    assert_eq!(world.pacer.status().view.last_frame_at, Some(Duration::ZERO));
+    assert_eq!(world.pacer.view().last_frame_at, Some(Duration::ZERO));
 }
 
 #[test]
-fn pacer_playout_prime_survives_reoffers_and_flushes_without_waiting() {
+fn pacer_playout_prime_survives_reoffers_and_restarts_without_waiting_when_full() {
     let mut world = world();
     open(&mut world, 60, true);
     push(&mut world, Box::new(frame(1)));
     push(&mut world, Box::new(frame(2)));
     for _ in 0..3 {
-        assert!(offer(&mut world).frame.is_none());
-        assert_eq!(world.pacer.status().deadline, Some(ms(60)));
+        assert!(offer(&mut world).take_frame().is_none());
+        assert_eq!(Pacer::next_deadline(&world.pacer), Some(ms(60)));
         world.clock.advance(ms(10));
     }
-    assert_eq!(world.pacer.status().view.depth, 2);
+    assert_eq!(world.pacer.view().depth, 2);
     assert_eq!(release(&mut world), frame(1));
     assert_eq!(world.clock.now().monotonic, ms(60));
     assert_eq!(release(&mut world), frame(2));
+    assert_eq!(world.clock.now().monotonic, ms(60));
+
+    // After the speaker runs dry, a full 60 ms cushion restarts immediately.
     world.clock.advance(ms(1000));
-    push(&mut world, Box::new(frame(3)));
+    for marker in 3..6 {
+        push(&mut world, Box::new(frame(marker)));
+    }
+    for marker in 3..6 {
+        assert_eq!(release(&mut world), frame(marker));
+        assert_eq!(world.clock.now().monotonic, ms(1060));
+    }
+
+    // EOF releases an incomplete cushion on a later dry restart.
+    world.clock.advance(ms(1000));
+    push(&mut world, Box::new(frame(6)));
     step(&mut world, PacerEvent::InputFinished);
-    assert_eq!(release(&mut world), frame(3));
-    assert_eq!(world.clock.now().monotonic, ms(1060));
-    assert!(step(&mut world, PacerEvent::Played).finished);
+    assert_eq!(release(&mut world), frame(6));
+    assert_eq!(world.clock.now().monotonic, ms(2060));
+    assert!(matches!(
+        step(&mut world, PacerEvent::Played).notification(),
+        Some(Command::Pacer(PacerCommand::PlayoutFinished))
+    ));
+
+    // A smooth arrival keeps the lead-bounded floor. 160 ms of lateness
+    // plus the 40 ms margin then lifts the target to 200 ms.
+    step(&mut world, PacerEvent::PeerFrameArrived { audible: false });
+    assert_eq!(world.pacer.target(), ms(60));
+    world.clock.advance(ms(180));
+    step(&mut world, PacerEvent::PeerFrameArrived { audible: false });
+    assert_eq!(world.pacer.target(), ms(200));
 }
 
 #[test]
@@ -212,7 +238,9 @@ fn pacer_playout_skips_one_silent_frame_to_reduce_excess_cushion() {
         push(&mut world, Box::new(frame(marker)));
     }
     assert_eq!(release(&mut world), frame(8001));
-    assert_eq!(world.pacer.status().view.depth, 6);
-    let playout = step(&mut world, PacerEvent::ReplySettled).playout;
+    assert_eq!(world.pacer.view().depth, 6);
+    let playout = world.pacer.playout();
     assert_eq!((playout.reprimes, playout.drained), (1, 1));
+    step(&mut world, PacerEvent::ReplySettled);
+    assert_eq!(world.pacer.playout(), Playout::default());
 }

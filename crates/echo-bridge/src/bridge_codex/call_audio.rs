@@ -1,11 +1,10 @@
 //! PCM boundaries for the run owner; media owns Opus and the 48 kHz track.
 use crate::{Error, bridge_world::PacerPort};
 use echo_audio::PcmResampler;
-use echo_core_api::{
-    Command, PacerCommand, PacerCommands, PacerEvent, PacerInput, PacerOutput, PacerStatus, ReplyFrame,
-};
+use echo_core_api::{Command, PacerCommand, PacerEvent, ReplyFrame};
 use echo_link::PcmFormat;
 use echo_media::PcmFrame;
+use echo_sub_pacer::{Heard, LipStats, Playout, State};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -131,6 +130,12 @@ pub struct ReplyAudio {
     microphone: Option<Box<PcmFrame>>,
 }
 
+pub(crate) struct ReplySettlement {
+    pub(crate) playout: Playout,
+    pub(crate) heard: Heard,
+    pub(crate) lip_stats: LipStats,
+}
+
 fn reply_converter() -> Result<Converter, Error> {
     Converter::new(crate::bridge_audio::format(16_000), 24_000)
 }
@@ -178,24 +183,27 @@ impl ReplyAudio {
         Ok(())
     }
 
-    pub(crate) fn reset(&mut self, cut: bool) -> Result<echo_core_api::Playout, Error> {
-        let out = self
-            .port
+    pub(crate) fn reset(&mut self, cut: bool) -> Result<Playout, Error> {
+        let playout = self.port.read(State::playout);
+        self.port
             .send(if cut { PacerEvent::Cut } else { PacerEvent::ReplyOpened });
         self.partial = 0;
         self.converter = reply_converter()?;
-        Ok(out.playout)
+        Ok(playout)
+    }
+
+    pub(crate) fn discard_output(&mut self) {
+        self.partial = 0;
+        self.port.discard_output();
     }
 
     pub(crate) fn arrived(&self, audible: bool) -> Duration {
-        self.port
-            .send(PacerEvent::PeerFrameArrived { audible })
-            .target
-            .unwrap_or_default()
+        self.port.send(PacerEvent::PeerFrameArrived { audible });
+        self.port.read(State::target)
     }
 
     pub(crate) fn discarded(&self) {
-        self.port.send(PacerEvent::PeerFrameDiscarded);
+        self.port.discarded();
     }
 
     pub(crate) fn microphone(&mut self, frame: &PcmFrame) {
@@ -216,9 +224,9 @@ impl ReplyAudio {
         let mut out = self.port.send(PacerEvent::Offer { allow_fade });
         loop {
             if matches!(out.notification(), Some(Command::Pacer(PacerCommand::WriteFrame))) {
-                return out.frame;
+                return out.take_frame();
             }
-            let deadline = self.port.instant(self.status().deadline)?;
+            let deadline = self.port.playout_due()?;
             tokio::time::sleep_until(deadline).await;
             out = self.port.send(PacerEvent::Tick);
         }
@@ -235,10 +243,14 @@ impl ReplyAudio {
         )
     }
 
-    pub(crate) fn settle(&self) -> PacerCommands {
-        let mut out = self.port.send(PacerEvent::ReplySettled);
-        out.lip_stats = self.port.send(PacerEvent::TakeLipStats).lip_stats;
-        out
+    pub(crate) fn settle(&self) -> ReplySettlement {
+        let (playout, heard) = self.port.read(|state| (state.playout(), state.heard()));
+        self.port.send(PacerEvent::ReplySettled);
+        ReplySettlement {
+            playout,
+            heard,
+            lip_stats: self.port.take_lip_stats(),
+        }
     }
 
     pub(crate) fn mouth_settle(&self) {
@@ -246,61 +258,50 @@ impl ReplyAudio {
     }
 
     pub(crate) fn mouth_due(&self) -> Option<Instant> {
-        self.port.instant(self.status().mouth_due)
+        self.port.instant(self.port.read(State::mouth_due))
     }
 
     pub(crate) fn mouth_change(&self) -> Option<bool> {
-        match self.port.send(PacerEvent::MouthTick).notification() {
-            Some(Command::Pacer(PacerCommand::MouthChanged(open))) => Some(open),
-            _ => None,
-        }
-    }
-
-    fn status(&self) -> PacerStatus {
-        self.port.status()
+        self.port.mouth_change()
     }
 
     pub(crate) fn sounded(&self) -> bool {
-        self.status().sounded
+        self.port.read(State::sounded)
     }
 
     pub(crate) fn voiced(&self) -> bool {
-        self.status().view.playing
+        self.port.read(State::view).playing
     }
 
     #[must_use]
     pub fn has_frames(&self) -> bool {
-        self.status().view.depth != 0
+        self.port.read(State::view).depth != 0
     }
 
     #[must_use]
     pub fn stalled(&self) -> bool {
-        self.status().output == PacerOutput::Stalled
+        self.port.read(State::stalled)
     }
 
     #[must_use]
     pub fn spoken(&self) -> bool {
-        self.status().spoken
+        self.port.read(State::spoken)
     }
 
     #[must_use]
     pub fn finished(&self) -> bool {
-        self.status().input == PacerInput::Finished
+        self.port.read(State::finished)
     }
 
     /// Transferred all retained frames. The device still owes a Played receipt.
     #[must_use]
     pub fn drained(&self) -> bool {
-        let status = self.status();
-        status.input == PacerInput::Finished
-            && self.partial == 0
-            && status.view.depth == 0
-            && status.output != PacerOutput::Staged
+        self.partial == 0 && self.port.read(State::drained)
     }
 
     #[must_use]
     pub fn dropped_frames(&self) -> u64 {
-        self.status().dropped
+        self.port.read(State::dropped)
     }
 
     /// Receive and acknowledge one queued frame at the standalone PCM boundary.
@@ -317,7 +318,7 @@ impl ReplyAudio {
 
     #[cfg(test)]
     pub(crate) fn expect_jitter(&self) {
-        self.port.send(PacerEvent::ExpectJitter);
+        self.port.expect_jitter();
     }
 
     #[cfg(test)]
@@ -332,7 +333,12 @@ impl ReplyAudio {
             return;
         }
         self.push_pcm(frame.try_into().unwrap());
-        assert!(self.port.send(PacerEvent::Offer { allow_fade: false }).frame.is_some());
+        assert!(
+            self.port
+                .send(PacerEvent::Offer { allow_fade: false })
+                .take_frame()
+                .is_some()
+        );
         self.handed();
     }
 }
