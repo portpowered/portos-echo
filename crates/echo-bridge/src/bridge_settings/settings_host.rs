@@ -1,6 +1,8 @@
 //! Typed transactions for the bridge's single settings owner. No task or exec here.
 use super::{PromptKind, SettingsError, SettingsStore, portos_permissions::PortosPermissions};
 use crate::bridge_mcp::Grant;
+#[path = "settings_host/openai_api_key.rs"]
+mod openai_api_key;
 #[path = "settings_host/settings_muse.rs"]
 mod settings_muse;
 #[path = "settings_host/settings_v2.rs"]
@@ -163,6 +165,17 @@ impl SettingsHost {
                     .unwrap_or_else(|error| error_reply_v2(&error));
             }
             SettingsOperation::PortosV2(request) => return self.portos_operation(request, owner),
+            SettingsOperation::OpenAiApiKey(request) => {
+                return self.save_openai_api_key(request).map_or_else(
+                    |error| error_reply_v2(&error),
+                    |restart_pending| {
+                        SettingsReply::SavedV2(echo_screen_contract::settings_v2::SaveResultV2 {
+                            version: echo_screen_contract::settings_v2::SettingsVersionV2,
+                            restart_pending,
+                        })
+                    },
+                );
+            }
             SettingsOperation::OpenAiSnapshot
             | SettingsOperation::OpenAiOperation(_)
             | SettingsOperation::MuseProbe => {

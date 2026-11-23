@@ -258,6 +258,29 @@ for a browser-capable host. `api_key` is an alternate credential mode: the bridg
 `live.credential_file` as a key and passes it to `account/login/start`. ChatGPT `signin` is unavailable in that
 mode. Never put a key or token in TOML, prompt text or command-line arguments.
 
+With an OpenAI API key, voice and delegated runner usage is billed to that key at API token rates, not to a ChatGPT
+plan. The Ultrafast speed tier (`codex.delegate_speed`) needs the runner model `gpt-6-astra` or `gpt-6.1-sol` and is
+billed at API rates, about six times the standard rate.
+
+To install in this mode, set `[live] mode = "api_key"` and keep `live.credential_file` a plain file directly in
+`/data/local/echo-bridge/private/` (the example's `live.json` works). Then pass the key's local file to the installer:
+`echo-setup install --config bridge.toml --openai-api-key-file openai-key.txt` (add `--force` to replace an installed
+ChatGPT config; `update` accepts the option too). The installer refuses the option with a config whose mode is
+`chatgpt`. It drops one trailing newline and refuses a blank key or one with control characters. It streams the key
+to the Echo over adb stdin, never on a command line, and writes it as `live.credential_file` owned by the bridge user
+with mode 0600. It then skips ChatGPT sign-in, checks that `echo-bridge status` reports `mode: api-key` and
+continues with Port OS. `echo-setup status --json` and `doctor` report `auth_mode` (`api_key`, `chatgpt` or
+`unavailable`), never the key.
+
+To replace the key later, open **Settings > Accounts > OpenAI (GPT Live)** on the Echo screen. In `api_key` mode it
+shows whether a key is set, and a **Save key** field in place of Link and Remove. The bridge applies the same rule
+as the installer, keeps the replaced key beside the new one as `<live.credential_file>.previous` (mode 0600), and
+restarts at the next settled boundary so the app server logs in with the new key. Neither the screen nor any
+response, log or trace shows the key. OpenAI first checks a key at the next call: a rejected key shows as "not
+accepted" and as the relink error on the voice screen. To go back, copy the `.previous` file over the key with the
+bridge stopped. The bridge does not start without a well-formed key file, so Settings can replace a key but not
+recover a missing one: run the installer with `--openai-api-key-file` instead.
+
 There is no bridge `signout` verb. To remove local ChatGPT access, stop the bridge, remove only
 `<codex.home>/auth.json` using the operator's private file management, then repeat sign-in if needed.
 Do not edit the credential while the app server owns the home. Removing a file or purging the installation
@@ -325,8 +348,8 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `echo.host` | Required string host; use literal loopback on device. No additional hostname validation in decoder. | restart / no |
 | `echo.wyoming_port` | Port integer 1–65535, default 16700. | restart / no |
 | `live` | Required credential/Live policy table. | restart / no |
-| `live.mode` | `chatgpt` (default) or `api_key`. | restart / no |
-| `live.credential_file` | Required literal path; current ChatGPT backend instead uses Codex home; API-key backend reads this file. | restart / no |
+| `live.mode` | `chatgpt` (default) or `api_key`. `api_key` skips ChatGPT sign-in; usage is billed to the key at API rates. | restart / no |
+| `live.credential_file` | Required literal path; current ChatGPT backend instead uses Codex home; API-key backend reads this file (one line, 0600). `install --openai-api-key-file` and Settings **Save key** write it. | restart / no |
 | `live.voice` | Optional legacy voice fallback when codex.voice absent; pinned voice list below. | restart / no |
 | `live.session_idle_seconds` | Unsigned 64-bit seconds, default 120; Live-call reuse idle timeout, not post-reply listening. | restart / no |
 | `voice` | Optional run-listening table, defaults below. | restart / no |

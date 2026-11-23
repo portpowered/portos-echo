@@ -13,6 +13,8 @@ use std::thread;
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+#[path = "support/api_key.rs"]
+mod api_key;
 #[path = "support/force_config.rs"]
 mod force_config;
 #[path = "support/install_setup.rs"]

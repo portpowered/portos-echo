@@ -8,7 +8,7 @@ use axum::{
 };
 use echo_screen_contract::{
     settings_v1::{PromptSaveV1, SettingsPatchV1},
-    settings_v2::{MuseProbeRequestV2, PortosOperationV2, SettingsPatchV2},
+    settings_v2::{MuseProbeRequestV2, OpenAiApiKeyRequestV2, PortosOperationV2, SettingsPatchV2},
 };
 
 async fn guard(state: &HttpState, uri: &Uri, headers: &HeaderMap) -> Result<(), StatusCode> {
@@ -95,6 +95,16 @@ pub(super) async fn openai_operation_v2(State(state): State<HttpState>, request:
         serde_json::from_slice(bytes)
             .ok()
             .map(SettingsOperation::OpenAiOperation)
+    })
+    .await
+}
+
+/// The key is decoded once into its private input type; no echo, no logging.
+pub(super) async fn openai_api_key_v2(State(state): State<HttpState>, request: Request) -> Response {
+    submit(state, request, 32_768, |bytes| {
+        serde_json::from_slice::<OpenAiApiKeyRequestV2>(bytes)
+            .ok()
+            .map(SettingsOperation::OpenAiApiKey)
     })
     .await
 }

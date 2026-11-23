@@ -1,6 +1,7 @@
 import { operateAccount, readOpenAI } from "../api-v2";
 import { element } from "../forms";
 import type { OpenAiAccountV2, PortosOperationV2 } from "../model";
+import { apiKeyStatus, openAIKeyForm } from "./openai-key";
 import {
     accountButtons,
     accountChallenge,
@@ -34,9 +35,11 @@ export function mountOpenAI(
     operationStatus.setAttribute("aria-live", "polite");
     const challenge = accountChallenge();
     const buttons = accountButtons(parent, "OpenAI", start);
+    const keyForm = openAIKeyForm(actions, perform, () => void refresh());
     parent.section.append(
         linkStatus,
         buttons.controls,
+        keyForm.form,
         operationStatus,
         challenge.instruction,
         challenge.code,
@@ -54,14 +57,17 @@ export function mountOpenAI(
 
     function render() {
         linkStatus.textContent =
+            (status && apiKeyStatus(status)) ??
             linkLabels[status?.link_status ?? "unavailable"];
+        keyForm.render(status);
+        const signIn = !status?.api_key;
         operationStatus.textContent =
             operationLabels[status?.operation_state ?? "idle"];
         operationStatus.hidden = !operationStatus.textContent;
         challenge.render(status?.challenge);
         buttons.render(
-            !active() && status?.link_status === "link_required",
-            !active() && status?.link_status === "linked",
+            signIn && !active() && status?.link_status === "link_required",
+            signIn && !active() && status?.link_status === "linked",
         );
     }
 

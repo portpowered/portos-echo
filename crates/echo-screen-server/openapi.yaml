@@ -336,6 +336,37 @@ paths:
         '413': { description: JSON body exceeds 1024 bytes. Empty body. }
         '415': { description: Content-Type requires application/json. Empty body. }
         '503': { description: 'Settings owner unavailable, stopping or saturated. Empty body.' }
+  /settings/v2/openai/api-key:
+    post:
+      security: [{ pairingToken: [] }]
+      description: Replace the OpenAI API key when live.mode is api_key. The bridge applies its credential-file rule, keeps the replaced key as live.credential_file plus .previous, writes the new key with mode 0600 and requests the settled restart that logs the Codex app server in again. The key is never returned, logged or traced; OpenAI first checks it at the next call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OpenAiApiKeyRequestV2' }
+      responses:
+        '200':
+          description: Key saved; restart pending.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SaveResultV2' }
+        '400': { description: 'Malformed JSON, wrong version or unknown key. Empty body.' }
+        '401': { description: Invalid or revoked pairing token. Empty body. }
+        '403': { description: Supplied foreign Origin. Empty body. }
+        '413': { description: JSON body exceeds 32768 bytes. Empty body. }
+        '415': { description: Content-Type requires application/json. Empty body. }
+        '422':
+          description: The key is blank or has control characters, or this Echo uses ChatGPT sign-in. Fixed message; never the key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV2' }
+        '500':
+          description: The key file could not be replaced; the previous key is retained.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingsErrorV2' }
+        '503': { description: 'Settings owner unavailable, stopping, saturated or unable to restart. Empty body.' }
   /settings/v2/portos:
     post:
       security: [{ pairingToken: [] }]
@@ -575,6 +606,8 @@ components:
       $ref: ../../schemas/screen/portos_operation_started_v2.json
     OpenAiAccountV2:
       $ref: ../../schemas/screen/openai_account_v2.json
+    OpenAiApiKeyRequestV2:
+      $ref: ../../schemas/screen/openai_api_key_request_v2.json
     MuseProbeRequestV2:
       $ref: ../../schemas/screen/muse_probe_request_v2.json
     MuseProbeResultV2:

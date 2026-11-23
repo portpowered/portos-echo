@@ -19,10 +19,12 @@ pub async fn execute(options: &Options) -> Result<Value> {
     };
     let (success, output) = adb.script(operation).await?;
     if options.command == "status" {
-        let result = status(&output)?;
+        let mut result = status(&output)?;
         if !success && result["ok"] == true {
             return Err(Failure("status_failed"));
         }
+        // Only the configured mode label; never the credential or its path.
+        result["auth_mode"] = crate::setup::installed_auth_mode(&adb).await.into();
         return Ok(result);
     }
     if !success {

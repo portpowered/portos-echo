@@ -228,7 +228,7 @@ impl SettingsService {
                                     if let Some(account) = &account {
                                         host.listed_voices(account.voices());
                                         match operation {
-                                            SettingsOperation::OpenAiSnapshot => return account.snapshot(),
+                                            SettingsOperation::OpenAiSnapshot => return account.snapshot(host.api_key()),
                                             SettingsOperation::OpenAiOperation(request) => return account.start(request),
                                             _ => {}
                                         }

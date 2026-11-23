@@ -449,3 +449,42 @@ function accountActions(page) {
             ]);
     });
 }
+
+test("API-key mode replaces OpenAI sign-in with a write-only key field", async (t) => {
+    const page = await open(t, v2Snapshot(), 200, {
+        openAI: {
+            version: 2,
+            link_status: "linked",
+            operation_state: "idle",
+            api_key: { configured: false },
+        },
+    });
+    const row = page.getByRole("region", { name: "OpenAI (GPT Live)" });
+    await row
+        .getByText("Using an API key: no key saved", { exact: true })
+        .waitFor();
+    for (const name of ["Link OpenAI", "Remove OpenAI link"])
+        assert.equal(
+            await row.getByRole("button", { name, exact: true }).isVisible(),
+            false,
+        );
+    const input = row.getByLabel("OpenAI API key");
+    assert.equal(await input.getAttribute("type"), "password");
+    await response(page, { version: 2, restart_pending: true });
+    await page.evaluate(() => {
+        window.openAIAccount.api_key = { configured: true };
+    });
+    await input.fill("dummy-local-only");
+    await row.getByRole("button", { name: "Save key", exact: true }).tap();
+    await row.getByText("Using an API key: key set", { exact: true }).waitFor();
+    assert.equal(await input.inputValue(), "");
+    const saved = (await allCalls(page))
+        .filter(
+            ({ method, url }) =>
+                method === "POST" &&
+                new URL(url).pathname === "/settings/v2/openai/api-key",
+        )
+        .map(({ body }) => JSON.parse(body));
+    assert.deepEqual(saved, [{ version: 2, api_key: "dummy-local-only" }]);
+    assert.equal((await page.content()).includes("dummy-local-only"), false);
+});
