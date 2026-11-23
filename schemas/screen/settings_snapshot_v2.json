@@ -67,11 +67,11 @@
         "delegate_effort": {
           "type": "string"
         },
-        "delegate_fast": {
-          "type": "boolean"
-        },
         "delegate_model": {
           "type": "string"
+        },
+        "delegate_speed": {
+          "$ref": "#/$defs/DelegateSpeedV2"
         },
         "voice": {
           "type": "string"
@@ -86,13 +86,22 @@
         "web_search",
         "delegate_model",
         "delegate_effort",
-        "delegate_fast"
+        "delegate_speed"
       ]
     },
     "DailyCapV1": {
       "type": "string",
       "maxLength": 19,
       "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "DelegateSpeedV2": {
+      "description": "The delegated runner's service tier. Ultrafast needs a model that lists it\n(GPT-6 Astra or GPT-6.1 Sol); the app server serves an unlisted tier as standard.",
+      "type": "string",
+      "enum": [
+        "standard",
+        "fast",
+        "ultrafast"
+      ]
     },
     "HomeSettingsV2": {
       "type": "object",

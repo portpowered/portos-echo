@@ -2,9 +2,9 @@
 use crate::{Error, bridge_codex::HostOptions, bridge_operator::screen_account};
 use echo_config::LiveMode;
 use echo_screen_contract::settings_v2::{
-    OpenAiAccountV2, OpenAiLinkStatusV2 as LinkStatus, PortosActionV2 as Action, PortosChallengeV2,
-    PortosOperationStartedV2, PortosOperationStateV2 as OperationState, PortosOperationV2, SettingsErrorV2,
-    SettingsVersionV2,
+    OpenAiAccountV2, OpenAiApiKeyStatusV2, OpenAiLinkStatusV2 as LinkStatus, PortosActionV2 as Action,
+    PortosChallengeV2, PortosOperationStartedV2, PortosOperationStateV2 as OperationState, PortosOperationV2,
+    SettingsErrorV2, SettingsVersionV2,
 };
 use echo_screen_server::SettingsReply;
 use echo_signin::{OperatorCommand, signin_codex::AccountError};
@@ -14,6 +14,8 @@ use tokio::sync::watch;
 struct State {
     snapshot: OpenAiAccountV2,
     queued: Option<Action>,
+    /// `api_key` mode has no sign-in to start or end from Settings.
+    api_key: bool,
     /// The realtime voices the admitted app server listed, once it has.
     voices: Option<Vec<String>>,
 }
@@ -31,15 +33,15 @@ impl Account {
             watch::channel(State {
                 snapshot: OpenAiAccountV2 {
                     version: SettingsVersionV2,
-                    link_status: if mode == LiveMode::Chatgpt {
-                        LinkStatus::Checking
-                    } else {
-                        LinkStatus::Unavailable
-                    },
+                    // Both modes observe the admitting account read. In
+                    // `api_key` mode it reports whether the app server holds the key.
+                    link_status: LinkStatus::Checking,
                     operation_state: OperationState::Idle,
                     challenge: None,
+                    api_key: None,
                 },
                 queued: None,
+                api_key: mode == LiveMode::ApiKey,
                 voices: None,
             })
             .0,
@@ -50,8 +52,11 @@ impl Account {
         self.0.borrow().voices.clone()
     }
 
-    pub fn snapshot(&self) -> SettingsReply {
-        SettingsReply::OpenAiSnapshot(self.0.borrow().snapshot.clone())
+    /// `api_key` comes from the settings host, which owns the configured file.
+    pub fn snapshot(&self, api_key: Option<OpenAiApiKeyStatusV2>) -> SettingsReply {
+        let mut snapshot = self.0.borrow().snapshot.clone();
+        snapshot.api_key = api_key;
+        SettingsReply::OpenAiSnapshot(snapshot)
     }
 
     pub fn start(&self, request: PortosOperationV2) -> SettingsReply {
@@ -60,7 +65,8 @@ impl Account {
             PortosOperationV2::Unlink { .. } => (Action::Unlink, LinkStatus::Linked, OperationState::Unlinking),
         };
         let accepted = self.0.send_if_modified(|state| {
-            if state.snapshot.link_status != required
+            if state.api_key
+                || state.snapshot.link_status != required
                 || matches!(
                     state.snapshot.operation_state,
                     OperationState::Linking | OperationState::Unlinking

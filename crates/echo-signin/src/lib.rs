@@ -6,6 +6,7 @@
 pub mod signin_codex;
 mod signin_commands;
 mod signin_providers;
+pub use signin_providers::api_key;
 
 use echo_chatgpt_auth::{AuthError, AuthSource};
 use echo_config::{ChatGptAuthConfig, LiveConfig, LiveMode};

@@ -242,10 +242,14 @@ pub enum Account {
     },
 }
 
-/// Project only the thread identifier needed for subsequent operations.
+/// Project the thread identifier needed for subsequent operations, and the
+/// effective service tier when the app server reports one.
 #[derive(Deserialize)]
 pub struct ThreadStartResult {
     pub thread: Thread,
+    /// The tier the server applied; an unsupported request is served as `default`.
+    #[serde(default, rename = "serviceTier")]
+    pub service_tier: Option<String>,
 }
 
 #[derive(Deserialize)]

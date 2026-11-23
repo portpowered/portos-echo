@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*_v{1,2}.json by tools/screen-schema.mjs.
-// Schema SHA-256: 3e560368c861921ed8b062de1ebae3e52f630e9c950f73fa6e18094ba5a34be3
+// Schema SHA-256: 17c58ab22566c68c131e2f70226a8c9926f3fe00aa2deb5d701b7816dd10c614
 export type AgentValuesV1 = {
     daily_request_cap: DailyCapV1;
     max_tool_calls: number;
@@ -57,8 +57,9 @@ export type CodexValuesV2 = {
     web_search: WebSearchV2;
     delegate_model: string;
     delegate_effort: string;
-    delegate_fast: boolean;
+    delegate_speed: DelegateSpeedV2;
 };
+export type DelegateSpeedV2 = "standard" | "fast" | "ultrafast";
 export type HomeSettingsV2 = { agent_tools: Array<HomeToolGroupV2> };
 export type HomeToolGroupV2 = "notes" | "prompts";
 export type LinkStatusV2 =
@@ -150,6 +151,7 @@ export type CodexPatchV2 = {
     delegate_effort?: string;
     delegate_fast?: boolean;
     delegate_model?: string;
+    delegate_speed?: DelegateSpeedV2;
     voice?: string;
     web_search?: WebSearchV2;
 };
@@ -195,13 +197,19 @@ export type PortosOperationStartedV2 = {
     version: SettingsVersionV2;
     operation: PortosActionV2;
 };
+export type OpenAiApiKeyStatusV2 = { configured: boolean };
 export type OpenAiLinkStatusV2 =
     "checking" | "unavailable" | "link_required" | "linked";
 export type OpenAiAccountV2 = {
     version: SettingsVersionV2;
     link_status: OpenAiLinkStatusV2;
     operation_state: PortosOperationStateV2;
+    api_key?: OpenAiApiKeyStatusV2;
     challenge?: PortosChallengeV2;
+};
+export type OpenAiApiKeyRequestV2 = {
+    version: SettingsVersionV2;
+    api_key: string;
 };
 export type MuseProbeRequestV2 = {
     operation: "probe";

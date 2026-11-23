@@ -14,6 +14,8 @@ const TOKEN: &str = "synthetic-service-pair";
 #[cfg(unix)]
 #[path = "settings_service_tests/muse.rs"]
 mod muse;
+#[path = "settings_service_tests/openai.rs"]
+mod openai;
 
 struct Fixture {
     root: tempfile::TempDir,

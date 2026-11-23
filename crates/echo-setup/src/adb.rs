@@ -45,6 +45,21 @@ impl Adb {
         self.call(&[OsString::from("shell"), OsString::from(command)]).await
     }
 
+    /// Private bytes travel only on stdin, never in argv or diagnostics.
+    pub async fn shell_input(&self, command: &str, input: &[u8]) -> Result<()> {
+        let (success, _) = self
+            .execute(
+                &[OsString::from("shell"), OsString::from(command)],
+                Some(input),
+                Duration::from_secs(60),
+            )
+            .await?;
+        if !success {
+            return Err(Failure("adb_failed"));
+        }
+        Ok(())
+    }
+
     pub async fn push(&self, local: &Path, remote: &str) -> Result<()> {
         self.call(&[
             OsString::from("push"),

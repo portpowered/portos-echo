@@ -55,6 +55,7 @@ pub(crate) fn router(state: HttpState) -> Router {
             "/settings/v2/openai",
             get(settings_http::openai_v2).post(settings_http::openai_operation_v2),
         )
+        .route("/settings/v2/openai/api-key", post(settings_http::openai_api_key_v2))
         .route("/screen-packs/v1", get(crate::packs::view::snapshot))
         .route("/screen-packs/v1/install", post(crate::packs::jobs::install))
         .route("/screen-packs/v1/selection", post(crate::packs::view::selection))

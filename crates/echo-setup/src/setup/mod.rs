@@ -12,6 +12,7 @@ mod wake;
 pub use account::AccountCommand;
 pub use confirmation::{ConfirmationEvidence, WakeConfirmation};
 pub use connection::InstalledConnection;
+pub(crate) use connection::installed_auth_mode;
 pub use forward::ForwardSession;
 pub use http::{Health, ScreenEvents, health, link_required};
 pub use prompt::{Prompt, Provider};
@@ -50,15 +51,15 @@ impl InstalledConnection {
         cancelled: &crate::Cancellation,
     ) -> Result<()> {
         let started = tokio::time::Instant::now();
-        self.authenticate(AccountCommand::EnsureSignin, now_unix, &mut present, cancelled)
-            .await?;
-        if self.runtime(cancelled).await?.relink_required {
-            let now = now_unix.saturating_add(started.elapsed().as_secs());
-            self.authenticate(AccountCommand::Signin, now, &mut present, cancelled)
-                .await?;
+        if self.auth_mode() == crate::install::api_key::AuthMode::ApiKey {
+            // No ChatGPT sign-in exists in api_key mode. The bridge must still
+            // report its configured mode; a refused key is not resumable here.
+            self.verify_api_key(cancelled).await?;
             if self.runtime(cancelled).await?.relink_required {
-                return Err(Failure("setup_relink_required"));
+                return Err(Failure("setup_api_key_rejected"));
             }
+        } else {
+            self.chatgpt(now_unix, started, &mut present, cancelled).await?;
         }
         let forwards = self.forward().await?;
         let required = cancelled
@@ -107,6 +108,44 @@ impl InstalledConnection {
         account::guide(self, command, self.deadline, now_unix, present, cancelled)
             .await
             .map_err(|error| command.context(error))?;
+        cancelled.until(async { Ok(()) }).await?;
+        self.start().await
+    }
+
+    async fn chatgpt(
+        &self,
+        now_unix: u64,
+        started: tokio::time::Instant,
+        present: &mut impl FnMut(&Prompt) -> Result<()>,
+        cancelled: &crate::Cancellation,
+    ) -> Result<()> {
+        self.authenticate(AccountCommand::EnsureSignin, now_unix, present, cancelled)
+            .await?;
+        if self.runtime(cancelled).await?.relink_required {
+            let now = now_unix.saturating_add(started.elapsed().as_secs());
+            self.authenticate(AccountCommand::Signin, now, present, cancelled)
+                .await?;
+            if self.runtime(cancelled).await?.relink_required {
+                return Err(Failure("setup_relink_required"));
+            }
+        }
+        Ok(())
+    }
+
+    async fn verify_api_key(&self, cancelled: &crate::Cancellation) -> Result<()> {
+        self.recover_account().await?;
+        cancelled.until(async { Ok(()) }).await?;
+        wake::bounded(self.deadline, async {
+            let (success, output) = self.adb.script("stop").await?;
+            if !success || output != "echo-install: stopped\n" {
+                return Err(Failure("stop_failed"));
+            }
+            Ok(())
+        })
+        .await?;
+        self.account(AccountCommand::ApiKeyStatus)
+            .await
+            .map_err(|_| Failure("setup_api_key_unconfirmed"))?;
         cancelled.until(async { Ok(()) }).await?;
         self.start().await
     }

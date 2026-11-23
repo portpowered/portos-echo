@@ -25,18 +25,19 @@ const CHECKS: [(&str, &str); 7] = [
 /// Observe seven checks with a bounded transport; never repair device state.
 pub async fn execute(options: &Options) -> Value {
     let mut passed = [false; 7];
+    let mut auth_mode = "unavailable";
     let ceiling = Duration::from_secs(options.timeout_seconds.min(15));
-    let _ = tokio::time::timeout(ceiling, observe(options, &mut passed)).await;
+    let _ = tokio::time::timeout(ceiling, observe(options, &mut passed, &mut auth_mode)).await;
     let checks: Vec<_> = CHECKS
         .iter()
         .zip(passed)
         .map(|((name, fix), ok)| json!({"name":name, "ok":ok, "fix":if ok {None} else {Some(fix)}}))
         .collect();
-    json!({"type":"result", "command":"doctor", "ok":passed.iter().all(|ok| *ok), "checks":checks})
+    json!({"type":"result", "command":"doctor", "ok":passed.iter().all(|ok| *ok), "checks":checks, "auth_mode":auth_mode})
 }
 
 #[allow(clippy::disallowed_methods, reason = "Existing host time")]
-async fn observe(options: &Options, passed: &mut [bool; 7]) -> crate::Result<()> {
+async fn observe(options: &Options, passed: &mut [bool; 7], auth_mode: &mut &'static str) -> crate::Result<()> {
     let mut adb = Adb::discover(options.adb.as_deref())?;
     passed[0] = true;
     adb.select_ready(options.serial.as_deref()).await?;
@@ -51,6 +52,7 @@ async fn observe(options: &Options, passed: &mut [bool; 7]) -> crate::Result<()>
             passed[2..].copy_from_slice(&probes);
         }
     }
+    *auth_mode = crate::setup::installed_auth_mode(&adb).await;
     Ok(())
 }
 

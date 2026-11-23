@@ -1,5 +1,6 @@
 import {
     assertShape,
+    decodeSaved,
     decodeShared,
     decodeSnapshot,
     readResponse,
@@ -13,7 +14,11 @@ import {
     type Snapshot,
     type SnapshotV2,
 } from "./api";
-import type { OpenAiAccountV2, PortosOperationV2 } from "./model";
+import type {
+    OpenAiAccountV2,
+    OpenAiApiKeyRequestV2,
+    PortosOperationV2,
+} from "./model";
 import { validateMuseStatus } from "./muse/api";
 
 export async function loadSettings(
@@ -113,7 +118,7 @@ export async function readOpenAI(actions: string, signal: AbortSignal) {
     assertShape(
         data,
         ["version", "link_status", "operation_state"],
-        ["challenge"],
+        ["challenge", "api_key"],
     );
     if (
         data.version !== 2 ||
@@ -124,7 +129,28 @@ export async function readOpenAI(actions: string, signal: AbortSignal) {
     )
         invalid();
     if ("challenge" in data) validateChallenge(data.challenge);
+    if ("api_key" in data) {
+        const key = record(data.api_key);
+        assertShape(key, ["configured"]);
+        if (typeof key.configured !== "boolean") invalid();
+    }
     return data as OpenAiAccountV2;
+}
+
+// The key travels once, in this request body; responses never carry it.
+export async function saveOpenAIKey(
+    actions: string,
+    signal: AbortSignal,
+    key: string,
+) {
+    const body: OpenAiApiKeyRequestV2 = { version: 2, api_key: key };
+    const response = await send(
+        settingsUrl(actions, "/openai/api-key", 2),
+        signal,
+        "POST",
+        body,
+    );
+    return decodeSaved(await readResponse(response, 2), 2);
 }
 
 function invalid(): never {
@@ -136,6 +162,7 @@ function options(value: unknown, choices: readonly string[]) {
 }
 
 export const searchModes = ["live", "cached", "disabled"] as const;
+export const speeds = ["standard", "fast", "ultrafast"] as const;
 export const groups = ["notes", "prompts"] as const;
 
 function decodeV2(value: unknown): SnapshotV2 {
@@ -149,7 +176,7 @@ function decodeV2(value: unknown): SnapshotV2 {
         "voice",
         "delegate_model",
         "delegate_effort",
-        "delegate_fast",
+        "delegate_speed",
         "web_search",
     ]);
     assertShape(agent, ["daily_request_cap"]);
@@ -158,7 +185,7 @@ function decodeV2(value: unknown): SnapshotV2 {
         data.version !== 2 ||
         typeof codex.delegate_model !== "string" ||
         typeof codex.delegate_effort !== "string" ||
-        typeof codex.delegate_fast !== "boolean" ||
+        !speeds.some((speed) => speed === codex.delegate_speed) ||
         !searchModes.some((mode) => mode === codex.web_search)
     )
         invalid();

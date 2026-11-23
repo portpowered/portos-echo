@@ -86,7 +86,10 @@ fn assert_persisted(base: &Path, settings: &Path, original: &str, fast: bool) {
     assert_eq!(fs::metadata(settings).unwrap().permissions().mode() & 0o777, 0o600);
     assert_eq!(
         fs::read_to_string(settings).unwrap(),
-        format!("[codex]\ndelegate_fast = {fast}\n\n[voice]\nsession_listen_seconds = 4\n")
+        format!(
+            "[codex]\ndelegate_speed = \"{}\"\n\n[voice]\nsession_listen_seconds = 4\n",
+            speed(fast)
+        )
     );
 }
 
@@ -155,6 +158,12 @@ fn configure_fast_mode(config: &mut CodexConfig, base: &Path, settings: &Path, f
     text
 }
 
+/// The wire and overlay tier for the paired case. The base and the initial
+/// overlay keep the legacy `delegate_fast` boolean, which still loads.
+const fn speed(fast: bool) -> &'static str {
+    if fast { "fast" } else { "standard" }
+}
+
 fn run_bridge(root: &Path, origin: &str, fixed_clock: bool) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_echo-bridge"));
     command.current_dir(root).args([
@@ -214,7 +223,7 @@ fn settings_url(root: &Path) -> reqwest::Url {
 async fn save(client: &reqwest::Client, url: &reqwest::Url, fast: bool, pending: bool) {
     let response = client
         .patch(url.clone())
-        .json(&json!({"version":2,"settings":{"codex":{"delegate_fast":fast}}}))
+        .json(&json!({"version":2,"settings":{"codex":{"delegate_speed":speed(fast)}}}))
         .send()
         .await
         .unwrap();
@@ -229,7 +238,7 @@ async fn assert_snapshot(client: &reqwest::Client, url: &reqwest::Url, fast: boo
     let response = client.get(url.clone()).send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let data: Value = response.json().await.unwrap();
-    assert_eq!(data["settings"]["codex"]["delegate_fast"], fast);
+    assert_eq!(data["settings"]["codex"]["delegate_speed"], speed(fast));
     assert_eq!(data["settings"]["voice"]["session_listen_seconds"], 4);
     assert_eq!(data["restart_pending"], false);
 }

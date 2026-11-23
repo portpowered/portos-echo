@@ -291,6 +291,8 @@ async fn t3_settings_host_http_prompt_exact_bytes_cache_and_validation_without_r
 mod endpoint;
 #[path = "settings_http_tests/pack_cases.rs"]
 mod pack_cases;
+#[path = "settings_http_tests/speed.rs"]
+mod speed;
 
 #[tokio::test]
 async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
@@ -323,7 +325,7 @@ async fn assert_v2_guards(fixture: &Fixture, url: &str) {
     use serde_json::json;
 
     let unauthenticated = url.split('?').next().unwrap();
-    let fast = |version| json!({"version":version,"settings":{"codex":{"delegate_fast":true}}});
+    let fast = |version| json!({"version":version,"settings":{"codex":{"delegate_speed":"fast"}}});
     for (request, expected) in [
         (fixture.client.get(unauthenticated), StatusCode::UNAUTHORIZED),
         (
@@ -397,12 +399,12 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
     let v1 = fixture.snapshot().await;
     let url = fixture.url("/settings/v2");
     let before = snapshot_v2(&fixture, &url).await;
-    assert_eq!(before["settings"]["codex"]["delegate_fast"], false);
+    assert_eq!(before["settings"]["codex"]["delegate_speed"], "standard");
     let base = fixture.root.path().join("bridge.toml");
     let original_base = fs::read(&base).unwrap();
     let path = fixture.path("settings.toml");
     fs::create_dir(&path).unwrap();
-    let fields = json!({"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner","delegate_fast":true},"agent":{"daily_request_cap":"6","max_tool_calls":6,"task_deadline_seconds":45}}});
+    let fields = json!({"version":2,"settings":{"codex":{"web_search":"cached","delegate_model":"synthetic-runner","delegate_speed":"ultrafast"},"agent":{"daily_request_cap":"6","max_tool_calls":6,"task_deadline_seconds":45}}});
     let response = fixture.client.patch(&url).json(&fields).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body: Value = response.json().await.unwrap();
@@ -421,7 +423,7 @@ async fn t3_settings_v2_http_failed_rename_retains_effective_and_v1_shape() {
         json!({"version":2,"restart_pending":true})
     );
     let data = snapshot_v2(&fixture, &url).await;
-    assert_eq!(data["settings"]["codex"]["delegate_fast"], true);
+    assert_eq!(data["settings"]["codex"]["delegate_speed"], "ultrafast");
     assert_eq!(data["restart_pending"], true);
     assert_eq!(data["settings"]["agent"], json!({"daily_request_cap":"6"}));
     assert_eq!(data["settings"]["codex"]["delegate_model"], "synthetic-runner");
@@ -455,6 +457,8 @@ mod legacy;
 
 async fn disable_fast_mode(fixture: &Fixture, url: &str, path: &Path) {
     use serde_json::{Value, json};
+    speed::refuse_speed_patches(fixture, url).await;
+    // The legacy boolean is still read from a cached client, and saved as `delegate_speed`.
     let response = fixture
         .client
         .patch(url)
@@ -468,12 +472,13 @@ async fn disable_fast_mode(fixture: &Fixture, url: &str, path: &Path) {
         json!({"version":2,"restart_pending":true})
     );
     let after = snapshot_v2(fixture, url).await;
-    assert_eq!(after["settings"]["codex"]["delegate_fast"], false);
+    assert_eq!(after["settings"]["codex"]["delegate_speed"], "standard");
     assert_eq!(after["settings"]["codex"]["delegate_model"], "synthetic-runner");
     assert_eq!(after["settings"]["codex"]["web_search"], "cached");
     assert_eq!(after["settings"]["agent"], json!({"daily_request_cap":"6"}));
     let overlay = fs::read_to_string(path).unwrap();
-    assert!(overlay.contains("delegate_fast = false\n"));
+    assert!(overlay.contains("delegate_speed = \"standard\"\n"));
+    assert!(!overlay.contains("delegate_fast"));
 }
 
 async fn snapshot_v2(fixture: &Fixture, url: &str) -> serde_json::Value {

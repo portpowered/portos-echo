@@ -160,6 +160,13 @@ setup_operator() {
     printf '%s\n' 'echo-install: screen ready'
     return
   fi
+  case ${command_name:?} in api-key | api-key-status)
+    [ "${running:?}" = 0 ] || fail 'stop the bridge before changing the API key'
+    migrate_state
+    if [ "$command_name" = api-key ]; then setup_api_key; else setup_api_key_status; fi
+    return
+    ;;
+  esac
   case ${command_name:?} in
     signin | ensure-signin)
       [ "${running:?}" = 0 ] || fail 'stop the bridge before signing in'
@@ -217,4 +224,47 @@ case \"\$launched\" in
   Error:* | *\"
 Error:\"*) exit 1 ;;
 esac"
+}
+
+setup_api_key_arguments() {
+  # Fixed shape only: the root-only setup stage and one plain private leaf.
+  [ "$#" = 5 ] && [ "$2" = --source ] && [ "$4" = --file ] || exit 2
+  api_key_source=$3 api_key_file=$5
+  case $api_key_source in /data/local/tmp/echo-setup-*/api-key) ;; *) exit 1 ;; esac
+  api_key_stage=${api_key_source%/api-key}
+  case ${api_key_stage#/data/local/tmp/echo-setup-} in '' | *[!0-9-]*) exit 1 ;; esac
+  api_key_leaf=${api_key_file#/data/local/echo-bridge/private/}
+  [ "$api_key_leaf" != "$api_key_file" ] && [ "${#api_key_leaf}" -le 64 ] || exit 1
+  case $api_key_leaf in
+    '' | .* | *[!A-Za-z0-9._-]* | bridge.toml | bridge.log | bridge.trace | screen-pairing.txt | launch.sh) exit 1 ;;
+  esac
+}
+
+setup_api_key() {
+  # The key moves from the root-only stage to the bridge user's private file.
+  # Its bytes never reach argv, the log or any output.
+  mark_paths_safe
+  run_adb shell "source='${api_key_source:?}' target='${api_key_file:?}' stage='${device:?}/private/.install-stage'
+test ! -L '${api_key_stage:?}' && test -d '${api_key_stage:?}' || exit 1
+test \"\$(stat -c %u:%a '${api_key_stage:?}')\" = 0:700 || exit 1
+test ! -L \"\$source\" && test -f \"\$source\" || exit 1
+bytes=\$(wc -c < \"\$source\")
+test \"\$bytes\" -gt 0 && test \"\$bytes\" -le 16384 || exit 1
+test ! -L \"\$target\" && { test ! -e \"\$target\" || test -f \"\$target\"; } || exit 1
+test ! -e \"\$stage\" && test ! -L \"\$stage\" || exit 1
+umask 077
+cat \"\$source\" > \"\$stage\" || exit 1
+rm -f \"\$source\"
+chown '${ECHO_RUN_OWNER:?}' \"\$stage\" && chmod 600 \"\$stage\" && mv -f \"\$stage\" \"\$target\""
+  printf '%s\n' 'echo-install: api-key completed'
+}
+
+setup_api_key_status() {
+  # Only the fixed mode line is examined; the private log is never printed.
+  run_adb shell "test -x '${device:?}/bin/echo-bridge'
+test ! -L '${device:?}/private/bridge.toml'
+test \"\$(stat -c %u:%h:%a '${device:?}/private/bridge.toml')\" = 9999:1:600
+/data/local/hassmic/runas \"${run_user:?}\" \"${run_groups:?}\" '${device:?}/bin/echo-bridge' status --config '${device:?}/private/bridge.toml' </dev/null 2>/dev/null"
+  awk '$0 == "mode: api-key" { found=1 } END { exit !found }' "${log:?}" || fail 'bridge did not report API-key mode'
+  printf '%s\n' 'echo-install: api-key-status completed'
 }

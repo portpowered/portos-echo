@@ -3,6 +3,10 @@
   "title": "OpenAiAccountV2",
   "type": "object",
   "properties": {
+    "api_key": {
+      "description": "Present only when `live.mode = \"api_key\"`; never the key or any part of it.",
+      "$ref": "#/$defs/OpenAiApiKeyStatusV2"
+    },
     "challenge": {
       "$ref": "#/$defs/PortosChallengeV2"
     },
@@ -23,6 +27,19 @@
     "operation_state"
   ],
   "$defs": {
+    "OpenAiApiKeyStatusV2": {
+      "type": "object",
+      "properties": {
+        "configured": {
+          "description": "A well-formed key file exists at `live.credential_file`.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "configured"
+      ]
+    },
     "OpenAiLinkStatusV2": {
       "type": "string",
       "enum": [

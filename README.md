@@ -176,6 +176,33 @@ Live access. OpenAI may change who can use the preview and on what terms; see
 [voice agent access](docs/configuration.md#voice-agent-access-and-what-it-may-do). Your credentials stay in private
 files on the Echo.
 
+### Or use an OpenAI API key
+
+Instead of a ChatGPT sign-in, the Echo can use an OpenAI API key. Usage is then billed to the key at API token rates.
+Prepare a `bridge.toml` ([quickstart](docs/quickstart.md#prepare-and-install-configuration)) with `mode = "api_key"`
+under `[live]`, and save the key alone on one line in a file that only you can read, such as `openai-key.txt`. The
+installer streams the key to the Echo's private files, never prints it, skips the ChatGPT step and continues with
+Port OS.
+
+**Linux:**
+
+```sh
+sh install.sh --config ./bridge.toml --openai-api-key-file ./openai-key.txt
+```
+
+**Windows PowerShell:**
+
+```powershell
+$env:ECHO_SETUP_CONFIG = (Resolve-Path .\bridge.toml).Path
+$env:ECHO_SETUP_OPENAI_API_KEY_FILE = (Resolve-Path .\openai-key.txt).Path
+irm https://github.com/portpowered/portos-echo/releases/latest/download/install.ps1 | iex
+```
+
+To switch an installed Echo from ChatGPT, run the installer directly:
+`echo-setup install --config ./bridge.toml --force --openai-api-key-file ./openai-key.txt`. To replace the
+key later, use **Save key** under **Settings > Accounts > OpenAI (GPT Live)**, or run `update --openai-api-key-file`
+again. The [configuration guide](docs/configuration.md) has the details.
+
 ## 4. Upload character packs
 
 Character packs are downloadable layouts and animated characters for the screen. The default pack installs with the

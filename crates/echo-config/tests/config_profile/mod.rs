@@ -1,4 +1,5 @@
 use super::*;
+use echo_config::DelegateSpeed;
 
 #[test]
 fn optional_profile_round_trips_both_loaders_and_model_precedence() {
@@ -93,7 +94,7 @@ fn documented_profile_can_be_enabled_without_changing_defaults() {
         .replace("# [codex]\n", "[codex]\n")
         .replace("# delegate_model =", "delegate_model =")
         .replace("# delegate_effort =", "delegate_effort =")
-        .replace("# delegate_fast =", "delegate_fast =")
+        .replace("# delegate_speed =", "delegate_speed =")
         .replace("# time_zone =", "time_zone =");
     let directory = Directory::new().unwrap();
     let path = directory.write(&input).unwrap();
@@ -103,39 +104,72 @@ fn documented_profile_can_be_enabled_without_changing_defaults() {
     ] {
         assert_eq!(config.codex_model(), Some("fixture-model"));
         assert_eq!(config.codex.delegate_effort.as_deref(), Some("low"));
-        assert!(!config.codex.delegate_fast);
+        assert_eq!(config.codex.delegate_speed, DelegateSpeed::Standard);
         assert_eq!(config.codex.time_zone.as_deref(), Some("America/Los_Angeles"));
     }
 }
 
 #[test]
-fn fast_mode_defaults_off_and_loads_both_examples() {
+fn delegate_speed_defaults_standard_and_loads_both_examples() {
     let directory = Directory::new().unwrap();
     let device_example = include_str!("../../../../examples/bridge.echo.toml");
     for input in [MINIMAL, EXAMPLE, device_example] {
         let parsed = BridgeConfig::from_toml_str(input).unwrap();
-        assert!(!parsed.codex.delegate_fast);
+        assert_eq!(parsed.codex.delegate_speed, DelegateSpeed::Standard);
         assert_eq!(BridgeConfig::load(directory.write(input).unwrap()).unwrap(), parsed);
     }
-    for (value, expected) in [("true", true), ("false", false)] {
-        let input = format!("{MINIMAL}\n[codex]\ndelegate_fast={value}");
+    for (fields, expected) in [
+        ("delegate_speed='standard'", DelegateSpeed::Standard),
+        ("delegate_speed='fast'", DelegateSpeed::Fast),
+        ("delegate_speed='ultrafast'", DelegateSpeed::Ultrafast),
+        ("delegate_fast=true", DelegateSpeed::Fast),
+        ("delegate_fast=false", DelegateSpeed::Standard),
+        ("delegate_fast=true\ndelegate_speed='fast'", DelegateSpeed::Fast),
+        (
+            "delegate_fast=false\ndelegate_speed='standard'",
+            DelegateSpeed::Standard,
+        ),
+    ] {
+        let input = format!("{MINIMAL}\n[codex]\n{fields}");
         for config in [
             BridgeConfig::from_toml_str(&input).unwrap(),
             BridgeConfig::load(directory.write(&input).unwrap()).unwrap(),
         ] {
-            assert_eq!(config.codex.delegate_fast, expected);
+            assert_eq!(config.codex.delegate_speed, expected, "{fields}");
         }
     }
-    let input = format!("{MINIMAL}\n[codex]\ndelegate_fast='synthetic'");
-    for result in [
-        BridgeConfig::from_toml_str(&input),
-        BridgeConfig::load(directory.write(&input).unwrap()),
+    let conflict = "codex.delegate_speed: conflicts with codex.delegate_fast; remove delegate_fast";
+    for (fields, expected) in [
+        (
+            "delegate_fast='synthetic'",
+            "codex.delegate_fast: invalid type or value",
+        ),
+        ("delegate_speed='Fast'", "codex.delegate_speed: invalid type or value"),
+        (
+            "delegate_speed='priority'",
+            "codex.delegate_speed: invalid type or value",
+        ),
+        ("delegate_speed=true", "codex.delegate_speed: invalid type or value"),
+        ("delegate_fast=true\ndelegate_speed='standard'", conflict),
+        ("delegate_fast=true\ndelegate_speed='ultrafast'", conflict),
+        ("delegate_fast=false\ndelegate_speed='fast'", conflict),
+        ("delegate_fast=false\ndelegate_speed='ultrafast'", conflict),
     ] {
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "codex.delegate_fast: invalid type or value"
-        );
+        let input = format!("{MINIMAL}\n[codex]\n{fields}");
+        for result in [
+            BridgeConfig::from_toml_str(&input),
+            BridgeConfig::load(directory.write(&input).unwrap()),
+        ] {
+            assert_eq!(result.unwrap_err().to_string(), expected, "{fields}");
+        }
     }
+}
+
+#[test]
+fn delegate_speed_maps_to_the_exact_service_tier() {
+    assert_eq!(DelegateSpeed::Standard.service_tier(), None);
+    assert_eq!(DelegateSpeed::Fast.service_tier(), Some("priority"));
+    assert_eq!(DelegateSpeed::Ultrafast.service_tier(), Some("ultrafast"));
 }
 
 #[test]

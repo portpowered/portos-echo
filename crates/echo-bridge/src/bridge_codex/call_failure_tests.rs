@@ -85,7 +85,7 @@ async fn call_bad_thread_or_remote_failure_closes_before_realtime_start() {
                 call.start(
                     &Options {
                         effort: Some("low"),
-                        fast: false,
+                        speed: echo_config::DelegateSpeed::Standard,
                         ..options()
                     },
                     vec![],
@@ -111,7 +111,7 @@ async fn call_bad_thread_or_remote_failure_closes_before_realtime_start() {
             call.start(
                 &Options {
                     effort: Some("low"),
-                    fast: false,
+                    speed: echo_config::DelegateSpeed::Standard,
                     ..options()
                 },
                 vec![],

@@ -3,6 +3,7 @@ use echo_config::SettingsOverlay;
 
 mod endpoint;
 mod muse;
+mod speed;
 
 fn overlay(input: &str) -> SettingsOverlay {
     let Ok(overlay) = SettingsOverlay::from_toml_str(input) else {
@@ -112,25 +113,6 @@ fn screen_settings_empty_model_and_effort_select_pin_defaults_over_legacy_aliase
     assert_eq!(overlay(&cleared.to_toml_string().unwrap()), cleared);
     assert_eq!(base.codex_model(), Some("codex-alias"));
     assert_eq!(base.agent.model.as_deref(), Some("agent-alias"));
-}
-
-#[test]
-fn screen_settings_fast_mode_preserves_inheritance_and_explicit_false() {
-    let base = BridgeConfig::from_toml_str(&format!("{MINIMAL}\n[codex]\ndelegate_fast=true")).unwrap();
-    let other = overlay("[codex]\ndelegate_effort='low'");
-    assert!(other.apply_to(&base).unwrap().codex.delegate_fast);
-    let settings = other.merge(&overlay("[codex]\ndelegate_fast=false"));
-    let encoded = settings.to_toml_string().unwrap();
-    assert_eq!(encoded, "[codex]\ndelegate_effort = \"low\"\ndelegate_fast = false\n");
-    let effective = overlay(&encoded).apply_to(&base).unwrap();
-    assert!(!effective.codex.delegate_fast);
-    assert_eq!(effective.codex.delegate_effort.as_deref(), Some("low"));
-    assert!(base.codex.delegate_fast);
-    let bad = "[agent]\nmax_tool_calls=3\n[codex]\ndelegate_fast='false'";
-    assert_eq!(
-        SettingsOverlay::from_toml_str(bad).unwrap_err().to_string(),
-        "codex.delegate_fast: invalid type or value"
-    );
 }
 
 #[test]
@@ -380,8 +362,8 @@ fn screen_settings_invalid_overlay_is_ignored_as_a_whole_with_safe_warning() {
             "home: unknown field",
         ),
         (
-            b"[agent]\nmax_tool_calls=4\n[codex]\ndelegate_fast='SYNTHETIC_VALUE'".to_vec(),
-            "codex.delegate_fast: invalid type or value",
+            b"[agent]\nmax_tool_calls=4\n[codex]\ndelegate_speed='SYNTHETIC_VALUE'".to_vec(),
+            "codex.delegate_speed: invalid type or value",
         ),
         (vec![255], "settings.toml: expected UTF-8 overlay"),
         (vec![b' '; 65_537], "settings.toml: overlay exceeds 65536 bytes"),

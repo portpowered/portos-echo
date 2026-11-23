@@ -130,7 +130,7 @@ async fn round_trip() {
             prompt: "Client audio bridge",
             model: None,
             effort: None,
-            fast: false,
+            speed: echo_config::DelegateSpeed::Standard,
             time_zone: None,
             web_search: echo_config::WebSearch::default(),
         };
