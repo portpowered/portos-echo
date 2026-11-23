@@ -309,7 +309,9 @@ async fn voice_barge_discards_unflushed_converter_and_pending_backpressure_frame
         .unwrap();
     source.audio(&[123; 320]).unwrap();
     assert!(!source.reply.has_frames());
-    let mut pending_frame = Some(vec![77; 960]);
+    source.reply.push_pcm(&[77; 960]);
+    let mut pending_frame = source.reply.stage(false).await;
+    assert_eq!(pending_frame, Some([77; 960]));
     tx.send(Ok(MediaEvent::Control(Event::SpeechStarted))).await.unwrap();
     // This step only arms the barge-in; the quiet stretch fires it below.
     let (sink, observe) = (Some(&Stalled), &mut |_| Ok(()));

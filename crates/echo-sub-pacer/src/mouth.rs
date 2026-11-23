@@ -100,7 +100,7 @@ mod tests {
         let mut now = now;
         for _ in 0..500 {
             while let Some(open) = mouth.poll(now) {
-                seen.push(((now - start).as_millis(), open));
+                seen.push((now.checked_sub(start).unwrap().as_millis(), open));
             }
             now += Duration::from_millis(10);
         }
@@ -226,7 +226,7 @@ mod tests {
         mouth.settle();
         for (offset, open) in [(0, true), (1, false), (16, true), (17, false)] {
             let due = t0 + OUTPUT_DELAY + FRAME * offset;
-            assert_eq!(mouth.poll(due - Duration::from_nanos(1)), None);
+            assert_eq!(mouth.poll(due.checked_sub(Duration::from_nanos(1)).unwrap()), None);
             assert_eq!(mouth.poll(due), Some(open));
         }
         assert_eq!(mouth.due(), None);

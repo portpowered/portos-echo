@@ -377,7 +377,9 @@ async fn voice_backpressure_keeps_pending_pcm_and_continues_control() {
     let (mut port, tx) = port();
     let mut source = Source::new(200, false).unwrap();
     source.controller.microphone_ended();
-    let mut pending = Some(vec![12; 960]);
+    source.reply.push_pcm(&[12; 960]);
+    let mut pending = source.reply.stage(false).await;
+    assert_eq!(pending, Some([12; 960]));
     let mut notices = Vec::new();
     for text in ["first", "second"] {
         tx.send(Ok(MediaEvent::Control(Event::Transcript {
@@ -403,7 +405,7 @@ async fn voice_backpressure_keeps_pending_pcm_and_continues_control() {
         )
         .await
         .unwrap();
-        assert_eq!(pending, Some(vec![12; 960]));
+        assert_eq!(pending, Some([12; 960]));
         assert_eq!(source.stats.reply_sent, 0);
     }
     assert_eq!(notices, vec!["first", "second"]);

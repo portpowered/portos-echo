@@ -1,6 +1,6 @@
 use super::*;
 use echo_core_api::{Clock, Command, PacerCommand, PausedClock, SeededRng, World};
-use std::time::UNIX_EPOCH;
+use std::{io::Write, time::UNIX_EPOCH};
 
 struct Empty;
 
@@ -9,11 +9,11 @@ impl Subsystem for Empty {
     const INPUTS: &'static [EventKind] = &[];
     const OUTPUTS: &'static [CommandKind] = &[];
 
-    fn on_event(_: &mut (), _: &mut Event, _: Now, _: &mut Commands) {}
-    fn next_deadline(_: &()) -> Option<Duration> {
+    fn on_event((): &mut (), _: &mut Event, _: Now, _: &mut Commands) {}
+    fn next_deadline((): &()) -> Option<Duration> {
         None
     }
-    fn check(_: &()) -> Result<(), Broken> {
+    fn check((): &()) -> Result<(), Broken> {
         Ok(())
     }
 }
@@ -49,10 +49,11 @@ fn frame(marker: u16) -> ReplyFrame {
 fn push(world: &mut TestWorld, scratch: Box<ReplyFrame>) -> Box<ReplyFrame> {
     let mut event = Event::Pacer(PacerEvent::PcmPushed(scratch));
     world.step(&mut event, &mut Commands::default());
-    let Event::Pacer(PacerEvent::PcmPushed(scratch)) = event else {
-        panic!("input scratch was lost")
+    let scratch = match event {
+        Event::Pacer(PacerEvent::PcmPushed(scratch)) => Some(scratch),
+        _ => None,
     };
-    scratch
+    scratch.unwrap()
 }
 
 fn offer(world: &mut TestWorld) -> PacerCommands {
@@ -71,23 +72,8 @@ fn ms(value: u64) -> Duration {
 fn pacer_ring_300_keeps_capacity_and_matches_old_release_clock() {
     let mut world = world();
     let storage = world.pacer.queue.storage();
-    let mut scratch = Box::new([0; 960]);
-    let scratch_ptr = std::ptr::from_ref(scratch.as_ref());
     open(&mut world, 200, false);
-    for marker in 0..300 {
-        *scratch = frame(marker);
-        scratch = push(&mut world, scratch);
-        assert_eq!(world.pacer.queue.storage(), storage);
-        assert_eq!(std::ptr::from_ref(scratch.as_ref()), scratch_ptr);
-    }
-    let status = world.pacer.status();
-    assert_eq!((storage.0, status.view.depth, status.dropped), (128, 128, 172));
-    step(&mut world, PacerEvent::InputFinished);
-    for marker in 172..300 {
-        assert_eq!(release(&mut world), frame(marker));
-        assert_eq!(world.pacer.queue.storage(), storage);
-    }
-    assert_eq!(world.pacer.status().view.depth, 0);
+    let mut scratch = check_overflow(&mut world);
     step(&mut world, PacerEvent::ReplyOpened);
     assert_eq!(world.pacer.queue.storage(), storage);
     assert_eq!(world.pacer.status().dropped, 0);
@@ -99,20 +85,47 @@ fn pacer_ring_300_keeps_capacity_and_matches_old_release_clock() {
         // The old ClockPacer sent frame k at start + 20 ms * (k + 1) - lead,
         // using the same opening credit for every frame whose offset is zero.
         let expected = ms((20 * (u64::from(marker) + 1)).saturating_sub(200));
-        assert_eq!(world.clock.now().monotonic - start, expected, "frame {marker}");
+        let elapsed = world.clock.now().monotonic.checked_sub(start).unwrap();
+        assert_eq!(elapsed, expected, "frame {marker}");
         assert_eq!(world.pacer.queue.storage(), storage);
     }
     step(&mut world, PacerEvent::RunClosed);
     assert_eq!(world.pacer.queue.storage(), storage);
     assert!(world.pacer.quiescent());
-    println!("pacer ring capacity=128 pushes=300 evictions=172 retained=128 release_offsets=300");
+    writeln!(
+        std::io::stdout().lock(),
+        "pacer ring capacity=128 pushes=300 evictions=172 retained=128 release_offsets=300"
+    )
+    .unwrap();
+}
+
+fn check_overflow(world: &mut TestWorld) -> Box<ReplyFrame> {
+    let storage = world.pacer.queue.storage();
+    let mut scratch = Box::new([0; 960]);
+    let scratch_ptr = std::ptr::from_ref(scratch.as_ref());
+    for marker in 0..300 {
+        *scratch = frame(marker);
+        scratch = push(world, scratch);
+        assert_eq!(world.pacer.queue.storage(), storage);
+        assert_eq!(std::ptr::from_ref(scratch.as_ref()), scratch_ptr);
+    }
+    let status = world.pacer.status();
+    assert_eq!((storage.0, status.view.depth, status.dropped), (128, 128, 172));
+    step(world, PacerEvent::InputFinished);
+    for marker in 172..300 {
+        assert_eq!(release(world), frame(marker));
+        assert_eq!(world.pacer.queue.storage(), storage);
+    }
+    assert_eq!(world.pacer.status().view.depth, 0);
+    scratch
 }
 
 fn release(world: &mut TestWorld) -> ReplyFrame {
     let mut commands = offer(world);
     if commands.frame.is_none() {
         let due = world.pacer.status().deadline.unwrap();
-        world.clock.advance(due - world.clock.now().monotonic);
+        let delay = due.checked_sub(world.clock.now().monotonic).unwrap();
+        world.clock.advance(delay);
         commands = step(world, PacerEvent::Tick);
     }
     assert!(matches!(
@@ -132,7 +145,7 @@ fn seeded_pacer_world_diff() {
     let diff = world.check().unwrap_err();
     let rendered = format!("{}: expected {}, actual {}", diff.field, diff.expected, diff.actual);
     assert_eq!(rendered, "pacer.reply_depth: expected 0..=128, actual out of range");
-    println!("World diff: {rendered}");
+    writeln!(std::io::stdout().lock(), "World diff: {rendered}").unwrap();
     world.pacer.queue.corrupt_depth(0);
     world.check().unwrap();
 }
