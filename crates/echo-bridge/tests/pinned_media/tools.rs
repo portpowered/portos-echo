@@ -307,7 +307,7 @@ async fn client(
                     prompt: "Client audio bridge",
                     model: Some(model),
                     effort: None,
-                    fast: false,
+                    speed: echo_config::DelegateSpeed::Standard,
                     time_zone: None,
                     web_search: config.web_search,
                 },

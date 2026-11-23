@@ -140,15 +140,8 @@ impl SettingsOverlay {
             result.listen_seconds = voice.optional("session_listen_seconds")?;
             voice.finish()?;
         }
-        if let Some(mut codex) = fields.section("codex")? {
-            result.voice = codex.optional("voice")?;
-            result.options.web_search = codex.optional("web_search")?;
-            result.options.delegate_model = codex.optional("delegate_model")?;
-            result.options.delegate_effort = codex.optional("delegate_effort")?;
-            // A legacy stored `delegate_fast` still loads; the next save writes `delegate_speed`.
-            result.options.delegate_speed =
-                DelegateSpeed::resolve(codex.optional("delegate_speed")?, codex.optional("delegate_fast")?)?;
-            codex.finish()?;
+        if let Some(codex) = fields.section("codex")? {
+            result.voice = result.options.decode_codex(codex)?;
         }
         if let Some(mut agent) = fields.section("agent")? {
             result.daily_cap = agent.optional("daily_request_cap")?;

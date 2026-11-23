@@ -291,6 +291,8 @@ async fn t3_settings_host_http_prompt_exact_bytes_cache_and_validation_without_r
 mod endpoint;
 #[path = "settings_http_tests/pack_cases.rs"]
 mod pack_cases;
+#[path = "settings_http_tests/speed.rs"]
+mod speed;
 
 #[tokio::test]
 async fn t3_settings_v2_http_refuses_wrong_version_origin_and_invalid_config() {
@@ -368,13 +370,6 @@ async fn assert_v2_guards(fixture: &Fixture, url: &str) {
                 .client
                 .patch(url)
                 .json(&json!({"version":2,"settings":{"codex":{"delegate_fast":"false"}}})),
-            StatusCode::BAD_REQUEST,
-        ),
-        (
-            fixture
-                .client
-                .patch(url)
-                .json(&json!({"version":2,"settings":{"codex":{"delegate_speed":"priority"}}})),
             StatusCode::BAD_REQUEST,
         ),
         (
@@ -462,13 +457,7 @@ mod legacy;
 
 async fn disable_fast_mode(fixture: &Fixture, url: &str, path: &Path) {
     use serde_json::{Value, json};
-    let conflict = json!({"version":2,"settings":{"codex":{"delegate_fast":false,"delegate_speed":"fast"}}});
-    let response = fixture.client.patch(url).json(&conflict).send().await.unwrap();
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(
-        response.json::<Value>().await.unwrap(),
-        json!({"version":2,"message":"codex.delegate_speed: conflicts with codex.delegate_fast"})
-    );
+    speed::refuse_speed_patches(fixture, url).await;
     // The legacy boolean is still read from a cached client, and saved as `delegate_speed`.
     let response = fixture
         .client

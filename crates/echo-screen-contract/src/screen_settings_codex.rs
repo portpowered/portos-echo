@@ -1,4 +1,4 @@
-//! The Settings V2 OpenAI options: the hosted search mode and the delegated runner.
+//! The Settings V2 `OpenAI` options: the hosted search mode and the delegated runner.
 use super::{WebSearchV2, present};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

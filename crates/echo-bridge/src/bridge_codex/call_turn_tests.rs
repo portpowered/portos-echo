@@ -1,7 +1,6 @@
 //! T1: delegated lifecycle and cancellation-safe interrupt delivery on JSONL.
 use super::{call_tests::*, *};
 use serde_json::Value;
-use std::io::Write as _;
 use std::{future::Future, task::Poll, time::Duration};
 
 async fn pending<T>(future: std::pin::Pin<&mut impl Future<Output = T>>) {
