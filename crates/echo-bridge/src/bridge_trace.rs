@@ -40,7 +40,7 @@
 //! handed to the Echo, and `endpoint` is `user_transcript` or `delegated_turn`,
 //! the Live session's first sign that the user's turn was over.
 use crate::{Error, bridge_world::Controller};
-use echo_core_api::{PendingTrace, TraceRow};
+use echo_core_api::{PendingTrace, TraceDrain, TraceRow};
 use echo_svc_trace::Writer;
 use serde_json::Value;
 use std::{
@@ -75,7 +75,10 @@ impl Owner {
         if let Some(ticker) = &self.ticker {
             ticker.abort();
         }
-        self.writer.finish().map_err(|_| Error::Trace)
+        self.writer.finish().map_err(|_| {
+            self.world.write_failed();
+            Error::Trace
+        })
     }
 }
 
@@ -114,7 +117,10 @@ impl Trace {
     }
 
     pub(crate) fn open_in(path: &Path, mode: &'static str, world: Arc<Controller>) -> Result<Self, Error> {
-        let writer = Arc::new(Writer::open(path, world.clone()).map_err(|_| Error::Trace)?);
+        let writer = Arc::new(Writer::open(path, world.clone()).map_err(|_| {
+            world.write_failed();
+            Error::Trace
+        })?);
         let started = Instant::now();
         let tick_needed = Arc::new(tokio::sync::Notify::new());
         let ticker = ticker(world.clone(), &writer, tick_needed.clone());

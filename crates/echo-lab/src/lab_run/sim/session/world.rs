@@ -80,7 +80,7 @@ impl World {
             configure_run(root, max, self.wait_for_long_answer)?;
         }
         self.provider = Some(provider);
-        self.bridge = Some(Process::start(&mut command)?);
+        self.bridge = Some(Process::start_bridge(&mut command, false)?);
         self.bridge
             .as_mut()
             .ok_or("session: missing bridge")?

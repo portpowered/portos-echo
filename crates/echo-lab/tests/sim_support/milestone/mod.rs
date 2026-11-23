@@ -39,7 +39,16 @@ fn run(session: &Session, seeded: bool) -> (Output, PathBuf, Value) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(i32::from(seeded)), "{stdout}\n{stderr}");
     let result = if seeded { "fail" } else { "pass" };
-    let path = PathBuf::from(stdout.trim().strip_suffix(&format!(": {result}")).unwrap());
+    let mut lines = stdout.lines();
+    assert_eq!(
+        lines.next(),
+        Some("world invariant scenario=m2-live-connect status=pass")
+    );
+    if seeded {
+        assert_eq!(lines.next(), Some("World diff: none (invariants hold)"));
+    }
+    let path = PathBuf::from(lines.next().unwrap().strip_suffix(&format!(": {result}")).unwrap());
+    assert_eq!(lines.next(), None);
     assert!(path.starts_with(&session.0), "{}", path.display());
     let report: Value = serde_json::from_slice(&fs::read(path.join("report.json")).unwrap()).unwrap();
     let schema: Value = serde_json::from_str(include_str!("../../../../../schemas/report.schema.json")).unwrap();

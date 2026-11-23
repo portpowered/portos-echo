@@ -25,6 +25,11 @@ impl Default for State {
 
 impl State {
     #[must_use]
+    pub fn pending_rows(&self) -> usize {
+        self.rows.len()
+    }
+
+    #[must_use]
     pub fn current_run(&self) -> Option<String> {
         self.active_run.clone()
     }

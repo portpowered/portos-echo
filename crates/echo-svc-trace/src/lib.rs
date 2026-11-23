@@ -72,6 +72,9 @@ fn run(mut sink: impl Write, source: &impl TraceDrain, receiver: &Receiver<()>) 
         let signalled = receiver.recv().is_ok();
         while let Some(pending) = source.next_row() {
             let result = write_row(&mut sink, pending.row);
+            if result.is_err() {
+                source.write_failed();
+            }
             if let Some(receipt) = pending.receipt {
                 let _ = receipt.send(result);
             }

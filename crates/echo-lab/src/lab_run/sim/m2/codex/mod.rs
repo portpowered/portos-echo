@@ -92,7 +92,7 @@ impl Case {
             std::fs::write(path, text.replace("wake_earcon = true", "wake_earcon = false"))
                 .map_err(|_| "m2: cannot disable fixture earcon")?;
         }
-        self.bridge = Some(Process::start(&mut command)?);
+        self.bridge = Some(Process::start_bridge(&mut command, false)?);
         self.bridge
             .as_mut()
             .ok_or("m2: missing bridge")?

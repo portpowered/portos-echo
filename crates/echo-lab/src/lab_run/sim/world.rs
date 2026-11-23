@@ -144,7 +144,7 @@ impl World {
                 super::m2::auth::configure(&mut command, root, case, auth)?;
             }
         }
-        self.bridge = Some(Process::start(&mut command)?);
+        self.bridge = Some(Process::start_bridge(&mut command, false)?);
         self.bridge
             .as_mut()
             .ok_or("launch: missing bridge")?

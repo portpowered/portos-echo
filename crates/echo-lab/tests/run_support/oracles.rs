@@ -41,10 +41,18 @@ fn mcp_controls_fail(sim: bool) {
             String::from_utf8(output.stderr).unwrap(),
             format!("echo-lab: {message}\n")
         );
-        assert_eq!(
-            String::from_utf8(output.stdout).unwrap(),
-            format!("{}: fail\n", session.0.join("artifacts").display())
-        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let outcome = format!("{}: fail\n", session.0.join("artifacts").display());
+        if sim {
+            assert_eq!(
+                stdout,
+                format!(
+                    "world invariant scenario=fixture status=fail\nWorld diff: proof.availability: expected one result per bridge generation, actual missing\n{outcome}"
+                )
+            );
+        } else {
+            assert_eq!(stdout, outcome);
+        }
         assert_eq!(session.operations(), ["digest"]);
         let report = session.report();
         assert_eq!(report["result"], "fail");

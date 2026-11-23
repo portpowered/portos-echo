@@ -42,7 +42,10 @@ impl WyomingClient {
         Self::connect_endpoint(addr.into(), opts, Arc::new(device::Standalone::default())).await
     }
 
-    pub(crate) async fn connect_endpoint(
+    /// Connect with an injected device owner, preserving the raw Wyoming client interface.
+    /// # Errors
+    /// Invalid client options are rejected before opening a connection.
+    pub async fn connect_endpoint(
         endpoint: Endpoint,
         opts: ClientOptions,
         control: Arc<dyn DeviceControl>,

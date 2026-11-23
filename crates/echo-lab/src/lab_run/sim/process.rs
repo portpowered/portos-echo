@@ -6,6 +6,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 mod diagnostic;
 mod line;
+pub(in crate::lab_run) mod witness;
 
 #[cfg(test)]
 pub(super) mod owners {
@@ -38,6 +39,11 @@ impl Process {
     }
     pub(super) fn start_observed(command: &mut Command) -> Result<Self, String> {
         Self::launch(command, true)
+    }
+
+    pub(super) fn start_bridge(command: &mut Command, observed: bool) -> Result<Self, String> {
+        witness::attach(command)?;
+        Self::launch(command, observed)
     }
     fn launch(command: &mut Command, observed: bool) -> Result<Self, String> {
         let mut child = command

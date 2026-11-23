@@ -40,11 +40,31 @@ receipt. A checked write can wake the writer earlier. Close stops admission and
 joins the drain. The clock monitor and replacement receipts keep their separate
 open lifetimes and elapsed-time origins.
 
+The T3 harness gives each bridge child a fresh owner-only directory and reads
+its World result after collecting the child. The controller remembers the
+first failed step invariant and checks the final device and trace state
+after cleanup. W1 uses the same controller with the raw Wyoming client and
+observes the result of its existing synchronous trace writer. The harness
+prints one World status per scenario. A failed scenario prints one redacted
+diff and preserves the existing journey error if there is one.
+
+To compare deterministic snapshots, prebuild with `make sim-prereqs`.
+Run this command twice with different output directories:
+
+```sh
+ECHO_LAB_WORLD_SEED=101 target/debug/echo-lab run tests/scenarios/m2-live-connect.yaml --driver sim --out <fresh-dir>
+```
+
+The M2 fixture uses its paused Tokio clock, with a fixed World epoch and seeded
+RNG for these invocations. Compare the two `world-snapshots.private.json` files
+with `cmp`. The files contain the three final results in scenario case order.
+Each contains only typed device state and trace drain status. Ordinary
+invocations remove the per-generation files on completion.
+
 ## Deferred
 
-- A1's next slice joins the World to the T3 scenario finalizer. The device step
-  currently receives wake and mute events.
-  Wyoming has no separate button report in the current wire contract.
+- The device step receives wake and mute events. Wyoming has no separate
+  button report in the current wire contract.
 - A2 owns the Wyoming service rename, session, pacer and call subsystems,
   playback clock, slot table and allocation proof.
 - A2 and B2 own migration of existing direct randomness consumers. The later

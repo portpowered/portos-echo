@@ -50,6 +50,7 @@ impl Case {
         config::configure(&mut command, root, port, origin, &root.join("trace"))?;
         self.binary = binary().await?;
         provision(root, &self.binary, case, &mut self.auth)?;
+        crate::lab_run::sim::process::witness::attach(&mut command)?;
         self.child = Some(
             command
                 .stdin(Stdio::piped())

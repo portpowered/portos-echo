@@ -20,15 +20,16 @@ serde_norway = "0.9.42"
 jsonschema = { version = "0.33", default-features = false }
 echo-contracts = { version = "0.1.0", path = "../echo-contracts" }
 echo-codex = { version = "0.1.0", path = "../echo-codex" }
+echo-bridge = { version = "0.1.0", path = "../echo-bridge" }
 echo-config = { version = "0.1.0", path = "../echo-config" }
 echo-wyoming = { version = "0.1.0", path = "../echo-wyoming" }
 echo-screen-contract = { version = "0.1.0", path = "../echo-screen-contract" }
 echo-spoof-mcp = { version = "0.1.0", path = "../echo-spoof-mcp" }
 echo-live = { version = "0.1.0", path = "../echo-live", features = ["fake"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "io-util", "sync", "time", "test-util", "fs"] }
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"
 echo-mcp-auth = { version = "0.1.0", path = "../echo-mcp-auth" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 

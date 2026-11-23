@@ -37,8 +37,10 @@ pub struct Control {
 /// # Errors
 /// All failures use fixed categories. EOF closes owned tasks and sockets.
 pub async fn execute_wyoming(settings: Settings) -> Result<(), Error> {
-    let (connector, world) = crate::bridge_world::connector(settings.wyoming.clone());
-    execute_in(settings, connector, Some(world)).await
+    let local = settings.lab || settings.model_url.is_some();
+    let (connector, world) = crate::bridge_world::connector(settings.wyoming.clone(), local)?;
+    let result = execute_in(settings, connector, Some(world.clone())).await;
+    result.and(world.publish())
 }
 
 /// # Errors

@@ -3,19 +3,21 @@ use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
-use echo_wyoming::{ClientOptions, WyomingClient};
+use echo_bridge::world_witness::HelperWorld;
+use echo_wyoming::WyomingClient;
 use serde_json::{Value, json};
 
 fn env(name: &str) -> Result<String, Box<dyn std::error::Error>> {
     Ok(std::env::var(name)?)
 }
 
-async fn endpoints() -> Result<WyomingClient, Box<dyn std::error::Error>> {
+async fn endpoints() -> Result<(HelperWorld, WyomingClient), Box<dyn std::error::Error>> {
     let address: SocketAddr = env("ECHO_LAB_WYOMING_ADDR")?.parse()?;
     if address.ip() != Ipv4Addr::LOCALHOST {
         return Err("invalid target".into());
     }
-    let client = WyomingClient::connect(address, ClientOptions::default()).await?;
+    let world = HelperWorld::new(address)?;
+    let client = world.connect().await?;
     client.run_satellite().await?;
     client.describe().await?;
     let mut addresses = vec![address];
@@ -35,7 +37,7 @@ async fn endpoints() -> Result<WyomingClient, Box<dyn std::error::Error>> {
         addresses.push(stream.peer_addr()?);
     }
     std::fs::write(env("ECHO_LAB_SIM_ENDPOINTS")?, serde_json::to_vec(&addresses)?)?;
-    Ok(client)
+    Ok((world, client))
 }
 
 fn trace(path: &PathBuf, records: &Value, append: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -78,7 +80,7 @@ async fn ready_barrier(script: &Value) -> Result<(), Box<dyn std::error::Error>>
 
 async fn run() -> Result<u8, Box<dyn std::error::Error>> {
     let script: Value = serde_json::from_slice(&std::fs::read(env("ECHO_LAB_SIM_SCRIPT")?)?)?;
-    let client = endpoints().await?;
+    let (world, client) = endpoints().await?;
     let path = PathBuf::from(env("ECHO_LAB_TRACE_PATH")?);
     if script["missing_trace"] != true {
         trace(&path, &script["records"], false)?;
@@ -103,6 +105,7 @@ async fn run() -> Result<u8, Box<dyn std::error::Error>> {
     io::stdout().flush()?;
     if let Some(code) = script["exit_code"].as_u64() {
         client.close().await?;
+        world.publish()?;
         return Ok(u8::try_from(code)?);
     }
     if script["cancel"] == true {
@@ -124,6 +127,7 @@ async fn run() -> Result<u8, Box<dyn std::error::Error>> {
             .write_all(raw.as_bytes())?;
     }
     client.close().await?;
+    world.publish()?;
     if script["fail_close"] == true {
         return Err("controlled close failure".into());
     }

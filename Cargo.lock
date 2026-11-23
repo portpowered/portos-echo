@@ -848,6 +848,7 @@ dependencies = [
  "rustix",
  "rustls",
  "rustls-native-certs",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
@@ -960,6 +961,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "echo-bridge",
  "echo-codex",
  "echo-config",
  "echo-contracts",

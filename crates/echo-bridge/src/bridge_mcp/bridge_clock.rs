@@ -75,16 +75,20 @@ async fn run(
     let proxy = proxy::Proxy::bind(settings.wyoming.tcp_addr(), context.clone()).await?;
     settings.wyoming = proxy.address.into();
     let (stop, shutdown) = oneshot::channel();
-    let (connector, world) = crate::bridge_world::connector(settings.wyoming.clone());
-    let work = bridge_runtime::execute_with_world(
-        settings,
-        Control {
-            utc_day: std::sync::Arc::new(|| 0),
-            shutdown,
-        },
-        connector,
-        Some(world),
-    );
+    let (connector, world) = crate::bridge_world::connector(settings.wyoming.clone(), true)?;
+    let work = async {
+        let result = bridge_runtime::execute_with_world(
+            settings,
+            Control {
+                utc_day: std::sync::Arc::new(|| 0),
+                shutdown,
+            },
+            connector,
+            Some(world.clone()),
+        )
+        .await;
+        result.and(world.publish())
+    };
     tokio::pin!(work);
     loop {
         tokio::select! {
