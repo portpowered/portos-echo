@@ -726,14 +726,14 @@ the phases' own:
 
 ## 9. Open questions for the owner
 
-1. **Root role.** May `echo-bridge boot` run as root to own the firewall, Alexa-off, the boot hook and supervision?
-   This amends "no code of ours runs as root".
-2. **Rooting.** Should the fork's athena setup gain a "root only" stop, or does our installer take over from a bare
-   rooted Echo?
+1. **Root role.** Answered 2026-11-22: yes, `echo-bridge boot` may run as root to own the firewall, Alexa-off,
+   the boot hook and supervision ([decisions](../program/decisions.md)).
+2. **Rooting.** Answered 2026-11-22: our installer takes over everything from a bare rooted Echo, and ideally
+   more of the fork's remaining steps move into it.
 3. **Exec uid.** Which uid should the tools run as: one from Android's OEM-reserved range, or `shell`? `shell` has
    `pm install` power, which we would rather avoid.
-4. **Policy tool.** May the installer download `magiskpolicy` as a separate GPL asset, or must the SELinux patch be
-   written in Rust?
+4. **Policy tool.** Answered 2026-11-22: yes, the installer may download `magiskpolicy` as a separate GPL
+   asset, never linked.
 5. **Port OS through Codex's MCP client?** Codex's client does not do Port OS's DPoP device grant. Our
    recommendation keeps Port OS bridge-owned (policy, ledger, consent) and uses Codex's client for other servers.
 6. **Network for tools.** Do shell tools get internet (for `curl`, `git`), or does search and fetch stay on the
