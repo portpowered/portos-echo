@@ -299,7 +299,7 @@ async fn t3_settings_overlay_invalid_startup_reports_and_ignores_entire_file() {
 }
 
 async fn rejected_overlay(overlay: &str, reason: &str, deprecated: bool) {
-    use super::restart::{binary_home, binary_ready, binary_snapshot};
+    use super::restart::{binary_home, binary_ready};
 
     let fixture = Fixture::new("chatgpt");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -313,14 +313,22 @@ async fn rejected_overlay(overlay: &str, reason: &str, deprecated: bool) {
     let mut process = Process::spawn(&mut super::super::voice_entry::command(&fixture));
     let _satellite = binary_ready(&listener, &mut process).await;
     let path = fixture.directory.path().join("trace");
-    let address = screen_address(&path, 0).await;
+    check_rejected_startup(&mut process, &path, reason, deprecated).await;
+    super::super::host::released(&fixture).await;
+    assert_eq!(std::fs::read(&base).unwrap(), text.as_bytes());
+    assert_eq!(std::fs::read(&overlay_path).unwrap(), overlay.as_bytes());
+    check_ignored_trace(&path, &home);
+}
+
+async fn check_rejected_startup(process: &mut Process, path: &Path, reason: &str, deprecated: bool) {
+    let address = screen_address(path, 0).await;
     let message = format!("settings.toml: ignored overlay: {reason}");
     let mut screen = bridge_wire_screen::stream(&address.to_string()).await;
     assert_eq!(
         bridge_wire_screen::state(&mut screen).await,
         json!({"state":"error", "relink":false, "message": message})
     );
-    let snapshot = binary_snapshot(address).await;
+    let snapshot = super::restart::binary_snapshot(address).await;
     assert_eq!(snapshot["settings"]["agent"]["daily_request_cap"], "500");
     process.finish(0).await;
     let deprecation = if deprecated {
@@ -329,10 +337,6 @@ async fn rejected_overlay(overlay: &str, reason: &str, deprecated: bool) {
         ""
     };
     assert_eq!(process.stderr().await, format!("{deprecation}echo-bridge: {message}\n"));
-    super::super::host::released(&fixture).await;
-    assert_eq!(std::fs::read(&base).unwrap(), text.as_bytes());
-    assert_eq!(std::fs::read(&overlay_path).unwrap(), overlay.as_bytes());
-    check_ignored_trace(&path, &home);
 }
 
 fn overlay_test_base(base: &Path, deprecated: bool) -> String {
