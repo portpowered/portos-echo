@@ -61,7 +61,9 @@ Port OS permissions shows the requested scopes next to the current grant. After 
 to report that the saved values are active before linking again. Presentation lists the installed screen packs
 and puts Template eyes first. Omitting `screen_pack` uses the installed template.
 Unknown keys, bad types, unreadable/oversized files or invalid effective values reject the **whole overlay**;
-the validated base remains active and a warning is presented. An invalid base remains a startup error.
+the validated base remains active. The startup warning appears on the paired screen and on stderr
+(`private/bridge.log` with the installer launcher). `private/bridge.trace` records `settings.ignored`.
+An invalid base remains a startup error.
 The operator account/link commands load base directly; the voice runtime loads the effective configuration.
 
 Settings edits persist first, then request replacement at an idle boundary between calls.
@@ -462,12 +464,19 @@ Realtime voices: `default` plus every voice the running Codex app server lists f
 sends (`v3`). The bridge reads that list after sign-in, so Settings follows the bundled Codex release; `miko`,
 `himari`, `hanul` and `leher` are among the 26 voices `rust-v0.171.0` lists. Until the list has been read, Settings
 offers `arbor`, `breeze`, `cove`, `ember`, `juniper`, `maple`, `sol`, `spruce` and `vale`. Settings refuses to save a
-voice that is not listed. A `codex.voice` in `bridge.toml` that the app server does not list is left out of the call,
+voice that is not listed. A configured voice absent from the app server's usable list is left out of the call,
 with one line on stderr, and the app server's default voice speaks. The v2-only voices earlier builds offered (`alloy`,
 `ash`, `ballad`, `cedar`, `coral`, `echo`, `sage`, `shimmer`, `verse`) still load from an existing `bridge.toml` or
 `settings.toml`, as `default` with one settings warning; they are never offered or saved.
 Offline, only the shape of a voice name is checked: lowercase ASCII letters, at most 32.
 `live.voice` is a legacy fallback; use `codex.voice` for the screen editor.
+
+In `private/bridge.trace`, `call.realtime_start_sent` records `voice` as the name sent in
+`thread/realtime/start`, or `"omitted"` when the request leaves the choice to the server. `voice_listed`
+is `true` for a named match, `false` for a miss or default selection with a usable V3 list, and `null`
+when no usable V3 list was returned. When a usable list rejects a named voice, `call.voice_dropped`
+records `configured_voice` and `listed_count` before the start marker. These events describe the request
+that left the bridge.
 
 ## Camera snapshots
 
