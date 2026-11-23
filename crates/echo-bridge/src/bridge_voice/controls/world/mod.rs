@@ -1,18 +1,23 @@
-//! The session controller composes the ordered device, pacer and trace World.
+//! The session controller composes the ordered device, session, pacer and trace World.
 use echo_core_api::{
     Broken, Clock, Command, Commands, DeviceControl, DeviceEvent, DeviceState, DeviceView, EntropyUnavailable, Event,
     Now, OsRng, PendingTrace, Rng, SeededRng, TraceDrain, TraceFailure, World,
 };
 use echo_link::LinkConnector;
 use echo_sub_device::Device;
-use echo_sub_pacer::Pacer;
 use echo_wyoming::{ClientOptions, Endpoint};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::time::Instant;
 
 mod pacer;
+mod session;
+mod slots;
+mod voice_reducers;
 pub mod witness;
 pub(crate) use pacer::{PacerPort, scope};
+pub(crate) use session::{SessionPort, call_effect};
+use slots::Slots;
+use voice_reducers::VoiceReducers;
 use witness::Witness;
 
 struct BridgeClock {
@@ -47,10 +52,11 @@ impl Rng for SessionRng {
     }
 }
 
-type SessionWorld = World<Device, Pacer, echo_sub_trace::Trace, BridgeClock, SessionRng>;
+type SessionWorld = World<Device, VoiceReducers, echo_sub_trace::Trace, BridgeClock, SessionRng>;
 
 struct State {
     world: SessionWorld,
+    runs: Slots<()>,
     first_violation: Option<Broken>,
     trace_held: bool,
 }
@@ -75,7 +81,10 @@ impl Controller {
             state: Mutex::new(State {
                 world: World {
                     device: DeviceState::default(),
-                    pacer,
+                    pacer: voice_reducers::State {
+                        playback: pacer,
+                        session: echo_sub_session::State::default(),
+                    },
                     trace: echo_sub_trace::State::default(),
                     clock: BridgeClock {
                         start: Instant::now(),
@@ -83,6 +92,7 @@ impl Controller {
                     },
                     rng: seed.map_or(SessionRng::Os(OsRng), |seed| SessionRng::Seeded(SeededRng::new(seed))),
                 },
+                runs: Slots::new(1),
                 first_violation: None,
                 trace_held: false,
             }),

@@ -40,13 +40,6 @@ pub struct Stats {
     pub cut: Option<Box<Cut>>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum FollowUp {
-    First,
-    Replied,
-    Unanswered,
-}
-
 pub(super) struct Source {
     pub microphone: Option<CaptureAudio>,
     pub muted: bool,
@@ -63,13 +56,6 @@ pub(super) struct Source {
     thinking: bool,
     pub user_speech: UserSpeech,
     pub marks: super::voice_wait::Marks,
-    /// When a reply nobody has begun is unanswered: one response window
-    /// after the reply opened or the user was last heard to stop speaking.
-    pub answer_due: Instant,
-    /// Whether a reply has settled, and whether speech after it went
-    /// unanswered: then the run ends, unfailed.
-    pub follow_up: FollowUp,
-    pub run_ceiling: Option<Instant>,
     /// User speech heard during the reply, until the model yields to it.
     barge: Barge,
     /// A barge-in cut the reply: call audio is its until the model speaks again.
@@ -162,7 +148,8 @@ impl Source {
         if self.reply.voiced()
             && let Ok(due) = self.controller.replacement_deadline()
         {
-            self.answer_due = self.answer_due.max(due);
+            self.controller
+                .set_response_due(self.controller.response_due().map_or(due, |answer| answer.max(due)));
         }
         self.meter.wrote(now);
     }
@@ -188,20 +175,28 @@ impl Source {
         }
     }
 
+    #[cfg(test)]
     pub fn new(lead_ms: u16, muted: bool) -> Result<Self, Error> {
+        Self::with_session(lead_ms, muted, Instant::now(), None)
+    }
+
+    pub(super) fn with_session(
+        lead_ms: u16,
+        muted: bool,
+        opened: Instant,
+        max: Option<std::time::Duration>,
+    ) -> Result<Self, Error> {
+        let controller = Controller::open(opened, max)?;
         Ok(Self {
             microphone: None,
             muted,
             reply: ReplyAudio::new(lead_ms)?,
-            controller: Controller::default(),
+            controller,
             failure: "playback",
             delegation: Delegation::default(),
             thinking: false,
             user_speech: UserSpeech::Quiet,
             marks: super::voice_wait::Marks::default(),
-            answer_due: Instant::now(),
-            follow_up: FollowUp::First,
-            run_ceiling: None,
             meter: ReplyMeter::default(),
             stats: Stats::default(),
             session: super::session_tools::Grants::default(),

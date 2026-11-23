@@ -14,7 +14,7 @@ const MAX: Duration = Duration::from_secs(12);
 /// A settled first reply one second after the run opened: listening to 4 s.
 async fn listening() -> (Grants, Controller) {
     let grants = Grants::new(Some(LISTEN), MAX);
-    let mut controller = Controller::default();
+    let mut controller = Controller::open(Instant::now(), None).unwrap();
     controller
         .admit_response(Instant::now() + Duration::from_secs(10))
         .unwrap();

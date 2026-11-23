@@ -170,6 +170,7 @@ const LINK: &str = "device.connected: expected false, actual true";
 const ROWS: &str = "trace.pending_rows: expected 0, actual nonzero";
 const WRITER: &str = "trace.writer_failed: expected false, actual true";
 const PACER_DEPTH: &str = "pacer.reply_depth: expected 0..=128, actual out of range";
+const SESSION_CLOSING: &str = "session.idle_deadline: expected absent while closing, actual present";
 const PACER_QUIESCENT: &str = "pacer.quiescent: expected true, actual false";
 
 impl Report {
@@ -196,7 +197,7 @@ impl Report {
             .as_ref()
             .map(render)
             .or_else(|| state.world.check().as_ref().err().map(render))
-            .or_else(|| (!state.world.pacer.quiescent()).then(|| PACER_QUIESCENT.to_owned()))
+            .or_else(|| (!state.world.pacer.playback.quiescent()).then(|| PACER_QUIESCENT.to_owned()))
             .or_else(|| snapshot.terminal_failure().map(str::to_owned));
         Self {
             status: if failure.is_none() { Status::Pass } else { Status::Fail },
@@ -221,6 +222,7 @@ impl Report {
                 WRITER,
                 PACER_DEPTH,
                 PACER_QUIESCENT,
+                SESSION_CLOSING,
             ]
             .into_iter()
             .find(|known| *known == diff)

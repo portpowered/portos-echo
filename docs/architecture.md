@@ -1334,6 +1334,7 @@ in a crate do not imply the configured voice owner calls them.
 | echo-spoof-mcp | [Deterministic MCP library/executable](../crates/echo-spoof-mcp/src/lib.rs), [0014](adr/0014-mcp-http.md) | Local tests/CI | contracts |
 | echo-sub-device | [Device reducer and World invariants](../crates/echo-sub-device/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-sub-pacer | [Fixed reply ring, paced playout and mouth timing](../crates/echo-sub-pacer/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api, audio |
+| echo-sub-session | [Run lifetime, deadlines and playback settlement](../crates/echo-sub-session/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-sub-trace | [Bounded trace queue and deadline](../crates/echo-sub-trace/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-svc-trace | [Trace JSONL writer and file lifecycle](../crates/echo-svc-trace/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-wyoming | [Bounded duplex client and link adapter](../crates/echo-wyoming/src/lib.rs), [0012](adr/0012-echo-wyoming.md), [0025](adr/0025-echo-link.md) | Bridge host | link, contracts, core-api |

@@ -7,7 +7,8 @@
 //! the run's no-answer, idle and listen deadlines apply again. Each end of
 //! the latch is also the end of a user turn for the barge-in (`Floor`).
 use crate::bridge_runtime::bridge_pacing::BargeTrigger;
-use crate::bridge_voice::{Error, Notice, Source, UserSpeech, voice_source::FollowUp};
+use crate::bridge_voice::{Error, Notice, Source, UserSpeech};
+use echo_core_api::FollowUp;
 use serde_json::{Value, json};
 use std::future::Future;
 use tokio::time::{Duration, Instant};
@@ -196,7 +197,7 @@ impl Source {
         if let Ok(due) = self.controller.replacement_deadline() {
             let resumed = (reason == "expired").then(|| self.resumed_listen(due)).flatten();
             self.marks.resumed = resumed.is_some();
-            self.answer_due = resumed.unwrap_or(due);
+            self.controller.set_response_due(resumed.unwrap_or(due));
         }
         self.marks.release(reason);
         self.turn_ended(reason);
@@ -208,7 +209,7 @@ impl Source {
     /// hold still holds; the no-answer window `due` stays the outer bound.
     /// None while anything answers: delegated work or a reply being spoken.
     fn resumed_listen(&self, due: Instant) -> Option<Instant> {
-        if self.follow_up != FollowUp::Replied
+        if self.controller.follow_up() != FollowUp::Replied
             || self.delegation.waiting()
             || self.controller.speaking()
             || self.reply.voiced()
