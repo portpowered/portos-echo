@@ -216,14 +216,16 @@ pub(super) fn setup_stages(rows: &[Value]) {
     for row in stages {
         let current = row["elapsed_ms"].as_u64().unwrap();
         assert!(current >= previous);
-        assert_eq!(row["provider_auth_mode"], "api_key");
-        let mut keys: Vec<_> = row.as_object().unwrap().keys().map(String::as_str).collect();
-        keys.sort_unstable();
-        assert_eq!(keys, ["elapsed_ms", "event", "provider_auth_mode"]);
+        let event = row["event"].as_str().unwrap();
+        let mut expected = json!({"elapsed_ms": current, "event": event, "provider_auth_mode": "api_key"});
+        if event == "call.realtime_start_sent" {
+            expected["voice"] = json!("omitted");
+            expected["voice_listed"] = json!(false);
+        }
+        assert_eq!(row, &expected);
         writeln!(
             std::io::stdout(),
-            "setup_stage={} elapsed_ms={current} delta_ms={}",
-            row["event"].as_str().unwrap(),
+            "setup_stage={event} elapsed_ms={current} delta_ms={}",
             current - previous
         )
         .unwrap();

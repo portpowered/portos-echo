@@ -76,7 +76,7 @@ fn bridge(args: &[String]) -> ExitCode {
         }
     };
     if let Some(startup) = &settings.startup {
-        for warning in &startup.deprecations {
+        for warning in startup.deprecations.iter().chain(startup.warning.iter()) {
             let _ = writeln!(std::io::stderr(), "echo-bridge: {warning}");
         }
     }

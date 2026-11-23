@@ -201,7 +201,12 @@ for line in sys.stdin:
         emit({"id": request["id"], "result": {"account": account, "requiresOpenaiAuth": True}})
     elif method == "thread/realtime/listVoices":
         assert request["params"] == {}
-        emit({"id": request["id"], "result": {"voices": {"v3": ["cove", "maple", "miko"]}}})
+        catalog = home.joinpath("voice-catalog.json")
+        voices = json.loads(catalog.read_text()) if catalog.exists() else ["cove", "maple", "miko"]
+        if voices is None:
+            emit({"id": request["id"], "error": {"code": -32603, "message": "synthetic voice catalog failure"}})
+        else:
+            emit({"id": request["id"], "result": {"voices": {"v3": voices}}})
     elif method == "thread/start":
         mode = home.joinpath("mode").read_text()
         assert mode.startswith("tool-")

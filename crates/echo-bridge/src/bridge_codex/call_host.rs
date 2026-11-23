@@ -34,21 +34,33 @@ async fn listed_voices(io: &mut RpcIo<ChildStdout, ChildStdin>) -> Option<Vec<St
 /// start for a voice it does not list, after the wake, so such a voice is left
 /// out and the server's default speaks instead. Outside a host, and when the
 /// list could not be read, the configured voice is sent as it is.
-pub(crate) fn admitted_voice(voice: Option<&str>) -> Option<&str> {
-    let voice = voice?;
-    let listed = LISTED
+pub(super) fn admitted_voice<'a>(
+    voice: Option<&'a str>,
+    trace: Option<&mut crate::bridge_trace::Trace>,
+) -> Result<(Option<&'a str>, Option<bool>), Error> {
+    let catalog = LISTED
         .try_with(|listed| {
-            listed
-                .as_ref()
-                .is_none_or(|names| names.iter().any(|name| name == voice))
+            listed.as_ref().map(|names| {
+                let contains = voice.is_some_and(|voice| names.iter().any(|name| name == voice));
+                (contains, names.len())
+            })
         })
-        .unwrap_or(true);
-    if !listed {
+        .ok()
+        .flatten();
+    if let (Some(configured_voice), Some((false, listed_count))) = (voice, catalog) {
         use std::io::Write as _;
         let warning = "codex.voice is not listed by the app server; using its default voice";
         let _ = writeln!(std::io::stderr(), "echo-bridge: {warning}");
+        if let Some(trace) = trace {
+            trace.record(
+                "call.voice_dropped",
+                None,
+                serde_json::json!({"configured_voice":configured_voice,"listed_count":listed_count}),
+            )?;
+        }
+        return Ok((None, Some(false)));
     }
-    listed.then_some(voice)
+    Ok((voice, catalog.map(|(contains, _)| contains)))
 }
 
 #[derive(Clone)]

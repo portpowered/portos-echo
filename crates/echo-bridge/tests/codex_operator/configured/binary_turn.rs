@@ -6,6 +6,8 @@ use tokio::{
     net::{TcpListener, TcpStream},
     time::Instant,
 };
+#[path = "binary_turn/voice_overlay.rs"]
+mod voice_overlay;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Finish {
@@ -94,6 +96,10 @@ async fn finish_run(fixture: &Fixture, process: &mut Process, finish: Finish, mu
 fn launch(fixture: &Fixture, port: u16, delegated: bool) -> Process {
     configure(fixture, port);
     configure_delegation(fixture, delegated);
+    binary_process(fixture)
+}
+
+fn binary_process(fixture: &Fixture) -> Process {
     let mut command = super::super::voice_entry::command(fixture);
     Process::spawn(command.args([
         "--live-loopback",
