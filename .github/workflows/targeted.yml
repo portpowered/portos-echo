@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 472e76d15ef577114ed624c264e28f5d83850707
+          ref: 4d94af828737766791ddd647dbadc80cd84b20f8
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 472e76d15ef577114ed624c264e28f5d83850707
+          ref: 4d94af828737766791ddd647dbadc80cd84b20f8
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
