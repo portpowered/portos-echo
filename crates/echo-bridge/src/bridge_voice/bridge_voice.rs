@@ -9,6 +9,7 @@ mod remote_admission;
 mod retained_link;
 #[path = "controls/session_controller.rs"]
 mod session_controller;
+use session_controller::run_opened;
 #[path = "controls/session_tools.rs"]
 mod session_tools;
 #[path = "controls/tool_ledger.rs"]
@@ -56,12 +57,12 @@ mod voice_tests;
 use crate::Error;
 use crate::bridge_codex::{Event, MediaEvent};
 pub use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Endpoint, FirstAudio, Heard, ReplyQuality};
-use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun, PlayOutcome, ReplySink};
+use echo_link::{EchoLink, LinkEvent, LinkEvents, PlayOutcome, ReplySink};
 use echo_media::PcmFrame;
 use std::{future::Future, num::NonZeroUsize, time::Duration};
 use tokio::time::{Instant, timeout};
+use voice_source::Source;
 pub use voice_source::Stats;
-use voice_source::{Source, UserSpeech};
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
     /// Bind the run identity, preserving queued tools' original binding.
@@ -163,78 +164,11 @@ pub async fn run<L: EchoLink>(
         events,
         microphone,
         port,
-        (options, Instant::now()),
+        (options, Instant::now(), None),
         cancelled,
         observe,
     )
     .await
-}
-
-async fn run_opened<L: EchoLink>(
-    client: &L,
-    events: &mut L::Events,
-    mut microphone: <L::Events as LinkEvents>::Run,
-    port: &mut impl VoicePort,
-    (options, opened): (Options, Instant),
-    cancelled: impl Future<Output = ()>,
-    mut observe: impl FnMut(Notice) -> Result<(), Error>,
-) -> Result<Stats, Error> {
-    if options.played_timeout.is_zero()
-        || Instant::now() >= options.response_deadline
-        || options
-            .listen_timeout
-            .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
-        || opened.checked_add(options.session_max).is_none()
-    {
-        return Err(Error::Deadline);
-    }
-    let mut source = Source::new(options.reply_lead_ms, options.muted)?;
-    source.run_ceiling = opened.checked_add(options.session_max);
-    source.session = session_tools::Grants::new(options.listen_timeout, options.session_max);
-    port.bind_session(Some(source.session.run.clone()));
-    port.start_muse_run(source.run_ceiling.ok_or(Error::Deadline)?)?;
-    source.controller.admit_response(options.response_deadline)?;
-    // A cut replaces playback, while the run still owns pending clock receipts.
-    let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
-        .map(|clock| clock.voice())
-        .transpose()?;
-    tokio::pin!(cancelled);
-    // Retain the reply-loop state once per run rather than embedding it in
-    // every conversation/admission future above this boundary.
-    let result = Box::pin(voice_listen::replies(
-        client,
-        (events, &mut microphone),
-        port,
-        (&mut source, &mut drain),
-        &options,
-        cancelled.as_mut(),
-        &mut observe,
-    ))
-    .await;
-    let cleanup = port.finish_muse_run().await;
-    port.bind_session(None);
-    result.and(cleanup)?;
-    session_controller::close(
-        client,
-        (events, &mut microphone),
-        port,
-        &mut source,
-        options.played_timeout,
-        cancelled.as_mut(),
-        &mut observe,
-    )
-    .await?;
-    if let Some(drain) = drain.take() {
-        drain.finish();
-    }
-    if options.listen_timeout.is_none() {
-        observe(Notice::ReplyPlayed)?;
-    }
-    source.stats.received_chunks = microphone.stats().received;
-    source.stats.dropped_chunks = microphone.stats().dropped;
-    source.stats.reply_dropped += source.reply.dropped_frames();
-    *source.stats.quality = source.settle(port.rtp_lost());
-    Ok(source.stats)
 }
 
 async fn generation<L: EchoLink>(
@@ -258,9 +192,10 @@ async fn generation<L: EchoLink>(
     // The transport still has a fixed lifetime, with room for active media
     // after the run's delegated waiting cutoff.
     let now = Instant::now();
-    let response_window = options.response_deadline.saturating_duration_since(now);
-    let ceiling =
-        source.run_ceiling.unwrap_or(now).saturating_duration_since(now) + response_window + options.played_timeout;
+    let run_ceiling = source.controller.run_ceiling().unwrap_or(now);
+    let ceiling = run_ceiling.saturating_duration_since(now)
+        + options.response_deadline.saturating_duration_since(now)
+        + options.played_timeout;
     let playback_result = std::cell::Cell::new(None);
     let playback_started = std::cell::Cell::new(false);
     let playback = async {
@@ -345,10 +280,10 @@ async fn drive<L: EchoLink>(
             biased;
             () = crate::bridge_endpoint::voice::ending() => return voice_listen::remote_cut(port, source),
             duration = earcon::completed() => observe(Notice::EarconPlayed(duration))?,
-            () = voice_listen::until(deadline) => voice_wait::expired(source, on_timeout)?,
+            () = voice_listen::until(deadline) => voice_wait::expired(source, deadline, on_timeout)?,
             () = voice_listen::until(barge) => source.interrupt(port)?,
             () = voice_listen::until(source.reply.mouth_due()) => {
-                if let Some(notice) = voice_listen::playout_notice(&source.reply, source.delegation.in_flight()) {
+                if let Some(notice) = voice_listen::playout_notice(&source.reply, source.controller.dispatch_in_flight()) {
                     observe(notice)?;
                 }
             },
@@ -379,7 +314,7 @@ async fn step<E: LinkEvents>(
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let uplink = port.uplink_ready();
-    let allow_fade = !source.delegation.held();
+    let allow_fade = !source.controller.dispatch_held();
     tokio::select! {
         // Setup-time speech arrives as one burst; send what the peer refused.
         () = uplink, if source.uplink_pending() => source.flush_uplink(port),
@@ -461,24 +396,29 @@ async fn media(
         MediaEvent::Audio(frame) => source.audio(&frame),
         MediaEvent::Control(Event::ReplyDone { text }) => voice_listen::finish_reply(text, port, source, observe).await,
         MediaEvent::Control(Event::Transcript { role, text, done }) => {
-            if role == "user" {
+            let text = if role == "user" {
                 source.meter.endpoint(Instant::now(), Endpoint::UserTranscript);
-                source.heard_user(BargeTrigger::UserTranscript, &text, done);
-            } else if role == "assistant" && !done {
-                source.spoke();
-            }
+                source.user_transcript(text, done)
+            } else {
+                if role == "assistant" && !done {
+                    source.spoke();
+                }
+                text
+            };
             observe(Notice::Transcript { role, text, done })
         }
         MediaEvent::Control(Event::TurnStarted { .. }) => {
             source.meter.endpoint(Instant::now(), Endpoint::DelegatedTurn);
-            source.delegation.started();
+            source
+                .controller
+                .turn(|session| echo_core_api::SessionTurnEvent::DispatchStarted { session });
             Ok(())
         }
         MediaEvent::Control(Event::TurnCompleted { answered, .. }) => {
             voice_listen::complete_turn(answered, port, source).await
         }
         MediaEvent::Control(Event::SpeechStarted) => {
-            source.heard_user(BargeTrigger::SpeechStarted, "", false);
+            source.speech_started();
             Ok(())
         }
         MediaEvent::Control(Event::SpeechStopped) => {
@@ -486,7 +426,7 @@ async fn media(
             Ok(())
         }
         MediaEvent::Control(Event::Session(request)) => {
-            session_tools::answer(request, &mut source.session, &mut source.controller, observe)?;
+            session_tools::answer(request, &source.controller, observe)?;
             voice_listen::end_if_ended(port, source).await
         }
         MediaEvent::Control(Event::Other | Event::ReplyHandoff(_)) => Ok(()),

@@ -3,12 +3,14 @@ mod clock;
 mod device;
 mod pacer;
 mod rng;
+mod session;
 mod trace;
 
 pub use clock::{Clock, Now, PausedClock, SystemClock};
 pub use device::{CapturePrivacy, DeviceControl, DeviceEvent, DeviceState, DeviceView, LinkState};
 pub use pacer::*;
 pub use rng::{EntropyUnavailable, OsRng, Rng, SeededRng};
+pub use session::*;
 pub use trace::{PendingTrace, TraceDrain, TraceFailure, TraceRow};
 
 use std::time::Duration;
@@ -19,6 +21,7 @@ pub enum Event {
     TraceFlushed { through: u64 },
     TraceFailed,
     Pacer(PacerEvent),
+    Session(SessionEvent),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,11 +31,13 @@ pub enum EventKind {
     TraceFlushed,
     TraceFailed,
     Pacer,
+    Session,
 }
 
 pub enum Command {
     ApplyDeviceView { generation: u64, view: DeviceView },
     Pacer(PacerCommand),
+    Session(SessionCommand),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -43,6 +48,13 @@ pub enum CommandKind {
     LipBatch,
     MouthChanged,
     PlayoutFinished,
+    StartCapture,
+    StopCapture,
+    EndSession,
+    CutReply,
+    OpenCall,
+    CloseCall,
+    SessionToolDecision,
 }
 
 #[derive(Default)]
@@ -50,6 +62,7 @@ pub struct Commands {
     device: Option<Command>,
     drain_trace: bool,
     pacer: PacerCommands,
+    session: SessionCommands,
 }
 
 impl Commands {
@@ -71,6 +84,14 @@ impl Commands {
 
     pub fn pacer(&mut self) -> &mut PacerCommands {
         &mut self.pacer
+    }
+
+    pub fn session(&mut self) -> &mut SessionCommands {
+        &mut self.session
+    }
+
+    pub fn take_session(&mut self) -> SessionCommands {
+        std::mem::take(&mut self.session)
     }
 
     pub fn take_pacer(&mut self) -> PacerCommands {

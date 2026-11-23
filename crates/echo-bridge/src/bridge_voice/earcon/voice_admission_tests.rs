@@ -76,7 +76,7 @@ async fn admission_invalid_clock_and_ready_cancellation_emit_no_rpc_or_peer() {
             unreachable!()
         };
         let samples = std::cell::Cell::new(0);
-        let result = admitted(
+        let result = Box::pin(admitted(
             (&client, &mut events, run),
             &mut io,
             &mut options(),
@@ -95,7 +95,7 @@ async fn admission_invalid_clock_and_ready_cancellation_emit_no_rpc_or_peer() {
                 },
                 None,
             ),
-        )
+        ))
         .await;
         assert_eq!(result, Err(if cancelled { Error::Control } else { Error::Input }));
         assert_eq!(samples.get(), usize::from(!cancelled));

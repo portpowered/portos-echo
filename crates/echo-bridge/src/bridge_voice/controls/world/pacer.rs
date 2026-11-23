@@ -32,15 +32,22 @@ fn step(world: &Controller, state: &mut super::State, event: &mut Event) -> Pace
     out.take_pacer()
 }
 
+pub(super) fn current_controller() -> Option<Arc<Controller>> {
+    CURRENT.try_with(|(world, _)| world.clone()).ok()
+}
+
 pub(crate) struct PacerPort(Arc<Controller>);
 
 impl PacerPort {
     pub(crate) fn open(lead_ms: u16, adaptive: bool) -> Self {
-        let world = CURRENT.try_with(|(world, _)| world.clone()).unwrap_or_else(|_| {
+        let world = current_controller().unwrap_or_else(|| {
             // Standalone component fixtures script their arrivals against the floor.
-            if cfg!(test) {
-                Controller::with_pacer(None, State::new(false))
-            } else {
+            #[cfg(test)]
+            {
+                Controller::for_voice_fixture()
+            }
+            #[cfg(not(test))]
+            {
                 Controller::new()
             }
         });
@@ -67,12 +74,12 @@ impl PacerPort {
     }
 
     pub(crate) fn read<T>(&self, read: impl FnOnce(&State) -> T) -> T {
-        read(&self.0.state().world.pacer)
+        read(&self.0.state().world.pacer.playback)
     }
 
     pub(crate) fn take_lip_stats(&self) -> LipStats {
         let mut state = self.0.state();
-        let lip_stats = state.world.pacer.lip_stats();
+        let lip_stats = state.world.pacer.playback.lip_stats();
         step(&self.0, &mut state, &mut Event::Pacer(PacerEvent::LipStatsCollected));
         lip_stats
     }

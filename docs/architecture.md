@@ -1019,7 +1019,7 @@ written, call audio is discarded until the model's next utterance, and the run l
 with no playback open. More speech from the user renews the listen window and opens nothing. A model that
 is still talking after the 2 s was not interrupted: the held audio plays, late but whole, and the delay is
 given back in the reply's silent frames. The times are constants in
-[reply_barge.rs](../crates/echo-bridge/src/bridge_runtime/bridge_pacing/reply_barge.rs).
+[the session barge reducer](../crates/echo-sub-session/src/barge.rs).
 
 The Live session alone judges a barge-in (owner, 2026-11-19). The bridge runs no speech detector of its
 own and never gates or alters the microphone audio it forwards. The session's transcript of the user is its
@@ -1334,6 +1334,7 @@ in a crate do not imply the configured voice owner calls them.
 | echo-spoof-mcp | [Deterministic MCP library/executable](../crates/echo-spoof-mcp/src/lib.rs), [0014](adr/0014-mcp-http.md) | Local tests/CI | contracts |
 | echo-sub-device | [Device reducer and World invariants](../crates/echo-sub-device/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-sub-pacer | [Fixed reply ring, paced playout and mouth timing](../crates/echo-sub-pacer/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api, audio |
+| echo-sub-session | [Run lifetime, turn and cut policy, deadlines, session-tool grants and playback settlement](../crates/echo-sub-session/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-sub-trace | [Bounded trace queue and deadline](../crates/echo-sub-trace/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-svc-trace | [Trace JSONL writer and file lifecycle](../crates/echo-svc-trace/src/lib.rs), [0036](adr/0036-a1-world.md) | Bridge session controller | core-api |
 | echo-wyoming | [Bounded duplex client and link adapter](../crates/echo-wyoming/src/lib.rs), [0012](adr/0012-echo-wyoming.md), [0025](adr/0025-echo-link.md) | Bridge host | link, contracts, core-api |

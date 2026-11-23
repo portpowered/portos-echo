@@ -6,6 +6,7 @@
 //! expiry. A stop and start of the session's speech detection is two turns.
 //! The trace shows each decision as a structure-only `barge.*` mark.
 use super::{yield_cases::stream, *};
+use crate::bridge_voice::voice_wait::run_marks::MarkFields;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 
@@ -341,7 +342,8 @@ async fn barge_turn_speech_start_expiry_rearms_the_cut() {
 /// all the audio the model sent, and the trace marks the turn it left alone.
 #[tokio::test(start_paused = true)]
 async fn barge_turn_local_cut_off_leaves_the_yield_to_the_model() {
-    use crate::bridge_voice::voice_wait::run_marks::{Knobs, scope};
+    use crate::bridge_world::{Controller, scope};
+    use echo_core_api::SessionKnobs;
     let observer = Observer::default();
     let mut client = FakeConnector::new(observer.clone()).connect().await.unwrap();
     let mut events = client.events().unwrap();
@@ -353,12 +355,15 @@ async fn barge_turn_local_cut_off_leaves_the_yield_to_the_model() {
         listen_timeout: Some(Duration::from_secs(3)),
         ..options()
     };
-    let knobs = Knobs {
+    let knobs = SessionKnobs {
         local_cut: false,
-        ..Knobs::default()
+        ..SessionKnobs::default()
     };
+    let world = Controller::for_voice_fixture();
+    world.configure_session(knobs).unwrap();
     let mut work = Box::pin(scope(
-        knobs,
+        world,
+        None,
         run(
             &client,
             &mut events,

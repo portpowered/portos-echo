@@ -1,196 +1,106 @@
-//! Run lifecycle decisions, independent of PCM conversion and device IO.
-use super::Error;
-use tokio::time::{Duration, Instant};
+//! Run lifecycle I/O at the playback and capture acknowledgement fences.
+use super::{Error, Notice, Options, Source, Stats, VoicePort, voice_listen, voice_session::SessionOptions};
+pub(super) use crate::bridge_world::SessionPort as Controller;
+use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun};
+use std::future::Future;
+use tokio::time::Instant;
 
-#[derive(Debug, Default, PartialEq, Eq)]
-enum State {
-    #[default]
-    Listening,
-    Replying,
-    Cutting,
-    Retired,
-    Closing,
-    Closed,
+pub(super) async fn run_opened<L: EchoLink>(
+    client: &L,
+    events: &mut L::Events,
+    mut microphone: <L::Events as LinkEvents>::Run,
+    port: &mut impl VoicePort,
+    (options, opened, admitted): (Options, Instant, Option<Controller>),
+    cancelled: impl Future<Output = ()>,
+    mut observe: impl FnMut(Notice) -> Result<(), Error>,
+) -> Result<Stats, Error> {
+    let mut source = run_source(&options, opened, admitted)?;
+    let controller = &source.controller;
+    controller.configure_tools(options.listen_timeout, options.session_max)?;
+    port.bind_session(Some(controller.token().clone()));
+    port.start_muse_run(controller.run_ceiling().ok_or(Error::Deadline)?)?;
+    controller.admit_response(options.response_deadline)?;
+    // A cut replaces playback, while the run still owns pending clock receipts.
+    let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
+        .map(|clock| clock.voice())
+        .transpose()?;
+    tokio::pin!(cancelled);
+    // Retain the reply-loop state once per run rather than embedding it in
+    // every conversation/admission future above this boundary.
+    let result = Box::pin(voice_listen::replies(
+        client,
+        (events, &mut microphone),
+        port,
+        (&mut source, &mut drain),
+        &options,
+        cancelled.as_mut(),
+        &mut observe,
+    ))
+    .await;
+    let cleanup = port.finish_muse_run().await;
+    port.bind_session(None);
+    result.and(cleanup)?;
+    close(
+        client,
+        (events, &mut microphone),
+        port,
+        &mut source,
+        options.played_timeout,
+        cancelled.as_mut(),
+        &mut observe,
+    )
+    .await?;
+    if let Some(drain) = drain.take() {
+        drain.finish();
+    }
+    if options.listen_timeout.is_none() {
+        observe(Notice::ReplyPlayed)?;
+    }
+    source.stats.received_chunks = microphone.stats().received;
+    source.stats.dropped_chunks = microphone.stats().dropped;
+    source.stats.reply_dropped += source.reply.dropped_frames();
+    *source.stats.quality = source.settle(port.rtp_lost());
+    Ok(source.stats)
 }
 
-/// A cut acknowledgment belongs to the retired playback, even when its ordered
-/// device event arrives after the replacement playback has started.
-#[derive(Debug, Default)]
-pub(super) struct Controller {
-    state: State,
-    played: bool,
-    /// The device closed a replacement playback that nothing was written to.
-    unanswered: bool,
-    cut_receipts: usize,
-    microphone_finished: bool,
-    response_window: Option<Duration>,
-    idle_deadline: Option<Instant>,
+fn run_source(options: &Options, opened: Instant, admitted: Option<Controller>) -> Result<Source, Error> {
+    if options.played_timeout.is_zero()
+        || Instant::now() >= options.response_deadline
+        || options
+            .listen_timeout
+            .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
+        || opened.checked_add(options.session_max).is_none()
+    {
+        return Err(Error::Deadline);
+    }
+    let controller = match admitted {
+        Some(controller) => controller,
+        None => Controller::on_connected_call(
+            opened,
+            options.listen_timeout,
+            options.session_max,
+            options.response_deadline,
+        )?,
+    };
+    Source::with_controller(options.reply_lead_ms, options.muted, controller)
 }
 
-impl Controller {
-    /// Start idle only after both speaker acknowledgments and mouth drain.
-    pub fn listen_after_reply(&mut self, timeout: Duration) -> Result<(), Error> {
-        if timeout.is_zero() || !self.ready_to_close(true, true) {
-            return Err(Error::Input);
-        }
-        self.idle_deadline = Some(Instant::now().checked_add(timeout).ok_or(Error::Input)?);
-        self.state = State::Listening;
-        Ok(())
+pub(super) fn validate(options: &SessionOptions) -> Result<(), Error> {
+    if options.response_timeout.is_zero()
+        || options.played_timeout.is_zero()
+        || options
+            .listen_timeout
+            .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
+        || options.session_max.is_zero()
+        || Instant::now().checked_add(options.session_max).is_none()
+    {
+        return Err(Error::Input);
     }
-
-    pub fn idle_deadline(&self) -> Option<Instant> {
-        self.idle_deadline
-    }
-
-    /// A granted deadline can only lengthen an armed listen interval.
-    pub fn extend_idle(&mut self, deadline: Instant) {
-        if let Some(current) = &mut self.idle_deadline {
-            *current = (*current).max(deadline);
-        }
-    }
-
-    pub fn closing(&self) -> bool {
-        matches!(self.state, State::Closing | State::Closed)
-    }
-
-    /// Ordered speech or assistant activity admits the next response window.
-    pub fn resume(&mut self) -> Result<(), Error> {
-        if matches!(self.state, State::Closing | State::Closed) {
-            return Err(Error::Control);
-        }
-        self.idle_deadline = None;
-        self.played = false;
-        self.unanswered = false;
-        Ok(())
-    }
-
-    /// Commit the run to explicit end before performing device IO. A failed
-    /// or cancelled end cannot reopen reply admission or issue another end.
-    pub fn begin_close(&mut self, mouth_drained: bool) -> Result<(), Error> {
-        if !self.ready_to_close(true, mouth_drained) {
-            return Err(Error::Wyoming);
-        }
-        self.state = State::Closing;
-        self.idle_deadline = None;
-        Ok(())
-    }
-
-    /// Called only after the explicit end write and capture drain succeed.
-    pub fn finish_close(&mut self, mouth_drained: bool) -> Result<(), Error> {
-        if self.state != State::Closing || !self.playback_settled(true, mouth_drained) || !self.microphone_finished {
-            return Err(Error::Wyoming);
-        }
-        self.state = State::Closed;
-        Ok(())
-    }
-
-    /// Retain the admitted response budget independently of any one reply.
-    pub fn admit_response(&mut self, deadline: Instant) -> Result<(), Error> {
-        let window = deadline
-            .checked_duration_since(Instant::now())
-            .filter(|window| !window.is_zero())
-            .ok_or(Error::Deadline)?;
-        self.response_window = Some(window);
-        Ok(())
-    }
-
-    /// A settled cut starts a fresh response window for the replacement.
-    pub fn replacement_deadline(&self) -> Result<Instant, Error> {
-        Instant::now()
-            .checked_add(self.response_window.ok_or(Error::Input)?)
-            .ok_or(Error::Input)
-    }
-
-    pub fn speaking(&self) -> bool {
-        self.state == State::Replying
-    }
-
-    pub fn cutting(&self) -> bool {
-        self.state == State::Cutting
-    }
-
-    pub fn retired(&self) -> bool {
-        self.state == State::Retired
-    }
-
-    pub fn accepts_audio(&self) -> bool {
-        self.idle_deadline.is_none()
-            && !matches!(
-                self.state,
-                State::Cutting | State::Retired | State::Closing | State::Closed
-            )
-    }
-
-    pub fn reply_started(&mut self) {
-        self.state = State::Replying;
-    }
-
-    pub fn cut(&mut self) {
-        self.state = State::Cutting;
-    }
-
-    pub fn cut_settled(&mut self) {
-        self.state = State::Retired;
-        self.cut_receipts += usize::from(!self.played);
-        self.played = false;
-    }
-
-    /// A persistent run settles a cut reply as over: nothing more of it will
-    /// play, and the next reply opens its own playback.
-    pub fn cut_played(&mut self) {
-        (self.played, self.unanswered) = (true, true);
-    }
-
-    /// False consumes a delayed cut receipt; true acknowledges this reply.
-    /// After a barge-in the model may say nothing more. The device then ends
-    /// the replacement playback itself, and the cut reply settles as played:
-    /// the run listens on instead of failing.
-    pub fn played(&mut self, stopped: bool) -> Result<bool, Error> {
-        if self.cut_receipts > 0 {
-            self.cut_receipts -= 1;
-            return Ok(false);
-        }
-        self.unanswered = self.state == State::Retired;
-        if !stopped && !self.unanswered {
-            return Err(Error::Wyoming);
-        }
-        self.played = true;
-        Ok(true)
-    }
-
-    pub fn microphone_ended(&mut self) {
-        self.microphone_finished = true;
-    }
-
-    pub fn microphone_started(&mut self) {
-        self.microphone_finished = false;
-    }
-
-    pub fn microphone_finished(&self) -> bool {
-        self.microphone_finished
-    }
-
-    pub fn has_played(&self) -> bool {
-        self.played
-    }
-
-    pub fn pending_cut_receipts(&self) -> usize {
-        self.cut_receipts
-    }
-
-    pub fn complete(&self, stopped: bool, mouth_drained: bool) -> bool {
-        self.state == State::Closed && self.playback_settled(stopped, mouth_drained) && self.microphone_finished
-    }
-
-    /// Playback can settle while duplex capture is still open. Never wait for
-    /// the EOF caused by the end command before deciding to issue that command.
-    pub fn ready_to_close(&self, stopped: bool, mouth_drained: bool) -> bool {
-        !matches!(self.state, State::Closing | State::Closed) && self.playback_settled(stopped, mouth_drained)
-    }
-
-    fn playback_settled(&self, stopped: bool, mouth_drained: bool) -> bool {
-        !self.cutting() && self.played && (stopped || self.unanswered) && mouth_drained
-    }
+    Instant::now()
+        .checked_add(options.response_timeout)
+        .and_then(|deadline| deadline.checked_add(options.played_timeout))
+        .ok_or(Error::Input)?;
+    Ok(())
 }
 
 /// Execute controller-selected close after both playback acknowledgments.
@@ -204,7 +114,6 @@ pub(super) async fn close<L: echo_link::EchoLink>(
     cancelled: impl std::future::Future<Output = ()>,
     observe: &mut impl FnMut(super::Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
-    use echo_link::{LinkEvent, LinkEvents};
     let (events, microphone) = input;
     let work = async {
         source.controller.begin_close(source.reply.mouth_due().is_none())?;
@@ -244,6 +153,7 @@ mod tests {
         EchoLink, LinkConnector, LinkEvent, LinkEvents,
         fake::{Command, FakeConnector, Observer},
     };
+    use tokio::time::{Duration, Instant};
 
     struct Port;
     impl VoicePort for Port {
@@ -282,7 +192,7 @@ mod tests {
     fn assert_close_rejects_activity(source: &mut Source) {
         assert!(!source.controller.accepts_audio());
         assert!(!source.controller.speaking());
-        assert_eq!(source.resume_reply(), Err(Error::Control));
+        assert_eq!(source.resume_reply(false), Err(Error::Control));
         assert_eq!(
             source.controller.listen_after_reply(Duration::from_secs(3)),
             Err(Error::Input)
@@ -320,7 +230,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn session_controller_listening_requires_settlement_and_renews_only_on_activity() {
-        let mut controller = Controller::default();
+        let controller = Controller::open(Instant::now(), None).unwrap();
         let interval = Duration::from_secs(3);
         assert_eq!(controller.listen_after_reply(interval), Err(Error::Input));
         controller
@@ -335,7 +245,7 @@ mod tests {
         assert!(!controller.accepts_audio());
         assert!(controller.ready_to_close(true, true));
         tokio::time::advance(Duration::from_secs(2)).await;
-        controller.resume().unwrap();
+        controller.resume(false).unwrap();
         assert_eq!(controller.idle_deadline(), None);
         assert!(controller.accepts_audio());
         assert!(!controller.has_played());
@@ -352,7 +262,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn session_controller_replacement_budget_is_bounded_and_requires_admission() {
-        let mut controller = Controller::default();
+        let controller = Controller::open(Instant::now(), None).unwrap();
         let start = Instant::now();
         assert_eq!(controller.replacement_deadline(), Err(Error::Input));
         for deadline in [start - Duration::from_secs(1), start] {
@@ -413,7 +323,7 @@ mod tests {
                 assert_eq!(result, Err(Error::Deadline));
                 assert!(!source.controller.complete(true, true));
                 assert!(!source.controller.accepts_audio());
-                assert_eq!(source.resume_reply(), Err(Error::Control));
+                assert_eq!(source.resume_reply(false), Err(Error::Control));
                 assert_eq!(source.controller.begin_close(true), Err(Error::Wyoming));
                 assert_eq!(observer.commands(), vec![Command::Connect]);
             }
@@ -422,7 +332,7 @@ mod tests {
 
     #[test]
     fn session_controller_requires_played_capture_eof_stop_and_mouth_drain() {
-        let mut controller = Controller::default();
+        let controller = Controller::open(Instant::now(), None).unwrap();
         controller.reply_started();
         assert!(!controller.complete(true, true));
         assert_eq!(controller.played(false), Err(Error::Wyoming));
@@ -442,7 +352,7 @@ mod tests {
 
     #[test]
     fn session_controller_late_cut_receipt_cannot_complete_replacement() {
-        let mut controller = Controller::default();
+        let controller = Controller::open(Instant::now(), None).unwrap();
         controller.reply_started();
         controller.cut();
         assert!(!controller.accepts_audio());
@@ -462,7 +372,7 @@ mod tests {
 
     #[test]
     fn session_controller_cut_after_played_does_not_steal_replacement_receipt() {
-        let mut controller = Controller::default();
+        let controller = Controller::open(Instant::now(), None).unwrap();
         controller.reply_started();
         assert_eq!(controller.played(true), Ok(true));
         controller.cut();
@@ -476,7 +386,7 @@ mod tests {
 
     #[test]
     fn session_controller_speaks_only_between_reply_start_and_cut() {
-        let mut controller = Controller::default();
+        let controller = Controller::open(Instant::now(), None).unwrap();
         assert!(controller.accepts_audio());
         assert!(!controller.speaking());
         controller.reply_started();
