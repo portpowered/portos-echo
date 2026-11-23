@@ -114,11 +114,15 @@ A settled reply arms the quiet deadline. A close issues one end request
 after playback and mouth settlement, and capture EOF confirms completion.
 The service awaits existing device writes, playback, and capture at their
 original boundaries. It also consumes the call open and close commands at
-the existing call setup and teardown boundaries.
+the existing call setup and teardown boundaries. Wake emits capture admission
+and, for a new call, an open command with the same run handle. The call-opened
+receipt carries that handle. The response window is armed at the existing
+post-negotiation fence.
 
 World also owns the run's tool grant and pending-end policy. The controller
 maps the compatibility token and request key to the current run and a typed
-tool handle. Its 64-entry retention window replays settled decisions and
+tool handle. Tool start and end carry the run handle, and the reducer emits
+its decision as a session command. The 64-entry retention window replays settled decisions and
 evicts in insertion order, returning slots with a new generation. The bridge
 still records the existing receipt before releasing the tool result. A
 pending end keeps the current immediate and audible-farewell boundaries.

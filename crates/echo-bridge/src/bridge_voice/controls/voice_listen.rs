@@ -198,10 +198,7 @@ async fn after_reply<L: EchoLink>(
 /// is applied and the runner finishes with nothing to hand back, the reply
 /// owes no delegated answer: the farewell already spoken is all of it.
 pub(super) async fn complete_turn(answered: bool, port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
-    let completion = source.controller.turn(SessionTurnEvent::DispatchCompleted {
-        answered,
-        listening: false,
-    });
+    let completion = source.controller.dispatch_completed(answered, false);
     if completion.outcome == Some(Ok(SessionOutcome::FinishReply)) {
         close_reply(port, source).await?;
     }
@@ -297,7 +294,7 @@ pub(super) async fn finish_reply(
         text,
         done: true,
     })?;
-    if source.controller.turn(SessionTurnEvent::ReplyDone).outcome != Some(Ok(SessionOutcome::FinishReply)) {
+    if source.controller.reply_ended().outcome != Some(Ok(SessionOutcome::FinishReply)) {
         return Ok(());
     }
     close_reply(port, source).await
@@ -373,7 +370,7 @@ async fn listening_step<E: LinkEvents>(
             // The runner can start before the native hand-off identifies the
             // request. Keep Played until the hand-off or speech opens a reply.
             if !source.stale() && matches!(event, MediaEvent::Control(Event::TurnStarted { .. })) {
-                source.controller.turn(SessionTurnEvent::DispatchWhileListening);
+                source.controller.turn(|session| SessionTurnEvent::DispatchWhileListening { session });
                 *turn_started = true;
                 super::media(event, port, source, observe).await?;
                 return Ok(false);

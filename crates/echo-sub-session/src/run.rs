@@ -1,7 +1,7 @@
 use crate::turn::Turn;
 use echo_core_api::{
-    FollowUp, SessionError as Error, SessionHandle, SessionOutcome, SessionPlayback, SessionTimer, SessionToolAction,
-    SessionToolDecision, SessionToolEvent, SessionToolRefusal, ToolCallHandle,
+    FollowUp, SessionCommand, SessionCommands, SessionError as Error, SessionHandle, SessionOutcome, SessionPlayback,
+    SessionTimer, SessionToolAction, SessionToolDecision, SessionToolEvent, SessionToolRefusal, ToolCallHandle,
 };
 use std::time::{Duration, Instant};
 
@@ -31,6 +31,7 @@ enum Receipt {
 pub(crate) struct Run {
     pub(crate) handle: SessionHandle,
     pub(crate) epoch: Instant,
+    pub(crate) call_opening: bool,
     pub(crate) ceiling: Option<Instant>,
     pub(crate) response_due: Instant,
     pub(crate) follow_up: FollowUp,
@@ -56,12 +57,20 @@ struct ToolWindow {
 }
 
 impl Run {
-    pub(crate) fn new(handle: SessionHandle, epoch: Instant, ceiling: Option<Instant>, now: Instant) -> Self {
+    pub(crate) fn new(
+        handle: SessionHandle,
+        epoch: Instant,
+        ceiling: Instant,
+        now: Instant,
+        response_due: Instant,
+        reuse_call: bool,
+    ) -> Self {
         Self {
             handle,
             epoch,
-            ceiling,
-            response_due: now,
+            call_opening: !reuse_call,
+            ceiling: Some(ceiling),
+            response_due,
             follow_up: FollowUp::First,
             turn: Turn::default(),
             playback: SessionPlayback::default(),
@@ -70,7 +79,13 @@ impl Run {
             receipt: Receipt::Waiting,
             cut_receipts: 0,
             microphone_finished: false,
-            response_window: None,
+            response_window: reuse_call
+                .then(|| {
+                    response_due
+                        .checked_duration_since(now)
+                        .filter(|window| !window.is_zero())
+                })
+                .flatten(),
             tools: None,
             active_tool: None,
             granted: None,
@@ -149,10 +164,11 @@ impl Run {
     }
 
     pub(crate) fn accepts_audio(&self) -> bool {
-        !matches!(
-            self.state,
-            Phase::Cutting | Phase::Retired | Phase::Closing | Phase::Closed
-        )
+        !self.call_opening
+            && !matches!(
+                self.state,
+                Phase::Cutting | Phase::Retired | Phase::Closing | Phase::Closed
+            )
     }
 
     pub(crate) fn reply_started(&mut self) {
@@ -280,13 +296,15 @@ impl Run {
         event: SessionToolEvent,
         idle: &mut Option<Instant>,
         now: Instant,
+        out: &mut SessionCommands,
     ) -> Result<SessionOutcome, Error> {
         match event {
-            SessionToolEvent::Started { tool, action } if self.active_tool.is_none() => {
+            SessionToolEvent::Started { tool, action, .. } if self.active_tool.is_none() && !self.call_opening => {
                 self.active_tool = Some(tool);
-                Ok(SessionOutcome::Tool(self.decide_tool(tool, action, idle, now)))
+                out.effects[0] = Some(SessionCommand::Tool(self.decide_tool(tool, action, idle, now)));
+                Ok(SessionOutcome::Applied)
             }
-            SessionToolEvent::Ended { tool } if self.active_tool == Some(tool) => {
+            SessionToolEvent::Ended { tool, .. } if self.active_tool == Some(tool) => {
                 self.active_tool = None;
                 Ok(SessionOutcome::Applied)
             }
