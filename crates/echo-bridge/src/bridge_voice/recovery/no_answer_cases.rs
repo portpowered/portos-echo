@@ -2,6 +2,7 @@
 //! The window runs from the user's end of speech; a resolved hand-off holds
 //! the run for its answer; a silent model still ends the run.
 use super::*;
+use crate::bridge_voice::voice_wait::run_marks::MarkFields;
 use std::cell::Cell;
 
 const WINDOW: Duration = Duration::from_secs(60);
@@ -21,7 +22,7 @@ fn guard(listen_timeout: Option<Duration>) -> Options {
 }
 
 fn speech(started: bool) -> MediaEvent {
-    MediaEvent::Control(if started {
+    MediaEvent::control(if started {
         Event::SpeechStarted
     } else {
         Event::SpeechStopped
@@ -179,7 +180,7 @@ async fn no_answer_fires_after_a_silent_speech_start_expires() {
 }
 
 fn partial(text: &str) -> MediaEvent {
-    MediaEvent::Control(Event::Transcript {
+    MediaEvent::control(Event::Transcript {
         role: "user".into(),
         text: text.into(),
         done: false,

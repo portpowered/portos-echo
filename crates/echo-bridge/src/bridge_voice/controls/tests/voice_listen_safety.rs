@@ -1,5 +1,4 @@
 //! T1: idle capture/control boundaries with staged memory-only input.
-use super::super::super::session_tools::Grants;
 use super::*;
 use echo_link::{MicFrame, MicrophoneRun, RunStats};
 
@@ -67,7 +66,7 @@ impl Input {
 }
 
 fn source() -> Source {
-    let mut source = Source::new(200, false).unwrap();
+    let source = Source::new(200, false).unwrap();
     source
         .controller
         .admit_response(Instant::now() + Duration::from_secs(10))
@@ -84,7 +83,10 @@ async fn voice_listen_mute_discards_mic_during_farewell_without_touching_playbac
     let (_tx, rx) = mpsc::channel(1);
     let mut port = Port(rx, std::rc::Rc::default());
     let mut source = Source::new(200, false).unwrap();
-    source.session = Grants::new(Some(Duration::from_secs(3)), Duration::from_secs(12));
+    source
+        .controller
+        .configure_tools(Some(Duration::from_secs(3)), Duration::from_secs(12))
+        .unwrap();
     source.spoke();
     source.audio(&[5000; 320]).unwrap();
     let muted = Cell::new(false);
@@ -103,7 +105,7 @@ async fn voice_listen_mute_discards_mic_during_farewell_without_touching_playbac
     assert!(muted.get());
     assert!(port.1.borrow().is_empty());
     super::super::super::media(
-        MediaEvent::Control(Event::ReplyDone {
+        MediaEvent::control(Event::ReplyDone {
             text: "Goodbye.".into(),
         }),
         &mut port,
@@ -115,7 +117,7 @@ async fn voice_listen_mute_discards_mic_during_farewell_without_touching_playbac
     assert!(source.reply.finished());
     assert!(!source.controller.cutting());
     assert_eq!(source.stats.reply_received, 1);
-    assert!(!source.session.ending());
+    assert!(!source.controller.ending());
 }
 
 #[tokio::test(start_paused = true)]
@@ -127,7 +129,9 @@ async fn settings_restart_waits_for_delegation_and_beats_ready_followup() {
             let (tx, rx) = mpsc::channel(2);
             let mut port = Port(rx, std::rc::Rc::default());
             let mut source = source();
-            source.delegation.started();
+            source
+                .controller
+                .turn(|session| echo_core_api::SessionTurnEvent::DispatchStarted { session });
             restart.request();
             {
                 let mut drain = None;
@@ -146,21 +150,21 @@ async fn settings_restart_waits_for_delegation_and_beats_ready_followup() {
                     Poll::Ready(())
                 })
                 .await;
-                tx.send(MediaEvent::Control(Event::TurnCompleted {
+                tx.send(MediaEvent::control(Event::TurnCompleted {
                     thread: "fixture".into(),
                     turn: "turn".into(),
                     answered: true,
                 }))
                 .await
                 .unwrap();
-                tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+                tx.send(MediaEvent::control(Event::SpeechStarted)).await.unwrap();
                 assert_eq!(work.await, Ok(false));
             }
-            assert!(!source.delegation.in_flight());
+            assert!(!source.controller.dispatch_in_flight());
             assert!(source.controller.has_played());
             assert!(matches!(
                 port.0.try_recv(),
-                Ok(MediaEvent::Control(Event::SpeechStarted))
+                Ok(event) if matches!(event.control_event(), Some(Event::SpeechStarted))
             ));
         })
         .await;
@@ -216,7 +220,7 @@ async fn voice_listen_activity_cancels_idle_and_admits_a_fresh_response_window()
         let mut source = source();
         let start = Instant::now();
         tokio::time::advance(Duration::from_millis(2999)).await;
-        tx.send(MediaEvent::Control(event)).await.unwrap();
+        tx.send(MediaEvent::control(event)).await.unwrap();
         assert_eq!(input.step(&mut port, &mut source).await, Ok(true));
         assert_eq!(source.controller.idle_deadline(), None);
         assert!(!source.controller.has_played());
@@ -235,7 +239,7 @@ async fn voice_listen_due_expiry_wins_over_ready_activity_without_consuming_it()
     let mut port = Port(rx, std::rc::Rc::default());
     let mut source = source();
     let deadline = source.controller.idle_deadline().unwrap();
-    tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+    tx.send(MediaEvent::control(Event::SpeechStarted)).await.unwrap();
     tokio::time::advance(Duration::from_secs(3)).await;
     assert_eq!(
         super::super::listen(
@@ -253,7 +257,7 @@ async fn voice_listen_due_expiry_wins_over_ready_activity_without_consuming_it()
     assert!(source.controller.has_played());
     assert!(matches!(
         port.0.try_recv(),
-        Ok(MediaEvent::Control(Event::SpeechStarted))
+        Ok(event) if matches!(event.control_event(), Some(Event::SpeechStarted))
     ));
 }
 
@@ -270,7 +274,7 @@ async fn voice_listen_transport_eof_and_closed_call_never_become_idle_success() 
         if device_eof {
             drop(input.controls);
         } else {
-            tx.send(MediaEvent::Control(Event::Closed)).await.unwrap();
+            tx.send(MediaEvent::control(Event::Closed)).await.unwrap();
         }
         let result = super::super::listen(
             (&mut events, &mut microphone),

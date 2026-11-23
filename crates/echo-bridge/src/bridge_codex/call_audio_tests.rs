@@ -14,13 +14,13 @@ fn capture_preserves_irregular_pcm_and_reports_unpadded_tail() {
     let input: Vec<i16> = (0..1003).collect();
     let mut frames = Vec::new();
     for chunk in input.chunks(137) {
-        frames.extend(capture.process(&format, &bytes(chunk)).unwrap());
+        frames.extend_from_slice(capture.process(&format, &bytes(chunk)).unwrap());
     }
-    frames.extend(capture.finish().unwrap());
+    frames.extend_from_slice(capture.finish().unwrap());
     assert_eq!(frames.len(), 3);
     assert_eq!(frames.concat(), input[..960]);
     assert_eq!(capture.tail_samples(), 43);
-    assert_eq!(capture.finish().unwrap(), Vec::<PcmFrame>::new());
+    assert_eq!(capture.finish().unwrap().len(), 0);
     assert_eq!(capture.process(&format, &[]), Err(Error::Audio));
 }
 
@@ -38,14 +38,11 @@ fn capture_validation_consumes_nothing_and_new_owner_discards_old_tail() {
         Err(Error::Audio)
     );
     let stereo = [i16::MAX, i16::MIN].repeat(320);
-    assert_eq!(capture.process(&format, &bytes(&stereo)).unwrap(), vec![[0; 320]]);
-    assert_eq!(
-        capture.process(&format, &bytes(&[6000; 100])).unwrap(),
-        Vec::<PcmFrame>::new()
-    );
+    assert_eq!(capture.process(&format, &bytes(&stereo)).unwrap(), &[[0; 320]]);
+    assert_eq!(capture.process(&format, &bytes(&[6000; 100])).unwrap().len(), 0);
     drop(capture);
     let mut capture = CaptureAudio::new(format).unwrap();
-    assert_eq!(capture.process(&format, &bytes(&[0; 640])).unwrap(), vec![[0; 320]]);
+    assert_eq!(capture.process(&format, &bytes(&[0; 640])).unwrap(), &[[0; 320]]);
     assert_eq!(capture.tail_samples(), 0);
 }
 
@@ -62,9 +59,9 @@ fn capture_supported_rates_and_stereo_keep_exact_duration() {
             let input = vec![0; usize::try_from(rate / 10).unwrap() * usize::from(channels)];
             let mut frames = Vec::new();
             for chunk in input.chunks(139 * usize::from(channels)) {
-                frames.extend(capture.process(&format, &bytes(chunk)).unwrap());
+                frames.extend_from_slice(capture.process(&format, &bytes(chunk)).unwrap());
             }
-            frames.extend(capture.finish().unwrap());
+            frames.extend_from_slice(capture.finish().unwrap());
             assert_eq!(frames, vec![[0; 320]; 5]);
             assert_eq!(capture.tail_samples(), 0);
         }
@@ -87,6 +84,41 @@ fn capture_supported_rates_and_stereo_keep_exact_duration() {
         },
     ] {
         assert!(matches!(CaptureAudio::new(format), Err(Error::Audio)));
+    }
+}
+
+#[test]
+fn capture_maximum_chunks_and_finish_reuse_scratch_at_every_supported_format() {
+    for rate in [16_000, 22_050, 24_000, 48_000] {
+        for channels in [1, 2] {
+            let format = PcmFormat {
+                rate,
+                width: 2,
+                channels,
+            };
+            let mut capture = CaptureAudio::new(format).unwrap();
+            let sample_base = capture.samples.as_ptr();
+            let frame_base = capture.frames.as_ptr();
+            let capacity = capture.frames.capacity();
+            let chunks = [CAPTURE_BYTES - 4, CAPTURE_BYTES, CAPTURE_BYTES, CAPTURE_BYTES];
+            let mut completed_samples = 0;
+            for size in chunks {
+                let frames = capture.process(&format, &[0; CAPTURE_BYTES][..size]).unwrap();
+                completed_samples += frames.len() * 320;
+                assert_eq!(frames.as_ptr(), frame_base);
+                assert!(frames.iter().all(|frame| frame == &[0; 320]));
+            }
+            completed_samples += capture.finish().unwrap().len() * 320;
+            let expected =
+                chunks.iter().sum::<usize>() / (2 * usize::from(channels)) * 16_000 / usize::try_from(rate).unwrap();
+            assert_eq!(
+                (completed_samples, capture.tail_samples()),
+                (expected / 320 * 320, expected % 320)
+            );
+            assert_eq!(capture.samples.as_ptr(), sample_base);
+            assert_eq!(capture.frames.as_ptr(), frame_base);
+            assert_eq!(capture.frames.capacity(), capacity);
+        }
     }
 }
 

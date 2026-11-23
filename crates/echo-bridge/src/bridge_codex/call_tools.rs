@@ -189,21 +189,21 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
             // The pending dispatch awaits this answer; never block it on media.
             request = requested(&mut self.session) => {
                 self.session_answer_pending = true;
-                Ok(MediaEvent::Control(Event::Session(request)))
+                Ok(MediaEvent::control(Event::Session(request)))
             },
-            // Keep nested real-media polling off the Windows main stack.
-            event = Box::pin(self.port.next()) => match event? {
-                MediaEvent::Control(event @ (Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => {
+            // Keep nested real-media polling off the main stack.
+            event = Box::pin(self.port.next()) => event?.map_control(|event| match event {
+                event @ (Event::Tool { .. } | Event::TurnStarted { .. } | Event::TurnCompleted { .. }) => {
                     self.observed_control(event)
                 },
-                MediaEvent::Control(Event::ReplyHandoff(id)) => {
+                Event::ReplyHandoff(id) => {
                     if let Some(muse) = &mut self.muse {
                         muse.handoff(id.clone());
                     }
-                    Ok(MediaEvent::Control(Event::ReplyHandoff(id)))
+                    Ok(MediaEvent::control(Event::ReplyHandoff(id)))
                 },
-                event => Ok(event),
-            },
+                event => Ok(MediaEvent::control(event)),
+            }),
         }
     }
 
@@ -252,7 +252,7 @@ impl<'p, 'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin, P: MediaPeer, H: ToolH
         Ok(if deferred || rejected_start {
             other()
         } else {
-            MediaEvent::Control(observed)
+            MediaEvent::control(observed)
         })
     }
 
@@ -496,5 +496,5 @@ async fn requested(session: &mut Option<mpsc::Receiver<SessionRequest>>) -> Sess
 }
 
 fn other() -> MediaEvent {
-    MediaEvent::Control(Event::Other)
+    MediaEvent::control(Event::Other)
 }

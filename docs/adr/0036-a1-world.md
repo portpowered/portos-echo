@@ -97,12 +97,57 @@ to these three inputs. [Coordinator ruling](https://github.com/portpowered/porto
 
 `echo-sub-pacer` depends on `echo-core-api` and the existing `echo-audio` DSP.
 
+## A2 session lifecycle
+
+`echo-sub-session` depends only on `echo-core-api`.
+
+The controller steps device, session, pacer and trace in that order. It
+allocates one voice run slot and passes a generational handle to the reducer.
+Release invalidates the handle after the run's cleanup. A reused slot rejects
+events from the previous generation. The slot implementation retires entries
+whose generation is exhausted.
+
+The pure session reducer owns response, run-ceiling and quiet deadlines,
+playback receipt ownership, and capture settlement. The bridge passes
+monotonic offsets from its existing clock, including under paused simulation.
+A settled reply arms the quiet deadline. A close issues one end request
+after playback and mouth settlement, and capture EOF confirms completion.
+The service awaits existing device writes, playback, and capture at their
+original boundaries. It also consumes the call open and close commands at
+the existing call setup and teardown boundaries. Wake emits capture admission
+and, for a new call, an open command with the same run handle. The call-opened
+receipt carries that handle. The response window is armed at the existing
+post-negotiation fence.
+
+World also owns the run's tool grant and pending-end policy. The controller
+maps the compatibility token and request key to the current run and a typed
+tool handle. Tool start and end carry the run handle, and the reducer emits
+its decision as a session command. The 64-entry retention window replays settled decisions and
+evicts in insertion order, returning slots with a new generation. The bridge
+still records the existing receipt before releasing the tool result. A
+pending end keeps the current immediate and audible-farewell boundaries.
+
+The session reducer owns the speech latch, the question and user turn's
+cut budget, and the delegated wait facts that affect admission and expiry.
+The controller supplies the configured latch duration and cut policy. Ordered
+speech, transcript, app-server dispatch and playback observations update the
+reducer on the same clock. The voice adapter schedules the selected deadlines
+with timeout priority. It consumes a cut command at the existing PCM retire
+and flush fence, and the pacer and trace keep their independent wakes. The
+private World check reports a remaining idle deadline after the run is released.
+
 ## Deferred
 
 - The device step receives wake and mute events. Wyoming has no separate
   button report in the current wire contract.
-- A2 owns the Wyoming service rename, session and call subsystems, slot
-  table and the phase-wide allocation proof.
+- A2 owns the Wyoming service rename, call reducer and phase-wide allocation
+  proof. The call reducer steps after pacer and before trace when introduced.
+  The retained-call policy and native goodbye path keep their current rules.
+- Playback join, reply completion and delegated turn completion retain their
+  service fences. The global inbox, record/replay, modeled speaker clock
+  and full allocation proofs remain with their existing plan gates.
+- Generational tool slots apply to session-control requests. The general
+  dispatcher, pending RPCs and tool ledger remain in B1.
 - The bounded EchoLink/Wyoming queue and serialization still use owned
   transport buffers. Their allocation work belongs at the service boundary.
 - The stepped simulator keeps its current adaptive-hold bypass. The

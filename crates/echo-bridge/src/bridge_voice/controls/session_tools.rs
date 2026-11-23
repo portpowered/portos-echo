@@ -4,13 +4,11 @@
 use super::{Error, Notice, session_controller::Controller};
 use crate::bridge_codex::{SessionCommand, SessionRequest};
 use echo_agent_api::ToolResult;
+use echo_core_api::{SessionToolAction, SessionToolDecision, SessionToolRefusal};
 use serde_json::json;
-use tokio::time::{Duration, Instant};
 
 pub(super) const EXTEND: &str = "extend_session";
 pub(super) const END: &str = "end_session";
-/// Bound the run's session-tool idempotency memory.
-const ANSWERED: usize = 64;
 
 /// Payload-free projection of one settled session tool invocation.
 pub struct Receipt {
@@ -20,66 +18,12 @@ pub struct Receipt {
     pub capped: Option<bool>,
 }
 
-/// Grants belong to one admitted run; a fresh run starts without them.
-#[derive(Default)]
-pub(super) struct Grants {
-    pub(super) run: std::sync::Arc<()>,
-    opened: Option<Instant>,
-    listen: Option<Duration>,
-    max: Duration,
-    granted: Option<Instant>,
-    ending: bool,
-    answered: Vec<(String, ToolResult)>,
-}
-
-impl Grants {
-    pub fn new(listen: Option<Duration>, max: Duration) -> Self {
-        Self {
-            opened: Some(Instant::now()),
-            listen,
-            max,
-            ..Self::default()
-        }
-    }
-
-    /// The run ends at the playback boundary.
-    pub fn ending(&self) -> bool {
-        self.ending
-    }
-
-    pub fn request_end(&mut self) {
-        self.ending = true;
-    }
-
-    /// The configured listen window after a reply.
-    pub fn listen(&self) -> Option<Duration> {
-        self.listen
-    }
-
-    /// Tool-granted absolute listen deadline, retained across replies.
-    pub fn granted(&self) -> Option<Instant> {
-        self.granted
-    }
-
-    /// Grant `seconds` beyond `base`, never past the run's opening plus max.
-    /// The base already includes any earlier grant, so a grant never shrinks.
-    fn extend(&mut self, base: Instant, seconds: u64, opened: Instant) -> (Instant, bool) {
-        let cap = opened.checked_add(self.max).unwrap_or(base);
-        let wanted = base.checked_add(Duration::from_secs(seconds));
-        let capped = wanted.is_none_or(|wanted| wanted > cap);
-        let deadline = wanted.map_or(cap, |wanted| wanted.min(cap));
-        self.granted = Some(deadline);
-        (deadline, capped)
-    }
-}
-
 /// Answer one admitted request for the active run.
 /// # Errors
 /// A failed receipt drops the reply, so the tool fails instead of succeeding.
 pub(super) fn answer(
     request: SessionRequest,
-    grants: &mut Grants,
-    controller: &mut Controller,
+    controller: &Controller,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let SessionRequest {
@@ -92,7 +36,10 @@ pub(super) fn answer(
     // Refusal precedes both controller mutation and idempotency-cache writes.
     let refused = if reply.is_closed() {
         Some("request_cancelled")
-    } else if run.as_ref().is_none_or(|run| !std::sync::Arc::ptr_eq(run, &grants.run)) {
+    } else if run
+        .as_ref()
+        .is_none_or(|run| !std::sync::Arc::ptr_eq(run, controller.token()))
+    {
         Some("session_stale")
     } else {
         None
@@ -102,17 +49,16 @@ pub(super) fn answer(
         let _ = reply.send(failure(outcome));
         return Ok(());
     }
-    // The same idempotency identity never mutates twice.
-    let (result, receipt) = if let Some((_, cached)) = grants.answered.iter().find(|(answered, _)| *answered == key) {
-        (cached.clone(), receipt(tool, "duplicate"))
-    } else {
-        let (result, receipt) = decide(command, tool, grants, controller);
-        if grants.answered.len() == ANSWERED {
-            grants.answered.remove(0);
-        }
-        grants.answered.push((key, result.clone()));
-        (result, receipt)
+    let action = match command {
+        SessionCommand::Extend(seconds) => SessionToolAction::Extend { seconds },
+        SessionCommand::End => SessionToolAction::End,
+        SessionCommand::Invalid { .. } => SessionToolAction::Invalid,
     };
+    let (decision, cached) = controller.answer_tool(key, action)?;
+    let (result, mut receipt) = project(tool, decision);
+    if cached {
+        receipt = self::receipt(tool, "duplicate");
+    }
     observe(Notice::SessionTool(receipt))?;
     let _ = reply.send(result);
     Ok(())
@@ -131,43 +77,27 @@ pub(super) fn inactive(
     Ok(())
 }
 
-fn decide(
-    command: SessionCommand,
-    tool: &'static str,
-    grants: &mut Grants,
-    controller: &mut Controller,
-) -> (ToolResult, Receipt) {
-    let refuse = |outcome| (failure(outcome), receipt(tool, outcome));
-    let (Some(listen), Some(opened)) = (grants.listen, grants.opened) else {
-        return refuse("session_inactive");
-    };
-    if controller.closing() {
-        return refuse("session_closing");
-    }
-    match command {
-        SessionCommand::Invalid { .. } => refuse("invalid_arguments"),
-        SessionCommand::End => {
-            let outcome = if grants.ending() {
-                "duplicate"
-            } else {
-                grants.ending = true;
-                "applied"
+fn project(tool: &'static str, decision: SessionToolDecision) -> (ToolResult, Receipt) {
+    match decision {
+        SessionToolDecision::Refused { reason, .. } => {
+            let outcome = match reason {
+                SessionToolRefusal::InvalidArguments => "invalid_arguments",
+                SessionToolRefusal::Inactive => "session_inactive",
+                SessionToolRefusal::Closing => "session_closing",
             };
+            (failure(outcome), receipt(tool, outcome))
+        }
+        SessionToolDecision::Ending { duplicate, .. } => {
+            let outcome = if duplicate { "duplicate" } else { "applied" };
             let result = ToolResult {
                 content: json!({"ending_after_reply": true}),
                 is_error: false,
             };
             (result, receipt(tool, outcome))
         }
-        SessionCommand::Extend(_) if grants.ending() => refuse("session_closing"),
-        SessionCommand::Extend(seconds) => {
-            // During playback the base is the projected post-play deadline.
-            let now = Instant::now();
-            let current = controller.idle_deadline().or_else(|| now.checked_add(listen));
-            let base = [current, grants.granted].into_iter().flatten().fold(now, Instant::max);
-            let (deadline, capped) = grants.extend(base, seconds, opened);
-            controller.extend_idle(deadline);
-            let deadline_ms = u64::try_from(deadline.saturating_duration_since(opened).as_millis()).unwrap_or(u64::MAX);
+        SessionToolDecision::Extended {
+            deadline_ms, capped, ..
+        } => {
             let result = ToolResult {
                 content: json!({"deadline_ms": deadline_ms, "capped": capped}),
                 is_error: false,

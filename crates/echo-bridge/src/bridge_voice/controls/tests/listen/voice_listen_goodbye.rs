@@ -1,6 +1,5 @@
 //! T1: an applied `end_session` during a delegated hand-off, with memory-only
 //! device and media and paused time.
-use super::super::super::session_tools::Grants;
 use super::*;
 use crate::bridge_codex::SessionCommand;
 
@@ -80,17 +79,13 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) -> usize {
     let (tx, rx) = mpsc::channel(64);
     let mut port = Port(rx, std::rc::Rc::default());
     let mut source = Source::new(200, false).unwrap();
-    let options = Options {
-        listen_timeout: Some(Duration::from_secs(3)),
-        session_max: Duration::from_secs(60),
-        response_deadline: Instant::now() + Duration::from_secs(10),
-        played_timeout: Duration::from_secs(1),
-        reply_lead_ms: 200,
-        muted: false,
-    };
-    source.session = Grants::new(options.listen_timeout, options.session_max);
-    source.controller.admit_response(options.response_deadline).unwrap();
-    let (end, answer) = session_request(SessionCommand::End, &source.session.run, "farewell");
+    let options = farewell_options();
+    let controller = &source.controller;
+    controller
+        .configure_tools(options.listen_timeout, options.session_max)
+        .unwrap();
+    controller.admit_response(options.response_deadline).unwrap();
+    let (end, answer) = session_request(SessionCommand::End, controller.token(), "farewell");
     let played = tokio::sync::Notify::new();
     let stopped = tokio::sync::Notify::new();
     let mut receipts = Vec::new();
@@ -104,7 +99,7 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) -> usize {
     };
     let started = Instant::now();
     let answer = goodbye_run(
-        replies(
+        Box::pin(replies(
             &client,
             (&mut events, &mut microphone),
             &mut port,
@@ -112,7 +107,7 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) -> usize {
             &options,
             std::future::pending(),
             &mut observe,
-        ),
+        )),
         &device,
         &stopped,
         goodbye_inputs(&device, &tx, (&stopped, &played), (end, answer), steps),
@@ -123,12 +118,23 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) -> usize {
     // The running turn held the run to its 60 s ceiling; the end did not wait
     // for it, nor for the response deadline or an idle window.
     assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
-    assert!(!source.delegation.in_flight());
+    assert!(!source.controller.dispatch_in_flight());
     assert!(source.controller.ready_to_close(true, true));
     let commands = device.commands();
     let cut = commands.iter().filter(|cmd| matches!(cmd, Command::Cut(_)));
     assert_eq!(cut.count(), cuts);
     played_bytes(&commands)
+}
+
+fn farewell_options() -> Options {
+    Options {
+        listen_timeout: Some(Duration::from_secs(3)),
+        session_max: Duration::from_secs(60),
+        response_deadline: Instant::now() + Duration::from_secs(10),
+        played_timeout: Duration::from_secs(1),
+        reply_lead_ms: 200,
+        muted: false,
+    }
 }
 
 fn played_bytes(commands: &[Command]) -> usize {
@@ -241,10 +247,10 @@ async fn handoff(tx: &mpsc::Sender<MediaEvent>, turn_first: bool) {
 /// Half of the audio `reply` sends.
 async fn farewell_audio(tx: &mpsc::Sender<MediaEvent>) {
     for _ in 0..6 {
-        tx.send(MediaEvent::Audio(Box::new([5000; 320]))).await.unwrap();
+        tx.send(MediaEvent::audio([5000; 320])).await.unwrap();
     }
 }
 
 async fn send_control(tx: &mpsc::Sender<MediaEvent>, event: Event) {
-    tx.send(MediaEvent::Control(event)).await.unwrap();
+    tx.send(MediaEvent::control(event)).await.unwrap();
 }

@@ -16,10 +16,7 @@ fn level(index: usize) -> i16 {
 
 async fn speak(model: &mpsc::Sender<MediaEvent>, frames: std::ops::Range<usize>, gap: Duration) {
     for index in frames {
-        model
-            .send(MediaEvent::Audio(Box::new([level(index); 320])))
-            .await
-            .unwrap();
+        model.send(MediaEvent::audio([level(index); 320])).await.unwrap();
         tokio::time::sleep(gap).await;
     }
 }
@@ -27,7 +24,7 @@ async fn speak(model: &mpsc::Sender<MediaEvent>, frames: std::ops::Range<usize>,
 async fn done(model: &mpsc::Sender<MediaEvent>, text: &str) {
     let text = text.into();
     model
-        .send(MediaEvent::Control(Event::ReplyDone { text }))
+        .send(MediaEvent::control(Event::ReplyDone { text }))
         .await
         .unwrap();
 }

@@ -11,6 +11,7 @@ use std::{
         OnceLock,
         atomic::{AtomicI32, Ordering},
     },
+    time::Duration,
 };
 
 static PROTOCOL: OnceLock<&'static dyn Protocol> = OnceLock::new();
@@ -219,11 +220,34 @@ impl Core {
     pub fn send(&self, kind: &CStr, data: Option<&CStr>, payload: &[u8]) {
         let fd = CLIENT.load(Ordering::Relaxed);
         if fd >= 0 && kind.to_bytes().len() < 48 && !wire::write(fd, kind, data, payload) {
+            self.hang_up();
+        }
+    }
+
+    /// Gives up on the client as a failed send does; its reader then ends.
+    pub fn hang_up(&self) {
+        let fd = CLIENT.swap(-1, Ordering::Relaxed);
+        if fd >= 0 {
             // SAFETY: The core lock keeps the borrowed descriptor live. Shutdown
             // wakes the reader; only the C listener closes the descriptor.
             unsafe { echo_hassmic_shutdown(fd) };
-            CLIENT.store(-1, Ordering::Relaxed);
         }
+    }
+
+    /// Sends like [`Core::send`] unless the client is still behind on reading
+    /// after `wait`, and says whether the frame went out. The capture thread
+    /// holds the core lock for its sends, so a blocked write there also stops
+    /// the reader from taking the reply audio and the cut; live audio is
+    /// dropped instead.
+    #[must_use]
+    pub fn offer(&self, kind: &CStr, data: Option<&CStr>, payload: &[u8], wait: Duration) -> bool {
+        let fd = CLIENT.load(Ordering::Relaxed);
+        let wait = c_int::try_from(wait.as_millis()).unwrap_or(c_int::MAX);
+        if fd >= 0 && !wire::writable(fd, wait) {
+            return false;
+        }
+        self.send(kind, data, payload);
+        true
     }
 
     #[must_use]

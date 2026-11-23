@@ -15,7 +15,9 @@ use tokio::{
     time::timeout,
 };
 
+mod duplex;
 mod fixture;
+mod stall;
 use fixture::{Fixture, NAME, TCP, isolated, listener_counts, reject_terminal_components};
 
 const LIMIT: Duration = Duration::from_secs(6);

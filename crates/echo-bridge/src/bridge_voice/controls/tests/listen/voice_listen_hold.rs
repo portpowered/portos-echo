@@ -183,7 +183,7 @@ async fn acknowledge<W: Future<Output = Result<Stats, Error>>>(
         reply(tx, 5000).await;
         super::settle(work, observer, played, 1).await;
         tokio::time::advance(Duration::from_secs(2)).await;
-        tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
+        tx.send(MediaEvent::control(Event::SpeechStarted)).await.unwrap();
         poll(work.as_mut()).await;
     }
     reply(tx, -5000).await;
@@ -223,7 +223,7 @@ async fn extend<W: Future<Output = Result<Stats, Error>>>(
     opened: Instant,
 ) -> (Instant, Instant) {
     let (extend, granted) = session_request(SessionCommand::Extend(120), run, "hold");
-    tx.send(MediaEvent::Control(extend)).await.unwrap();
+    tx.send(MediaEvent::control(extend)).await.unwrap();
     poll(work.as_mut()).await;
     let granted_at = Instant::now();
     let grant = granted.await.unwrap();
@@ -241,7 +241,7 @@ async fn end_explicitly<W: Future<Output = Result<Stats, Error>>>(
     tokio::time::advance(after).await;
     poll(work.as_mut()).await;
     let (end, ended) = session_request(SessionCommand::End, run, "end");
-    tx.send(MediaEvent::Control(end)).await.unwrap();
+    tx.send(MediaEvent::control(end)).await.unwrap();
     let result = work.await.map(|_| ());
     let answer = ended.await.unwrap().content;
     assert_eq!(answer, serde_json::json!({"ending_after_reply": true}));

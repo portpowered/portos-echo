@@ -1,4 +1,5 @@
 use super::*;
+use echo_core_api::{BargeTrigger, SessionOutcome, SessionTurnEvent};
 use tokio::time::Duration;
 
 fn frame(level: i16) -> Vec<u8> {
@@ -9,6 +10,7 @@ fn frame(level: i16) -> Vec<u8> {
 #[derive(Default)]
 struct Narrow {
     room: std::cell::Cell<usize>,
+    failed: std::cell::Cell<bool>,
     /// What the microphone hears of the reply frame last written.
     echo: std::cell::Cell<i16>,
     sent: std::cell::RefCell<Vec<i16>>,
@@ -20,6 +22,9 @@ impl VoicePort for Narrow {
         Err(Error::Audio)
     }
     fn try_send(&self, frame: PcmFrame) -> Result<bool, Error> {
+        if self.failed.get() {
+            return Err(Error::Unavailable);
+        }
         if self.room.get() == 0 {
             return Ok(false);
         }
@@ -35,13 +40,17 @@ impl VoicePort for Narrow {
     }
 }
 
+fn forward_test(source: &mut Source, marker: i16, port: &Narrow) -> Result<(), Error> {
+    forward(&source.controller, &mut source.stats, &[marker; 320], port)
+}
+
 #[test]
 fn setup_burst_waits_for_the_sender_in_order_and_mute_withholds_the_rest() {
     let mut source = Source::new(200, false).unwrap();
     let port = Narrow::default();
     port.room.set(2);
     for marker in 1..=5 {
-        source.forward(&[marker; 320], &port).unwrap();
+        forward_test(&mut source, marker, &port).unwrap();
     }
     assert_eq!(*port.sent.borrow(), [1, 2]);
     assert!(source.uplink_pending());
@@ -51,7 +60,7 @@ fn setup_burst_waits_for_the_sender_in_order_and_mute_withholds_the_rest() {
     assert_eq!(*port.sent.borrow(), [1, 2, 3, 4]);
     // Room for one: waiting speech goes first, the new frame queues behind it.
     port.room.set(1);
-    source.forward(&[6; 320], &port).unwrap();
+    forward_test(&mut source, 6, &port).unwrap();
     assert_eq!(*port.sent.borrow(), [1, 2, 3, 4, 5]);
     assert!(source.uplink_pending());
     source.mute_uplink();
@@ -66,15 +75,30 @@ fn setup_burst_waits_for_the_sender_in_order_and_mute_withholds_the_rest() {
 fn stalled_sender_backlog_is_bounded_and_keeps_the_newest_speech() {
     let mut source = Source::new(200, false).unwrap();
     let port = Narrow::default();
-    for marker in 0..=UPLINK_BACKLOG {
-        source.forward(&[i16::try_from(marker).unwrap(); 320], &port).unwrap();
+    for marker in 0..=1500 {
+        forward_test(&mut source, marker, &port).unwrap();
     }
     port.room.set(usize::MAX);
     source.flush_uplink(&port).unwrap();
     let sent = port.sent.borrow();
-    assert_eq!(sent.len(), UPLINK_BACKLOG);
-    assert_eq!((sent[0], sent[UPLINK_BACKLOG - 1]), (1, 1500));
+    assert_eq!(sent.as_slice(), (1..=1500).collect::<Vec<_>>());
     assert_eq!(source.stats.uplink_dropped, 1);
+}
+
+#[test]
+fn sender_failure_leaves_the_oldest_unsent_frame_and_propagates_the_error() {
+    let mut source = Source::new(200, false).unwrap();
+    let port = Narrow::default();
+    forward_test(&mut source, 11, &port).unwrap();
+    port.failed.set(true);
+    assert_eq!(forward_test(&mut source, 22, &port), Err(Error::Unavailable));
+    assert!(source.uplink_pending());
+    assert_eq!(source.stats.microphone_frames, 1);
+    port.failed.set(false);
+    port.room.set(2);
+    source.flush_uplink(&port).unwrap();
+    assert_eq!(*port.sent.borrow(), [11]);
+    assert!(!source.uplink_pending());
 }
 
 #[tokio::test(start_paused = true)]
@@ -94,12 +118,17 @@ async fn acknowledgement_playout_returns_directly_to_screen_thinking() {
         let mut screen = Screen::bind(None).await.unwrap();
         screen.presentation = Presentation::new(Some(send));
         let mut view = View::new(&screen, &health, &mut trace);
-        let mut delegation = Delegation::default();
-        delegation.started();
-        delegation.spoke();
+        let mut source = Source::new(200, false).unwrap();
+        source
+            .controller
+            .turn(|session| SessionTurnEvent::DispatchStarted { session });
+        source.spoke();
         let mut mouth = ReplyAudio::mouth_fixture();
         mouth.test_handoff(&frame(1000));
-        assert!(!delegation.answered());
+        assert_eq!(
+            source.controller.reply_ended().outcome,
+            Some(Ok(SessionOutcome::Applied))
+        );
         // The acknowledgement's quiet lasts the gap hold: the mouth closes.
         let frame_period = Duration::from_millis(20);
         let gap_hold = Duration::from_millis(300);
@@ -112,7 +141,7 @@ async fn acknowledgement_playout_returns_directly_to_screen_thinking() {
         }
 
         let mut project_mouth = |mouth: &ReplyAudio| {
-            let notice = playout_notice(mouth, delegation.in_flight()).unwrap();
+            let notice = playout_notice(mouth, source.controller.dispatch_in_flight()).unwrap();
             view.observe(ServeNotice::Session(SessionNotice::Run(notice))).unwrap();
         };
         tokio::time::advance(Duration::from_millis(80)).await;
@@ -156,7 +185,7 @@ async fn first_audio_is_timed_from_the_user_transcript_or_the_delegated_turn() {
     for (event, endpoint) in [(user, Endpoint::UserTranscript), (turn, Endpoint::DelegatedTurn)] {
         let mut source = Source::new(200, false).unwrap();
         let mut port = Narrow::default();
-        super::super::media(MediaEvent::Control(event), &mut port, &mut source, &mut |_| Ok(()))
+        super::super::media(MediaEvent::control(event), &mut port, &mut source, &mut |_| Ok(()))
             .await
             .unwrap();
         tokio::time::advance(Duration::from_millis(730)).await;
@@ -284,11 +313,11 @@ async fn barge_in_is_judged_by_the_session_alone_and_its_cut_says_what_was_heard
     // The user speaks. The session has given no sign of it: nothing is held.
     for _ in 0..35 {
         replying(&mut source, &port, 2000, 6000).await;
-        assert!(!source.barge.pending() && source.playable());
+        assert!(!source.controller.barge_pending() && source.playable());
     }
     // The session's transcript of that speech: the reply is held at once.
     source.heard_user(BargeTrigger::UserTranscript, "Sto", false);
-    assert!(source.barge.pending() && !source.playable());
+    assert!(source.controller.barge_pending() && !source.playable());
     source.heard_user(BargeTrigger::UserTranscript, "p.", false);
     for _ in 0..26 {
         replying(&mut source, &port, 0, 6000).await;
@@ -316,7 +345,7 @@ async fn noise(source: &mut Source, port: &Narrow) -> u32 {
     let mut held = 0;
     for step in 0..80 {
         replying(source, port, 2000, if step < 10 { 600 } else { 0 }).await;
-        held += u32::from(source.barge.pending());
+        held += u32::from(source.controller.barge_pending());
     }
     held
 }
@@ -332,7 +361,7 @@ async fn barge_in_sound_at_the_microphone_never_holds_or_cuts_the_reply() {
     for level in [2000, 6000, 2000] {
         for _ in 0..50 {
             replying(&mut source, &port, level, 0).await;
-            assert!(!source.barge.pending(), "{level}");
+            assert!(!source.controller.barge_pending(), "{level}");
         }
     }
     assert_eq!(noise(&mut source, &port).await, 0);
@@ -359,17 +388,17 @@ async fn reply_start_is_not_held_by_the_transcript_of_the_turn_it_answers() {
     source.spoke();
     // The question's transcript comes late: the answer has not sounded yet.
     source.heard_user(BargeTrigger::UserTranscript, "What", false);
-    assert!(!source.barge.pending());
+    assert!(!source.controller.barge_pending());
     for _ in 0..30 {
         replying(&mut source, &port, 2000, 0).await;
     }
     // The rest of it comes later still, under the answer.
     source.heard_user(BargeTrigger::UserTranscript, " time is it?", false);
     source.heard_user(BargeTrigger::UserTranscript, "What time is it?", true);
-    assert!(!source.barge.pending() && source.playable());
+    assert!(!source.controller.barge_pending() && source.playable());
     // A transcript now is the user talking over the answer.
     source.heard_user(BargeTrigger::UserTranscript, "", false);
-    assert!(source.barge.pending());
+    assert!(source.controller.barge_pending());
 }
 
 /// 600 ms of a reply at speaking level, with nobody else in the room.
@@ -394,11 +423,11 @@ async fn reply_is_not_held_by_a_question_transcribed_after_its_first_audio() {
     answering(&mut source, &port).await;
     source.heard_user(BargeTrigger::UserTranscript, "What", false);
     source.heard_user(BargeTrigger::UserTranscript, "What time is it?", true);
-    assert!(!source.barge.pending() && source.playable());
+    assert!(!source.controller.barge_pending() && source.playable());
     // The next turn is the user talking over it. The model yields before
     // that turn's transcript is whole, and the reply is cut.
     source.heard_user(BargeTrigger::UserTranscript, "Sto", false);
-    assert!(source.barge.pending() && !source.playable());
+    assert!(source.controller.barge_pending() && !source.playable());
     for _ in 0..26 {
         replying(&mut source, &port, 0, 0).await;
     }
@@ -408,24 +437,24 @@ async fn reply_is_not_held_by_a_question_transcribed_after_its_first_audio() {
     // The turn that cut it is the next reply's question: the rest of its
     // transcript holds nothing, and the turn after it does.
     source.controller.cut_settled();
-    source.resume_reply().unwrap();
+    source.resume_reply(false).unwrap();
     answering(&mut source, &port).await;
     source.heard_user(BargeTrigger::UserTranscript, "Stop.", true);
-    assert!(!source.barge.pending() && source.playable());
+    assert!(!source.controller.barge_pending() && source.playable());
     source.heard_user(BargeTrigger::UserTranscript, "No", false);
-    assert!(source.barge.pending());
+    assert!(source.controller.barge_pending());
     // The model talks through the window: the reply plays on and ends.
     for _ in 0..101 {
         replying(&mut source, &port, 2000, 0).await;
     }
-    assert!(!source.barge.pending());
+    assert!(!source.controller.barge_pending());
     let quality = source.settle(0);
     assert_eq!((quality.cuts, quality.holds, quality.hold_ms), (0, 1, 2000));
     // A reply that ended awaits its own question again, as late as it comes.
-    source.resume_reply().unwrap();
+    source.resume_reply(false).unwrap();
     answering(&mut source, &port).await;
     source.heard_user(BargeTrigger::UserTranscript, "And tomorrow?", true);
-    assert!(!source.barge.pending());
+    assert!(!source.controller.barge_pending());
     let quality = source.settle(0);
     assert_eq!((quality.cuts, quality.holds, quality.hold_ms), (0, 0, 0));
 }

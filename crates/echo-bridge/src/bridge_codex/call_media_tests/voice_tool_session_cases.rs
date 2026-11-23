@@ -366,20 +366,20 @@ where
 {
     let mut events = Vec::new();
     loop {
-        match session.next().await.unwrap() {
-            MediaEvent::Control(Event::TurnStarted { thread, turn }) => {
+        match session.next().await.unwrap().into_parts().0 {
+            Some(Event::TurnStarted { thread, turn }) => {
                 assert_eq!(thread, "thread-1");
                 events.push((true, turn));
             }
-            MediaEvent::Control(Event::TurnCompleted { thread, turn, .. }) => {
+            Some(Event::TurnCompleted { thread, turn, .. }) => {
                 assert_eq!(thread, "thread-1");
                 events.push((false, turn));
             }
-            MediaEvent::Control(Event::ReplyDone { text }) => {
+            Some(Event::ReplyDone { text }) => {
                 assert_eq!(text, "done");
                 return events;
             }
-            MediaEvent::Control(Event::Other) => (),
+            Some(Event::Other) => (),
             _ => unreachable!("unexpected lifecycle event"),
         }
     }

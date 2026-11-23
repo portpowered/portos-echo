@@ -1,40 +1,21 @@
 //! A barge-in silences the reply at once and cuts it once the model yields.
-use std::time::Duration;
-use tokio::time::Instant;
+use echo_core_api::BargeTrigger;
+use std::{fmt, time::Duration};
 
 /// How long a sign of user speech from the Live session keeps a barge-in
 /// pending. Each further sign renews it.
-pub(crate) const BARGE_WINDOW: Duration = Duration::from_secs(2);
+pub const BARGE_WINDOW: Duration = Duration::from_secs(2);
 /// A pending barge-in fires once the reply has gone this long without
 /// audible audio from the model: it stopped talking, so the user has the floor.
-pub(crate) const BARGE_QUIET: Duration = Duration::from_millis(500);
+pub const BARGE_QUIET: Duration = Duration::from_millis(500);
 /// The most of the user's transcript kept for a cut's trace row, in bytes.
 const SAID_MAX: usize = 240;
 
-/// The sign of user speech that armed a barge-in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BargeTrigger {
-    /// A user-role transcript fragment from the Live session.
-    UserTranscript,
-    /// The Live session's speech-start item.
-    SpeechStarted,
-}
-
-impl BargeTrigger {
-    #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::UserTranscript => "user_transcript",
-            Self::SpeechStarted => "speech_started",
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Armed {
     trigger: BargeTrigger,
-    until: Instant,
-    quiet_since: Instant,
+    until: Duration,
+    quiet_since: Duration,
 }
 
 /// The Live session is the only judge of a barge-in: the bridge runs no
@@ -61,10 +42,20 @@ pub(crate) struct Barge {
     said: String,
 }
 
+impl fmt::Debug for Barge {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Playback failure diagnostics may print the World state.
+        formatter
+            .debug_struct("Barge")
+            .field("armed", &self.armed)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Barge {
     /// A sign of user speech came at `now` during a reply. True when it
     /// armed a barge-in, false when it renewed the pending one.
-    pub(crate) fn arm(&mut self, now: Instant, trigger: BargeTrigger) -> bool {
+    pub(crate) fn arm(&mut self, now: Duration, trigger: BargeTrigger) -> bool {
         let until = now + BARGE_WINDOW;
         if let Some(armed) = &mut self.armed {
             armed.until = armed.until.max(until);
@@ -108,7 +99,7 @@ impl Barge {
     }
 
     /// One reply frame from the model was accepted at `now`.
-    pub(crate) fn heard(&mut self, now: Instant, audible: bool) {
+    pub(crate) fn heard(&mut self, now: Duration, audible: bool) {
         let Some(armed) = &mut self.armed else {
             return;
         };
@@ -125,13 +116,13 @@ impl Barge {
     /// When the pending barge-in fires unless the model is heard first:
     /// already at `now` once the model has `ended` its turn.
     #[must_use]
-    pub(crate) fn due(&self, now: Instant, ended: bool) -> Option<Instant> {
+    pub(crate) fn due(&self, now: Duration, ended: bool) -> Option<Duration> {
         let due = self.armed?.quiet_since + BARGE_QUIET;
         Some(if ended { due.min(now) } else { due })
     }
 
     /// The trigger of a barge-in that is due at `now`; it is no longer pending.
-    pub(crate) fn fire(&mut self, now: Instant, ended: bool) -> Option<BargeTrigger> {
+    pub(crate) fn fire(&mut self, now: Duration, ended: bool) -> Option<BargeTrigger> {
         self.due(now, ended).filter(|due| *due <= now)?;
         self.armed.take().map(|armed| armed.trigger)
     }
@@ -143,14 +134,14 @@ impl Barge {
 /// of `BARGE_WINDOW`. Each reply therefore owns the first user turn
 /// transcribed since the reply before it, through that turn's whole
 /// transcript. Only a later turn is the user talking over the reply.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Question {
     asked: Asked,
     /// The user's turn last heard of has been transcribed whole.
     ended: bool,
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Asked {
     /// Nothing of the question has come: the next user turn is it.
     #[default]
@@ -264,14 +255,15 @@ mod tests {
 
     /// T1: the transcript under a pending barge-in is kept for its cut,
     /// bounded, and a whole turn replaces its fragments.
-    #[tokio::test(start_paused = true)]
-    async fn barge_keeps_the_transcript_that_armed_it() {
-        let start = Instant::now();
+    #[test]
+    fn barge_keeps_the_transcript_that_armed_it() {
+        let start = Duration::ZERO;
         let mut barge = Barge::default();
         barge.transcribed("before", false);
         assert!(barge.arm(start, BargeTrigger::UserTranscript));
         barge.transcribed("Sto", false);
         barge.transcribed("p it", false);
+        assert!(!format!("{barge:?}").contains("Stop it"));
         assert_eq!(barge.fire(start, true), Some(BargeTrigger::UserTranscript));
         assert_eq!((barge.said().as_str(), barge.said().as_str()), ("Stop it", ""));
         barge.arm(start, BargeTrigger::UserTranscript);
@@ -284,9 +276,9 @@ mod tests {
     }
 
     /// T1: the model talks through the whole window, so nothing fires.
-    #[tokio::test(start_paused = true)]
-    async fn barge_is_dropped_when_the_model_talks_past_the_window() {
-        let start = Instant::now();
+    #[test]
+    fn barge_is_dropped_when_the_model_talks_past_the_window() {
+        let start = Duration::ZERO;
         let mut barge = Barge::default();
         assert_eq!((barge.due(start, true), barge.fire(start, true)), (None, None));
         assert!(!barge.pending() && barge.arm(start, BargeTrigger::UserTranscript));
@@ -305,9 +297,9 @@ mod tests {
     /// T1: quiet frames do not count as the model talking; the quiet stretch
     /// runs from the last audible frame, and a further sign renews the window
     /// without restarting the stretch.
-    #[tokio::test(start_paused = true)]
-    async fn barge_fires_after_the_quiet_stretch_with_its_first_trigger() {
-        let start = Instant::now();
+    #[test]
+    fn barge_fires_after_the_quiet_stretch_with_its_first_trigger() {
+        let start = Duration::ZERO;
         let mut barge = Barge::default();
         barge.arm(start, BargeTrigger::SpeechStarted);
         barge.heard(start + FRAME * 5, true);
@@ -316,7 +308,10 @@ mod tests {
         assert!(barge.pending());
         let due = start + FRAME * 5 + BARGE_QUIET;
         assert_eq!(barge.due(start, false), Some(due));
-        assert_eq!(barge.fire(due - Duration::from_millis(1), false), None);
+        assert_eq!(
+            barge.fire(due.checked_sub(Duration::from_millis(1)).unwrap(), false),
+            None
+        );
         assert_eq!(barge.fire(due, false), Some(BargeTrigger::SpeechStarted));
         assert_eq!((barge.due(due, false), barge.fire(due, false)), (None, None));
         assert_eq!(
@@ -326,12 +321,12 @@ mod tests {
     }
 
     /// T1: a stretch that began inside the window still fires after it.
-    #[tokio::test(start_paused = true)]
-    async fn barge_quiet_that_began_inside_the_window_fires_after_it() {
-        let start = Instant::now();
+    #[test]
+    fn barge_quiet_that_began_inside_the_window_fires_after_it() {
+        let start = Duration::ZERO;
         let mut barge = Barge::default();
         barge.arm(start, BargeTrigger::UserTranscript);
-        let last = start + BARGE_WINDOW - FRAME;
+        let last = (start + BARGE_WINDOW).checked_sub(FRAME).unwrap();
         barge.heard(last, true);
         barge.heard(start + BARGE_WINDOW, false);
         assert_eq!(
@@ -341,9 +336,9 @@ mod tests {
     }
 
     /// T1: a model that ended its turn has yielded; nothing is waited out.
-    #[tokio::test(start_paused = true)]
-    async fn barge_fires_at_once_when_the_model_has_ended_its_turn() {
-        let start = Instant::now();
+    #[test]
+    fn barge_fires_at_once_when_the_model_has_ended_its_turn() {
+        let start = Duration::ZERO;
         let mut barge = Barge::default();
         barge.arm(start, BargeTrigger::UserTranscript);
         let now = start + FRAME;

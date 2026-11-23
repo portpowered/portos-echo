@@ -117,7 +117,7 @@ impl Fixture {
 
 pub(super) struct Satellite {
     pub(super) child: Child,
-    logs: Lines<BufReader<ChildStderr>>,
+    pub(super) logs: Lines<BufReader<ChildStderr>>,
 }
 
 impl Satellite {
@@ -134,6 +134,15 @@ impl Satellite {
         })
         .await;
         assert_eq!(found.ok(), Some(true), "satellite readiness for {marker}: {observed:?}");
+    }
+
+    /// What the role logged after its last awaited line, through its exit.
+    pub(super) async fn rest(&mut self) -> Vec<String> {
+        let mut lines = Vec::new();
+        while let Ok(Ok(Some(line))) = timeout(LIMIT, self.logs.next_line()).await {
+            lines.push(line);
+        }
+        lines
     }
 
     pub(super) async fn signal(&self, signal: &str) {

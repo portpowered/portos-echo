@@ -191,7 +191,7 @@ async fn settle_disabled_reply(
 
 fn dispatch(started: bool) -> MediaEvent {
     let (thread, turn) = ("fixture-thread".into(), "fixture-turn".into());
-    MediaEvent::Control(if started {
+    MediaEvent::control(if started {
         Event::TurnStarted { thread, turn }
     } else {
         Event::TurnCompleted {

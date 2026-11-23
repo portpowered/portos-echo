@@ -96,7 +96,7 @@ async fn microphone<E: LinkEvents>(events: &mut E) -> E::Run {
     }
 }
 fn done() -> MediaEvent {
-    MediaEvent::Control(Event::ReplyDone {
+    MediaEvent::control(Event::ReplyDone {
         text: "fixture reply".into(),
     })
 }
@@ -231,15 +231,15 @@ async fn voice_user_done_and_legacy_other_never_complete_a_reply() {
     wake(&observer, 0);
     let mic = microphone(&mut events).await;
     let (mut port, tx) = port();
-    tx.send(Ok(MediaEvent::Audio(Box::new([456; 320])))).await.unwrap();
-    tx.send(Ok(MediaEvent::Control(Event::Transcript {
+    tx.send(Ok(MediaEvent::audio([456; 320]))).await.unwrap();
+    tx.send(Ok(MediaEvent::control(Event::Transcript {
         role: "user".into(),
         text: "question".into(),
         done: true,
     })))
     .await
     .unwrap();
-    tx.send(Ok(MediaEvent::Control(Event::Other))).await.unwrap();
+    tx.send(Ok(MediaEvent::control(Event::Other))).await.unwrap();
     let end = options().response_deadline;
     let result = run(
         &client,
@@ -354,11 +354,11 @@ async fn voice_all_webrtc_media_after_done_is_discarded() {
     ));
     pending(work.as_mut()).await;
     for frame in [[0; 320], [64; 320], [-64; 320]] {
-        tx.send(Ok(MediaEvent::Audio(Box::new(frame)))).await.unwrap();
+        tx.send(Ok(MediaEvent::audio(frame))).await.unwrap();
         pending(work.as_mut()).await;
     }
     assert_eq!(frames(&observer).len(), 0);
-    tx.send(Ok(MediaEvent::Audio(Box::new([65; 320])))).await.unwrap();
+    tx.send(Ok(MediaEvent::audio([65; 320]))).await.unwrap();
     pending(work.as_mut()).await;
     observer.finish(Ok(()));
     assert_eq!(work.await.unwrap().reply_received, 4);
@@ -367,7 +367,7 @@ async fn voice_all_webrtc_media_after_done_is_discarded() {
 
 fn turn(started: bool) -> MediaEvent {
     let (thread, turn, answered) = ("thread-1".to_owned(), "turn-1".to_owned(), true);
-    MediaEvent::Control(if started {
+    MediaEvent::control(if started {
         Event::TurnStarted { thread, turn }
     } else {
         Event::TurnCompleted { thread, turn, answered }
@@ -375,7 +375,7 @@ fn turn(started: bool) -> MediaEvent {
 }
 
 fn said(text: &str) -> MediaEvent {
-    MediaEvent::Control(Event::Transcript {
+    MediaEvent::control(Event::Transcript {
         role: "assistant".into(),
         text: text.into(),
         done: false,
@@ -389,7 +389,7 @@ async fn send(tx: &mpsc::Sender<Result<MediaEvent, Error>>, events: impl IntoIte
 }
 
 fn audible(count: usize) -> Vec<MediaEvent> {
-    (0..count).map(|_| MediaEvent::Audio(Box::new([123; 320]))).collect()
+    (0..count).map(|_| MediaEvent::audio([123; 320])).collect()
 }
 
 async fn tick<F: Future>(mut work: Pin<&mut F>, frames: usize) {
@@ -490,7 +490,7 @@ async fn voice_stuck_delegation_cuts_once_the_filler_has_played_at_the_run_ceili
     assert_eq!(work.await, Err(Error::SessionCeiling));
     assert_eq!(observer.commands().last(), Some(&Command::Cut(0)));
     assert_eq!(frames(&observer), filler);
-    assert!(matches!(port.events.try_recv(), Ok(Ok(MediaEvent::Audio(_)))));
+    assert!(port.events.try_recv().unwrap().unwrap().into_parts().1.is_some());
 }
 
 fn assert_drained_reply(observer: &Observer, old_frames: usize) {

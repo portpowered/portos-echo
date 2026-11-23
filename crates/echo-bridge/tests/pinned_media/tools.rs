@@ -386,21 +386,21 @@ async fn dispatch<R: tokio::io::AsyncRead + Unpin, W: tokio::io::AsyncWrite + Un
     };
     let completed = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
-            match session.next().await.unwrap() {
-                MediaEvent::Control(Event::TurnStarted { thread, turn }) => {
+            match session.next().await.unwrap().into_parts().0 {
+                Some(Event::TurnStarted { thread, turn }) => {
                     assert_eq!(Some(thread.as_str()), call_thread.as_deref());
                     assert!(started.replace((thread, turn)).is_none());
                 }
-                MediaEvent::Control(Event::TurnCompleted { thread, turn, .. }) if exhausted => {
+                Some(Event::TurnCompleted { thread, turn, .. }) if exhausted => {
                     assert_eq!(started, Some((thread, turn)));
                     return;
                 }
-                MediaEvent::Control(Event::ReplyDone { text }) => {
+                Some(Event::ReplyDone { text }) => {
                     assert_eq!(text, expected);
                     return;
                 }
                 event => assert!(
-                    !matches!(event, MediaEvent::Control(Event::Closed)),
+                    !matches!(event, Some(Event::Closed)),
                     "call closed before native appended result"
                 ),
             }

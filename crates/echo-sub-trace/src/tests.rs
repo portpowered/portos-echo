@@ -2,7 +2,7 @@ use super::*;
 use echo_core_api::{Clock, PausedClock, TraceRow};
 use std::time::UNIX_EPOCH;
 
-fn row(id: usize) -> Event {
+fn row(id: usize) -> Event<'static> {
     Event::TraceRow(Some(PendingTrace {
         row: TraceRow {
             event: "fixture".into(),

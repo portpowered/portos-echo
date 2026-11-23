@@ -154,10 +154,13 @@ fn m3_check_and_normal_discovery_execute_the_same_production_scenario() {
         .args(["run", "--all", "--driver", "sim", "--out", "suite"])
         .output()
         .unwrap();
+    // The suite prints each scenario's failure reason on stdout and only the
+    // summary on stderr; show both so a failure says which step failed and why.
     assert_eq!(
         output.status.code(),
         Some(0),
-        "{}",
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).ends_with("executed=1 passed=1 failed=0 not_runnable=0\n"));

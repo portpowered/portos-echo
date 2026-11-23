@@ -4,15 +4,13 @@ use tokio::time::Instant;
 
 #[cfg(test)]
 mod playout_tests;
-mod reply_barge;
 pub(crate) mod reply_lips;
 
+pub use echo_core_api::BargeTrigger;
 pub use echo_sub_pacer::{Heard, LipStats};
 pub(crate) use echo_sub_pacer::{PERIOD, Playout, QUIET};
-pub use reply_barge::BargeTrigger;
 #[cfg(test)]
-pub(crate) use reply_barge::{BARGE_QUIET, BARGE_WINDOW};
-pub(crate) use reply_barge::{Barge, Floor, Question};
+pub(crate) use echo_sub_session::{BARGE_QUIET, BARGE_WINDOW};
 
 /// Initial playback credit followed by the existing no-catch-up 20 ms pacer.
 pub(crate) struct LeadPacer {

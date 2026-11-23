@@ -92,12 +92,12 @@ where
     H: ToolHost + 'static,
 {
     loop {
-        match session.next().await.unwrap() {
-            MediaEvent::Control(Event::ReplyDone { text }) => {
+        match session.next().await.unwrap().into_parts() {
+            (Some(Event::ReplyDone { text }), _) => {
                 assert_eq!(text, "done");
                 return;
             }
-            MediaEvent::Control(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. }) => (),
+            (Some(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. }), _) => (),
             _ => unreachable!("unexpected session event"),
         }
     }
@@ -183,18 +183,18 @@ async fn tools_pending_request_does_not_block_pcm_or_transcript_before_cancellat
         let mut session = ToolSession::new(&mut call, host, catalog(), budget()).unwrap();
         let mut transcripts = Vec::new();
         loop {
-            match session.next().await.unwrap() {
-                MediaEvent::Audio(frame) => {
-                    assert_eq!(*frame, [17; 320]);
+            match session.next().await.unwrap().into_parts() {
+                (None, Some(frame)) => {
+                    assert_eq!(frame, [17; 320]);
                     session.send([23; 320]).unwrap();
                     pcm_sent.notify_one();
                 }
-                MediaEvent::Control(Event::Transcript { text, .. }) => {
+                (Some(Event::Transcript { text, .. }), _) => {
                     transcripts.push(text);
                 }
-                MediaEvent::Control(Event::ReplyDone { .. }) => break,
-                MediaEvent::Control(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. }) => (),
-                MediaEvent::Control(_) => unreachable!("unexpected event"),
+                (Some(Event::ReplyDone { .. }), _) => break,
+                (Some(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. }), _) => (),
+                (Some(_), _) | (None, None) => unreachable!("unexpected event"),
             }
         }
         assert_eq!(transcripts, ["pending tool"]);
@@ -351,8 +351,8 @@ async fn tools_pending_queue_overflow_fails_and_cleanup_reaps_media_without_extr
         };
         let mut session = ToolSession::new(&mut call, host, catalog(), budget()).unwrap();
         loop {
-            match session.next().await {
-                Ok(MediaEvent::Control(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => (),
+            match session.next().await.map(|event| event.into_parts().0) {
+                Ok(Some(Event::Other | Event::TurnStarted { .. } | Event::TurnCompleted { .. })) => (),
                 Err(error) => {
                     assert_eq!(error, Error::Unavailable);
                     break;

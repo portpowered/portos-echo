@@ -13,6 +13,7 @@ struct Fake {
     local_wake: bool,
     muted: bool,
     output_muted: Cell<bool>,
+    behind: Cell<bool>,
 }
 
 impl Default for Fake {
@@ -23,6 +24,7 @@ impl Default for Fake {
             local_wake: true,
             muted: false,
             output_muted: Cell::new(false),
+            behind: Cell::new(false),
         }
     }
 }
@@ -37,6 +39,19 @@ impl Satellite for Fake {
 
     fn send(&self, kind: &CStr, data: Option<&CStr>, payload: &[u8]) {
         self.record(frame(kind.to_bytes(), data.unwrap_or(c"").to_bytes(), payload));
+    }
+
+    fn offer(&self, kind: &CStr, data: Option<&CStr>, payload: &[u8], wait: Duration) -> bool {
+        self.record(Observation::Core(format!("Offer({wait:?})")));
+        if self.behind.get() {
+            return false;
+        }
+        self.send(kind, data, payload);
+        true
+    }
+
+    fn hang_up(&self) {
+        self.record(Observation::Core("HangUp".into()));
     }
 
     fn duplex(&self) -> bool {
@@ -79,6 +94,11 @@ impl Fake {
 
     fn accept(&self, kind: &CStr, json: &CStr, payload: &[u8]) {
         handle(self, &Event { kind, json, payload });
+    }
+
+    fn assert_actions_raw(&self, expected: &[&str]) {
+        let expected: Vec<_> = expected.iter().map(|core| Observation::Core((*core).into())).collect();
+        assert_eq!(self.observations.take(), expected);
     }
 
     fn assert_actions(&self, expected: &[Action<'_>]) {
@@ -125,7 +145,7 @@ fn capture_info_and_pong_keep_the_fixed_wire_values() {
     let core = Fake::default();
     core.accept(c"describe", c"{}", &[]);
     start(&core);
-    audio(&core, b"\x13\x00", 1234);
+    audio(&core, b"\x13\x00", 1234, &Behind::new());
     core.accept(c"ping", c"{}", &[]);
     let info = format!(
         concat!(
@@ -144,6 +164,7 @@ fn capture_info_and_pong_keep_the_fixed_wire_values() {
                 br#"{"start_stage":"asr","end_stage":"tts","restart_on_end":false,"wake_word_name":"computer_en-US"}"#,
                 b""
             ),
+            Observation::Core("Offer(250ms)".into()),
             frame(
                 b"audio-chunk",
                 br#"{"rate":16000,"width":2,"channels":1,"timestamp":1234}"#,
@@ -227,4 +248,52 @@ fn reply_progress_defaults_and_error_actions_match_the_core_contract() {
     ]);
     core.accept(c"hassmic-continue", c"{}", &[]);
     assert_eq!(core.observations.take(), [Observation::Core("Continue".into())]);
+}
+
+#[test]
+fn microphone_audio_is_dropped_while_the_client_is_behind() {
+    let (core, behind) = (Fake::default(), Behind::new());
+    core.behind.set(true);
+    audio(&core, b"\x01\x00", 100, &behind);
+    audio(&core, b"\x02\x00", 150, &behind);
+    // The first chunk waits out a burst; while the client stays behind, none waits.
+    core.assert_actions_raw(&["Offer(250ms)", "Offer(0ns)"]);
+    assert_eq!(
+        (
+            behind.dropped.load(Ordering::Relaxed),
+            behind.since.load(Ordering::Relaxed)
+        ),
+        (2, 100)
+    );
+    core.behind.set(false);
+    audio(&core, b"\x03\x00", 200, &behind);
+    assert_eq!(
+        core.observations.take(),
+        [
+            Observation::Core("Offer(0ns)".into()),
+            frame(
+                b"audio-chunk",
+                br#"{"rate":16000,"width":2,"channels":1,"timestamp":200}"#,
+                b"\x03\x00"
+            )
+        ]
+    );
+    assert_eq!(behind.dropped.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn a_client_that_reads_nothing_for_five_seconds_is_dropped() {
+    let (core, behind) = (Fake::default(), Behind::new());
+    core.behind.set(true);
+    for timestamp in [1000, 1050, 5999] {
+        audio(&core, b"\x01\x00", timestamp, &behind);
+    }
+    core.assert_actions_raw(&["Offer(250ms)", "Offer(0ns)", "Offer(0ns)"]);
+    audio(&core, b"\x01\x00", 6000, &behind);
+    core.assert_actions_raw(&["Offer(0ns)", "HangUp"]);
+    // Without a client the next chunk has nowhere to go and starts afresh.
+    core.behind.set(false);
+    audio(&core, b"\x01\x00", 6050, &behind);
+    assert_eq!(core.observations.take().len(), 2);
+    assert_eq!(behind.dropped.load(Ordering::Relaxed), 0);
 }

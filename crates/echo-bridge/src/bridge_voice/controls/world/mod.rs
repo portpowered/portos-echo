@@ -1,18 +1,26 @@
-//! The session controller composes the ordered device, pacer and trace World.
+//! The session controller composes the ordered device, session, pacer, call and trace World.
 use echo_core_api::{
     Broken, Clock, Command, Commands, DeviceControl, DeviceEvent, DeviceState, DeviceView, EntropyUnavailable, Event,
     Now, OsRng, PendingTrace, Rng, SeededRng, TraceDrain, TraceFailure, World,
 };
 use echo_link::LinkConnector;
 use echo_sub_device::Device;
-use echo_sub_pacer::Pacer;
 use echo_wyoming::{ClientOptions, Endpoint};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::time::Instant;
 
+mod call;
 mod pacer;
+mod session;
+mod slots;
+mod tools;
+mod voice_reducers;
 pub mod witness;
+pub(crate) use call::CallPort;
 pub(crate) use pacer::{PacerPort, scope};
+pub(crate) use session::{SessionPort, close_call, open_call};
+use slots::Slots;
+use voice_reducers::VoiceReducers;
 use witness::Witness;
 
 struct BridgeClock {
@@ -47,10 +55,12 @@ impl Rng for SessionRng {
     }
 }
 
-type SessionWorld = World<Device, Pacer, echo_sub_trace::Trace, BridgeClock, SessionRng>;
+type SessionWorld = World<Device, VoiceReducers, echo_sub_trace::Trace, BridgeClock, SessionRng>;
 
 struct State {
     world: SessionWorld,
+    runs: Slots<()>,
+    tools: tools::ToolSlots,
     first_violation: Option<Broken>,
     trace_held: bool,
 }
@@ -65,24 +75,36 @@ impl Controller {
         Self::with_witness(None)
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_voice_fixture() -> Arc<Self> {
+        Self::with_pacer(None, echo_sub_pacer::State::new(false))
+    }
+
     fn with_witness(witness: Option<Witness>) -> Arc<Self> {
         Self::with_pacer(witness, echo_sub_pacer::State::default())
     }
 
     fn with_pacer(witness: Option<Witness>, pacer: echo_sub_pacer::State) -> Arc<Self> {
         let seed = witness.as_ref().and_then(|witness| witness.seed);
+        let start = Instant::now();
         Arc::new(Self {
             state: Mutex::new(State {
                 world: World {
                     device: DeviceState::default(),
-                    pacer,
+                    pacer: voice_reducers::State {
+                        playback: pacer,
+                        session: echo_sub_session::State::new(start.into_std()),
+                        call: echo_sub_call::State::default(),
+                    },
                     trace: echo_sub_trace::State::default(),
                     clock: BridgeClock {
-                        start: Instant::now(),
+                        start,
                         fixed_epoch: seed.is_some(),
                     },
                     rng: seed.map_or(SessionRng::Os(OsRng), |seed| SessionRng::Seeded(SeededRng::new(seed))),
                 },
+                runs: Slots::new(1),
+                tools: tools::ToolSlots::new(),
                 first_violation: None,
                 trace_held: false,
             }),
