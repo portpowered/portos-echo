@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 454889ac4992c484dab8e68b55572d075adb2c1c
+          ref: c1a98ed16dbbc38304ba1c41356aae247f46ebb8
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -55,6 +55,11 @@ jobs:
         run: cd web/screen && npx --offline playwright install --with-deps chromium
       - name: Chromium sandbox user namespaces
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Focused Chromium recovery at 960 by 600
+        run: |
+          cd web/screen
+          npm run build
+          node --test --test-timeout=30000 tests/settings/codex/recovery.mjs
       - name: test-unit-screen
         run: make test-unit-screen
       - name: Publish screen screenshot evidence
@@ -62,7 +67,7 @@ jobs:
         id: screen-evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: screen-evidence-454889ac4992c484dab8e68b55572d075adb2c1c
+          name: screen-evidence-c1a98ed16dbbc38304ba1c41356aae247f46ebb8
           path: |
             web/screen/test-results/screenshots/**
             web/screen/test-results/summary.txt
@@ -74,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 454889ac4992c484dab8e68b55572d075adb2c1c
+          ref: c1a98ed16dbbc38304ba1c41356aae247f46ebb8
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -114,7 +119,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 454889ac4992c484dab8e68b55572d075adb2c1c
+          ref: c1a98ed16dbbc38304ba1c41356aae247f46ebb8
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
