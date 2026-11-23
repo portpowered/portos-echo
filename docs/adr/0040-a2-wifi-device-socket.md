@@ -56,6 +56,14 @@ loss opens Settings with Wi-Fi expanded and focus on its summary after 30 second
 result clears the pending deadline. After dismissal, the next prompt requires a confirmed recovery
 and another full outage. The local page and its Wi-Fi relay remain available during network loss.
 
+The coordinator assigned the USB fallback to this lane under option B. `echo-setup wifi status` and
+`echo-setup wifi join --ssid NAME` select a ready USB device and run the fixed
+`/data/local/echo/bin/current wifi` entry point over non-PTY adb. Status closes stdin. Join reads
+one password line from a file or redirected stdin and sends the v1 frame on adb stdin. The
+device command uses the same endpoint and transaction as the paired page. The setup utility
+validates the framed response and emits its own result. Fork installs retain their documented
+`scripts/wifi-join.sh` fallback until the coordinator's A2 T5 cutover.
+
 ## Deferred
 
 - The coordinator proves the installed helper's system UID, Binder/SELinux admission, Wi-Fi route

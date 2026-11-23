@@ -44,6 +44,8 @@ fn main() -> io::Result<()> {
         }
         let devices = fs::read_to_string(root.join("devices"))?;
         write!(io::stdout(), "List of devices attached\r\n{devices}\r\n")?;
+    } else if args.first().is_some_and(|v| v == "shell") && args.get(1).is_some_and(|v| v == "-T") {
+        wifi(&root, &args[2..])?;
     } else if args.first().is_some_and(|v| v == "shell") {
         let command = args
             .get(1)
@@ -63,6 +65,40 @@ fn main() -> io::Result<()> {
             }
         }
     } else {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn wifi(root: &Path, args: &[std::ffi::OsString]) -> io::Result<()> {
+    let (op, remote) = match args {
+        [no_input, remote] if no_input == "-n" => ("status", remote),
+        [remote] => ("join", remote),
+        _ => return Err(io::Error::other("invalid Wi-Fi shell flags")),
+    };
+    let expected = format!(
+        "if [ ! -e /data/local/echo/bin/current ]; then printf '%s\\n' wifi-unsupported; \
+         exit 1; fi; exec /data/local/echo/bin/current wifi {op}"
+    );
+    assert_eq!(remote, expected.as_str());
+    if let Some(bridge) = std::env::var_os("ECHO_SETUP_TEST_WIFI_BRIDGE") {
+        let status = std::process::Command::new(bridge)
+            .env("ECHO_LAB_WIFI_SOCKET", root.join("wifi.sock"))
+            .args(["wifi", op])
+            .status()?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    let mut input = Vec::new();
+    io::stdin().read_to_end(&mut input)?;
+    if op == "status" {
+        assert!(input.is_empty());
+    } else if root.join("wifi-reflect").is_file() {
+        io::stdout().write_all(&input)?;
+        io::stderr().write_all(&input)?;
+        return Ok(());
+    }
+    io::stdout().write_all(&fs::read(root.join("wifi-output"))?)?;
+    if root.join("wifi-fail").exists() {
         std::process::exit(1);
     }
     Ok(())

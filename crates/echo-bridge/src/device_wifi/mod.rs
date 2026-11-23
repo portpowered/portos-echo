@@ -3,7 +3,10 @@
 mod android;
 #[cfg(not(target_os = "android"))]
 mod fixture;
+mod usb;
 mod wire;
+
+pub use usb::usb_command;
 
 use echo_core_api::{Clock, SystemClock};
 use serde_json::Value;

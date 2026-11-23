@@ -8,6 +8,7 @@ pub mod lifecycle;
 mod release;
 pub mod setup;
 mod version;
+pub mod wifi;
 
 /// Fixed public diagnostics never contain dependency output or caller data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
