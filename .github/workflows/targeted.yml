@@ -31,6 +31,7 @@ permissions:
   contents: read
 jobs:
   focused-call:
+    if: inputs.scenarios != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -113,4 +114,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           target: lint-rules
+      - name: Provision locked screen npm cache
+        run: npm --prefix web/screen ci --offline=false
       - run: make lint
