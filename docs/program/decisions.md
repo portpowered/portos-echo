@@ -1,7 +1,7 @@
 ---
 author: Port OS Team
 owner: Port OS Team
-last modified: 2026, november, 22
+last modified: 2026, november, 23
 status: active; decision log. Newest first within each list
 ---
 
@@ -23,6 +23,7 @@ stay the same.
 
 | Date | Decision | By | Where it applies |
 | --- | --- | --- | --- |
+| 2026-11-23 | **`SessionView` keeps the four boolean fields declared in the session PRD.** The read-only projection derives `closing`, `speaking`, `microphone_finished` and `accepts_reply_audio` from the session reducer's phase and receipts. Use one item-level `#[expect(clippy::struct_excessive_bools)]` on the view. | Coordinator | Binding mailbox answer for `sb-a2-session-subsystem`, option A ([PR #359](https://github.com/portpowered/portos-echo/pull/359)) |
 | 2026-11-22 | **The installer owns the rooted Echo, and `echo-bridge boot` runs as root.** Owner answers to single-binary plan section 9: question 1, root role: "yes it may". `echo-bridge boot` may run as root to own the firewall, Alexa-off, the boot hook and supervision; this amends "no code of ours runs as root" for that role only. Question 2, rooting: "we should ideally take over everything". The fork's setup is used only to root the Echo; our installer takes over everything after that from a bare rooted Echo, and the plan prefers moving more of the remaining fork steps into it over adding a fork stop. Question 4, policy tool: "yes we can for the gpl asset". The installer may download `magiskpolicy` as a separate GPL asset, never linked or vendored. The owner also cleared the A1 T5 install on the Echo. Questions 3, 5, 6, 8 and 9 stay open. | Owner | Single-binary plan sections 4.1, 6 and 9; A2 boot and install lanes |
 | 2026-11-22 | **A1 ratchets direct standard-clock calls.** Clippy bans new `SystemTime::now` and `std::time::Instant::now` calls. The four reads named in single-binary plan section 1.4.8 use `Clock`. The new host clock definition and existing reads outside those four sites have item-level reasons. Later lanes may only reduce the legacy counts. Tokio's pauseable monotonic clock remains available. | Coordinator | [A1 clock baseline](baselines.md#a1-direct-clock-calls-2026-11-22), `clippy.toml` |
 | 2026-11-22 | **The A1 device World keeps Wyoming as its transport service.** The session controller composes the device subsystem. Wyoming publishes observations and applies its view as it accepts wake and capture, and retains socket ownership and wire receipts. The existing service name moves with A2. | Coordinator | [ADR 0036](../adr/0036-a1-world.md), single-binary plan section 2.4 |

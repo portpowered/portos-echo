@@ -29,15 +29,15 @@ async fn session_world_wake_opens_only_a_new_call_and_scopes_its_receipt() {
     assert!(matches!(out.take_effect(), Some(SessionCommand::StartCapture { session: handle }) if handle == session));
     assert!(matches!(out.take_effect(), Some(SessionCommand::OpenCall { session: handle }) if handle == session));
     assert!(out.take_effect().is_none());
-    assert!(!state.world.pacer.session.accepts_reply_audio());
+    assert!(!state.world.pacer.session.view().accepts_reply_audio);
     assert_eq!(state.world.pacer.session.view().next_deadline, None);
 
-    let wrong_generation = world.session_step(&mut state, SessionEvent::CallOpened { session: next });
-    assert_eq!(wrong_generation.outcome, Some(Err(SessionError::Control)));
-    assert!(!state.world.pacer.session.accepts_reply_audio());
+    let stale = world.session_step(&mut state, SessionEvent::CallOpened { session: next });
+    assert_eq!(stale.outcome, Some(Err(SessionError::Control)));
+    assert!(!state.world.pacer.session.view().accepts_reply_audio);
     let opened = world.session_step(&mut state, SessionEvent::CallOpened { session });
     assert_eq!(opened.outcome, Some(Ok(SessionOutcome::Applied)));
-    assert!(state.world.pacer.session.accepts_reply_audio());
+    assert!(state.world.pacer.session.view().accepts_reply_audio);
     assert_eq!(
         state.world.pacer.session.view().next_deadline,
         Some((due, SessionTimer::Response))
@@ -47,7 +47,7 @@ async fn session_world_wake_opens_only_a_new_call_and_scopes_its_receipt() {
     let mut out = world.session_step(&mut state, wake(next, true));
     assert!(matches!(out.take_effect(), Some(SessionCommand::StartCapture { session }) if session == next));
     assert!(out.take_effect().is_none());
-    assert!(state.world.pacer.session.accepts_reply_audio());
+    assert!(state.world.pacer.session.view().accepts_reply_audio);
 }
 
 #[tokio::test(start_paused = true)]
