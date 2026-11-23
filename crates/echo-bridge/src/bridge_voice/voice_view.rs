@@ -108,6 +108,8 @@ impl<'a> View<'a> {
         match notice {
             ServeNotice::Kill(enabled) => self.kill(enabled),
             ServeNotice::Ready => {
+                let trace_witness = self.startup == Startup::Pending
+                    && std::env::var_os("A1_TRACE_TICK_WITNESS").is_some();
                 self.startup = Startup::Ready;
                 self.closed("idle")?;
                 self.relinked()?;
@@ -117,6 +119,9 @@ impl<'a> View<'a> {
                 });
                 self.screen.ready()?;
                 self.trace.record("bridge.ready", None, json!({}))?;
+                if trace_witness {
+                    self.trace.buffer_clock_offset(json!({"synced":false, "reason":"synthetic-tick"}))?;
+                }
                 crate::bridge_runtime::publish("bridge.ready", None)
             }
             ServeNotice::Listening => self.begin(),

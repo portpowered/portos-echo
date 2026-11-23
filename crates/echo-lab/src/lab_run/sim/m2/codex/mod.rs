@@ -98,6 +98,9 @@ impl Case {
             .ok_or("m2: missing bridge")?
             .expect("bridge.ready")
             .await?;
+        if std::env::var_os("A1_TRACE_TICK_WITNESS").is_some() {
+            trace_tick_witness(self.bridge.as_mut().ok_or("m2: missing bridge")?, &self.trace_path).await?;
+        }
         self.trace = read_trace(&self.trace_path)?;
         let address = self
             .trace
@@ -425,4 +428,29 @@ fn connected(clock: &Value) -> bool {
     clock["states"]
         .as_array()
         .is_some_and(|states| states.iter().any(|row| row["state"]["state"] == "connected"))
+}
+
+
+async fn trace_tick_witness(bridge: &mut Process, path: &Path) -> Result<(), String> {
+    let expected = r#"{"elapsed_ms":0,"event":"clock.offset","provider_auth_mode":"api_key","reason":"synthetic-tick","synced":false}"#;
+    advance(bridge, 99).await?;
+    let before = std::fs::read_to_string(path).map_err(|_| "trace tick: prior read failed")?;
+    if before.contains("synthetic-tick") {
+        return Err("trace tick: row visible before the first tick".into());
+    }
+    advance(bridge, 1).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let bytes = std::fs::read_to_string(path).map_err(|_| "trace tick: read failed")?;
+            if bytes == format!("{before}{expected}\n") {
+                use std::io::Write;
+                writeln!(std::io::stderr(), "TRACE_TICK_WITNESS paused_ms=100 exact=1 extra=0")
+                    .map_err(|_| "trace tick: evidence output failed")?;
+                return Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| "trace tick: row did not drain within the first tick".to_owned())?
 }

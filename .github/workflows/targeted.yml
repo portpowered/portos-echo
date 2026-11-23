@@ -29,6 +29,7 @@ on:
         default: false
 permissions:
   contents: read
+  actions: read
 jobs:
   targeted:
     if: ${{ !inputs.release_bundle || inputs.nextest_filter != '' || inputs.scenarios != '' }}
@@ -43,10 +44,18 @@ jobs:
         with:
           target: test-sim
           sim: 'true'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: targeted-reports-45086408167-1
+          path: ${{ runner.temp }}/a1-baseline
+          run-id: 45086408167
+          github-token: ${{ github.token }}
       - name: Execute requested selections
         id: selections
         shell: sh
         env:
+          A1_GOLDEN: ${{ runner.temp }}/a1-baseline/repeat-1
+          A1_TRACE_TICK_WITNESS: "1"
           TARGETED_FILTER: ${{ inputs.nextest_filter }}
           TARGETED_SCENARIOS: ${{ inputs.scenarios }}
           TARGETED_REPEAT: ${{ inputs.repeat }}
@@ -101,6 +110,16 @@ jobs:
               failed = failed or code != 0
           raise SystemExit(1 if failed else 0)
           PY
+      - name: Compare whole trace bytes with cmp
+        env:
+          A1_GOLDEN: ${{ runner.temp }}/a1-baseline/repeat-1
+        run: |
+          cd "$A1_GOLDEN"
+          cmp 0-m2-live-connect/trace-golden.jsonl legacy.jsonl
+          cmp 0-m2-live-connect/trace-golden.jsonl candidate.jsonl
+          wc -cl 0-m2-live-connect/trace-golden.jsonl candidate.jsonl
+          sha256sum 0-m2-live-connect/trace-golden.jsonl legacy.jsonl candidate.jsonl
+          echo "TRACE_GOLDEN_CMP legacy_exit=0 candidate_exit=0"
       - name: Upload echo-lab reports
         if: always() && steps.selections.outputs.report_root != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

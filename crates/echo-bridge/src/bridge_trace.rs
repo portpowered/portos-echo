@@ -377,3 +377,43 @@ mod bridge_spine_tests {
         );
     }
 }
+
+
+#[cfg(test)]
+#[tokio::test(start_paused = true)]
+async fn bridge_trace_m2_golden_witness() {
+    use serde_json::Map;
+    use std::{io::Write, time::Duration};
+
+    let dir = std::path::PathBuf::from(std::env::var_os("A1_GOLDEN").unwrap());
+    let input = std::fs::read_to_string(dir.join("0-m2-live-connect/trace-inputs.jsonl")).unwrap();
+    let mut legacy = std::fs::File::create(dir.join("legacy.jsonl")).unwrap();
+    let mut candidate = Trace::open(&dir.join("candidate.jsonl"), "api_key").unwrap();
+    let mut elapsed = 0;
+    for line in input.lines() {
+        let row: Value = serde_json::from_str(line).unwrap();
+        let at = row["elapsed_ms"].as_u64().unwrap();
+        let event = row["event"].as_str().unwrap();
+        let run = row["run"].as_str();
+        assert_eq!(row["mode"], "api_key");
+        assert!(!delegation_payload::event(event));
+        tokio::time::advance(Duration::from_millis(at - elapsed)).await;
+        elapsed = at;
+
+        // This is the old writer's envelope construction and JSONL emission
+        // with its elapsed read supplied by the pre-change input journal.
+        let mut entry = Map::new();
+        entry.insert("event".into(), event.into());
+        entry.insert("elapsed_ms".into(), at.into());
+        entry.insert("provider_auth_mode".into(), "api_key".into());
+        if let Some(run) = run {
+            entry.insert("run_id".into(), run.into());
+        }
+        entry.extend(row["fields"].as_object().unwrap().clone());
+        legacy.write_all(&serde_json::to_vec(&entry).unwrap()).unwrap();
+        legacy.write_all(b"\n").unwrap();
+        legacy.flush().unwrap();
+        candidate.record(event, run, row["fields"].clone()).unwrap();
+    }
+    candidate.finish().unwrap();
+}
