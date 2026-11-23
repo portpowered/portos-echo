@@ -194,6 +194,7 @@ export const emit = (page, wire) =>
     page.evaluate((data) => window.streams[0].onmessage({ data }), wire);
 export const calls = (page) => page.evaluate(() => window.calls);
 export async function bounds(page, scrollText = false) {
+    const { width, height } = page.viewportSize();
     const contrasts = await page.evaluate(() => {
         function luminance(color) {
             const rgb = color
@@ -261,8 +262,8 @@ export async function bounds(page, scrollText = false) {
             assert.ok(
                 box.x >= 0 &&
                     box.y >= 0 &&
-                    box.x + box.width <= 1280 &&
-                    box.y + box.height <= 800,
+                    box.x + box.width <= width &&
+                    box.y + box.height <= height,
                 JSON.stringify(box),
             );
         assert.ok(box.scroll <= box.client, JSON.stringify(box));
@@ -274,8 +275,8 @@ export async function bounds(page, scrollText = false) {
         assert.ok(
             area.x >= 0 &&
                 area.y >= 0 &&
-                area.x + area.width <= 1280 &&
-                area.y + area.height <= 800,
+                area.x + area.width <= width &&
+                area.y + area.height <= height,
         );
         assert.equal(
             await page
@@ -296,13 +297,13 @@ export async function bounds(page, scrollText = false) {
             );
     assert.equal(
         await page.evaluate(() => document.documentElement.scrollHeight),
-        800,
+        height,
     );
     assert.equal(
         await page.evaluate(() => document.documentElement.scrollWidth),
-        1280,
+        width,
     );
     console.log(
-        `geometry: ${measurements.length} text/control boxes; ${buttons.length} targets >=64px; min contrast ${Math.min(...contrasts).toFixed(2)}:1; viewport 1280x800`,
+        `geometry: ${measurements.length} text/control boxes; ${buttons.length} targets >=64px; min contrast ${Math.min(...contrasts).toFixed(2)}:1; viewport ${width}x${height}`,
     );
 }

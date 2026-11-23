@@ -113,20 +113,25 @@ export function startPage(root: HTMLElement, href: string): () => void {
     }
     function renderLinkCode(
         details: HTMLElement,
-        state: Extract<UiState, { state: "link_code" }>,
+        state: Extract<UiState, { state: "link_code" | "open_ai_signin" }>,
+        onExpired?: () => void,
     ): void {
         const expiry = text("p", "");
-        details.append(
-            text("p", state.user_code),
-            text("p", state.verification_uri),
-            expiry,
-        );
+        const code = text("p", state.user_code);
+        const uri = text("p", state.verification_uri);
+        if (state.state === "open_ai_signin") code.className = "openai-code";
+        details.append(code, uri, expiry);
         function refresh(): void {
             const { label, refreshInMs } = formatExpiry(
                 state.expires_at_unix,
                 "countdown",
             );
             expiry.textContent = label;
+            if (label === "Expired" && onExpired) {
+                code.remove();
+                uri.remove();
+                onExpired();
+            }
             expiryTimer =
                 refreshInMs === undefined
                     ? undefined
@@ -142,6 +147,14 @@ export function startPage(root: HTMLElement, href: string): () => void {
         clearTimeout(expiryTimer);
         expiryTimer = undefined;
         const state = frame.state;
+        const recovery =
+            state.state === "open_ai_relink" ||
+            state.state === "open_ai_signin";
+        const previous = content.dataset.uiState;
+        const leftRecovery =
+            !recovery &&
+            (previous === "open_ai_relink" || previous === "open_ai_signin") &&
+            content.contains(document.activeElement);
         const idle = state.state === "ready" || state.state === "connected";
         const retained = content.querySelectorAll(
             ":scope > [data-pack-persistent]",
@@ -151,8 +164,12 @@ export function startPage(root: HTMLElement, href: string): () => void {
         // A pack's face shows the state itself; only prompts keep a heading.
         const face =
             !!content.querySelector(":scope > .pack-stage") &&
+            !recovery &&
             !["link_code", "approval", "error"].includes(state.state);
-        const heading = text("h1", state.state.replace(/_/g, " "));
+        const heading = text(
+            "h1",
+            recovery ? "ChatGPT sign-in" : state.state.replace(/_/g, " "),
+        );
         if (!idle && !face) content.append(heading);
         const details = document.createElement("div");
         details.className = "details";
@@ -181,6 +198,43 @@ export function startPage(root: HTMLElement, href: string): () => void {
             case "link_code":
                 renderLinkCode(details, state);
                 break;
+            case "open_ai_signin": {
+                if (state.muted) details.append(text("p", "Microphone muted"));
+                const attempt_id = state.attempt_id;
+                controls.append(
+                    button(
+                        "Cancel",
+                        { action: "cancel_open_ai_signin", attempt_id },
+                        frame,
+                    ),
+                    button(
+                        "Get a new code",
+                        { action: "renew_open_ai_signin", attempt_id },
+                        frame,
+                    ),
+                );
+                renderLinkCode(details, state, () =>
+                    controls.replaceChildren(),
+                );
+                break;
+            }
+            case "open_ai_relink": {
+                if (state.muted) details.append(text("p", "Microphone muted"));
+                const status = text("p", state.message);
+                status.setAttribute("aria-live", "polite");
+                details.append(status);
+                if (!state.starting) {
+                    const relink = button(
+                        "Relink",
+                        { action: "relink" },
+                        frame,
+                    );
+                    controls.append(relink);
+                    if (previous === "open_ai_signin" && !content.hidden)
+                        relink.focus();
+                }
+                break;
+            }
             case "approval":
                 details.append(text("p", state.prompt));
                 controls.append(
@@ -225,7 +279,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
                 );
                 break;
         }
-        if (packs?.update(state)) {
+        if (packs?.update(state) && !recovery) {
             stopAnimation?.();
             details.replaceChildren();
             // The face plays the emote; a tap anywhere dismisses it, with no box.
@@ -239,6 +293,14 @@ export function startPage(root: HTMLElement, href: string): () => void {
         } else if (state.state === "emotion" && face) {
             // An emote the pack lacks keeps the native frame animation.
             content.insertBefore(heading, details);
+        }
+        if (recovery && previous !== state.state && !content.hidden) {
+            heading.tabIndex = -1;
+            if (!controls.contains(document.activeElement)) heading.focus();
+        } else if (leftRecovery && !content.hidden) {
+            const target = content.querySelector("button") ?? content;
+            if (target === content) content.tabIndex = -1;
+            target.focus();
         }
     }
     try {
@@ -270,7 +332,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
         href,
         () => settings?.dirty() ?? false,
         () => {
-            chrome.wait();
+            offline();
             stream.restart();
         },
     );
@@ -279,6 +341,13 @@ export function startPage(root: HTMLElement, href: string): () => void {
     });
     function offline(): void {
         chrome.wait();
+        if (presentation.current?.state.state === "open_ai_signin") {
+            presentation.clear();
+            cancelPending?.();
+            clearTimeout(expiryTimer);
+            content.querySelector(".details")?.replaceChildren();
+            content.querySelector(".controls")?.replaceChildren();
+        }
     }
     function visibility(): void {
         build.setLive(chrome.enabled && !document.hidden);
@@ -310,7 +379,7 @@ export function startPage(root: HTMLElement, href: string): () => void {
     };
     stream.onerror = () => {
         if (disposed) return;
-        chrome.wait();
+        offline();
         if (!chrome.enabled) diagnostic.textContent = INTERRUPTED;
     };
     function dispose(): void {

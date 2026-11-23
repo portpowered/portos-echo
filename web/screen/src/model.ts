@@ -1,5 +1,5 @@
 // Generated from schemas/screen/*.json by tools/screen-schema.mjs.
-// Schema SHA-256: b10b018b2b44ed8ec901f6d14985218a6a3d40405f3ef4548e0556b9a8fc43f7
+// Schema SHA-256: afc8e9487999bab981398b502742268198c5ee61168dce448848666e0b38b87d
 export type UiState =
     | { state: "ready"; message: string }
     | { state: "connecting" }
@@ -27,13 +27,29 @@ export type UiState =
           frame_ms: bigint;
           frames: Array<string>;
       }
-    | { state: "error"; message: string; relink: boolean };
+    | { state: "error"; message: string; relink: boolean }
+    | {
+          state: "open_ai_relink";
+          message: string;
+          starting: boolean;
+          muted: boolean;
+      }
+    | {
+          state: "open_ai_signin";
+          attempt_id: string;
+          user_code: string;
+          verification_uri: string;
+          expires_at_unix: bigint;
+          muted: boolean;
+      };
 export type UiAction =
     | { action: "tap"; target: string }
     | { action: "approve"; id: string }
     | { action: "deny"; id: string }
     | { action: "relink" }
-    | { action: "dismiss" };
+    | { action: "dismiss" }
+    | { action: "cancel_open_ai_signin"; attempt_id: string }
+    | { action: "renew_open_ai_signin"; attempt_id: string };
 export type ScreenFrame = { seq: bigint; state: UiState };
 export type MouthBatch = { sent_ms: bigint; samples: Array<MouthSample> };
 export type MouthSample = { at_ms: bigint; open: number; vowel: MouthVowel };
@@ -85,6 +101,24 @@ export const models = {
                     relink: { type: "boolean" },
                 },
             },
+            {
+                fields: {
+                    state: { literal: "open_ai_relink" },
+                    message: { type: "string" },
+                    starting: { type: "boolean" },
+                    muted: { type: "boolean" },
+                },
+            },
+            {
+                fields: {
+                    state: { literal: "open_ai_signin" },
+                    attempt_id: { type: "string" },
+                    user_code: { type: "string" },
+                    verification_uri: { type: "string" },
+                    expires_at_unix: { type: "u64" },
+                    muted: { type: "boolean" },
+                },
+            },
         ],
     },
     UiAction: {
@@ -104,6 +138,18 @@ export const models = {
             { fields: { action: { literal: "deny" }, id: { type: "string" } } },
             { fields: { action: { literal: "relink" } } },
             { fields: { action: { literal: "dismiss" } } },
+            {
+                fields: {
+                    action: { literal: "cancel_open_ai_signin" },
+                    attempt_id: { type: "string" },
+                },
+            },
+            {
+                fields: {
+                    action: { literal: "renew_open_ai_signin" },
+                    attempt_id: { type: "string" },
+                },
+            },
         ],
     },
     ScreenFrame: {

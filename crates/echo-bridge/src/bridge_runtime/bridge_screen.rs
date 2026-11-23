@@ -1,10 +1,11 @@
 //! The bridge owns screen lifetime and publishes bounded activity updates.
 use crate::bridge_mcp::bridge_presentation::Presentation;
 use crate::bridge_runtime::bridge_pacing::reply_lips::Lips;
+use crate::bridge_settings::openai_account::Account;
 use crate::{Error, bridge_input::loopback, bridge_trace::Trace};
 use echo_config::ScreenConfig;
 use echo_contracts::secret::Secret;
-use echo_screen_contract::UiState;
+use echo_screen_contract::{UiAction, UiState};
 use echo_screen_server::ScreenServer;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -214,7 +215,11 @@ impl Screen {
         ))
     }
 
-    pub fn supervise_actions(&mut self, health: tokio::sync::watch::Receiver<crate::bridge_health::Links>) {
+    pub fn supervise_actions(
+        &mut self,
+        health: tokio::sync::watch::Receiver<crate::bridge_health::Links>,
+        account: Option<Account>,
+    ) {
         let Some(server) = &mut self.server else {
             return;
         };
@@ -257,22 +262,13 @@ impl Screen {
                         }
                     } => continue,
                 };
-                if !mute.lock().map_or(true, |mute| mute.muted) && approvals.answer(&action).is_err() {
+                let muted = mute.lock().map_or(true, |mute| mute.muted);
+                if !muted && approvals.answer(&action).is_err() {
                     break;
                 }
-                if action == echo_screen_contract::UiAction::Relink {
-                    // This is an instruction, never an implicit sign-in request.
-                    if mute.lock().map_or(true, |mute| mute.muted) {
-                        continue;
-                    }
-                    let result = if health.borrow().relink_required {
-                        presentation.publish(failure_state(true))
-                    } else {
-                        presentation.refresh()
-                    };
-                    if result.is_err() {
-                        break;
-                    }
+                let relink_required = health.borrow().relink_required;
+                if recovery_action(&action, account.as_ref(), &presentation, muted, relink_required).is_err() {
+                    break;
                 }
             }
         }));
@@ -315,6 +311,30 @@ impl Drop for Screen {
         if let Some(task) = &self.actions {
             task.abort();
         }
+    }
+}
+
+fn recovery_action(
+    action: &UiAction,
+    account: Option<&Account>,
+    presentation: &Presentation,
+    muted: bool,
+    relink_required: bool,
+) -> Result<(), Error> {
+    match (action, account) {
+        (UiAction::CancelOpenAiSignin { attempt_id }, Some(account)) => {
+            account.stop_recovery(attempt_id, false);
+            Ok(())
+        }
+        (UiAction::RenewOpenAiSignin { attempt_id }, Some(account)) => {
+            account.stop_recovery(attempt_id, true);
+            Ok(())
+        }
+        (UiAction::Relink, Some(account)) if account.relink_start() => Ok(()),
+        (UiAction::Relink, None) if muted => Ok(()),
+        (UiAction::Relink, None) if relink_required => presentation.publish(failure_state(true)),
+        (UiAction::Relink, _) => presentation.refresh(),
+        _ => Ok(()),
     }
 }
 

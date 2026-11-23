@@ -112,7 +112,7 @@ impl<'a> SettingsLink<'a> {
         };
         let runtime = self
             .retained
-            .get_or_try_init(|| view.open_portos(config, options.mcp_epoch))
+            .get_or_try_init(|| view.open_portos(config, options.mcp_epoch, self.account.clone()))
             .await?;
         let grant = runtime.as_ref().map(|runtime| runtime.grant.clone());
         self.health.set_mcp(grant.clone())?;
@@ -158,19 +158,14 @@ impl<'a> SettingsLink<'a> {
 /// publish Connected; played settlement precedes Ready. All device/call/process
 /// cleanup finishes while presentation remains owned.
 ///
-/// Configured delegation discovers MCP tools after authentication and retains
-/// policy, consent and the effect ledger across calls. The service monitors
-/// the nominated kill file; the caller supplies a peer factory.
+/// Configured delegation retains policy, consent and the effect ledger across calls.
 ///
 /// After first readiness no failure ends this owner: a failed generation is
 /// traced, shown on health and screen, and replaced after bounded backoff while
 /// the device link is kept (see `voice_recovery`).
 ///
 /// # Errors
-/// A stop that was not requested, the kill path, and configuration or
-/// credentials that are unusable before first readiness, in fixed categories.
-/// A startup authorization failure publishes the existing relink instruction
-/// and keeps the screen available until cancellation; no implicit login occurs.
+/// Fixed startup, credential and control failures.
 pub async fn execute<C: LinkConnector, P: MediaPeer>(
     options: RuntimeOptions<'_>,
     connector: C,
@@ -239,8 +234,13 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
             return Err(error);
         }
     };
-    screen.supervise_actions(health.state.subscribe());
-    let settings_trace = trace.clone();
+    let account = service
+        .as_ref()
+        .map(|_| Account::new(options.host.mode, screen.presentation.clone(), trace.clone()));
+    let recovery = account.clone().filter(|_| options.host.mode == LiveMode::Chatgpt);
+    screen.supervise_actions(health.state.subscribe(), recovery.clone());
+    let local = options.host.routes.is_some();
+    let service = service.map(|host| host.with_local_muse(local).with_trace(trace.clone()));
     let world = trace.world();
     if let Some(config) = options.delegation {
         world.configure_session(echo_core_api::SessionKnobs {
@@ -248,11 +248,8 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
             local_cut: config.voice.local_barge_cut,
         })?;
     }
-    let mut view = View::new(&screen, &health, &mut trace)
-        .with_screen_account(service.is_some() && options.host.mode == LiveMode::Chatgpt);
+    let mut view = View::new(&screen, &health, &mut trace).with_screen_account(recovery);
     let requested = Cell::new(false);
-    let account = service.as_ref().map(|_| Account::new(options.host.mode));
-    let local_muse = options.host.routes.is_some();
     let mut link = SettingsLink::new(
         options.delegation,
         &health,
@@ -269,8 +266,6 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
     let (result, settings) = if let Some((service, account)) = service.zip(account) {
         let (result, completion) = Box::pin(
             service
-                .with_local_muse(local_muse)
-                .with_trace(settings_trace)
                 .with_account(account)
                 .with_screen_camera(&screen)
                 .scope_with_grant(work, || link.status(), || link.health.mcp_grant()),
@@ -417,7 +412,10 @@ impl<C: LinkConnector, P: MediaPeer, F: AsyncFnMut() -> Result<P, Error>> Stage<
         let mut host = options.host.clone();
         host.deadline = Instant::now() + self.budget;
         let mut voice = options.voice.clone();
-        voice.session.muted = link.muted().unwrap_or(voice.session.muted);
+        let recovering = grant.health.state.borrow().relink_required && grant.account.is_some();
+        voice.session.muted = link
+            .muted()
+            .unwrap_or_else(|| voice.session.muted || (recovering && view.screen.muted().unwrap_or(true)));
         let result = with_capture(
             host,
             link,

@@ -251,7 +251,7 @@ impl Tools {
         epoch: Option<u64>,
     ) -> Result<(), Error> {
         if self.shared_grant.is_none() {
-            self.runtime = open_portos(config, screen, trace, epoch).await?;
+            self.runtime = open_portos(config, screen, trace, epoch, None).await?;
         }
         let client = config
             .mcp
@@ -361,11 +361,14 @@ pub(super) async fn open_portos(
     screen: &Screen,
     trace: &mut Trace,
     epoch: Option<u64>,
+    account: Option<crate::bridge_settings::openai_account::Account>,
 ) -> Result<Option<bridge_mcp::Runtime>, Error> {
     let Some(settings) = bridge_mcp::Settings::configured(config)? else {
         return Ok(None);
     };
-    let mut runtime = bridge_mcp::Runtime::open(settings, screen.presentation.clone(), trace.clone(), epoch).await?;
+    let mut runtime =
+        bridge_mcp::Runtime::open_with_account(settings, screen.presentation.clone(), trace.clone(), epoch, account)
+            .await?;
     if let Err(error) = trace.record(
         "mcp.operator.listening",
         None,

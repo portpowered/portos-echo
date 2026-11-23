@@ -6,14 +6,20 @@ import {
     decodeAction,
     encode,
 } from "../dist/lib/decoder.js";
-import { states, actionWires, frame } from "./fixtures.mjs";
+import {
+    states,
+    actionWires,
+    recoveryStates,
+    recoveryActions,
+    frame,
+} from "./fixtures.mjs";
 
 test("all published Rust fixture states, frames and actions round trip exact bytes", () => {
-    for (const wire of states) {
+    for (const wire of [...states, ...recoveryStates]) {
         assert.equal(encode(decodeState(wire)), wire);
         assert.equal(encode(decodeFrame(frame(7, wire))), frame(7, wire));
     }
-    for (const wire of actionWires)
+    for (const wire of [...actionWires, ...recoveryActions])
         assert.equal(encode(decodeAction(wire)), wire);
     assert.equal(
         encode(decodeAction('{"action":"dismiss","metadata":42}')),

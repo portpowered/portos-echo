@@ -69,6 +69,7 @@ pub(super) trait Stage<C: LinkConnector> {
 pub(super) fn terminal(error: &Error, ever_ready: bool, stopped: bool) -> bool {
     use echo_mcp_auth::AuthError;
     stopped
+        || (*error == Error::Authorization && crate::bridge_settings::openai_account::owns_relink())
         || (!ever_ready
             && matches!(
                 error,

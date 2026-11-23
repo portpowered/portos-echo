@@ -204,6 +204,66 @@
         "message",
         "relink"
       ]
+    },
+    {
+      "description": "Sign-in is available or preparing a challenge.",
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "starting": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "const": "open_ai_relink"
+        }
+      },
+      "required": [
+        "state",
+        "message",
+        "starting",
+        "muted"
+      ]
+    },
+    {
+      "description": "The current device-code challenge.",
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "type": "string"
+        },
+        "expires_at_unix": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "const": "open_ai_signin"
+        },
+        "user_code": {
+          "type": "string"
+        },
+        "verification_uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "attempt_id",
+        "user_code",
+        "verification_uri",
+        "expires_at_unix",
+        "muted"
+      ]
     }
   ]
 }

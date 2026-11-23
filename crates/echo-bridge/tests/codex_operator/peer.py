@@ -21,6 +21,11 @@ home.joinpath("routing.json").write_text(json.dumps({
     "config": overrides, "proxy": {key: os.environ[key] for key in routing_keys if key in os.environ}}))
 assert "OPENAI_API_KEY" not in os.environ
 assert "OPENAI_ACCESS_TOKEN" not in os.environ
+screen_recovery = home.joinpath("screen-recovery").is_file()
+if screen_recovery and home.joinpath("peer-pid").exists():
+    # Linux leaves an exited but unreaped process in /proc.
+    previous = int(home.joinpath("peer-pid").read_text())
+    assert not pathlib.Path(f"/proc/{previous}").exists()
 control = socket.socket()
 control.bind(("127.0.0.1", 0))
 control.listen(1)
@@ -141,7 +146,13 @@ for line in sys.stdin:
         assert kind in ("chatgptDeviceCode", "chatgpt")
         result = {"type": kind, "loginId": "local-login"}
         if kind == "chatgptDeviceCode":
-            result.update(verificationUrl="http://127.0.0.1:12345/verify", userCode="TEST-CODE")
+            uri = "https://example.invalid/verify" if screen_recovery else "http://127.0.0.1:12345/verify"
+            code = "TEST-CODE"
+            if screen_recovery and home.joinpath("login-type").exists():
+                uri, code = "https://example.invalid/renew", "NEXT-CODE"
+            result.update(verificationUrl=uri, userCode=code)
+        if screen_recovery:
+            home.joinpath("login-type").write_text(kind)
         else:
             result.update(authUrl="http://127.0.0.1:12345/authorize")
         emit({"id": request["id"], "result": result})
@@ -152,8 +163,8 @@ for line in sys.stdin:
             outcome = connection.recv(64)
         if outcome == b"eof":
             break
-        success = outcome == b"success"
-        if success:
+        success = outcome in (b"success", b"success-no-account")
+        if outcome == b"success":
             home.joinpath("auth.json").write_bytes(b'{"synthetic":"local-only"}\n')
         emit({"method": "account/login/completed", "params": {
             "loginId": "local-login", "success": success, "error": "synthetic private error"}})

@@ -115,11 +115,23 @@ same bridge assembly, using the existing screen contract.
 
 Configured call-creation and model-credential acquisition failures keep both listeners alive, set
 `live=error` and `relink_required=true`, and emit `auth.relink_required` with a
-fixed reason. Later wakes emit `run.refused` without another credential or Live
-request. Explicit sign-in followed by restart clears this in-process latch; a
-file change alone does not. The paired screen displays the operator sign-in and
-restart instruction. Its Relink action repeats that instruction without starting
-authentication. Call-creation outages display a non-relink error and permit the
+fixed reason. With the Settings account owner mounted, selecting Relink on the
+paired screen requests ChatGPT device-code sign-in. The screen shows the
+verification URL, code and expiry while keeping the microphone mute cue visible.
+Cancel clears the challenge, and Get a new code clears it before queuing a
+replacement. Both actions apply only to the displayed attempt. Expiry clears
+the challenge and returns the screen to Relink with a short reason.
+The bridge reaps the voice child before starting the sign-in child against the
+same private home. After matching completion it reaps that child, re-reads the
+account in a new voice child, and clears relink when the bridge becomes ready.
+The bridge process and paired listener stay up throughout.
+When configured, the existing loopback operator endpoint accepts explicit
+start and status requests for the same account operation. See
+[operator sign-in recovery](../architecture.md#operator-sign-in-recovery) for
+the requests. Health reports the relink flag. The trace reports start,
+completion, expiry and categorized failure with no challenge values.
+The standalone sign-in command remains available for maintenance.
+Call-creation outages display a non-relink error and permit the
 next wake to try again. The synthetic lab route retains its fatal-error protocol.
 Active producer failures cut playback while its receiver remains alive and wait
 for the satellite's Played acknowledgment before publishing the safe error.

@@ -1170,8 +1170,43 @@ app-server configuration and screen page.
 
 #### Limits and plans — Authentication
 
-Auth failure requires relink, not automatic interactive sign-in. W4 moves private stores to the Echo's
-bridge user; screen-app exclusion still needs device proof. No real credential is used to validate this page.
+When the Settings account owner is mounted, an explicit Relink on the paired
+screen requests sign-in and shows the active device-code challenge. The bridge
+settles each app-server child before another opens the same private home.
+Matching completion is followed by an account read and normal voice admission
+in the same bridge process. The ready signal clears the relink latch.
+W4 moves private stores to the Echo's bridge user.
+The coordinator owns device proof of screen-app exclusion.
+
+##### Operator sign-in recovery
+
+On installations with the Port OS operator listener configured, use its
+existing IPv4 loopback address and screen pairing bearer. The listener rejects
+requests carrying an `Origin` header. To start a ChatGPT sign-in while
+`relink_required` is set, run the following with the configured port and
+`[screen] pairing_token_file` path:
+
+```sh
+printf 'Authorization: Bearer %s\n' "$(cat "$pairing_file")" |
+  curl --silent --show-error --header @- --header 'Content-Type: application/json' \
+    --data '{"operation":"openai_signin_start"}' "http://127.0.0.1:$operator_port/operator/mcp"
+```
+
+A start returns HTTP 202 with `{"outcome":"accepted"}`. Repeat the request with
+`openai_signin_status` for HTTP 200 and the current state. While `pending`, the
+response includes the same `verification_uri`, `user_code` and
+`expires_at_unix` as the paired screen. Share the URL and code privately with
+the owner before expiry. OpenAI responses use `Cache-Control: no-store`.
+The other status values are `relink_required`, `starting`, `checking`,
+`ready` and `unavailable`. A start outside ChatGPT recovery or while its
+account slot is occupied returns HTTP 409.
+
+The paired screen can cancel or renew the current attempt while muted.
+Completion, cancellation and expiry remove the challenge from both surfaces.
+Health retains the recovery flag until voice admission. Trace events
+`auth.signin_started`, `auth.signin_completed`, `auth.signin_expired` and
+`auth.signin_failed` carry fixed categories where applicable. Challenge values
+are limited to the authorized presentation surfaces.
 
 ### Screen and mouth state
 

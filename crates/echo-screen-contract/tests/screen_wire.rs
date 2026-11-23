@@ -2,6 +2,9 @@
 use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use serde::{Serialize, de::DeserializeOwned};
 use std::io::Write as _;
+
+#[path = "screen_wire/openai.rs"]
+mod openai;
 use std::{error::Error, fmt::Debug};
 
 fn round_trip<T>(value: &T, wire: &str) -> Result<(), Box<dyn Error>>
