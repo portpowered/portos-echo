@@ -2,6 +2,8 @@
 mod packs;
 mod screen_settings;
 mod support;
+#[path = "screen_settings/wifi.rs"]
+mod wifi;
 use echo_screen_contract::{ScreenFrame, UiAction, UiState};
 use support::{Result, TOKEN, events, frame, page_build, post, report, request, server};
 use tokio::{io::AsyncReadExt, net::TcpListener};

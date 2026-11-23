@@ -1,0 +1,18 @@
+id: a2-wifi-settings
+milestone: A2
+tiers: [T3]
+setup: {}
+steps:
+  - expect_screen: {state: ready}
+  - press: wifi-reject
+  - press: wifi-lose
+  - press: wifi-join
+  - expect_screen: {state: ready}
+  - say: ../fixtures/lab/w1-utterance.pcm
+  - expect_trace:
+      - wyoming.run_started
+      - reply.played
+      - bridge.run_completed
+  - press: wifi-forget
+budgets: {}
+negative: []

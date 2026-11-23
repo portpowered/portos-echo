@@ -15,6 +15,7 @@ fn main() -> ExitCode {
         Some("boot") => return boot::dispatch(args.skip(1)),
         #[cfg(any(target_os = "android", target_os = "linux"))]
         Some("__boot-launch") if cfg!(target_os = "android") => return boot::launch(args.skip(1)),
+        Some("wifi") => return ExitCode::from(echo_bridge::device_wifi::usb_command(args.skip(1))),
         Some("notices") => {
             if args.nth(1).is_some() {
                 return input_error(&Error::Input);
@@ -30,7 +31,7 @@ fn main() -> ExitCode {
 }
 
 fn device(args: impl IntoIterator<Item = OsString>) -> ExitCode {
-    match echo_device::run(args) {
+    match echo_device::run_with_wifi(args, echo_bridge::device_wifi::HANDLER) {
         Ok(never) => match never {},
         Err(error) => {
             let _ = writeln!(std::io::stderr(), "echo-bridge device: {error}");

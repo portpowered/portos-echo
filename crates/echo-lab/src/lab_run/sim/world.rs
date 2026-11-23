@@ -35,6 +35,8 @@ pub struct World {
     pub address: Option<std::net::SocketAddr>,
     pub run: Option<String>,
     pub endpoints: Vec<std::net::SocketAddr>,
+    pub(super) wifi: Option<super::production::wifi::Device>,
+    pub(super) wifi_password_matches: Option<usize>,
 }
 
 impl World {
@@ -63,7 +65,8 @@ impl World {
         live: impl std::future::Future<Output = Result<FakeLive, echo_live::call::CallError>>,
     ) -> Result<(), String> {
         if super::production::selected(bridge) {
-            self.canonical = Some(super::m2::codex::provider::Provider::start_m1(python).await?);
+            let path = self.wifi.as_ref().map(super::production::wifi::Device::fixture);
+            self.canonical = Some(super::m2::codex::provider::Provider::start_m1(python, path.as_deref()).await?);
         }
         self.start_owned(&mut process::host(python), bridge, root, live, process::connect)
             .await
@@ -77,7 +80,10 @@ impl World {
         live: impl std::future::Future<Output = Result<FakeLive, echo_live::call::CallError>>,
         probe: impl FnMut(std::net::SocketAddr) -> F,
     ) -> Result<(), String> {
-        self.trace_path = root.join("bridge.private.jsonl");
+        self.trace_path = self.wifi.as_ref().map_or_else(
+            || root.join("bridge.private.jsonl"),
+            super::production::wifi::Device::trace,
+        );
         self.ui_path = root.join("ui.private.json");
         let deadline = process::readiness_deadline();
         self.host = Some(Process::start(host_command)?);
@@ -118,6 +124,10 @@ impl World {
         self.generation += 1;
         self.address = Some(address);
         let mut command = Command::new(bridge);
+        command.env_remove("ECHO_LAB_WIFI_SOCKET");
+        if let Some(wifi) = &self.wifi {
+            command.env("ECHO_LAB_WIFI_SOCKET", wifi.socket());
+        }
         command
             .env("ECHO_LAB_WYOMING_ADDR", address.to_string())
             .env(
@@ -132,19 +142,27 @@ impl World {
             .env("ECHO_LAB_UI_STATE_PATH", &self.ui_path);
         if super::production::selected(bridge) {
             self.private = Some(super::m2::codex::config::Root::new()?);
+            let private = &self.private.as_ref().ok_or("m1: missing private root")?.0;
+            let trace_root = self.trace_path.parent().unwrap_or(root);
             super::production::configure_codex(
                 &mut command,
-                &self.private.as_ref().ok_or("m1: missing private root")?.0,
-                root,
+                private,
+                trace_root,
                 address,
                 &self.canonical.as_ref().ok_or("m1: missing provider")?.origin,
                 self.spoof.as_ref().ok_or("launch: missing spoof")?.url(),
             )?;
+            if self.wifi.is_some() {
+                super::production::wifi::configure_settings(private)?;
+            }
             if let Some((case, auth)) = &self.m2 {
                 super::m2::auth::configure(&mut command, root, case, auth)?;
             }
         }
-        self.bridge = Some(Process::start_bridge(&mut command, false)?);
+        self.bridge = Some(match &self.wifi {
+            Some(wifi) => Process::start_bridge_with_log(&mut command, wifi.bridge_log()?)?,
+            None => Process::start_bridge(&mut command, false)?,
+        });
         self.bridge
             .as_mut()
             .ok_or("launch: missing bridge")?
@@ -309,12 +327,7 @@ impl World {
     pub async fn close(&mut self) -> Result<(), String> {
         self.screen.take();
         let mut failures = self.close_bridge().await;
-        if let Some(provider) = self.canonical.take() {
-            match provider.close().await {
-                Ok(snapshot) if super::production::valid_provider(&snapshot, &self.trace, &self.history) => {}
-                _ => failures.push("cleanup: canonical M1 provider observations disagree".into()),
-            }
-        }
+        failures.extend(self.close_provider().await.err());
         self.private.take();
         if let Some(live) = self.live.take() {
             live.shutdown().await;
@@ -329,6 +342,7 @@ impl World {
         {
             failures.push("cleanup: host failed to close".into());
         }
+        failures.extend(self.close_wifi().await.err());
         if self.remove_private().await.is_err() {
             failures.push("cleanup: cannot remove private observation".into());
         }
@@ -337,6 +351,34 @@ impl World {
         } else {
             Err(failures.join("; "))
         }
+    }
+
+    async fn close_provider(&mut self) -> Result<(), String> {
+        let Some(provider) = self.canonical.take() else {
+            return Ok(());
+        };
+        match provider.close().await {
+            Ok(snapshot) if self.valid_provider(&snapshot) => Ok(()),
+            _ => Err("cleanup: canonical M1 provider observations disagree".into()),
+        }
+    }
+
+    async fn close_wifi(&mut self) -> Result<(), String> {
+        if let Some(wifi) = self.wifi.take() {
+            self.wifi_password_matches = Some(wifi.close().await?);
+        }
+        Ok(())
+    }
+
+    fn valid_provider(&self, snapshot: &Value) -> bool {
+        if self.wifi.is_some() {
+            return *snapshot
+                == json!({
+                    "event":"provider.snapshot", "calls":1, "matching_calls":1,
+                    "sidebands":1, "external":0, "refreshes":0, "wifi_refused":1
+                });
+        }
+        super::production::valid_provider(snapshot, &self.trace, &self.history)
     }
 
     pub(super) async fn close_bridge(&mut self) -> Vec<String> {
@@ -364,7 +406,7 @@ impl World {
 
     pub(super) async fn remove_private(&self) -> Result<(), String> {
         let mut failed = false;
-        let private = self.trace_path.parent().map(|root| root.join("configured.private"));
+        let private = self.ui_path.parent().map(|root| root.join("configured.private"));
         if let Some(private) = private.filter(|path| path.is_dir()) {
             failed |= tokio::fs::remove_dir_all(private).await.is_err();
         }

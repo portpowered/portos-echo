@@ -22,6 +22,25 @@ pub fn link(vendor: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+pub fn wifi_dex(manifest: &Path, out: &Path) -> Result<(), Box<dyn Error>> {
+    let build = manifest.join("build/wifi");
+    for name in ["EchoWifi.java", "dex.py"] {
+        writeln!(
+            std::io::stdout(),
+            "cargo:rerun-if-changed={}",
+            build.join(name).display()
+        )?;
+    }
+    for name in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        writeln!(std::io::stdout(), "cargo:rerun-if-env-changed={name}")?;
+    }
+    let status = Command::new("python3").arg(build.join("dex.py")).arg(out).status()?;
+    if !status.success() {
+        return Err("could not build Android Wi-Fi helper".into());
+    }
+    Ok(())
+}
+
 fn compiler() -> Result<PathBuf, Box<dyn Error>> {
     for key in ["ANDROID_NDK_HOME", "ANDROID_NDK_LATEST_HOME"] {
         writeln!(std::io::stdout(), "cargo:rerun-if-env-changed={key}")?;

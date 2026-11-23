@@ -7,9 +7,14 @@ async fn main() {
 }
 
 async fn run() -> i32 {
-    let Ok(options) = cli::Options::parse(std::env::args_os().skip(1)) else {
-        let _ = writeln!(io::stderr(), "echo-setup: invalid usage; see --help");
-        return 2;
+    let mut args = std::env::args_os().skip(1).peekable();
+    if args.peek().is_some_and(|arg| arg == "wifi") {
+        return echo_setup::wifi::run(args.skip(1))
+            .await
+            .unwrap_or_else(|_| invalid_usage());
+    }
+    let Ok(options) = cli::Options::parse(args) else {
+        return invalid_usage();
     };
     if options.command == "--help" {
         let _ = write!(io::stdout(), "{}", cli::HELP);
@@ -48,6 +53,11 @@ async fn run() -> i32 {
     };
     render(&options, &event);
     exit_code(&event)
+}
+
+fn invalid_usage() -> i32 {
+    let _ = writeln!(io::stderr(), "echo-setup: invalid usage; see --help");
+    2
 }
 
 fn exit_code(event: &serde_json::Value) -> i32 {

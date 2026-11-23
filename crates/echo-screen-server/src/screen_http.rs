@@ -30,6 +30,7 @@ pub(super) struct HttpState {
     pub(crate) build: Arc<str>,
     pub(crate) settings: Option<mpsc::Sender<SettingsRequest>>,
     pub(crate) camera: Option<crate::Camera>,
+    pub(crate) wifi: Option<crate::WifiRelay>,
 }
 
 pub(crate) fn router(state: HttpState) -> Router {
@@ -41,6 +42,7 @@ pub(crate) fn router(state: HttpState) -> Router {
         .route("/screen.js", get(screen_assets::js))
         .route("/events", get(events))
         .route("/actions", post(actions_post))
+        .route("/_screen/wifi", post(crate::screen_wifi::post))
         .route("/camera/v1/events", get(crate::camera::http::events))
         .route("/camera/v1/results/{id}", post(crate::camera::http::result))
         .route("/settings/v1", get(settings_http::snapshot).post(settings_http::save))
@@ -87,7 +89,7 @@ pub(crate) fn authorized(core: &Core, uri: &Uri) -> bool {
 }
 
 async fn index(State(state): State<HttpState>) -> Response {
-    screen_assets::index_with_settings(state.settings.is_some(), &state.build)
+    screen_assets::index_with_settings(state.settings.is_some(), state.wifi.is_some(), &state.build)
 }
 
 impl HttpState {
@@ -208,6 +210,7 @@ mod tests {
             origin: "http://127.0.0.1:1".into(),
             build: "synthetic".into(),
             settings: None,
+            wifi: None,
             packs: Arc::default(),
             camera: None,
         };
@@ -269,6 +272,7 @@ mod tests {
             settings: None,
             packs: Arc::default(),
             camera: None,
+            wifi: None,
         };
         let request = Request::builder()
             .uri("/events?token=synthetic-screen-pair")
@@ -307,6 +311,7 @@ mod tests {
                 settings: None,
                 packs: Arc::default(),
                 camera: None,
+                wifi: None,
             };
             let request = Request::builder()
                 .uri("/events?token=synthetic-screen-pair")

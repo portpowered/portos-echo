@@ -100,6 +100,7 @@ Add each new tracked documentation page to this index in the same change.
 - [A2 live call subsystem](adr/0037-a2-live-call.md)
 - [A2 audio allocation boundaries](adr/0038-a2-audio-allocation.md)
 - [A2 boot supervision](adr/0039-a2-boot-supervision.md)
+- [A2 Wi-Fi device socket](adr/0040-a2-wifi-device-socket.md)
 - [Maintained WebView screen client](adr/0023-echo-screen.md)
 - [Bridge audio orchestration](adr/0024-echo-bridge.md)
 

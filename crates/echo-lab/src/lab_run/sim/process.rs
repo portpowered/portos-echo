@@ -35,17 +35,17 @@ impl Process {
     }
 
     pub fn start(command: &mut Command) -> Result<Self, String> {
-        Self::launch(command, false)
+        Self::launch(command, Stdio::null())
     }
     pub(super) fn start_observed(command: &mut Command) -> Result<Self, String> {
-        Self::launch(command, true)
+        Self::launch(command, Stdio::piped())
     }
 
-    fn launch(command: &mut Command, observed: bool) -> Result<Self, String> {
+    fn launch(command: &mut Command, stderr: Stdio) -> Result<Self, String> {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(if observed { Stdio::piped() } else { Stdio::null() })
+            .stderr(stderr)
             .spawn()
             .map_err(|_| "launch: cannot spawn owned process")?;
         let input = child.stdin.take();

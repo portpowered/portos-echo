@@ -21,7 +21,19 @@ const INVALID: &str = "proof.availability: expected one valid result per bridge 
 impl super::Process {
     pub(in crate::lab_run::sim) fn start_bridge(command: &mut Command, observed: bool) -> Result<Self, String> {
         attach(command)?;
-        Self::launch(command, observed)
+        if observed {
+            Self::start_observed(command)
+        } else {
+            Self::start(command)
+        }
+    }
+
+    pub(in crate::lab_run::sim) fn start_bridge_with_log(
+        command: &mut Command,
+        log: std::fs::File,
+    ) -> Result<Self, String> {
+        attach(command)?;
+        Self::launch(command, log.into())
     }
 }
 

@@ -29,7 +29,7 @@ async fn t3_m2_codex_provider_closes_before_a_call_without_waiting_for_an_offer(
 #[tokio::test]
 async fn t3_m1_repeated_provider_quiesces_and_closes_without_an_admitted_call() {
     let python = "python3";
-    let owner = provider::Provider::start_m1(python).await.unwrap();
+    let owner = provider::Provider::start_m1(python, None).await.unwrap();
     tokio::time::timeout(DEADLINE, owner.quiesce()).await.unwrap().unwrap();
     let observed = tokio::time::timeout(DEADLINE, owner.close()).await.unwrap().unwrap();
     assert_eq!(
@@ -51,7 +51,7 @@ async fn continuous_capture() {
     let output = tempfile::tempdir().unwrap();
     let (listener, listener_lifetime) = super::lifecycle::observed_listener().await;
     let address = listener.local_addr().unwrap();
-    let provider = provider::Provider::start_m1(&options.python).await.unwrap();
+    let provider = provider::Provider::start_m1(&options.python, None).await.unwrap();
     let mut command = continuous_command(
         options.bridge.as_ref().unwrap(),
         &root.0,

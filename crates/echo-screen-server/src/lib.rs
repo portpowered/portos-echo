@@ -8,6 +8,7 @@ mod screen_listener;
 mod screen_mouth;
 mod screen_settings;
 mod screen_url;
+mod screen_wifi;
 
 pub use camera::{Camera, CaptureError, Link as CameraLink, Refused as CameraRefused, Sample as CameraSample};
 pub use packs::PackSettings;
@@ -15,6 +16,7 @@ pub use packs::view::{DEFAULT as DEFAULT_PACK, PackCatalog};
 pub use screen_mouth::MouthSender;
 pub use screen_settings::{PromptKind, SettingsOperation, SettingsReply, SettingsRequest, settings_channel};
 pub use screen_url::page_url;
+pub use screen_wifi::WifiRelay;
 
 use echo_contracts::secret::Secret;
 use echo_screen_contract::{UiAction, UiState};
@@ -225,6 +227,21 @@ pub async fn serve_with_camera(
     settings: Option<mpsc::Sender<SettingsRequest>>,
     enable_camera: bool,
 ) -> Result<ScreenServer, ScreenServerError> {
+    serve_with_wifi(bind, pairing_token, states, settings, enable_camera, None).await
+}
+
+/// Start the screen with a private same-origin Wi-Fi relay when configured.
+///
+/// # Errors
+/// Returns the same fixed input/bind diagnostics as `serve`.
+pub async fn serve_with_wifi(
+    bind: SocketAddr,
+    pairing_token: Secret<String>,
+    states: mpsc::Receiver<UiState>,
+    settings: Option<mpsc::Sender<SettingsRequest>>,
+    enable_camera: bool,
+    wifi: Option<WifiRelay>,
+) -> Result<ScreenServer, ScreenServerError> {
     if !bind.ip().is_loopback() {
         return Err(ScreenServerError::InvalidBind);
     }
@@ -253,6 +270,7 @@ pub async fn serve_with_camera(
         settings,
         packs: pack_files.clone(),
         camera: camera.clone(),
+        wifi,
     });
     let listener_task = tokio::spawn(screen_listener::run(listener, app, stop_rx, drain_rx));
     let (publication_requests, requests) = mpsc::channel(32);

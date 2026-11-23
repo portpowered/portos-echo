@@ -2,6 +2,7 @@
 pub mod mute;
 pub mod report;
 pub mod restart;
+pub mod wifi;
 use std::{net::SocketAddr, path::Path};
 
 use echo_screen_contract::ScreenFrame;

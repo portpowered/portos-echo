@@ -171,9 +171,16 @@ The Echo remembers the networks it has joined. In a new place:
 No screen, or a hidden network? Connect the Echo over USB and run:
 
 ```sh
-echo-setup wifi join "Network name"   # asks for the password; it is never shown or stored on the PC
-echo-setup wifi status                # prints the network name and "connected"
+echo-setup wifi status
+echo-setup wifi join --ssid "Network name" --password-file /path/to/private-password-file
+echo-setup wifi join --ssid "Network name" < /path/to/private-password-file
 ```
+
+Status reports the current network and whether its Wi-Fi link is reachable. Join reads one password line
+from the file or redirected stdin when `--password-file` is omitted. Supply an empty line for an open network.
+After a timeout, check status before retrying. On a fork install, use the fork's `scripts/wifi-join.sh` for USB
+recovery until the A2 T5 cutover. The A2 command reports `wifi-unsupported` if its device entry point or Wi-Fi
+endpoint is absent.
 
 ## Addendum C: voice and prompt
 

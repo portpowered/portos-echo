@@ -37,13 +37,18 @@ pub(crate) fn startup_bundle() -> Vec<u8> {
     }
 }
 
-pub(crate) fn index_with_settings(settings: bool, build: &str) -> Response {
+pub(crate) fn index_with_settings(settings: bool, wifi: bool, build: &str) -> Response {
     let capabilities = if settings {
         "\n    <meta name=\"echo-settings\" content=\"v1\" />\n    <meta name=\"echo-packs\" content=\"v1\" />"
     } else {
         ""
     };
-    let head = format!("<head>\n    <meta name=\"echo-build\" content=\"{build}\" />{capabilities}");
+    let wifi = if wifi {
+        "\n    <meta name=\"echo-wifi\" content=\"v1\" />"
+    } else {
+        ""
+    };
+    let head = format!("<head>\n    <meta name=\"echo-build\" content=\"{build}\" />{capabilities}{wifi}");
     let html = INDEX.replacen("<head>", &head, 1);
     ([("content-type", "text/html; charset=utf-8")], html).into_response()
 }
@@ -130,7 +135,7 @@ mod tests {
         assert_ne!(build_id(b""), build);
         assert_eq!(build_id(&startup_bundle()), build_id(&startup_bundle()));
         for (settings, metas) in [(false, 1), (true, 3)] {
-            let body = to_bytes(index_with_settings(settings, &build).into_body(), 4096)
+            let body = to_bytes(index_with_settings(settings, false, &build).into_body(), 4096)
                 .await
                 .unwrap();
             let html = std::str::from_utf8(&body).unwrap();

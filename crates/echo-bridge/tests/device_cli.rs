@@ -1,5 +1,8 @@
 //! T3 process witness for the prebuilt device and notices commands.
 
+#[path = "device_cli/wifi.rs"]
+mod wifi;
+
 use std::{
     error::Error,
     io,

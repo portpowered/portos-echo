@@ -22,6 +22,8 @@ import { mountPortos, portosEndpointForm } from "./accounts/portos";
 import { mountOpenAI } from "./accounts/openai";
 import { accountRow } from "./accounts/account-buttons";
 import { museForm } from "./muse/form";
+import { mountWifi, wifiExchange } from "./wifi/read";
+import { watchWifi } from "./wifi/offline";
 
 const REPUBLISHED = "Relink requested. Return to the screen for instructions.";
 const LINK_FROM_PC =
@@ -79,6 +81,12 @@ export function mountSettings(
     panel.append(header, muted, status, fields);
     root.append(gear, panel);
     const keyboard = mountKeyboard(panel, fields);
+    const exchangeWifi = document.querySelector(
+        'meta[name="echo-wifi"][content="v1"]',
+    )
+        ? wifiExchange(actions)
+        : undefined;
+    let wifi: ReturnType<typeof mountWifi> | undefined;
     // Set by Relink until the bridge answers with its relink error frame.
     let relinkAsked = false;
     let relinkShown = false;
@@ -125,6 +133,8 @@ export function mountSettings(
         gear.hidden = false;
         gear.setAttribute("aria-expanded", "false");
         pending?.abort();
+        wifi?.stop();
+        wifi = undefined;
         portos?.stop();
         portos = undefined;
         openai?.stop();
@@ -232,7 +242,6 @@ export function mountSettings(
         }, "Saving…");
     }
     function render(data: Snapshot | SnapshotV2) {
-        fields.replaceChildren();
         if (data.version === 1) renderV1(data);
         else renderV2(data);
         for (const warning of data.warnings) {
@@ -399,8 +408,8 @@ export function mountSettings(
         });
         fields.append(link);
     }
-    gear.addEventListener("click", () => {
-        if (disposed) return;
+    function open(wifiOutage = false) {
+        if (disposed || !panel.hidden) return;
         panel.hidden = false;
         root.classList.add("settings-open");
         keyboard.close();
@@ -408,8 +417,13 @@ export function mountSettings(
         gear.hidden = true;
         gear.setAttribute("aria-expanded", "true");
         fields.replaceChildren();
+        if (exchangeWifi) {
+            wifi = mountWifi(exchangeWifi);
+            fields.append(wifi.element);
+        }
         sections.length = 0;
         back.focus();
+        if (wifiOutage) wifi?.open(true);
         void perform(
             async (signal) => {
                 const data = await loadSettings(actions, signal);
@@ -424,7 +438,14 @@ export function mountSettings(
             undefined,
             true,
         );
-    });
+    }
+    const stopWatching = exchangeWifi
+        ? watchWifi(exchangeWifi, () => {
+              if (panel.hidden) open(true);
+              else wifi?.open(false);
+          })
+        : undefined;
+    gear.addEventListener("click", () => open());
     back.addEventListener("click", leave);
     panel.addEventListener("keydown", (event) => {
         if (event.key === "Escape") leave();
@@ -444,7 +465,9 @@ export function mountSettings(
         },
         dispose() {
             disposed = true;
+            stopWatching?.();
             pending?.abort();
+            wifi?.stop();
             portos?.stop();
             openai?.stop();
             muse?.forget();

@@ -7,6 +7,7 @@ import { states, frame } from "./fixtures.mjs";
 import "./settings/usability.mjs";
 import "./chrome/render.mjs";
 import "./settings/page.mjs";
+import "./settings/wifi/read.mjs";
 import "./settings/page-v2.mjs";
 import "./settings/codex/speed.mjs";
 import "./settings/accounts.mjs";

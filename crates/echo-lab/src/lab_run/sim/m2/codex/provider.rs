@@ -30,7 +30,7 @@ pub(in crate::lab_run::sim) struct Provider {
 impl Provider {
     #[cfg(test)]
     pub(super) async fn start_retained(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, true, None, false, true).await
+        Self::start_mode(python, true, None, false, true, None).await
     }
     #[cfg(test)]
     pub(super) async fn maintained(&self) {
@@ -43,18 +43,18 @@ impl Provider {
         self.commands.send(Control::NextCapture).await.unwrap();
     }
     pub async fn start(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, false, None, false, false).await
+        Self::start_mode(python, false, None, false, false, None).await
     }
-    pub async fn start_m1(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, true, None, false, false).await
+    pub async fn start_m1(python: &str, wifi: Option<&std::path::Path>) -> Result<Self, String> {
+        Self::start_mode(python, true, None, false, false, wifi).await
     }
     #[cfg(test)]
     pub(super) async fn start_fault(python: &str, fault: &str) -> Result<Self, String> {
-        Self::start_mode(python, false, Some(fault), false, false).await
+        Self::start_mode(python, false, Some(fault), false, false, None).await
     }
     #[cfg(test)]
     pub(super) async fn start_quiet_edges(python: &str) -> Result<Self, String> {
-        Self::start_mode(python, false, None, true, false).await
+        Self::start_mode(python, false, None, true, false, None).await
     }
     async fn start_mode(
         python: &str,
@@ -62,12 +62,17 @@ impl Provider {
         fault: Option<&str>,
         quiet_edges: bool,
         retained: bool,
+        wifi: Option<&std::path::Path>,
     ) -> Result<Self, String> {
         let mut command = tokio::process::Command::new(python);
         command
             .arg("-u")
             .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lab_run/sim/m2/codex/provider.py"))
             .args(fault);
+        command.env_remove("ECHO_LAB_WIFI_FIXTURE");
+        if let Some(path) = wifi {
+            command.env("ECHO_LAB_WIFI_FIXTURE", path);
+        }
         let mut process = Process::start(&mut command)?;
         let ready = process.expect("provider.ready").await?;
         let origin = ready["origin"]

@@ -3,6 +3,7 @@ import base64
 import hashlib
 import http.server
 import json
+import os
 import queue
 import select
 import socket
@@ -17,6 +18,9 @@ observed = {'calls': [], 'sidebands': 0, 'external': 0, 'refreshes': 0}
 output_lock = threading.Lock()
 fault = sys.argv[1] if len(sys.argv) == 2 else None
 assert fault in (None, 'call_refused', 'malformed_sdp', 'pending_call')
+wifi_radio = os.environ.get('ECHO_LAB_WIFI_FIXTURE')
+if wifi_radio:
+    observed['wifi_refused'] = 0
 
 
 def emit(value):
@@ -61,6 +65,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             observed['external'] += 1
             self.respond(403, b'{}')
             return
+        if wifi_radio:
+            with open(wifi_radio, encoding='utf-8') as radio:
+                reachable = json.load(radio)['status']['reachable']
+            if not reachable:
+                observed['wifi_refused'] += 1
+                self.respond(400, b'{"error":"Wi-Fi link unavailable"}')
+                return
         observed['calls'].append({
             'path': self.path, 'model': body['session']['model'],
             'alpha': self.headers.get('OpenAI-Alpha'),

@@ -60,6 +60,15 @@ impl Adb {
         Ok(())
     }
 
+    pub(crate) async fn wifi(&self, command: &str, input: Option<&[u8]>) -> Result<(bool, String)> {
+        let mut args = vec![OsString::from("shell"), OsString::from("-T")];
+        if input.is_none() {
+            args.push(OsString::from("-n"));
+        }
+        args.push(OsString::from(command));
+        self.execute(&args, input, Duration::from_secs(600)).await
+    }
+
     pub async fn push(&self, local: &Path, remote: &str) -> Result<()> {
         self.call(&[
             OsString::from("push"),

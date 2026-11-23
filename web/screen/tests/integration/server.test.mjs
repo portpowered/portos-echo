@@ -1,59 +1,24 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
-import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { chromium } from "playwright";
+import { startScreenFixture } from "../support/server-fixture.mjs";
+import { verifyWifiPrompt } from "../settings/wifi/integration.mjs";
 
 // One prebuilt process/browser for this integration file, isolated page contexts.
-const executable = new URL(
-    `../../../../target/debug/examples/screen_fixture`,
-    import.meta.url,
-);
-const fixture = spawn(fileURLToPath(executable), [], {
-    stdio: ["pipe", "pipe", "pipe"],
-});
-const output = [];
-const waiters = [];
-let diagnostic = "";
-fixture.stderr.on("data", (bytes) => {
-    diagnostic += bytes;
-});
-createInterface({ input: fixture.stdout }).on("line", (line) => {
-    const value = JSON.parse(line);
-    const waiter = waiters.shift();
-    if (waiter) waiter(value);
-    else output.push(value);
-});
-const next = () =>
-    output.length
-        ? Promise.resolve(output.shift())
-        : new Promise((resolve) => waiters.push(resolve));
-const command = (value) => fixture.stdin.write(JSON.stringify(value) + "\n");
-const token = "synthetic-screen-pair";
-command({ start: { token, port: 0 } });
-const { ready } = await next();
-assert.equal(ready.host, "127.0.0.1");
-const origin = `http://127.0.0.1:${ready.port}`;
+const { origin, pairedUrl, command, next, output, stop } =
+    await startScreenFixture();
 const browser = await chromium.launch({
     headless: true,
     args: ["--disable-background-networking", "--no-proxy-server"],
 });
 after(async () => {
     await browser.close();
-    const exited = once(fixture, "exit");
-    command({ stop: true });
-    assert.deepEqual(await next(), { stopped: true });
-    assert.deepEqual(await exited, [0, null]);
-    assert.equal(diagnostic, "");
+    await stop();
 });
 
-const pairedUrl = `${origin}/?${new URLSearchParams({
-    events: `/events?token=${token}`,
-    actions: `/actions?token=${token}`,
-})}`;
+test("paired Wi-Fi opens at 30 seconds and accepts keyboard input", (t) =>
+    verifyWifiPrompt(t, browser));
 
 function chromeState(page, state) {
     return page.locator(`.screen-band.band-${state}`);
@@ -291,12 +256,8 @@ test("F02/F14/F15/F16: native SSE/page/actions, keyboard focus, exact assets and
             ? route.continue()
             : route.abort(),
     );
-    const query = new URLSearchParams({
-        events: `/events?token=${token}`,
-        actions: `/actions?token=${token}`,
-    });
     const page = await context.newPage();
-    await page.goto(`${origin}/?${query}`);
+    await page.goto(pairedUrl);
     const update = async (state) => {
         command({ state });
         await page.locator(`[data-ui-state="${state.state}"]`).waitFor();

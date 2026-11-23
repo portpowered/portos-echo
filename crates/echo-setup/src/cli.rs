@@ -10,7 +10,10 @@ echo-setup install [--version VERSION | --from-dir DIR] [--config FILE [--force]
 echo-setup update [--version VERSION | --from-dir DIR] [--config FILE] [--openai-api-key-file FILE] [OPTIONS]
 echo-setup status|rollback|doctor [OPTIONS]
 echo-setup uninstall [--purge] [OPTIONS]
+echo-setup wifi status [WIFI OPTIONS]
+echo-setup wifi join --ssid NAME [--password-file FILE] [WIFI OPTIONS]
 OPTIONS: --adb PATH --serial DEVICE --json --timeout-seconds N --release-base URL
+WIFI OPTIONS: --adb PATH --serial DEVICE --json --timeout-seconds N
 Default release matches this executable; never latest. Versions omit leading v.
 Install --force requires a readable --config FILE and replaces only the base config.
 --openai-api-key-file writes the key to live.credential_file and skips ChatGPT sign-in;
@@ -19,7 +22,7 @@ Downloads require HTTPS; explicit http://127.0.0.1:PORT mirrors are for local te
 Exit 0: completed; 1: prerequisite/integrity/device failure; 2: usage; 3: setup timeout.
 Expired provider codes also exit 3. Run install again to resume with a fresh code.
 Ctrl+C cancels setup with exit 1 after bounded cleanup; run install again to resume.
-Stdin is not consumed; closed stdin is supported for bootstrap/script invocation.
+Only wifi join without --password-file reads one line from stdin; other commands support closed stdin.
 Device identifiers, credentials and dependency logs are never printed.
 Install/update confirm the running nobody identity and requested version after start.
 Install/update prepare the screen app before account linking; existing app installs are retained.
@@ -59,6 +62,7 @@ impl Options {
             "rollback",
             "uninstall",
             "doctor",
+            "wifi",
             "--help",
             "--version",
         ]

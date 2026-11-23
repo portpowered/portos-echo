@@ -229,7 +229,7 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
     super::prompts::publish(&mut trace)?;
     let (service, send) = settings.map_or((None, None), |(service, send)| (Some(service), Some(send)));
     let camera = cfg!(target_os = "android") && options.delegation.is_some_and(|config| config.camera.enabled);
-    let mut screen = Screen::bind_for_runtime(options.screen, send, camera).await?;
+    let mut screen = Screen::bind_for_runtime(options.screen, send, camera, options.host.routes.is_some()).await?;
     screen.download_packs(options.delegation, &trace);
     screen.settings_warning(options.settings_warning, &mut trace)?;
     let health = match Health::bind(options.health).await {

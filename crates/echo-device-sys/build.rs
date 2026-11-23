@@ -58,6 +58,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .try_compile("echo_hassmic_entry")?;
     compile_satellite(&mut build, &vendor, &local, if athena { HOST } else { ATHENA })?;
     if athena {
+        android::wifi_dex(Path::new(&manifest), out)?;
         android::link(&vendor, out)?;
     } else {
         for library in ["pthread", "m", "dl"] {
