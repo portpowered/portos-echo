@@ -4,13 +4,19 @@ use echo_device_sys::{Action, Core, Event, Protocol, VERSION};
 use std::{
     ffi::CStr,
     io::{self, Write},
+    sync::atomic::{AtomicI64, AtomicU32, Ordering},
+    time::Duration,
 };
 
 #[cfg(test)]
 #[path = "protocol_tests.rs"]
 mod tests;
 
-pub(super) struct Wyoming;
+pub(super) static WYOMING: Wyoming = Wyoming { behind: Behind::new() };
+
+pub(super) struct Wyoming {
+    behind: Behind,
+}
 
 impl Protocol for Wyoming {
     fn connected(&self, core: &Core) {
@@ -32,7 +38,7 @@ impl Protocol for Wyoming {
     }
 
     fn audio(&self, core: &Core, pcm: &[u8], timestamp: i64) {
-        audio(core, pcm, timestamp);
+        audio(core, pcm, timestamp, &self.behind);
     }
 
     fn played(&self, core: &Core) {
@@ -56,6 +62,8 @@ impl Protocol for Wyoming {
 trait Satellite {
     fn apply(&self, action: Action<'_>);
     fn send(&self, kind: &CStr, data: Option<&CStr>, payload: &[u8]);
+    fn offer(&self, kind: &CStr, data: Option<&CStr>, payload: &[u8], wait: Duration) -> bool;
+    fn hang_up(&self);
     fn duplex(&self) -> bool;
     fn local_wake(&self) -> bool;
     fn name(&self) -> &CStr;
@@ -74,6 +82,12 @@ impl Satellite for Core {
     }
     fn send(&self, kind: &CStr, data: Option<&CStr>, payload: &[u8]) {
         self.send(kind, data, payload);
+    }
+    fn offer(&self, kind: &CStr, data: Option<&CStr>, payload: &[u8], wait: Duration) -> bool {
+        self.offer(kind, data, payload, wait)
+    }
+    fn hang_up(&self) {
+        self.hang_up();
     }
     fn duplex(&self) -> bool {
         self.duplex()
@@ -233,13 +247,75 @@ fn start(core: &impl Satellite) {
     core.send(c"run-pipeline", Some(data.as_c_str()), &[]);
 }
 
-fn audio(core: &impl Satellite, pcm: &[u8], timestamp: i64) {
+fn audio(core: &impl Satellite, pcm: &[u8], timestamp: i64, behind: &Behind) {
     let mut data = Data::<96>::new();
     let _ = write!(
         data,
         r#"{{"rate":16000,"width":2,"channels":1,"timestamp":{timestamp}}}"#
     );
-    core.send(c"audio-chunk", Some(data.as_c_str()), pcm);
+    let sent = core.offer(c"audio-chunk", Some(data.as_c_str()), pcm, behind.wait());
+    if behind.note(sent, timestamp) {
+        core.hang_up();
+    }
+}
+
+/// Microphone audio the client was too far behind to take: late audio is of
+/// no use to a live talker, and waiting for the client would hold the core.
+/// A burst, such as the replay of the wake word, gets a short wait to drain;
+/// a client that stops reading gets none, and after `GIVE_UP_MS` the link is
+/// dropped as a timed-out send drops it. Only the capture thread notes, under
+/// the core lock.
+struct Behind {
+    since: AtomicI64,
+    dropped: AtomicU32,
+}
+
+impl Behind {
+    const fn new() -> Self {
+        Self {
+            since: AtomicI64::new(0),
+            dropped: AtomicU32::new(0),
+        }
+    }
+
+    const GRACE: Duration = Duration::from_millis(250);
+    /// As long as the native send timeout lets a blocked send wait.
+    const GIVE_UP_MS: i64 = 5000;
+
+    fn wait(&self) -> Duration {
+        if self.dropped.load(Ordering::Relaxed) == 0 {
+            Self::GRACE
+        } else {
+            Duration::ZERO
+        }
+    }
+
+    /// Returns whether to give up on the client.
+    fn note(&self, sent: bool, timestamp: i64) -> bool {
+        let dropped = self.dropped.load(Ordering::Relaxed);
+        if !sent {
+            if dropped == 0 {
+                self.since.store(timestamp, Ordering::Relaxed);
+                log(
+                    b"mic: the client is not reading, mic audio dropped until it catches up",
+                    b"",
+                );
+            } else if timestamp - self.since.load(Ordering::Relaxed) >= Self::GIVE_UP_MS {
+                self.dropped.store(0, Ordering::Relaxed);
+                log(b"mic: the client read nothing for 5 s, link dropped", b"");
+                return true;
+            }
+            self.dropped.store(dropped.saturating_add(1), Ordering::Relaxed);
+        } else if dropped > 0 {
+            self.dropped.store(0, Ordering::Relaxed);
+            let span = timestamp - self.since.load(Ordering::Relaxed);
+            log(
+                b"mic: the client caught up, dropped ",
+                format!("{dropped} chunks over {span} ms").as_bytes(),
+            );
+        }
+        false
+    }
 }
 
 fn mute(core: &impl Satellite, muted: bool) {

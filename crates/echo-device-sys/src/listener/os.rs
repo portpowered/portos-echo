@@ -41,6 +41,7 @@ unsafe extern "C" {
     fn connect(fd: c_int, address: *const UnixAddress, length: c_uint) -> c_int;
     fn signal(signum: c_int, handler: extern "C" fn(c_int)) -> usize;
     fn write(fd: c_int, buffer: *const c_void, length: usize) -> isize;
+    fn _exit(status: c_int) -> !;
 }
 
 #[unsafe(no_mangle)]
@@ -99,6 +100,14 @@ pub(super) fn on_stop(notify: extern "C" fn(c_int)) -> io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+/// Ends the process without atexit handlers or static destructors: the
+/// native capture and playback threads are still running and would use what
+/// those tear down.
+pub(super) fn exit_now(status: c_int) -> ! {
+    // SAFETY: _exit takes no pointers and never returns.
+    unsafe { _exit(status) }
 }
 
 pub(super) fn notify(fd: c_int) {

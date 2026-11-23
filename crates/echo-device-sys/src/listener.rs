@@ -96,7 +96,7 @@ fn watch_stop() -> io::Result<()> {
     std::thread::Builder::new().name("wyoming-stop".into()).spawn(move || {
         if receive.recv(&mut [0]).is_ok() {
             cleanup();
-            std::process::exit(0);
+            os::exit_now(0);
         }
     })?;
     os::on_stop(notify)
