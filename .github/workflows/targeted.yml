@@ -25,6 +25,8 @@ jobs:
           test "$(git rev-parse HEAD)" = 61ba20b11d2387c3a7dc74a37c553400ecfde25c
           proof_root="$(mktemp -d "$RUNNER_TEMP/a2-call-review.XXXXXX")"
           mkdir -p "$proof_root/home" "$proof_root/tmp"
+          cp -a "$HOME/.cache/portos-echo/codex" "$proof_root/codex-cache"
+          export ECHO_CODEX_CACHE_DIR="$proof_root/codex-cache"
           export CARGO_HOME="$HOME/.cargo" RUSTUP_HOME="$HOME/.rustup"
           export HOME="$proof_root/home" USERPROFILE="$proof_root/home" TMPDIR="$proof_root/tmp"
           export CODEX_HOME="$proof_root/home/.codex"
@@ -50,3 +52,4 @@ jobs:
           name: m2-review-report
           path: ${{ steps.proof.outputs.report_root }}
           retention-days: 3
+
