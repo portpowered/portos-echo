@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 25125f0baf478717b22b5333c44e86dca3926bf3
+          ref: 917d9e4dac8c7cb5b134c4cabf8ffa7ccfd5cb71
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -62,7 +62,7 @@ jobs:
         id: screen-evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: screen-evidence-25125f0baf478717b22b5333c44e86dca3926bf3
+          name: screen-evidence-917d9e4dac8c7cb5b134c4cabf8ffa7ccfd5cb71
           path: |
             web/screen/test-results/screenshots/**
             web/screen/test-results/summary.txt
@@ -74,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 25125f0baf478717b22b5333c44e86dca3926bf3
+          ref: 917d9e4dac8c7cb5b134c4cabf8ffa7ccfd5cb71
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -86,6 +86,7 @@ jobs:
         run: |
           git rev-parse HEAD
           UPDATE_SCHEMAS=1 cargo test --locked -p echo-screen-contract --test screen_schema
+          npm --prefix web/screen ci --offline=false
           npm --prefix web/screen run generate:schema
           git diff --exit-code -- schemas/screen web/screen/src/model.ts web/screen/src/settings
           cargo test --locked -p echo-screen-contract --test screen_wire --test screen_schema
@@ -99,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 25125f0baf478717b22b5333c44e86dca3926bf3
+          ref: 917d9e4dac8c7cb5b134c4cabf8ffa7ccfd5cb71
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
