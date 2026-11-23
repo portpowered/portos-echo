@@ -108,7 +108,7 @@ impl<'a> View<'a> {
         match notice {
             ServeNotice::Kill(enabled) => self.kill(enabled),
             ServeNotice::Ready => {
-                let tick_path = (self.startup == Startup::Pending)
+                let tick_path = (self.startup == Startup::Ready)
                     .then(|| std::env::var_os("A1_TICK_TRACE")).flatten();
                 self.startup = Startup::Ready;
                 self.closed("idle")?;

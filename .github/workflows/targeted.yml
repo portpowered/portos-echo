@@ -111,6 +111,7 @@ jobs:
           raise SystemExit(1 if failed else 0)
           PY
       - name: Compare whole trace bytes with cmp
+        if: always()
         env:
           A1_GOLDEN: ${{ runner.temp }}/a1-baseline/repeat-1
         run: |

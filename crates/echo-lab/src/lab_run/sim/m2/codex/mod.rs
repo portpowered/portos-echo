@@ -102,9 +102,6 @@ impl Case {
             .ok_or("m2: missing bridge")?
             .expect("bridge.ready")
             .await?;
-        if let Some(path) = tick_witness {
-            trace_tick_witness(self.bridge.as_mut().ok_or("m2: missing bridge")?, &path).await?;
-        }
         self.trace = read_trace(&self.trace_path)?;
         let address = self
             .trace
@@ -205,6 +202,10 @@ impl Case {
             .ok_or("m2: missing bridge")?
             .expect("bridge.ready")
             .await?;
+        if std::env::var_os("A1_TRACE_TICK_WITNESS").is_some() {
+            let path = self.root.as_ref().ok_or("m2: missing private root")?.0.join("tick.jsonl");
+            trace_tick_witness(self.bridge.as_mut().ok_or("m2: missing bridge")?, &path).await?;
+        }
         Ok(())
     }
 
