@@ -8,7 +8,10 @@ use tokio::time::Instant;
 
 impl Source {
     pub fn speech_started(&mut self) {
-        let outcome = self.controller.turn(SessionTurnEvent::SpeechStarted).outcome;
+        let outcome = self
+            .controller
+            .turn(|session| SessionTurnEvent::SpeechStarted { session })
+            .outcome;
         if outcome == Some(Ok(SessionOutcome::Held)) {
             self.meter.held(Instant::now());
         }
@@ -35,9 +38,7 @@ impl Source {
     }
 
     pub fn user_quiet(&self) {
-        self.controller.turn(SessionTurnEvent::SpeechStopped {
-            voiced: self.reply.voiced(),
-        });
+        self.controller.speech_stopped(self.reply.voiced());
     }
 
     pub fn barge_due(&self) -> Option<Instant> {
@@ -47,15 +48,19 @@ impl Source {
     /// Retire playback at its existing service fence and discard its abandoned
     /// tail. Stream order identifies the replacement's next assistant delta.
     pub fn interrupt(&mut self, port: &mut impl VoicePort) -> Result<(), Error> {
-        let out = self.controller.turn(SessionTurnEvent::BargeDue {
+        let mut out = self.controller.turn(|session| SessionTurnEvent::BargeDue {
+            session,
             finished: self.reply.finished(),
         });
-        let Some(SessionCommand::CutReply { trigger, text, .. }) = out.effect else {
+        let Some(SessionCommand::CutReply {
+            trigger: Some(trigger), ..
+        }) = out.take_effect()
+        else {
             return Ok(());
         };
         let (silent_ms, yield_ms) = self.meter.cut(trigger);
         self.stats.cut = Some(Box::new(Cut {
-            text,
+            text: out.cut_text,
             silent_ms,
             yield_ms,
         }));
