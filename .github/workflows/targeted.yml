@@ -15,6 +15,7 @@ jobs:
         run: |
           UPDATE_SCHEMAS=1 cargo test --locked -p echo-screen-contract --test screen_schema schema_snapshots -- --exact
           cd web/screen
+          npm ci
           npm run generate:schema
           npm run check:schema
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
