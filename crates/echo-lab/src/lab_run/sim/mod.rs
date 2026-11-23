@@ -58,7 +58,7 @@ impl<'a> Sim<'a> {
         })
     }
 
-    fn attempt(&mut self, step: &Step, artifacts: &Artifacts) -> Result<(), String> {
+    fn attempt(&mut self, step: &Step, artifacts: &mut Artifacts) -> Result<(), String> {
         if let Step::Mcp(action) = step {
             return Err(format!(
                 "sim: MCP {} control requires the M5 bridge driver",
