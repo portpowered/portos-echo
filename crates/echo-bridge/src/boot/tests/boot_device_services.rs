@@ -62,6 +62,18 @@ fn actions(filter: &FilterFixture, action: &str) -> usize {
         .count()
 }
 
+fn prepare(device: &DeviceIo) {
+    let mut stages = Vec::new();
+    device.prepare(|stage| stages.push(stage));
+    assert!(stages.is_empty(), "{stages:?}");
+}
+
+fn restore(device: &DeviceIo) {
+    let mut stages = Vec::new();
+    device.restore(|stage| stages.push(stage)).unwrap();
+    assert!(stages.is_empty(), "{stages:?}");
+}
+
 #[test]
 fn boot_device_services_restores_default_enabled_disabled_and_unset_values() {
     let dir = tempfile::tempdir().unwrap();
@@ -83,7 +95,7 @@ fn boot_device_services_restores_default_enabled_disabled_and_unset_values() {
 
     let restarted = open(dir.path());
     for _ in 0..2 {
-        restarted.restore(|stage| panic!("{stage}")).unwrap();
+        restore(&restarted);
     }
     assert_eq!(state(&filter), original());
     assert_eq!(actions(&filter, "pm enable --user 0 com.amazon.bishop"), 1);
@@ -120,7 +132,7 @@ fn boot_device_services_retries_failed_apply_and_restore_with_durable_original()
     assert_eq!(pending["packages"], json!({}));
     assert_eq!(state(&filter)["settings"]["system"]["owner_value"], USER_SETTING);
     filter.remove("fail");
-    open(dir.path()).restore(|stage| panic!("{stage}")).unwrap();
+    restore(&open(dir.path()));
     assert_eq!(state(&filter), original());
 }
 
@@ -129,12 +141,12 @@ fn boot_device_services_installs_only_on_difference_and_launches_available_scree
     let dir = tempfile::tempdir().unwrap();
     let (filter, device) = fixture(dir.path());
     filter.write("bin/echo-screen.apk", INSTALLED);
-    device.prepare(|stage| panic!("{stage}"));
+    prepare(&device);
     filter.write("bin/echo-screen.apk", CANDIDATE);
-    device.prepare(|stage| panic!("{stage}"));
-    device.prepare(|stage| panic!("{stage}"));
+    prepare(&device);
+    prepare(&device);
     filter.remove("bin/echo-screen.apk");
-    device.prepare(|stage| panic!("{stage}"));
+    prepare(&device);
     assert_eq!(filter.read("installed/base.apk"), CANDIDATE);
     assert_eq!(actions(&filter, "pm install -r"), 2);
     assert_eq!(actions(&filter, "am start -W"), 4);

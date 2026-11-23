@@ -44,7 +44,7 @@ fn boot_assembled_repairs_flush_and_falls_back_then_parks_and_resumes() {
         let mut runner = Fake::new(&path, END);
         runner.ready_current = false;
         runner.parked = Some((255_000, 260_000));
-        runner.samples.push(4999);
+        runner.samples = vec![4999, 5000];
         runner.services = Some(device);
         runner.firewall = Some(filter);
         let transcript = FilterFixture::attach(root);

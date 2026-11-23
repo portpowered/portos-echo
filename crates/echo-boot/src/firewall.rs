@@ -43,13 +43,13 @@ pub fn watch_firewall(host: &mut impl HostOps) {
     let mut last = None;
     while !host.shutdown() {
         let next = host.now() + WATCH;
-        let state = inspect(host, true);
-        if last != Some(state) {
-            host.log(match state {
+        let health = inspect(host, true);
+        if last != Some(health) {
+            host.log(match health {
                 Ok(()) => Log::FirewallReady,
                 Err(stage) => Log::FirewallUnhealthy(stage),
             });
-            last = Some(state);
+            last = Some(health);
         }
         while !host.shutdown() && host.now() < next {
             host.sleep(next.saturating_sub(host.now()));

@@ -38,29 +38,73 @@ pub trait HostOps {
     fn now(&self) -> Duration;
     fn sleep(&mut self, duration: Duration);
     fn shutdown(&self) -> bool;
+    /// # Errors
+    /// The stop marker could not be inspected safely.
     fn stop_marker(&mut self) -> Result<bool>;
+    /// # Errors
+    /// Publishing or clearing the acknowledgement failed.
     fn acknowledge(&mut self, finished: bool) -> Result<()>;
+    /// # Errors
+    /// The candidate could not be validated or hashed.
     fn candidate(&mut self, slot: Slot) -> Result<Digest>;
+    /// # Errors
+    /// The persisted journal could not be read or decoded.
     fn load_selection(&mut self) -> Result<Option<Selection>>;
+    /// # Errors
+    /// The selection journal could not be saved durably.
     fn save_selection(&mut self, selection: &Selection) -> Result<()>;
+    /// # Errors
+    /// The launcher failed to validate, apply or start the role.
     fn spawn(&mut self, role: Role, slot: Slot, identity: Identity) -> Result<()>;
+    /// # Errors
+    /// The role's process state could not be inspected.
     fn observe(&mut self, role: Role) -> Result<ChildStatus>;
     /// Finishes cleanup and reaps the process before returning its status.
+    ///
+    /// # Errors
+    /// The role or its descendants could not be stopped and reaped.
     fn stop(&mut self, role: Role, why: Stop) -> Result<String>;
     fn log(&mut self, entry: Log<'_>);
+    /// # Errors
+    /// The resolver properties could not be read.
     fn resolvers(&mut self) -> Result<Vec<IpAddr>>;
-    /// None denotes a missing tool. A failed invocation is an error.
+    /// None denotes a missing tool.
+    ///
+    /// # Errors
+    /// An available tool failed to list the filter.
     fn filter(&mut self, family: Family) -> Result<Option<String>>;
+    /// # Errors
+    /// The filter restore tool could not apply the transaction.
     fn restore_filter(&mut self, family: Family, transaction: &str) -> Result<()>;
+    /// # Errors
+    /// IPv6 settings could not be read or applied.
     fn ipv6_disabled(&mut self, enforce: bool) -> Result<bool>;
+    /// # Errors
+    /// The ADB properties or listeners could not be read or corrected.
     fn usb_adb_only(&mut self, enforce: bool) -> Result<bool>;
+    /// # Errors
+    /// The Android startup service could not be started.
     fn prepare_device(&mut self) -> Result<()>;
+    /// # Errors
+    /// The startup service failed or could not be observed.
     fn poll_device(&mut self) -> Result<()>;
+    /// # Errors
+    /// The startup service group could not be stopped and reaped.
     fn stop_device(&mut self) -> Result<()>;
+    /// # Errors
+    /// The Wi-Fi link or resolver state could not be read.
     fn network(&mut self) -> Result<Vec<IpAddr>>;
+    /// # Errors
+    /// The clock sync worker could not be started.
     fn start_clock(&mut self) -> Result<()>;
+    /// # Errors
+    /// The clock worker failed or returned an invalid receipt.
     fn poll_clock(&mut self) -> Result<ClockStatus>;
+    /// # Errors
+    /// The clock worker could not be stopped and reaped.
     fn stop_clock(&mut self) -> Result<()>;
+    /// # Errors
+    /// The Android RTC command failed.
     fn write_rtc(&mut self) -> Result<()>;
 }
 

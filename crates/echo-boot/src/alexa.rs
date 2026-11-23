@@ -48,6 +48,7 @@ pub enum PackageState {
 pub struct SavedSetting {
     pub namespace: String,
     pub key: String,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
     pub previous: Option<String>,
 }
 
@@ -74,10 +75,15 @@ impl Journal {
     /// Rejects invalid, unsupported or non-Athena restore entries.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let journal: Self = serde_json::from_slice(bytes).map_err(|_| "invalid Alexa journal")?;
+        journal.validate()?;
+        Ok(journal)
+    }
+
+    fn validate(&self) -> Result<()> {
         let mut keys = Vec::new();
-        if journal.version != 1
-            || journal.packages.keys().any(|name| !PACKAGES.contains(&name.as_str()))
-            || journal.settings.iter().any(|entry| {
+        if self.version != 1
+            || self.packages.keys().any(|name| !PACKAGES.contains(&name.as_str()))
+            || self.settings.iter().any(|entry| {
                 let key = (entry.namespace.as_str(), entry.key.as_str());
                 let invalid = keys.contains(&key)
                     || !SETTINGS.iter().any(|&(ns, name, _)| key == (ns, name))
@@ -88,12 +94,13 @@ impl Journal {
         {
             return Err("invalid Alexa journal");
         }
-        Ok(journal)
+        Ok(())
     }
 
     /// # Errors
-    /// Returns an encoding error if the journal cannot be serialized.
+    /// Rejects invalid entries or an encoding failure.
     pub fn encode(&self) -> Result<Vec<u8>> {
+        self.validate()?;
         serde_json::to_vec(self).map_err(|_| "encode Alexa journal")
     }
 
@@ -123,7 +130,10 @@ mod tests {
         journal.remember_setting("system", "smartconn_status", Some("later".into()));
         let decoded = Journal::decode(&journal.encode().unwrap()).unwrap();
         assert_eq!(decoded.settings[0].previous, None);
-        journal.remember_setting("global", "wifi_on", Some("1".into()));
-        assert!(Journal::decode(&journal.encode().unwrap()).is_err());
+        let unrelated =
+            br#"{"version":1,"packages":{},"settings":[{"namespace":"global","key":"wifi_on","previous":"1"}]}"#;
+        assert!(Journal::decode(unrelated).is_err());
+        let missing = br#"{"version":1,"packages":{},"settings":[{"namespace":"system","key":"smartconn_status"}]}"#;
+        assert!(Journal::decode(missing).is_err());
     }
 }

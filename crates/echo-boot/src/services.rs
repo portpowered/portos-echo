@@ -6,7 +6,7 @@ const SAMPLE: Duration = Duration::from_secs(1);
 const NETWORK_SETTLE: Duration = Duration::from_secs(5);
 const INITIAL_LIMIT: Duration = Duration::from_secs(10);
 const CLOCK_LIMIT: Duration = Duration::from_secs(6);
-const CLOCK_PERIOD: Duration = Duration::from_secs(6 * 60 * 60);
+const CLOCK_PERIOD: Duration = Duration::from_hours(6);
 
 pub enum ClockStatus {
     Running,
