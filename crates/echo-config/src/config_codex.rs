@@ -2,7 +2,9 @@ use crate::{BridgeConfig, ConfigError, config_decode::Fields};
 use std::path::PathBuf;
 use toml::de::DeValue;
 
+mod delegate_speed;
 mod prompts;
+pub use delegate_speed::DelegateSpeed;
 pub use prompts::{LIVE_INSTRUCTIONS, LIVE_SESSION_GUIDANCE, RUNNER_INSTRUCTIONS, RUNNER_SESSION_GUIDANCE};
 
 /// How `binary` is asked to serve: the pinned multi-tool takes the `app-server`
@@ -49,7 +51,8 @@ pub struct CodexConfig {
     pub model: Option<String>,
     pub delegate_model: Option<String>,
     pub delegate_effort: Option<String>,
-    pub delegate_fast: bool,
+    /// `delegate_speed`, or the legacy `delegate_fast` boolean when it is absent.
+    pub delegate_speed: DelegateSpeed,
     pub time_zone: Option<String>,
     pub web_search: WebSearch,
     pub skills: Vec<String>,
@@ -136,7 +139,8 @@ pub(super) fn decode(value: DeValue<'_>) -> Result<CodexConfig, ConfigError> {
         model: fields.optional("model")?,
         delegate_model: fields.optional("delegate_model")?,
         delegate_effort: fields.optional("delegate_effort")?,
-        delegate_fast: fields.optional("delegate_fast")?.unwrap_or_default(),
+        delegate_speed: DelegateSpeed::resolve(fields.optional("delegate_speed")?, fields.optional("delegate_fast")?)?
+            .unwrap_or_default(),
         time_zone: fields.optional("time_zone")?,
         web_search: fields.optional("web_search")?.unwrap_or_default(),
         skills: fields.optional("skills")?.unwrap_or_default(),

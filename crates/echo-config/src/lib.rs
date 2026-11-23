@@ -16,8 +16,8 @@ pub use config_auth::ChatGptAuthConfig;
 pub use config_camera::CameraConfig;
 pub use config_clock::{ClockConfig, DEFAULT_TIME_SERVERS};
 pub use config_codex::{
-    CodexConfig, CodexLaunch, LIVE_INSTRUCTIONS, LIVE_SESSION_GUIDANCE, RUNNER_INSTRUCTIONS, RUNNER_SESSION_GUIDANCE,
-    WebSearch, realtime_voices,
+    CodexConfig, CodexLaunch, DelegateSpeed, LIVE_INSTRUCTIONS, LIVE_SESSION_GUIDANCE, RUNNER_INSTRUCTIONS,
+    RUNNER_SESSION_GUIDANCE, WebSearch, realtime_voices,
 };
 pub use config_endpoint::{PORTOS_API_BASE, PORTOS_GATEWAY_URL, PortosEndpoint, SettingsEndpoint};
 pub use config_muse::MuseConfig;

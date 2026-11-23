@@ -41,7 +41,8 @@ The base must validate first. If `[home]` is configured, `BridgeConfig::load_eff
 optional `settings.toml` (maximum 65,536 bytes). The overlay can set these leaves:
 
 - Voice and OpenAI use `voice.session_listen_enabled`, `voice.session_listen_seconds`,
-  `codex.voice`, `codex.web_search`, `codex.delegate_model`, `codex.delegate_effort` and `codex.delegate_fast`.
+  `codex.voice`, `codex.web_search`, `codex.delegate_model`, `codex.delegate_effort` and `codex.delegate_speed`
+  (a stored legacy `codex.delegate_fast` still loads; the next save writes `delegate_speed`).
   An empty delegated model or effort selects the pinned app server's default.
 - Agent settings include `agent.daily_request_cap`
   and the `notes` and `prompts` groups in `home.agent_tools`. An empty group list disables both groups.
@@ -225,22 +226,64 @@ Do not assume that a particular paid plan, API subscription or a working Codex l
 The pinned server owns its realtime model; `codex.delegate_model` chooses the runner model, not the voice model.
 Unset, the runner uses `gpt-6.1-sol`. gpt-6.2-* models currently refuse the direct `web.run` that search needs.
 
-In paired Settings, open OpenAI, select **Delegated fast mode**, and choose **Save settings**. Wait for
+`codex.delegate_speed` chooses the runner's service tier: `standard` (default), `fast` or `ultrafast`.
+In paired Settings, open OpenAI, choose **Delegated speed**, and choose **Save settings**. Wait for
 Settings to report that the saved values are active. The next runner thread starts with the saved tier.
-Fast mode requests priority processing for a supported runner model. The pin's bundled catalog advertises
-priority for `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`,
-`gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5`. The provider controls eligibility, cost and speed.
+The bridge sends it as `thread/start` `serviceTier`: a present null for standard (which also clears a tier the
+Codex home would otherwise inherit), `"priority"` for fast and `"ultrafast"` for ultrafast.
 The Live voice uses its own start parameters.
 
-For standard processing, clear the checkbox and save, or set `delegate_fast = false` under `[codex]` in TOML.
-A saved false overrides a true base value. To return to the base preference, stop the bridge, remove just
-`delegate_fast` from the home's `settings.toml`, and start the bridge again. Before downgrading to a bridge
-without this key, remove it from both TOML files.
+- **Fast** requests priority processing. The pin's bundled catalog advertises priority for `gpt-6-astra`,
+  `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` and `gpt-5.5`.
+- **Ultrafast** needs a runner model whose catalog lists the tier: `gpt-6-astra` or `gpt-6.1-sol`
+  (also `gpt-6.2-astra` and `gpt-6.2-sol`, which currently refuse search) and the app server's
+  `ultrafast_mode` feature, which is on by default. It costs about six times the standard API price;
+  ChatGPT plans meter it at higher multipliers. The bridge does not refuse other models.
+
+The provider controls eligibility, cost and speed. When the model or account cannot use the requested tier, the
+app server serves the thread at standard without an error. The bridge then records a
+`call.service_tier_downgraded` trace event with the requested and effective tiers, and the call continues.
+
+For standard processing, choose **Standard** and save, or set `delegate_speed = "standard"` under `[codex]` in
+TOML. A saved value overrides the base value. To return to the base preference, stop the bridge, remove just
+`delegate_speed` (or a legacy `delegate_fast`) from the home's `settings.toml`, and start the bridge again.
+
+The older boolean `delegate_fast` still loads in both files: `true` means `fast` and `false` means `standard`.
+A file that sets both keys to different tiers is refused with
+`codex.delegate_speed: conflicts with codex.delegate_fast; remove delegate_fast`. Settings saves only
+`delegate_speed`, so a stored `delegate_fast` is replaced on the next save. A bridge older than this key
+refuses `delegate_speed`: before downgrading, remove it from both TOML files, or replace it with
+`delegate_fast` when the tier is `standard` or `fast`.
 
 In the current backend, desktop `import-codex` is refused. `signin --browser` is an alternate app-server flow
 for a browser-capable host. `api_key` is an alternate credential mode: the bridge reads the nominated
 `live.credential_file` as a key and passes it to `account/login/start`. ChatGPT `signin` is unavailable in that
 mode. Never put a key or token in TOML, prompt text or command-line arguments.
+
+With an OpenAI API key, voice and delegated runner usage is billed to that key at API token rates, not to a ChatGPT
+plan. The Ultrafast speed tier (`codex.delegate_speed`) needs the runner model `gpt-6-astra` or `gpt-6.1-sol` and is
+billed at API rates, about six times the standard rate.
+
+To install in this mode, set `[live] mode = "api_key"` and keep `live.credential_file` a plain file directly in
+`/data/local/echo-bridge/private/` (the example's `live.json` works). Then pass the key's local file to the installer:
+`echo-setup install --config bridge.toml --openai-api-key-file openai-key.txt` (add `--force` to replace an installed
+ChatGPT config; `update` accepts the option too). The installer refuses the option with a config whose mode is
+`chatgpt`. It drops one trailing newline and refuses a blank key, a key with leading or trailing spaces, and any
+character outside visible ASCII. It streams the key to the Echo over adb stdin, never on a command line, and writes
+it as `live.credential_file` owned by the bridge user with mode 0600. It then skips ChatGPT sign-in, checks that
+`echo-bridge status` reports `mode: api-key` and
+continues with Port OS. `echo-setup status --json` and `doctor` report `auth_mode` (`api_key`, `chatgpt` or
+`unavailable`), never the key.
+
+To replace the key later, open **Settings > Accounts > OpenAI (GPT Live)** on the Echo screen. In `api_key` mode it
+shows whether a key is set, and a **Save key** field in place of Link and Remove. The bridge applies the same rule
+as the installer, keeps the replaced key beside the new one as `<live.credential_file>.previous` (mode 0600), and
+restarts at the next settled boundary so the app server logs in with the new key. Neither the screen nor any
+response, log or trace shows the key. OpenAI first checks a key when it is used, so a
+wrong key may still show as set; it surfaces as a failed voice call or delegated turn (and as "not accepted" when
+the app server refuses the login). To go back, copy the `.previous` file over the key with the
+bridge stopped. The bridge does not start without a well-formed key file, so Settings can replace a key but not
+recover a missing one: run the installer with `--openai-api-key-file` instead.
 
 There is no bridge `signout` verb. To remove local ChatGPT access, stop the bridge, remove only
 `<codex.home>/auth.json` using the operator's private file management, then repeat sign-in if needed.
@@ -309,8 +352,8 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `echo.host` | Required string host; use literal loopback on device. No additional hostname validation in decoder. | restart / no |
 | `echo.wyoming_port` | Port integer 1–65535, default 16700. | restart / no |
 | `live` | Required credential/Live policy table. | restart / no |
-| `live.mode` | `chatgpt` (default) or `api_key`. | restart / no |
-| `live.credential_file` | Required literal path; current ChatGPT backend instead uses Codex home; API-key backend reads this file. | restart / no |
+| `live.mode` | `chatgpt` (default) or `api_key`. `api_key` skips ChatGPT sign-in; usage is billed to the key at API rates. | restart / no |
+| `live.credential_file` | Required literal path; current ChatGPT backend instead uses Codex home; API-key backend reads this file (one line, 0600). `install --openai-api-key-file` and Settings **Save key** write it. | restart / no |
 | `live.voice` | Optional legacy voice fallback when codex.voice absent; pinned voice list below. | restart / no |
 | `live.session_idle_seconds` | Unsigned 64-bit seconds, default 120; Live-call reuse idle timeout, not post-reply listening. | restart / no |
 | `voice` | Optional run-listening table, defaults below. | restart / no |
@@ -386,7 +429,8 @@ a manual base edit still needs reload/restart. Prompt editing is independent of 
 | `codex.model` | Optional nonblank legacy runner-model alias; overrides agent.model. | restart / no |
 | `codex.delegate_model` | Optional nonblank runner model; overrides both older model keys. Unset everywhere, the bridge selects `gpt-6.1-sol`. An empty screen override selects that default even when a legacy model key is set. gpt-6.2-* models currently refuse the direct `web.run` that search needs (HTTP 400, decision 2026-11-21), so every delegated turn fails with them while search is on. | boundary / yes |
 | `codex.delegate_effort` | Optional nonempty string sent to runner; decoder imposes no enum, pinned app server validates supported effort. | boundary / yes |
-| `codex.delegate_fast` | Boolean, default false. True requests priority processing for the delegated model. False selects standard routing. | boundary / yes |
+| `codex.delegate_speed` | `standard` default, `fast` (priority) or `ultrafast`. Ultrafast needs `gpt-6-astra` or `gpt-6.1-sol` and costs more; an unsupported tier is served as standard and traced as `call.service_tier_downgraded`. Invalid type/value: `codex.delegate_speed: invalid type or value`. | boundary / yes |
+| `codex.delegate_fast` | Legacy boolean read when `delegate_speed` is absent: true is `fast`, false is `standard`. Both set to different tiers: `codex.delegate_speed: conflicts with codex.delegate_fast; remove delegate_fast`. Settings no longer writes it. | boundary / yes |
 | `codex.time_zone` | Default unset; IANA-name syntax (nonempty slash components using ASCII letters/digits/underscore/plus/minus). Not a lookup validating that zone exists. | restart / no |
 | `codex.skills` | Default []; ordered list of distinct owner skill names under `home.dir/skills`. Nonempty requires the configured Codex client runner and agent home. | restart / no |
 

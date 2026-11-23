@@ -5,15 +5,17 @@ use crate::bridge_mcp::{
     bridge_operations::{Operation, StartError},
 };
 use crate::bridge_settings::portos_permissions::portos_server;
-use echo_config::{BridgeConfig, SettingsEndpoint, SettingsOptions, SettingsOverlay, SettingsServerTools, WebSearch};
+use echo_config::{
+    BridgeConfig, DelegateSpeed, SettingsEndpoint, SettingsOptions, SettingsOverlay, SettingsServerTools, WebSearch,
+};
 use echo_mcp_auth::GrantStatus;
 use echo_screen_contract::{
     settings_v1::LinkStatusV1,
     settings_v2::{
-        AgentPatchV2, AgentValuesV2, CodexValuesV2, HomeSettingsV2, HomeToolGroupV2, LinkStatusV2, PortosActionV2,
-        PortosOperationStartedV2, PortosOperationStateV2, PortosOperationV2, PortosScopeV2, PortosServerV2,
-        PortosStatusV2, PortosToolV2, SaveResultV2, SettingsErrorV2, SettingsFieldsV2, SettingsSnapshotV2,
-        SettingsValuesV2, SettingsVersionV2, WebSearchV2,
+        AgentPatchV2, AgentValuesV2, CodexValuesV2, DelegateSpeedV2, HomeSettingsV2, HomeToolGroupV2, LinkStatusV2,
+        PortosActionV2, PortosOperationStartedV2, PortosOperationStateV2, PortosOperationV2, PortosScopeV2,
+        PortosServerV2, PortosStatusV2, PortosToolV2, SaveResultV2, SettingsErrorV2, SettingsFieldsV2,
+        SettingsSnapshotV2, SettingsValuesV2, SettingsVersionV2, WebSearchV2,
     },
 };
 use echo_screen_server::SettingsReply;
@@ -65,6 +67,10 @@ impl SettingsHost {
         let agent = fields.agent.unwrap_or_default();
         let voice = fields.voice.unwrap_or_default();
         self.check_voice(codex.voice.as_deref())?;
+        let delegate_speed = codex
+            .requested_speed()
+            .map_err(SettingsError::Prompt)?
+            .map(speed_from_v2);
         let daily_cap = agent
             .daily_request_cap
             .map(|value| value.as_str().parse::<u64>())
@@ -97,7 +103,7 @@ impl SettingsHost {
             }),
             delegate_model: codex.delegate_model,
             delegate_effort: codex.delegate_effort,
-            delegate_fast: codex.delegate_fast,
+            delegate_speed,
             agent_tools: fields.home.map(|home| {
                 home.agent_tools
                     .into_iter()
@@ -156,7 +162,7 @@ impl SettingsHost {
                     },
                     delegate_model: config.codex_model().unwrap_or_default().into(),
                     delegate_effort: config.codex.delegate_effort.clone().unwrap_or_default(),
-                    delegate_fast: config.codex.delegate_fast,
+                    delegate_speed: speed_to_v2(config.codex.delegate_speed),
                 },
                 agent: AgentValuesV2 {
                     daily_request_cap: accepted.settings.agent.daily_request_cap,
@@ -171,6 +177,22 @@ impl SettingsHost {
             restart_pending: accepted.restart_pending,
             warnings,
         })
+    }
+}
+
+const fn speed_from_v2(speed: DelegateSpeedV2) -> DelegateSpeed {
+    match speed {
+        DelegateSpeedV2::Standard => DelegateSpeed::Standard,
+        DelegateSpeedV2::Fast => DelegateSpeed::Fast,
+        DelegateSpeedV2::Ultrafast => DelegateSpeed::Ultrafast,
+    }
+}
+
+const fn speed_to_v2(speed: DelegateSpeed) -> DelegateSpeedV2 {
+    match speed {
+        DelegateSpeed::Standard => DelegateSpeedV2::Standard,
+        DelegateSpeed::Fast => DelegateSpeedV2::Fast,
+        DelegateSpeed::Ultrafast => DelegateSpeedV2::Ultrafast,
     }
 }
 

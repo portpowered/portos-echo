@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenAiApiKeyRequestV2",
+  "description": "Replace the API key used in `api_key` mode. Write-only.",
+  "type": "object",
+  "properties": {
+    "api_key": {
+      "type": "string",
+      "maxLength": 16384,
+      "minLength": 1,
+      "writeOnly": true
+    },
+    "version": {
+      "$ref": "#/$defs/SettingsVersionV2"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "api_key"
+  ],
+  "$defs": {
+    "SettingsVersionV2": {
+      "type": "integer",
+      "const": 2
+    }
+  }
+}

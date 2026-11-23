@@ -122,6 +122,8 @@ fn render(options: &cli::Options, event: &serde_json::Value) {
                         let _ = writeln!(io::stdout(), "{name}: {state} {fix}");
                     }
                 }
+                let mode = event["auth_mode"].as_str().unwrap_or("unavailable");
+                let _ = writeln!(io::stdout(), "auth_mode: {mode}");
             }
             "rollback" if event["ok"] == true => {
                 let _ = writeln!(io::stdout(), "Echo rolled back and started.");
@@ -174,6 +176,26 @@ fn fix(error: &str) -> &'static str {
         "setup_relink_required" => "ChatGPT still requires sign-in. Run install again to resume setup.",
         "setup_kill_switch" => "The bridge kill switch is active. Inspect status before resuming setup.",
         "setup_account_unsettled" => "Account cleanup could not be confirmed. Inspect status before resuming setup.",
+        "api_key_file_unreadable" => "Check that the --openai-api-key-file path exists and is readable.",
+        "api_key_file_invalid" => {
+            "Put only the OpenAI API key in the file: one line without control characters, at most 16 KiB."
+        }
+        "api_key_config_mode_chatgpt" => {
+            "The --config file uses ChatGPT sign-in. Set [live] mode = \"api_key\" to use an API key."
+        }
+        "api_key_mode_required" => {
+            "The installed config uses ChatGPT sign-in. Pass --config FILE with [live] mode = \"api_key\" and --force."
+        }
+        "api_key_path_unsupported" => {
+            "Set live.credential_file to a file directly in /data/local/echo-bridge/private/, such as live.json."
+        }
+        "api_key_install_failed" => "The API key could not be written on the Echo. Run install again.",
+        "setup_api_key_unconfirmed" => {
+            "The bridge did not report API-key mode. Check the installed config, then run install again."
+        }
+        "setup_api_key_rejected" => {
+            "The bridge could not authenticate with the API key. Run install again with --openai-api-key-file and a valid key."
+        }
         "command_not_implemented" => "This installer command is still under development.",
         _ => "Check device connectivity and prerequisites, then run install again.",
     }

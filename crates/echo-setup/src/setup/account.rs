@@ -90,7 +90,9 @@ pub(super) async fn guide(
     let forwards = connection.forward().await?;
     let result = {
         let provider = match command {
-            AccountCommand::EnsureSignin | AccountCommand::Signin => super::Provider::Chatgpt,
+            AccountCommand::EnsureSignin | AccountCommand::Signin | AccountCommand::ApiKeyStatus => {
+                super::Provider::Chatgpt
+            }
             AccountCommand::Link => super::Provider::Portos,
         };
         let pending = cancelled.until(connection.account(command));
@@ -175,6 +177,9 @@ pub enum AccountCommand {
     Signin,
     /// Ask the running bridge's existing link owner to link Port OS.
     Link,
+    /// In `api_key` mode, confirm the stopped bridge reports `mode: api-key`.
+    /// Presents no prompt and never reads or prints the key.
+    ApiKeyStatus,
 }
 
 impl AccountCommand {
@@ -193,6 +198,7 @@ impl AccountCommand {
             Self::EnsureSignin => "ensure-signin",
             Self::Signin => "signin",
             Self::Link => "link",
+            Self::ApiKeyStatus => "api-key-status",
         }
     }
 }

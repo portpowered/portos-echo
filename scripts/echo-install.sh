@@ -15,6 +15,7 @@ if [ "${1:-}" = --device ]; then
   shift
   device_mode=true
   setup_observation "$@"
+  [ "${1:-}" != api-key ] || { setup_api_key_arguments "$@" && set -- api-key; }
   adb() {
     case $1 in
       devices) printf 'List of devices attached\nlocal\tdevice\n' ;;
@@ -144,9 +145,9 @@ if [ "$1" = --help ]; then
 fi
 command_name=$1
 shift
-case $command_name in signin | ensure-signin | link | screen-setup) [ "$device_mode" = true ] || usage ;;
+case $command_name in signin | ensure-signin | link | screen-setup | api-key | api-key-status) [ "$device_mode" = true ] || usage ;;
 esac
-case $command_name in install | start | stop | status | uninstall | doctor | rollback | signin | ensure-signin | link | screen-setup) ;; *) usage ;; esac
+case $command_name in install | start | stop | status | uninstall | doctor | rollback | signin | ensure-signin | link | screen-setup | api-key | api-key-status) ;; *) usage ;; esac
 config='' bridge='' codex='' ca='' force=false purge=false seen=' '
 while [ "$#" -gt 0 ]; do
   flag=$1
@@ -196,6 +197,8 @@ umask 077
 log=$(mktemp) || fail 'private log creation failed'
 locked=false
 safe_paths=false
+# Sourced helpers call this once the owned paths are proven, enabling the exit cleanup.
+mark_paths_safe() { safe_paths=true; }
 starting=false
 device=/data/local/echo-bridge
 lock=/data/local/echo-bridge.lock
@@ -377,7 +380,7 @@ for root in '$device/private' '$device/home'; do
     done' sh {} + || exit 1
 done"
 }
-case $command_name in signin | ensure-signin | link | screen-setup)
+case $command_name in signin | ensure-signin | link | screen-setup | api-key | api-key-status)
   setup_operator
   exit 0
   ;;

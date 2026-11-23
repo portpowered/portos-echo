@@ -818,6 +818,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "echo-boot"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "echo-bridge"
 version = "0.1.0"
 dependencies = [
@@ -826,6 +834,7 @@ dependencies = [
  "echo-agent-api",
  "echo-agent-loop",
  "echo-audio",
+ "echo-boot",
  "echo-camera",
  "echo-codex",
  "echo-config",

@@ -5,6 +5,7 @@ main() {
   umask 077
   version='@ECHO_VERSION@'
   config=''
+  api_key=''
   seen=' '
   while [ "$#" -gt 0 ]; do
     flag=$1
@@ -13,15 +14,19 @@ main() {
     case $flag in
       --help)
         [ "$#" = 1 ] || usage
-        printf '%s\n' 'Usage: sh install.sh [--version VERSION] [--config FILE]' \
+        printf '%s\n' 'Usage: sh install.sh [--version VERSION] [--config FILE] [--openai-api-key-file FILE]' \
           'Linux x86_64; requires curl or wget, sha256sum and ordinary coreutils.' \
           'The source bootstrap requires --version. echo-setup locates adb.'
         exit 0
         ;;
-      --version | --config)
+      --version | --config | --openai-api-key-file)
         [ "$#" -ge 2 ] || usage
         case $2 in '' | --*) usage ;; esac
-        case $flag in --version) version=${2#v} ;; --config) config=$2 ;; esac
+        case $flag in
+          --version) version=${2#v} ;;
+          --config) config=$2 ;;
+          --openai-api-key-file) api_key=$2 ;;
+        esac
         shift
         ;;
       *) usage ;;
@@ -34,6 +39,9 @@ main() {
     END { exit (!ok || bad) }' || usage
   if [ -n "$config" ]; then
     [ -f "$config" ] && [ -r "$config" ] || fail 'config is not readable'
+  fi
+  if [ -n "$api_key" ]; then
+    [ -f "$api_key" ] && [ -r "$api_key" ] || fail 'API key file is not readable'
   fi
   for tool in sha256sum mktemp awk chmod rm; do
     command -v "$tool" >/dev/null 2>&1 || fail 'required installer utility is missing'
@@ -59,6 +67,8 @@ main() {
   chmod 700 "$binary" 2>/dev/null || fail 'installer permission change failed'
   set -- install --version "$version"
   [ -z "$config" ] || set -- "$@" --config "$config"
+  # Only the path crosses argv; echo-setup reads the key itself.
+  [ -z "$api_key" ] || set -- "$@" --openai-api-key-file "$api_key"
   "$binary" "$@"
 }
 fail() {

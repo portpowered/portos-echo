@@ -266,20 +266,48 @@ fn settings_v2_sparse_wire_preserves_decimal_cap_and_refuses_other_shapes() -> R
 }
 
 #[test]
-fn settings_v2_fast_mode_patch_is_sparse_and_strict() -> Result<(), Box<dyn Error>> {
-    use echo_screen_contract::{settings_v1::SettingsPatchV1, settings_v2::SettingsPatchV2};
+fn settings_v2_speed_patch_is_sparse_strict_and_reads_legacy_fast() -> Result<(), Box<dyn Error>> {
+    use echo_screen_contract::settings_v1::SettingsPatchV1;
+    use echo_screen_contract::settings_v2::{DelegateSpeedV2 as Speed, SettingsPatchV2};
     use serde_json::{Value, from_value, json, to_value};
 
-    let body = |version, value| json!({"version":version,"settings":{"codex":{"delegate_fast":value}}});
-    for value in [json!(true), json!(false)] {
-        let wire = body(2, value.clone());
+    let body = |version, codex| json!({"version":version,"settings":{"codex":codex}});
+    let conflict = Err("codex.delegate_speed: conflicts with codex.delegate_fast");
+    for (codex, expected) in [
+        (json!({"delegate_speed":"standard"}), Ok(Some(Speed::Standard))),
+        (json!({"delegate_speed":"fast"}), Ok(Some(Speed::Fast))),
+        (json!({"delegate_speed":"ultrafast"}), Ok(Some(Speed::Ultrafast))),
+        (json!({"delegate_fast":true}), Ok(Some(Speed::Fast))),
+        (json!({"delegate_fast":false}), Ok(Some(Speed::Standard))),
+        (
+            json!({"delegate_fast":true,"delegate_speed":"fast"}),
+            Ok(Some(Speed::Fast)),
+        ),
+        (json!({"delegate_effort":"low"}), Ok(None)),
+        (json!({"delegate_fast":true,"delegate_speed":"ultrafast"}), conflict),
+        (json!({"delegate_fast":false,"delegate_speed":"fast"}), conflict),
+    ] {
+        let wire = body(2, codex.clone());
         let patch: SettingsPatchV2 = from_value(wire.clone())?;
         assert!(patch.settings.valid_shape());
+        assert_eq!(
+            patch.settings.codex.as_ref().unwrap().requested_speed(),
+            expected,
+            "{codex}"
+        );
         assert_eq!(to_value(patch)?, wire);
-        assert!(from_value::<SettingsPatchV1>(body(1, value)).is_err());
+        assert!(from_value::<SettingsPatchV1>(body(1, codex)).is_err());
     }
-    for value in [Value::Null, json!("false"), json!(0)] {
-        assert!(from_value::<SettingsPatchV2>(body(2, value)).is_err());
+    for codex in [
+        json!({"delegate_fast":Value::Null}),
+        json!({"delegate_fast":"false"}),
+        json!({"delegate_fast":0}),
+        json!({"delegate_speed":Value::Null}),
+        json!({"delegate_speed":"priority"}),
+        json!({"delegate_speed":"Fast"}),
+        json!({"delegate_speed":true}),
+    ] {
+        assert!(from_value::<SettingsPatchV2>(body(2, codex)).is_err());
     }
     Ok(())
 }
@@ -292,7 +320,7 @@ fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>
         "version":2,
         "settings":{
             "voice":{"session_listen_enabled":true,"session_listen_seconds":15},
-            "codex":{"voice":"marin","web_search":"cached","delegate_model":"synthetic-runner","delegate_effort":"low","delegate_fast":false},
+            "codex":{"voice":"marin","web_search":"cached","delegate_model":"synthetic-runner","delegate_effort":"low","delegate_speed":"standard"},
             "agent":{"daily_request_cap":"9223372036854775807"},
             "home":{"agent_tools":["notes","prompts"]}
         },
@@ -315,13 +343,20 @@ fn settings_v2_snapshot_round_trips_public_values() -> Result<(), Box<dyn Error>
     portos_relink_advice_wire(&expected)?;
     preserved(&snapshot)?;
     let codex = "/settings/codex";
-    expected.pointer_mut(codex).unwrap()["delegate_fast"] = true.into();
-    let enabled: SettingsSnapshotV2 = serde_json::from_value(expected.clone())?;
-    assert_eq!(serde_json::to_value(enabled)?, expected);
-    for invalid in [serde_json::Value::Null, "false".into()] {
-        expected.pointer_mut(codex).unwrap()["delegate_fast"] = invalid;
+    for speed in ["fast", "ultrafast"] {
+        expected.pointer_mut(codex).unwrap()["delegate_speed"] = speed.into();
+        let enabled: SettingsSnapshotV2 = serde_json::from_value(expected.clone())?;
+        assert_eq!(serde_json::to_value(enabled)?, expected);
+    }
+    for invalid in [serde_json::Value::Null, "priority".into(), true.into()] {
+        expected.pointer_mut(codex).unwrap()["delegate_speed"] = invalid;
         assert!(serde_json::from_value::<SettingsSnapshotV2>(expected.clone()).is_err());
     }
+    let fields = expected.pointer_mut(codex).unwrap().as_object_mut().unwrap();
+    fields.remove("delegate_speed");
+    fields.insert("delegate_fast".into(), false.into());
+    // The snapshot names only `delegate_speed`; the legacy boolean is a patch input.
+    assert!(serde_json::from_value::<SettingsSnapshotV2>(expected.clone()).is_err());
     expected
         .pointer_mut(codex)
         .unwrap()

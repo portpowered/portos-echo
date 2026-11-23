@@ -146,6 +146,17 @@ fn shell(root: &Path, command: &str) -> io::Result<()> {
     {
         std::process::exit(1);
     }
+    if command.starts_with("umask 077 && cat > '/data/local/tmp/echo-setup-") {
+        // Private bytes arrive on stdin only; argv is recorded in the ledger.
+        let mut key = Vec::new();
+        io::stdin().read_to_end(&mut key)?;
+        fs::write(root.join("api-key-input"), key)?;
+        return Ok(());
+    }
+    if command.contains("/bundle/scripts/echo-install.sh' --device api-key --source '") {
+        fs::write(root.join("api-key-target"), command)?;
+        return writeln!(io::stdout(), "echo-install: api-key completed");
+    }
     if command.starts_with("sh -s -- --device ") {
         let mut script = Vec::new();
         io::stdin().read_to_end(&mut script)?;
@@ -228,7 +239,7 @@ fn account_reply(root: &Path, command: &str) -> io::Result<bool> {
         io::stdout().write_all(&fs::read(root.join("stop-reply"))?)?;
         return Ok(true);
     }
-    if !["signin", "ensure-signin", "link"]
+    if !["signin", "ensure-signin", "link", "api-key-status"]
         .iter()
         .any(|verb| command == format!("sh -s -- --device {verb}"))
     {

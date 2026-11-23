@@ -331,7 +331,7 @@ impl Configured {
                     prompt: echo_config::LIVE_INSTRUCTIONS,
                     model: Some(self.config.delegate_model()),
                     effort: self.config.codex.delegate_effort.as_deref(),
-                    fast: self.config.codex.delegate_fast,
+                    speed: self.config.codex.delegate_speed,
                     time_zone: self.config.codex.time_zone.as_deref(),
                     web_search: self.config.codex.web_search,
                 },

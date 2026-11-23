@@ -8,6 +8,7 @@ import "./settings/usability.mjs";
 import "./chrome/render.mjs";
 import "./settings/page.mjs";
 import "./settings/page-v2.mjs";
+import "./settings/codex/speed.mjs";
 import "./settings/accounts.mjs";
 import "./settings/packs.mjs";
 import "./settings/leave.mjs";

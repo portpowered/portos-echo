@@ -182,7 +182,7 @@ pub(in crate::bridge_voice) fn admission_options() -> ServeOptions<'static> {
             voice: Some("cedar"),
             model: Some("fixture-model"),
             effort: Some("low"),
-            fast: false,
+            speed: echo_config::DelegateSpeed::Standard,
             time_zone: Some("Europe/Berlin"),
             web_search: echo_config::WebSearch::default(),
             instructions: "configured\n\u{8a9e} \n",

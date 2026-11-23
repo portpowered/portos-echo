@@ -58,7 +58,7 @@ async fn configured_options_preserve_overrides_budgets_tools_and_default_voice()
     let mut prepared = configured();
     prepared.config.codex.delegate_model = Some("delegate-model".into());
     prepared.config.codex.delegate_effort = Some("custom-effort".into());
-    prepared.config.codex.delegate_fast = true;
+    prepared.config.codex.delegate_speed = echo_config::DelegateSpeed::Ultrafast;
     prepared.config.codex.time_zone = Some("Europe/Berlin".into());
     prepared.config.codex.voice = Some("cedar".into());
     prepared.config.live.voice = Some("alloy".into());
@@ -80,7 +80,7 @@ async fn configured_options_preserve_overrides_budgets_tools_and_default_voice()
         .voice
         .conversation(("snapshot", "live snapshot"), options.host.deadline);
     assert_eq!(call.call.effort, Some("custom-effort"));
-    assert!(call.call.fast);
+    assert_eq!(call.call.speed, echo_config::DelegateSpeed::Ultrafast);
     assert_eq!(call.call.time_zone, Some("Europe/Berlin"));
     assert_eq!(options.voice.call.instructions, echo_config::RUNNER_INSTRUCTIONS);
     assert_eq!(options.voice.tools, [tool]);

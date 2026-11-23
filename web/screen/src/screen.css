@@ -354,6 +354,12 @@ main.settings-open {
 .settings-row > label {
     font-weight: var(--text-label-weight);
 }
+/* A one-line note under the field it explains. */
+.settings-hint {
+    margin: calc(-1 * var(--space-2)) 0 var(--space-3);
+    font-size: 20px;
+    color: var(--color-muted-foreground);
+}
 /* A section's actions: its save button on the column's right edge, any
    secondary action to its left. The right-most answer is the primary one. */
 .settings-actions {

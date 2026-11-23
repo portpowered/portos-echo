@@ -43,6 +43,8 @@ pub enum SettingsOperation {
     PortosV2(PortosOperationV2),
     OpenAiSnapshot,
     OpenAiOperation(PortosOperationV2),
+    /// Replace the `api_key`-mode credential; the bridge validates and stores it.
+    OpenAiApiKey(echo_screen_contract::settings_v2::OpenAiApiKeyRequestV2),
     MuseProbe,
     Prompt(PromptKind, PromptSaveV1),
 }

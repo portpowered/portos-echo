@@ -1,6 +1,7 @@
 //! Read only the installed config and the one screen credential. Never open
 //! account, grant or Codex files, and never accept a host path as a device path.
 use super::wake::bounded;
+use crate::install::api_key::{self, AuthMode};
 use crate::{Failure, Result, adb::Adb, cli::Options};
 use echo_contracts::secret::Secret;
 use serde::Deserialize;
@@ -14,6 +15,8 @@ pub struct InstalledConnection {
     pub(super) deadline: Instant,
     account: super::account::AccountOwner,
     launch: Option<(String, String)>,
+    /// Installed `live.mode` and `live.credential_file`; never the credential.
+    live: (AuthMode, Option<String>),
 }
 
 impl InstalledConnection {
@@ -38,9 +41,27 @@ impl InstalledConnection {
                 deadline,
                 account: super::account::AccountOwner::default(),
                 launch,
+                live: api_key::project(raw.expose())?,
             })
         })
         .await
+    }
+
+    /// The installed credential mode; the bridge's own config owns it.
+    #[must_use]
+    pub fn auth_mode(&self) -> AuthMode {
+        self.live.0
+    }
+
+    /// Deliver a key to the installed `live.credential_file` while stopped.
+    /// # Errors
+    /// `api_key_mode_required`, `api_key_path_unsupported` or `api_key_install_failed`.
+    pub(crate) async fn install_api_key(&self, stage: &str, key: &Secret<String>) -> Result<()> {
+        if self.live.0 != AuthMode::ApiKey {
+            return Err(Failure("api_key_mode_required"));
+        }
+        let target = api_key::target(self.live.1.as_deref())?;
+        bounded(self.deadline, api_key::deliver(&self.adb, stage, key, target)).await
     }
 
     pub(super) async fn start(&self) -> Result<()> {
@@ -152,6 +173,14 @@ impl InstalledConnection {
             Ok(Secret::new(value.to_owned()))
         })
         .await
+    }
+}
+
+/// Read-only projection for status and doctor; any refusal is `unavailable`.
+pub(crate) async fn installed_auth_mode(adb: &Adb) -> &'static str {
+    match private_read(adb, "setup-config").await {
+        Ok(raw) => api_key::project(raw.expose()).map_or("unavailable", |(mode, _)| mode.label()),
+        Err(_) => "unavailable",
     }
 }
 
