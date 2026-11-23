@@ -60,7 +60,7 @@ impl Native {
         if self.seen.len() >= 1024 {
             return Err(Error::Trace);
         }
-        let run = self.trace.active_run.lock().map_err(|_| Error::Trace)?.clone();
+        let run = self.trace.current_run()?;
         let mut fields = json!({"delegation_id":id,"thread_id":thread,"task":params["item"]});
         if let Some(turn) = &self.turn {
             fields["turn_id"] = turn.clone().into();

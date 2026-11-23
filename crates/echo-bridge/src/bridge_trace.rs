@@ -295,7 +295,7 @@ mod bridge_spine_tests {
                 SystemClock.now().monotonic < deadline,
                 "row was not flushed on the first trace tick"
             );
-            std::thread::yield_now();
+            tokio::task::yield_now().await;
         }
         assert_eq!(trace.started.elapsed(), echo_sub_trace::TICK);
     }
