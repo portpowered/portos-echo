@@ -11,6 +11,9 @@ export class Presentation {
     reopened(): void {
         this.fresh = true;
     }
+    displays(wire: string): boolean {
+        return this.current !== undefined && this.wire === wire;
+    }
     receive(wire: string): boolean {
         const next = decodeFrame(wire);
         const replay = this.fresh

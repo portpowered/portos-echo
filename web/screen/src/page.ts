@@ -6,6 +6,7 @@ import { formatExpiry } from "./expiry";
 import { mountSettings } from "./settings/view";
 import { mountPacks } from "./packs/view";
 import { mouthEvents } from "./packs/mouth";
+import { mountChrome } from "./chrome";
 
 function text(tag: string, value: string): HTMLElement {
     const node = document.createElement(tag);
@@ -36,7 +37,6 @@ export function startPage(root: HTMLElement, href: string): () => void {
     let expiryTimer: ReturnType<typeof setTimeout> | undefined;
     let settings: ReturnType<typeof mountSettings> | undefined;
     let packs: ReturnType<typeof mountPacks> | undefined;
-    let unwatchBuild: (() => void) | undefined;
     let failureTimer: ReturnType<typeof setTimeout> | undefined;
     const FAILURE = "Action could not be sent";
     // Only a failed action reports, and the report clears itself: the ready
@@ -261,20 +261,43 @@ export function startPage(root: HTMLElement, href: string): () => void {
                 (signal) =>
                     postAction(urls.actions, { action: "relink" }, signal),
             );
-        unwatchBuild = watchBuild(
-            stream,
-            href,
-            () => settings?.dirty() ?? false,
-        );
     } catch {
         diagnostic.textContent = "Screen configuration is invalid";
         return () => {};
     }
+    let lastFrame = -Infinity;
+    const build = watchBuild(
+        stream,
+        href,
+        () => settings?.dirty() ?? false,
+        (started) => {
+            if (lastFrame > started) return;
+            chrome.wait();
+            stream.restart();
+        },
+    );
+    const chrome = mountChrome((enabled) => {
+        build.setLive(enabled && !document.hidden);
+    });
+    function offline(): void {
+        chrome.wait();
+    }
+    function visibility(): void {
+        build.setLive(chrome.enabled && !document.hidden);
+    }
+    if (!navigator.onLine) offline();
+    window.addEventListener("offline", offline);
+    document.addEventListener("visibilitychange", visibility);
     stream.onmessage = (event) => {
         if (disposed) return;
         try {
-            if (presentation.receive(event.data) && presentation.current)
-                render(presentation.current);
+            const changed = presentation.receive(event.data);
+            const frame = presentation.current;
+            if (frame && (changed || presentation.displays(event.data))) {
+                lastFrame = performance.now();
+                chrome.update(frame.state.state);
+                if (changed) render(frame);
+            }
         } catch {
             diagnostic.textContent = "Screen update could not be read";
         }
@@ -289,7 +312,8 @@ export function startPage(root: HTMLElement, href: string): () => void {
     };
     stream.onerror = () => {
         if (disposed) return;
-        diagnostic.textContent = INTERRUPTED;
+        chrome.wait();
+        if (!chrome.enabled) diagnostic.textContent = INTERRUPTED;
     };
     function dispose(): void {
         if (disposed) return;
@@ -300,7 +324,10 @@ export function startPage(root: HTMLElement, href: string): () => void {
         clearTimeout(failureTimer);
         settings?.dispose();
         packs?.dispose();
-        unwatchBuild?.();
+        chrome.dispose();
+        build.dispose();
+        window.removeEventListener("offline", offline);
+        document.removeEventListener("visibilitychange", visibility);
         stream.close();
         cancelPending?.();
         window.removeEventListener("pagehide", dispose);

@@ -226,11 +226,26 @@ public final class ScreenTest {
         System.out.println("screen-config: restore=true; top=16; bottom=10; url=[redacted]");
     }
 
+    private static void chrome() {
+        for (boolean fullPanel : new boolean[] {false, true}) {
+            ScreenConfig.Chrome legacy = ScreenConfig.chrome(true, fullPanel, true);
+            equal(legacy.top, 16);
+            equal(legacy.bottom, 10);
+        }
+        equal(ScreenConfig.chrome(false, false, true), ScreenConfig.Chrome.LEGACY);
+        equal(ScreenConfig.chrome(false, true, false), ScreenConfig.Chrome.LEGACY);
+        ScreenConfig.Chrome page = ScreenConfig.chrome(false, true, true);
+        equal(page.top, 0);
+        equal(page.bottom, 0);
+        System.out.println("screen-chrome: legacy=16/10; uncertain or untrusted=legacy; confirmed=0/0");
+    }
+
     public static void main(String[] args) {
         retryPolicy();
         loadPolicy();
         stalledLoad();
         directBoot();
         configuration();
+        chrome();
     }
 }

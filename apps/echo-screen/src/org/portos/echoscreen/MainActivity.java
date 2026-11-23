@@ -6,11 +6,16 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Point;
+import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.UserManager;
+import android.view.Display;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -25,11 +30,17 @@ import android.widget.TextView;
 
 /** Thin Android adapters. No URL, intent, error description or token is logged. */
 public final class MainActivity extends Activity implements ScreenLoad.Port {
+    private static final String ENABLE_CHROME =
+            "document.documentElement.setAttribute('data-echo-screen-chrome','page')";
+    private static final String DISABLE_CHROME =
+            "document.documentElement.removeAttribute('data-echo-screen-chrome')";
     private final Handler handler = new Handler(Looper.getMainLooper());
     private ScreenLoad load;
     private FrameLayout frame;
     private TextView message;
     private WebView web;
+    private Secret trustedDocument;
+    private boolean markedPageOwned;
     private CameraPairing pairing;
     private AndroidStillCapture camera;
     private NativeCameraClient nativeCamera;
@@ -55,6 +66,7 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
         message.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         frame.addView(message, fill());
         setContentView(frame);
+        frame.getViewTreeObserver().addOnGlobalLayoutListener(this::refreshChrome);
         load = new ScreenLoad(this);
         startLoad(getIntent());
         if (!userUnlocked()) {
@@ -121,6 +133,11 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
         startCamera();
     }
 
+    @Override protected void onResume() {
+        super.onResume();
+        refreshChrome();
+    }
+
     @Override protected void onStop() {
         started = false;
         stopCamera();
@@ -156,6 +173,51 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
     @Override public void onWindowFocusChanged(boolean focused) {
         super.onWindowFocusChanged(focused);
         if (focused) immersive();
+        refreshChrome();
+    }
+
+    private boolean legacyHomeAvailable() {
+        Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                .setPackage("org.hassmic.home");
+        int flags = PackageManager.MATCH_DEFAULT_ONLY | PackageManager.MATCH_DIRECT_BOOT_AWARE
+                | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+        try {
+            return !getPackageManager().queryIntentActivities(home, flags).isEmpty();
+        } catch (SecurityException ignored) {
+            return true;
+        }
+    }
+
+    private boolean fullPanel() {
+        Display display = frame.getDisplay();
+        if (display == null || display.getDisplayId() != Display.DEFAULT_DISPLAY
+                || isInMultiWindowMode() || !frame.isLaidOut()) return false;
+        Point panel = new Point();
+        display.getRealSize(panel);
+        int[] origin = new int[2];
+        frame.getLocationOnScreen(origin);
+        Rect visible = new Rect();
+        frame.getWindowVisibleDisplayFrame(visible);
+        return panel.x > 0 && panel.y > 0 && origin[0] == 0 && origin[1] == 0
+                && frame.getWidth() == panel.x && frame.getHeight() == panel.y
+                && visible.left == 0 && visible.top == 0
+                && visible.right == panel.x && visible.bottom == panel.y;
+    }
+
+    private void refreshChrome() {
+        if (frame == null) return;
+        boolean trusted = web != null && trustedDocument != null
+                && trustedDocument.expose().equals(web.getUrl());
+        ScreenConfig.Chrome chrome = ScreenConfig.chrome(
+                trusted && legacyHomeAvailable(), trusted && fullPanel(), trusted);
+        if (frame.getPaddingTop() != chrome.top || frame.getPaddingBottom() != chrome.bottom) {
+            frame.setPadding(0, chrome.top, 0, chrome.bottom);
+        }
+        boolean enabled = chrome == ScreenConfig.Chrome.PAGE;
+        if (trusted && enabled != markedPageOwned) {
+            markedPageOwned = enabled;
+            web.evaluateJavascript(enabled ? ENABLE_CHROME : DISABLE_CHROME, null);
+        }
     }
 
     @Override public void cancel() {
@@ -169,6 +231,9 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
 
     private void discard(WebView view) {
         web = null;
+        trustedDocument = null;
+        markedPageOwned = false;
+        refreshChrome();
         frame.removeView(view);
         view.destroy();
     }
@@ -187,6 +252,12 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
         web.getSettings().setJavaScriptEnabled(true);
         web.getSettings().setDomStorageEnabled(true);
         web.setWebViewClient(new WebViewClient() {
+            @Override public void onPageStarted(WebView view, String location, Bitmap icon) {
+                if (view != web) return;
+                trustedDocument = null;
+                markedPageOwned = false;
+                refreshChrome();
+            }
             @Override public void onReceivedError(WebView view, WebResourceRequest request,
                     WebResourceError error) {
                 load.error(attempt, request.isForMainFrame());
@@ -195,8 +266,11 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
                     WebResourceResponse response) {
                 load.error(attempt, request.isForMainFrame());
             }
-            @Override public void onPageFinished(WebView view, String ignored) {
+            @Override public void onPageFinished(WebView view, String location) {
+                if (view != web) return;
+                if (url.expose().equals(location)) trustedDocument = url;
                 load.finished(attempt);
+                refreshChrome();
             }
             @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
                 if (view == web) {

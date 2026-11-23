@@ -4,7 +4,11 @@ use axum::{
 };
 
 const INDEX: &str = include_str!("../../../web/screen/src/index.html");
-const CSS: &str = include_str!("../../../web/screen/src/screen.css");
+const CSS: &str = concat!(
+    include_str!("../../../web/screen/src/screen.css"),
+    "\n",
+    include_str!("../../../web/screen/src/chrome/screen.css"),
+);
 
 // The identity of the page this server serves: a digest of the document, both stylesheets and the script
 // bundle. The document carries it in its echo-build meta. A page that reconnects to a server whose document

@@ -21,6 +21,22 @@ final class ScreenConfig {
         this.message = message;
     }
 
+    enum Chrome {
+        LEGACY(TOP, BOTTOM), PAGE(0, 0);
+
+        final int top;
+        final int bottom;
+
+        Chrome(int top, int bottom) {
+            this.top = top;
+            this.bottom = bottom;
+        }
+    }
+
+    static Chrome chrome(boolean legacyHome, boolean fullPanel, boolean trustedDocument) {
+        return !legacyHome && fullPanel && trustedDocument ? Chrome.PAGE : Chrome.LEGACY;
+    }
+
     static ScreenConfig select(boolean supplied, Secret extra, Store store) {
         Secret selected = supplied ? extra : store.read();
         if (selected == null && !supplied) {
