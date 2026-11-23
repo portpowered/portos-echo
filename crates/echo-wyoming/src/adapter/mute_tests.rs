@@ -27,7 +27,10 @@ async fn mute_orders_snapshot_frames_eof_and_cancellation_safe_event_delivery() 
         assert!(mute.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
         drop(mute); // cancellation must not lose the pending Mute.
         for n in 0..2 {
-            assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload, [n, 0]);
+            assert_eq!(
+                MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload.as_ref(),
+                [n, 0]
+            );
         }
         assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
         assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Mute(true))));

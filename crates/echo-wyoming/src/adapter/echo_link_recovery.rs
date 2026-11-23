@@ -43,7 +43,10 @@ async fn m1_restart_regression_wake_before_info_preserves_played() {
         };
         assert_eq!(run.wake_phrase(), "Computer");
         for n in 0..10 {
-            assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload, [n, 0]);
+            assert_eq!(
+                MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload.as_ref(),
+                [n, 0]
+            );
         }
         assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap(), None);
         assert_eq!(
@@ -70,7 +73,10 @@ async fn echo_link_queued_microphone_drains_before_transport_or_protocol_failure
                 unreachable!()
             };
             assert_eq!(run.wake_phrase(), "Computer");
-            assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload, [1, 2]);
+            assert_eq!(
+                MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload.as_ref(),
+                [1, 2]
+            );
             assert_eq!(
                 MicrophoneRun::stats(&run),
                 RunStats {

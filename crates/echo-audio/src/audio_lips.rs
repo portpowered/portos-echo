@@ -119,6 +119,13 @@ impl LipAnalyser {
         self.open == 0
     }
 
+    /// Forget the prior reply's mouth state and keep the window scratch.
+    pub fn reset(&mut self) {
+        self.open = 0;
+        self.seen = None;
+        self.held = None;
+    }
+
     /// Analyse the next window. Silence costs one pass for its level.
     pub fn window(&mut self, pcm: &[u8]) -> LipSample {
         let (samples, _) = pcm.as_chunks::<2>();

@@ -1,9 +1,9 @@
 //! T1: lip sync from the production hand-off (`Mouth::wrote`) on a paused
 //! clock. The screen is a recording sink: taking, stalled, busy or absent.
-use super::{LipSink, Lips};
+use super::reply_lips::{LipSink, Lips};
 use crate::{bridge_codex::ReplyAudio, bridge_runtime::bridge_pacing::LeadPacer, bridge_world::Controller};
 use echo_audio::FrameQueue;
-use echo_screen_contract::mouth::MouthBatch;
+use echo_screen_contract::mouth::{MouthBatch, MouthSample};
 use echo_sub_pacer::LipStats;
 use std::future::Future;
 use std::{
@@ -30,8 +30,11 @@ impl LipSink for Screen {
         self.wanted
     }
 
-    fn send(&self, batch: &MouthBatch) -> usize {
-        self.sent.lock().unwrap().push(batch.clone());
+    fn send(&self, sent_ms: u64, samples: &[MouthSample]) -> usize {
+        self.sent.lock().unwrap().push(MouthBatch {
+            sent_ms,
+            samples: samples.to_vec(),
+        });
         usize::from(self.takes)
     }
 }

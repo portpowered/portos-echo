@@ -73,7 +73,7 @@ impl MicrophoneRun for Run {
                 width: 2,
                 channels: 1,
             },
-            payload: vec![0; 640],
+            payload: vec![0; 640].into(),
         })))
     }
     fn stats(&self) -> RunStats {

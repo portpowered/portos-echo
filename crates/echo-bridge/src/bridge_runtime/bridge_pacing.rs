@@ -5,6 +5,9 @@ use tokio::time::Instant;
 #[cfg(test)]
 mod playout_tests;
 pub(crate) mod reply_lips;
+#[cfg(test)]
+#[path = "bridge_pacing/reply_lips_tests.rs"]
+mod reply_lips_tests;
 
 pub use echo_core_api::BargeTrigger;
 pub use echo_sub_pacer::{Heard, LipStats};

@@ -61,14 +61,14 @@ impl AudioTrack {
             },
         ))
     }
-    pub(crate) async fn send(&self, data: Vec<u8>) -> Result<(), Error> {
+    pub(crate) async fn send(&self, data: &[u8]) -> Result<(), Error> {
         tokio::time::timeout(
             Duration::from_millis(100),
             self.track.write_sample(
                 self.ssrc,
                 111,
                 &rtc::media::Sample {
-                    data: data.into(),
+                    data: data.to_vec().into(),
                     duration: Duration::from_millis(20),
                     ..rtc::media::Sample::new(tokio::time::Instant::now().into_std())
                 },

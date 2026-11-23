@@ -85,7 +85,7 @@ fn wake(observer: &Observer, samples: usize) {
         "Computer",
         vec![MicFrame {
             format: crate::bridge_audio::format(16_000),
-            payload: vec![0; samples * 2],
+            payload: vec![0; samples * 2].into(),
         }],
     );
 }

@@ -4,7 +4,7 @@ use echo_link::{
     LinkConnector,
     fake::{Command, FakeConnector, Observer},
 };
-use echo_screen_contract::mouth::MouthBatch;
+use echo_screen_contract::mouth::{MouthBatch, MouthSample};
 use std::{
     cell::{Cell, RefCell},
     future::poll_fn,
@@ -22,8 +22,11 @@ impl LipSink for RemoteEndScreen {
         Some(true)
     }
 
-    fn send(&self, batch: &MouthBatch) -> usize {
-        self.0.lock().unwrap().push(batch.clone());
+    fn send(&self, sent_ms: u64, samples: &[MouthSample]) -> usize {
+        self.0.lock().unwrap().push(MouthBatch {
+            sent_ms,
+            samples: samples.to_vec(),
+        });
         1
     }
 }

@@ -52,11 +52,15 @@ NEXTEST_SHARD = $(if $(NEXTEST_PARTITION),--partition $(NEXTEST_PARTITION) --no-
 SCENARIO_PARTITION ?=
 SCENARIO_SHARD = $(if $(SCENARIO_PARTITION),--partition $(SCENARIO_PARTITION))
 
-.PHONY: test-unit-rust test-unit-python test-unit-screen
+.PHONY: test-unit-rust test-unit-python test-unit-screen test-alloc
 test-unit: test-unit-rust test-unit-python test-unit-screen
 
 test-unit-rust:
 	cargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci $(NEXTEST_SHARD)
+	if [ -z "$(NEXTEST_PARTITION)" ] || [ "$(NEXTEST_PARTITION)" = count:1/4 ]; then $(MAKE) test-alloc; fi
+
+test-alloc:
+	cargo nextest run --locked -p echo-bridge --test world_alloc_t3 --run-ignored only --config-file .github/nextest.toml --profile ci --success-output immediate
 
 test-unit-python:
 	python -m unittest discover -s crates/echo-lab/src/lab_run/sim/host_tests

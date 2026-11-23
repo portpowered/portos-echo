@@ -37,7 +37,10 @@ async fn first_reconnected_wake_completes_with_lifecycle_consumer_held() {
     let mut interrupted = events.recv().await.unwrap().unwrap().run.unwrap();
     assert_eq!(events.recv().await.unwrap().unwrap().audio_count, 1);
     drop(old);
-    assert_eq!(interrupted.recv().await.unwrap().unwrap().payload, vec![99; 2048]);
+    assert_eq!(
+        interrupted.recv().await.unwrap().unwrap().payload.as_ref(),
+        vec![99; 2048]
+    );
     assert_eq!(interrupted.recv().await, Err(Error::Disconnected));
     let (io, mut fresh) = duplex(4096);
     connections.send(Ok(io)).await.unwrap();
@@ -58,7 +61,7 @@ async fn first_reconnected_wake_completes_with_lifecycle_consumer_held() {
             }
         );
         for index in 1..33 {
-            assert_eq!(run.recv().await.unwrap().unwrap().payload, vec![index; 2048]);
+            assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), vec![index; 2048]);
         }
         assert_eq!(run.recv().await.unwrap(), None);
         assert_eq!(events.recv().await.unwrap().unwrap().audio_count, 33);
@@ -246,7 +249,7 @@ async fn queue_retains_newest_counts_drops_and_drains_before_error() {
             timestamp: None,
             extra: std::collections::BTreeMap::new(),
         },
-        payload: vec![value],
+        payload: vec![value].into(),
     };
     for value in 1..=5 {
         queue.push(frame(value));
@@ -293,24 +296,34 @@ async fn invalid_wire_limits_and_closed_writer_have_fixed_errors() {
     use echo_contracts::wyoming::WyomingEvent;
     use serde_json::Value;
     for bytes in [b"{not-json}\n".as_slice(), b"123456789", b"{"] {
-        let (mut writer, mut reader) = duplex(1024);
+        let (mut writer, reader) = duplex(1024);
         writer.write_all(bytes).await.unwrap();
         drop(writer);
-        assert_eq!(wyoming_wire::read(&mut reader, 8).await.unwrap_err(), Error::Protocol);
+        assert_eq!(
+            wyoming_wire::Reader::new(8, 1)
+                .read(&mut tokio::io::BufReader::new(reader))
+                .await
+                .unwrap_err(),
+            Error::Protocol
+        );
     }
     let (mut writer, reader) = duplex(1024);
     let event = WyomingEvent::Ping(Value::Null);
     assert_eq!(
-        wyoming_wire::write(&mut writer, &event, vec![0; 9], 8).await,
+        wyoming_wire::Writer::new()
+            .write(&mut writer, &event, vec![0; 9], 8)
+            .await,
         Err(Error::Capacity)
     );
     assert_eq!(
-        wyoming_wire::write(&mut writer, &event, vec![], 8).await,
+        wyoming_wire::Writer::new().write(&mut writer, &event, vec![], 8).await,
         Err(Error::Capacity)
     );
     drop(reader);
     assert_eq!(
-        wyoming_wire::write(&mut writer, &event, vec![], 1024).await,
+        wyoming_wire::Writer::new()
+            .write(&mut writer, &event, vec![], 1024)
+            .await,
         Err(Error::Disconnected)
     );
 }
@@ -435,10 +448,16 @@ async fn oversized_and_truncated_frames_are_protocol_errors() {
         b"{\"type\":\"audio-chunk\",\"payload_length\":1000}\n".as_slice(),
         b"{\"type\":\"ping\",\"payload_length\":2}\nx",
     ] {
-        let (mut writer, mut reader) = duplex(4096);
+        let (mut writer, reader) = duplex(4096);
         writer.write_all(bytes).await.unwrap();
         drop(writer);
-        assert_eq!(wyoming_wire::read(&mut reader, 128).await.unwrap_err(), Error::Protocol);
+        assert_eq!(
+            wyoming_wire::Reader::new(128, 1)
+                .read(&mut tokio::io::BufReader::new(reader))
+                .await
+                .unwrap_err(),
+            Error::Protocol
+        );
     }
 }
 

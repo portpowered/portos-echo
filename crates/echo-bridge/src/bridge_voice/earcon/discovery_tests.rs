@@ -36,7 +36,7 @@ fn frame(value: i16) -> MicFrame {
             width: 2,
             channels: 1,
         },
-        payload: value.to_le_bytes().repeat(320),
+        payload: value.to_le_bytes().repeat(320).into(),
     }
 }
 

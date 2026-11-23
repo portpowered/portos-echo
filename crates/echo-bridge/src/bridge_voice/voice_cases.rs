@@ -235,7 +235,7 @@ async fn voice_premature_played_and_failed_playback_never_succeed() {
 async fn voice_initial_mute_and_failed_send_keep_exact_accepted_capture_counts() {
     let frame = || MicFrame {
         format: crate::bridge_audio::format(16_000),
-        payload: vec![0; 1280],
+        payload: vec![0; 1280].into(),
     };
     let (mut port, _tx) = port();
     let mut source = Source::new(200, true).unwrap();
@@ -254,7 +254,7 @@ async fn voice_initial_mute_and_failed_send_keep_exact_accepted_capture_counts()
 async fn voice_duplicate_unmute_preserves_pcm_but_a_transition_discards_partial_capture() {
     let frame = |value: i16| MicFrame {
         format: crate::bridge_audio::format(16_000),
-        payload: value.to_le_bytes().repeat(160),
+        payload: value.to_le_bytes().repeat(160).into(),
     };
     let (port, _tx) = port();
     let mut source = Source::new(200, false).unwrap();
@@ -320,7 +320,7 @@ async fn voice_wire_mute_drains_preceding_capture_and_counts_only_suppressed_chu
         (1_i16..=4)
             .map(|value| MicFrame {
                 format: crate::bridge_audio::format(16_000),
-                payload: value.to_le_bytes().repeat(320),
+                payload: value.to_le_bytes().repeat(320).into(),
             })
             .collect(),
         2,
