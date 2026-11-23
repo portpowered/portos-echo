@@ -17,16 +17,20 @@ fn row(id: usize) -> Event {
     }))
 }
 
+fn fill(state: &mut State, clock: &PausedClock, out: &mut Commands) {
+    for id in 0..CAPACITY {
+        let mut event = row(id);
+        Trace::on_event(state, &mut event, clock.now(), out);
+        assert!(matches!(event, Event::Trace(None)));
+    }
+}
+
 #[test]
 fn full_ring_rejects_without_eviction_and_drains_in_admission_order() {
     let mut state = State::default();
     let clock = PausedClock::new(UNIX_EPOCH);
     let mut out = Commands::default();
-    for id in 0..CAPACITY {
-        let mut event = row(id);
-        Trace::on_event(&mut state, &mut event, clock.now(), &mut out);
-        assert!(matches!(event, Event::Trace(None)));
-    }
+    fill(&mut state, &clock, &mut out);
     let mut overflow = row(CAPACITY);
     Trace::on_event(&mut state, &mut overflow, clock.now(), &mut out);
     assert!(matches!(overflow, Event::Trace(Some(_))));

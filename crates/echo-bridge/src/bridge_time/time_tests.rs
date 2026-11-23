@@ -94,15 +94,31 @@ async fn t3_time_no_servers_measure_and_trace_nothing() {
     assert_eq!(rows(&path), Vec::<Value>::new());
 }
 
-#[tokio::test]
-async fn t3_time_failure_diagnostic_drains_without_a_followup_event() {
+async fn invalid_sntp_reply() -> Outcome {
     use echo_core_api::{Clock, SystemClock};
 
     // The clock monitor receives an invalid SNTP reply on each loopback attempt.
     let mut fake = Fake::ahead(0);
     fake.stratum = 0;
     let server = fake.serve().await;
-    let outcome = super::sntp::measure(&[server], Duration::from_millis(400)).await;
+    let query = tokio::spawn(async move { super::sntp::measure(&[server], Duration::from_millis(400)).await });
+    // Let the real loopback socket progress without allowing Tokio to auto-advance.
+    let watchdog = SystemClock.now().monotonic + Duration::from_secs(2);
+    while !query.is_finished() {
+        assert!(
+            SystemClock.now().monotonic < watchdog,
+            "loopback clock query did not finish"
+        );
+        tokio::task::yield_now().await;
+    }
+    query.await.unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn t3_time_failure_diagnostic_drains_without_a_followup_event() {
+    use echo_core_api::{Clock, SystemClock};
+
+    let outcome = invalid_sntp_reply().await;
     assert!(matches!(
         outcome,
         Outcome::Unsynced {
@@ -111,7 +127,6 @@ async fn t3_time_failure_diagnostic_drains_without_a_followup_event() {
         }
     ));
 
-    tokio::time::pause();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("trace");
     let trace = Trace::open(&path, "api_key").unwrap();

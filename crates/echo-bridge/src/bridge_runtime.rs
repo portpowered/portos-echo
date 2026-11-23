@@ -141,12 +141,13 @@ async fn execute_controlled_in<C: LinkConnector>(
 ) -> Result<(), Error> {
     validate_sim(&settings)?;
     let mut delegation = bridge_delegation::Host::new(&settings, control.utc_day);
+    let mode = match settings.mode {
+        LiveAuthMode::Chatgpt => "chatgpt",
+        LiveAuthMode::ApiKey => "api_key",
+    };
     let mut trace = Trace::open_in(
         &settings.trace,
-        match settings.mode {
-            LiveAuthMode::Chatgpt => "chatgpt",
-            LiveAuthMode::ApiKey => "api_key",
-        },
+        mode,
         world.unwrap_or_else(crate::bridge_world::Controller::new),
     )?
     .with_payloads(settings.config.as_ref().is_none_or(|config| config.trace.payloads));

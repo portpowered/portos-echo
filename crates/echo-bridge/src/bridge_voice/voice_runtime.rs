@@ -220,12 +220,13 @@ pub(super) async fn execute_owned<C: LinkConnector, P: MediaPeer>(
     settings: Option<(SettingsService, tokio::sync::mpsc::Sender<SettingsRequest>)>,
     world: Option<std::sync::Arc<crate::bridge_world::Controller>>,
 ) -> Result<RuntimeCompletion, Error> {
+    let mode = match options.host.mode {
+        LiveMode::Chatgpt => "chatgpt",
+        LiveMode::ApiKey => "api_key",
+    };
     let mut trace = Trace::open_in(
         options.trace,
-        match options.host.mode {
-            LiveMode::Chatgpt => "chatgpt",
-            LiveMode::ApiKey => "api_key",
-        },
+        mode,
         world.unwrap_or_else(crate::bridge_world::Controller::new),
     )?
     .with_payloads(options.delegation.is_none_or(|config| config.trace.payloads));

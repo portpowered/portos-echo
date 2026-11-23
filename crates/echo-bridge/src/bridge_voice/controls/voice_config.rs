@@ -162,7 +162,7 @@ impl Configured {
                     None,
                     self.world.clone(),
                 );
-                super::voice_wait::run_marks::scope(self.knobs(), work)
+                super::voice_wait::run_marks::scope(self.knobs(), Box::pin(work))
                     .await
                     .map(|_| ())
             },
