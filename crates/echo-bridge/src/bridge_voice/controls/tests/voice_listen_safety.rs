@@ -67,7 +67,7 @@ impl Input {
 }
 
 fn source() -> Source {
-    let mut source = Source::new(200, false).unwrap();
+    let source = Source::new(200, false).unwrap();
     source
         .controller
         .admit_response(Instant::now() + Duration::from_secs(10))
