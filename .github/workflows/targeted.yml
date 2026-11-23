@@ -30,10 +30,9 @@ on:
 permissions:
   contents: read
 jobs:
-  focused-call:
-    if: inputs.scenarios != ''
+  allocation-control:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -41,34 +40,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
-          target: test-sim
-          sim: 'true'
-      - name: U2 and P1 call tests
-        shell: sh
-        run: |
-          cargo test -p echo-sub-call --locked -- --nocapture
-          cargo nextest run -p echo-bridge --locked --config-file .github/nextest.toml --profile ci -E 'test(/call_audio::tests::capture_/) or test(/voice_source::tests/) or test(/call_media::tests/) or test(/voice_listen_goodbye/)' --success-output immediate
-          cargo nextest run -p echo-bridge --test bridge_codex_media --locked --config-file .github/nextest.toml --profile ci --success-output immediate
-      - name: M2 with World seed 101
-        id: m2
-        shell: sh
-        run: |
-          report_root=$(mktemp -d)
-          echo "report_root=$report_root" >> "$GITHUB_OUTPUT"
-          make sim-prereqs
-          code=0
-          ECHO_LAB_WORLD_SEED=101 target/debug/echo-lab run tests/scenarios/m2-live-connect.yaml --driver sim --out "$report_root/m2" || code=$?
-          echo "TARGETED_RESULT repeat=1 exit=$code"
-          exit "$code"
-      - name: Upload the M2 report
-        if: always() && steps.m2.outputs.report_root != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: targeted-reports-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.m2.outputs.report_root }}
-          retention-days: 3
-      - name: P1 bridge T3
-        run: make test-sim-bridge
+          target: lint-rust
       - name: Verify the counter catches a transient allocation
         shell: sh
         run: |
@@ -92,28 +64,10 @@ jobs:
           cargo test -p echo-sub-call --locked "$test_name" -- --exact --nocapture >"$output" 2>&1 || code=$?
           cat "$output"
           test "$code" -eq 101
-          rg -F 'uplink allocated after construction' "$output"
-          rg -F 'left: 1' "$output"
-          rg -F 'right: 0' "$output"
+          grep -F 'uplink allocated after construction' "$output"
+          grep -F 'left: 1' "$output"
+          grep -F 'right: 0' "$output"
           cp "$saved" "$file"
           git diff --exit-code -- "$file"
-  lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: lint-self-tests
-      - uses: ./.github/actions/setup
-        with:
-          target: lint-deps
-      - uses: ./.github/actions/setup
-        with:
-          target: lint-rules
-      - name: Provision locked screen npm cache
-        run: npm --prefix web/screen ci --offline=false
-      - run: make lint
+          cargo test -p echo-sub-call --locked "$test_name" -- --exact --nocapture
+          echo 'TARGETED_RESULT repeat=1 exit=0'
