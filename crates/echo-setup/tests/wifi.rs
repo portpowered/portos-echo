@@ -61,7 +61,7 @@ impl Drop for Fixture {
 
 fn result(output: &Output, code: i32, expected: Value) -> Result {
     assert_eq!(output.status.code(), Some(code));
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr.len(), 0);
     assert_eq!(serde_json::from_slice::<Value>(&output.stdout)?, expected);
     Ok(())
 }
@@ -94,7 +94,7 @@ fn t3_wifi_status_and_legacy_binary_absence() -> Result {
         String::from_utf8(status.stdout)?.replace("\r\n", "\n"),
         "Wi-Fi: Fixture A (reachable)\n"
     );
-    assert!(status.stderr.is_empty());
+    assert_eq!(status.stderr.len(), 0);
     fs::write(
         &output,
         "{\"type\":\"wifi-result\",\"data\":{\"version\":1,\"op\":\"status\",\"ok\":true,\"ssid\":null,\"reachable\":false}}\n",

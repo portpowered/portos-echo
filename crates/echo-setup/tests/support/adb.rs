@@ -91,7 +91,7 @@ fn wifi(root: &Path, args: &[std::ffi::OsString]) -> io::Result<()> {
     let mut input = Vec::new();
     io::stdin().read_to_end(&mut input)?;
     if op == "status" {
-        assert!(input.is_empty());
+        assert_eq!(input.len(), 0);
     } else if root.join("wifi-reflect").is_file() {
         io::stdout().write_all(&input)?;
         io::stderr().write_all(&input)?;
