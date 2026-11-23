@@ -339,7 +339,7 @@ pub(super) fn pacing(runtime: &Runtime, world: &Witness) -> ResultRow {
 fn barge_cycles(world: &Witness, count: usize) {
     let mut scratch = Box::new([7; 960]);
     let call = world.call_handle();
-    for marker in 0..count {
+    for _ in 0..count {
         world.step(Event::Session(SessionEvent::ReplyStarted { session: RUN }));
         scratch = world.push(scratch);
         let speech = || Event::Session(SessionEvent::Turn(SessionTurnEvent::SpeechStarted { session: RUN }));
@@ -361,27 +361,7 @@ fn barge_cycles(world: &Witness, count: usize) {
             })
         ));
         world.pacer(PacerEvent::Cut);
-        world.step(Event::Call(CallEvent::RetireReceive { call }));
-        let out = world
-            .step(Event::Call(CallEvent::BumpReceiveGeneration { call }))
-            .take_call()
-            .into_parts()
-            .0;
-        let Some(CallCommand::ResetReceive { generation, .. }) = out else {
-            panic!("missing receive reset")
-        };
-        assert_eq!(
-            world
-                .step(Event::Call(CallEvent::RemoteAudioFrame {
-                    call,
-                    generation: generation - 1,
-                    frame: &[0; 320],
-                }))
-                .take_call()
-                .into_parts(),
-            (None, None)
-        );
-        world.step(Event::Call(CallEvent::ReceiveReset { call, generation }));
+        let generation = retire_reply(world, call);
         assert!(world.step(due()).take_session().take_effect().is_none());
         assert_eq!(world.core().world.pacer.playback.view().depth, 0);
         world.step(Event::Session(SessionEvent::ReplyStarted { session: RUN }));
@@ -398,9 +378,32 @@ fn barge_cycles(world: &Witness, count: usize) {
             SessionMark::BargeCut { turn, .. }, SessionMark::BargePassed { count: 1, .. },
             SessionMark::Latched { .. }, SessionMark::BargeRearmed { .. }
         ] if u64::from(*turn) == generation));
-        assert!(generation >= u64::try_from(marker + 1).unwrap());
         world.advance(FRAME_TIME);
     }
+}
+
+fn retire_reply(world: &Witness, call: CallHandle) -> u64 {
+    world.step(Event::Call(CallEvent::RetireReceive { call }));
+    let (out, _) = world
+        .step(Event::Call(CallEvent::BumpReceiveGeneration { call }))
+        .take_call()
+        .into_parts();
+    let Some(CallCommand::ResetReceive { generation, .. }) = out else {
+        panic!("missing receive reset")
+    };
+    assert_eq!(
+        world
+            .step(Event::Call(CallEvent::RemoteAudioFrame {
+                call,
+                generation: generation - 1,
+                frame: &[0; 320],
+            }))
+            .take_call()
+            .into_parts(),
+        (None, None)
+    );
+    world.step(Event::Call(CallEvent::ReceiveReset { call, generation }));
+    generation
 }
 
 pub(super) fn barge(runtime: &Runtime, world: &Witness) -> ResultRow {

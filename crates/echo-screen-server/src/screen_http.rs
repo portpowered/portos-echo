@@ -194,6 +194,66 @@ mod tests {
     use futures_util::StreamExt;
 
     #[tokio::test]
+    async fn mouth_payloads_keep_sse_bytes_and_frame_sequence_through_drain() {
+        use echo_screen_contract::mouth::{MouthBatch, MouthSample, MouthVowel};
+        let core = Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-screen-pair".into()))));
+        let (_stop, stop_rx) = watch::channel(false);
+        let (drain, drain_rx) = watch::channel(None);
+        let state = HttpState {
+            core: core.clone(),
+            actions: mpsc::channel(1).0,
+            stop: stop_rx,
+            drain: drain_rx,
+            origin: "http://127.0.0.1:1".into(),
+            build: "synthetic".into(),
+            settings: None,
+            packs: Arc::default(),
+            camera: None,
+        };
+        let request = Request::builder()
+            .uri("/events?token=synthetic-screen-pair&mouth=1")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = events(State(state), Extension(watch::channel(false).0), request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let sender = crate::MouthSender::new(core.clone());
+        assert!(core.lock().await.publish(UiState::Listening));
+        let samples = std::array::from_fn::<_, 6, _>(|index| MouthSample {
+            at_ms: 1020 + u64::try_from(index).unwrap() * 20,
+            open: u8::try_from(index * 10).unwrap(),
+            vowel: MouthVowel::A,
+        });
+        for count in [0, 5, 6] {
+            assert_eq!(sender.send_samples(1000, &samples[..count]), 1);
+        }
+        assert!(core.lock().await.publish(UiState::Speaking));
+        core.lock().await.drain();
+        drain.send_replace(Some(tokio::time::Instant::now()));
+        assert_eq!(sender.send_samples(1200, &samples), 0);
+        let mut body = response.into_body().into_data_stream();
+        assert_eq!(
+            body.next().await.unwrap().unwrap(),
+            "data: {\"seq\":1,\"state\":{\"state\":\"listening\"}}\n\n"
+        );
+        for count in [0, 5, 6] {
+            let json = serde_json::to_string(&MouthBatch {
+                sent_ms: 1000,
+                samples: samples[..count].to_vec(),
+            })
+            .unwrap();
+            assert_eq!(
+                body.next().await.unwrap().unwrap(),
+                format!("event: mouth\ndata: {json}\n\n")
+            );
+        }
+        assert_eq!(
+            body.next().await.unwrap().unwrap(),
+            "data: {\"seq\":2,\"state\":{\"state\":\"speaking\"}}\n\n"
+        );
+        assert!(body.next().await.is_none());
+    }
+
+    #[tokio::test]
     async fn queued_terminal_frame_drains_before_eof() {
         let core = Arc::new(Mutex::new(Core::new(&Secret::new("synthetic-screen-pair".into()))));
         let (_stop, stop_rx) = watch::channel(false);
