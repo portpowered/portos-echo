@@ -4,25 +4,20 @@ on:
 permissions:
   contents: read
 jobs:
-  screen-schema:
+  screen:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: 8040780c6c58c10e9c3e093e7f6e0592ee6dab90
           persist-credentials: false
-      - name: Regenerate screen contracts
+      - name: Check Linux screen wire and web model
         run: |
-          UPDATE_SCHEMAS=1 cargo test --locked -p echo-screen-contract --test screen_schema schema_snapshots -- --exact
+          git rev-parse HEAD
+          cargo test --locked -p echo-screen-contract --test screen_wire --test screen_schema
           cd web/screen
           npm ci --offline=false
-          npm run generate:schema
-          npm run check:schema
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: bridge-screen-signin-schemas
-          path: |
-            schemas/screen/ui_state.json
-            schemas/screen/ui_action.json
-            schemas/screen/screen_frame.json
-            web/screen/src/model.ts
+          npm run lint
+          npm run build
+          node --test tests/wire.test.mjs
