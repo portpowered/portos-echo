@@ -144,6 +144,23 @@ async fn start_and_stop(fixture: &Fixture, listener: &TcpListener, home: &Path, 
         fs::remove_file(&trace_path).unwrap();
     }
     let mut process = Process::spawn(&mut command(fixture));
+    let satellite = await_ready(listener, &mut process).await;
+    let child = fixture.child_lifetime().await;
+    stop(process, satellite, child).await;
+    if mode == "api_key" {
+        drop(api_owner(fixture));
+    } else {
+        drop(fixture.owner());
+    }
+    assert_eq!(read(home, "launches"), "started\n");
+    let rows = trace(&trace_path);
+    assert_eq!(count(&rows, "bridge.ready"), 1);
+    assert_eq!(count(&rows, "auth.relink_required"), 0);
+    assert!(!strings_contain_key(&fs::read(&trace_path).unwrap()));
+    presentation_released(&trace_path, mode, true);
+}
+
+async fn await_ready(listener: &TcpListener, process: &mut Process) -> tokio::net::TcpStream {
     let mut satellite = tokio::time::timeout(OBSERVATION_TIMEOUT, listener.accept())
         .await
         .unwrap()
@@ -156,7 +173,10 @@ async fn start_and_stop(fixture: &Fixture, listener: &TcpListener, home: &Path, 
     assert_eq!(bridge_short::read(&mut satellite).await.0["type"], "describe");
     bridge_short::send(&mut satellite, "info", json!({"satellite":{"name":"synthetic"}})).await;
     assert_eq!(process.line().await, r#"{"event":"bridge.ready"}"#);
-    let child = fixture.child_lifetime().await;
+    satellite
+}
+
+async fn stop(mut process: Process, mut satellite: tokio::net::TcpStream, child: tokio::net::TcpStream) {
     assert_eq!(
         child.try_read(&mut [0]).unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
@@ -172,17 +192,6 @@ async fn start_and_stop(fixture: &Fixture, listener: &TcpListener, home: &Path, 
         .await
         .unwrap()
         .unwrap();
-    if mode == "api_key" {
-        drop(api_owner(fixture));
-    } else {
-        drop(fixture.owner());
-    }
-    assert_eq!(read(home, "launches"), "started\n");
-    let rows = trace(&trace_path);
-    assert_eq!(count(&rows, "bridge.ready"), 1);
-    assert_eq!(count(&rows, "auth.relink_required"), 0);
-    assert!(!strings_contain_key(&fs::read(&trace_path).unwrap()));
-    presentation_released(&trace_path, mode, true);
 }
 
 fn api_owner(fixture: &Fixture) -> Supervisor {
