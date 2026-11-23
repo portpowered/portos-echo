@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 917d9e4dac8c7cb5b134c4cabf8ffa7ccfd5cb71
+          ref: 454889ac4992c484dab8e68b55572d075adb2c1c
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -62,7 +62,7 @@ jobs:
         id: screen-evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: screen-evidence-917d9e4dac8c7cb5b134c4cabf8ffa7ccfd5cb71
+          name: screen-evidence-454889ac4992c484dab8e68b55572d075adb2c1c
           path: |
             web/screen/test-results/screenshots/**
             web/screen/test-results/summary.txt
@@ -74,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 917d9e4dac8c7cb5b134c4cabf8ffa7ccfd5cb71
+          ref: 454889ac4992c484dab8e68b55572d075adb2c1c
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
@@ -93,6 +93,20 @@ jobs:
           npm --prefix web/screen run check:schema
       - name: PRD Rust package checks
         run: cargo nextest run --locked -p echo-bridge -p echo-signin --all-targets --config-file .github/nextest.toml --profile ci
+      - name: E1 and E4 focused component and M2 sim
+        run: |
+          make sim-prereqs
+          cargo nextest run --locked -p echo-bridge --test bridge_t3 --run-ignored only --config-file .github/nextest.toml --profile ci --success-output immediate -E 'test(t3_bridge_screen_signin) | test(t3_settings_account_changes_reuse_the_credential_owners)'
+          cargo run --locked -p echo-lab -- run tests/scenarios/m2-live-connect.yaml --driver sim --out "$RUNNER_TEMP/targeted-reports/m2-live-connect"
+          printf '%s\n' 'TARGETED_RESULT repeat=1 exit=0'
+      - name: Publish scenario report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: targeted-reports-m2-live-connect
+          path: ${{ runner.temp }}/targeted-reports
+          if-no-files-found: ignore
+          retention-days: 3
   lint:
     name: E5 make lint
     runs-on: ubuntu-latest
@@ -100,7 +114,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 917d9e4dac8c7cb5b134c4cabf8ffa7ccfd5cb71
+          ref: 454889ac4992c484dab8e68b55572d075adb2c1c
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
