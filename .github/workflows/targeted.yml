@@ -4,20 +4,20 @@ on:
 permissions:
   contents: read
 jobs:
-  screen:
+  bridge-rust:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: 8040780c6c58c10e9c3e093e7f6e0592ee6dab90
+          fetch-depth: 0
           persist-credentials: false
-      - name: Check Linux screen wire and web model
-        run: |
-          git rev-parse HEAD
-          cargo test --locked -p echo-screen-contract --test screen_wire --test screen_schema
-          cd web/screen
-          npm ci --offline=false
-          npm run lint
-          npm run build
-          node --test tests/wire.test.mjs
+      - uses: ./.github/actions/setup
+        with:
+          target: lint-rust
+      - run: git rev-parse HEAD
+      - run: cargo fmt --all --check
+      - run: cargo xtask lint-shape
+      - run: cargo xtask lint-rules
+      - run: cargo clippy --locked -p echo-bridge --lib --test bridge_t3 -- -D warnings
