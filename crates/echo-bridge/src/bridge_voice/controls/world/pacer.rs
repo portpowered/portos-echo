@@ -72,9 +72,9 @@ impl PacerPort {
 
     pub(crate) fn take_lip_stats(&self) -> LipStats {
         let mut state = self.0.state();
-        let stats = state.world.pacer.lip_stats();
+        let lip_stats = state.world.pacer.lip_stats();
         step(&self.0, &mut state, &mut Event::Pacer(PacerEvent::LipStatsCollected));
-        stats
+        lip_stats
     }
 
     pub(crate) fn playout_due(&self) -> Option<Instant> {
