@@ -1,3 +1,5 @@
+use echo_contracts::secret::Secret;
+use echo_device::wifi::{Outcome, Status};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::HashSet;
@@ -304,5 +306,3 @@ mod tests {
         assert!(matches!(request(br#"{"type":"ping"}"#), Err((None, Error::Invalid))));
     }
 }
-use echo_contracts::secret::Secret;
-use echo_device::wifi::{Outcome, Status};

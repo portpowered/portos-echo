@@ -347,12 +347,7 @@ impl World {
         {
             failures.push("cleanup: host failed to close".into());
         }
-        if let Some(wifi) = self.wifi.take() {
-            match wifi.close().await {
-                Ok(matches) => self.wifi_password_matches = Some(matches),
-                Err(error) => failures.push(error),
-            }
-        }
+        failures.extend(self.close_wifi().await.err());
         if self.remove_private().await.is_err() {
             failures.push("cleanup: cannot remove private observation".into());
         }
@@ -361,6 +356,13 @@ impl World {
         } else {
             Err(failures.join("; "))
         }
+    }
+
+    async fn close_wifi(&mut self) -> Result<(), String> {
+        if let Some(wifi) = self.wifi.take() {
+            self.wifi_password_matches = Some(wifi.close().await?);
+        }
+        Ok(())
     }
 
     fn valid_provider(&self, snapshot: &Value) -> bool {

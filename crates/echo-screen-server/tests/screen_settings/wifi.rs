@@ -37,7 +37,9 @@ async fn t3_wifi_relay_checks_pairing_origin_and_body_before_provider() -> Resul
     )
     .await?;
     let addr = server.bound_addr;
-    let correct = format!("Origin: http://{addr}\r\nContent-Type: application/json\r\n");
+    let base = "http://127.0.0.1";
+    let origin = format!("{base}:{}", addr.port());
+    let correct = format!("Origin: {origin}\r\nContent-Type: application/json\r\n");
     let path = format!("/_screen/wifi?token={TOKEN}");
     let over_limit = " ".repeat(1025);
     for (uri, body, headers, expected) in [
@@ -52,7 +54,7 @@ async fn t3_wifi_relay_checks_pairing_origin_and_body_before_provider() -> Resul
         (
             &path,
             SCAN,
-            &format!("Origin: http://{addr}\r\nContent-Type: text/plain\r\n"),
+            &format!("Origin: {origin}\r\nContent-Type: text/plain\r\n"),
             415,
         ),
         (&path, &over_limit, &correct, 413),
