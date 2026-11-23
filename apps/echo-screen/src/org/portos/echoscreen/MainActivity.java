@@ -1,15 +1,20 @@
 package org.portos.echoscreen;
 
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.UserManager;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -29,6 +34,12 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
     private AndroidStillCapture camera;
     private NativeCameraClient nativeCamera;
     private boolean started;
+    private boolean listeningForUnlock;
+    private final BroadcastReceiver unlockReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (Intent.ACTION_USER_UNLOCKED.equals(intent.getAction())) checkUnlock();
+        }
+    };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -41,20 +52,48 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
         message.setTextColor(Color.WHITE);
         message.setBackgroundColor(Color.BLACK);
         message.setGravity(Gravity.CENTER);
+        message.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         frame.addView(message, fill());
         setContentView(frame);
         load = new ScreenLoad(this);
-        configure(getIntent());
+        startLoad(getIntent());
+        if (!userUnlocked()) {
+            registerReceiver(unlockReceiver, new IntentFilter(Intent.ACTION_USER_UNLOCKED));
+            listeningForUnlock = true;
+        }
+        checkUnlock();
         immersive();
     }
 
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        configure(intent);
+        startLoad(intent);
     }
 
-    private void configure(Intent intent) {
+    private void startLoad(Intent intent) {
+        load.start(() -> configure(intent));
+    }
+
+    @Override public boolean userUnlocked() {
+        UserManager user = getSystemService(UserManager.class);
+        return user != null && user.isUserUnlocked();
+    }
+
+    private void checkUnlock() {
+        if (!userUnlocked()) return;
+        stopListeningForUnlock();
+        load.onUserUnlocked();
+    }
+
+    private void stopListeningForUnlock() {
+        if (listeningForUnlock) {
+            unregisterReceiver(unlockReceiver);
+            listeningForUnlock = false;
+        }
+    }
+
+    private ScreenConfig configure(Intent intent) {
         stopCamera();
         SharedPreferences preferences = getSharedPreferences("echo-screen", MODE_PRIVATE);
         ScreenConfig.Store store = new ScreenConfig.Store() {
@@ -73,7 +112,7 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
         if (supplied && config.url == null) preferences.edit().putBoolean("camera_trusted", false).apply();
         pairing = preferences.getBoolean("camera_trusted", false) ? CameraPairing.parse(config.url) : null;
         startCamera();
-        load.start(config);
+        return config;
     }
 
     @Override protected void onStart() {
@@ -120,17 +159,22 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
     }
 
     @Override public void cancel() {
-        handler.removeCallbacksAndMessages(null);
-        if (web != null) {
-            web.stopLoading();
-            frame.removeView(web);
-            web.destroy();
-            web = null;
+        clearSchedule();
+        WebView view = web;
+        if (view != null) {
+            view.stopLoading();
+            discard(view);
         }
     }
 
+    private void discard(WebView view) {
+        web = null;
+        frame.removeView(view);
+        view.destroy();
+    }
+
     @Override public void waiting(String text) {
-        message.setText(text);
+        if (!text.contentEquals(message.getText())) message.setText(text);
         message.setVisibility(View.VISIBLE);
         if (web != null) web.setVisibility(View.INVISIBLE);
         message.bringToFront();
@@ -154,6 +198,13 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
             @Override public void onPageFinished(WebView view, String ignored) {
                 load.finished(attempt);
             }
+            @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                if (view == web) {
+                    discard(view);
+                    load.rendererGone(attempt);
+                }
+                return true;
+            }
         });
         frame.addView(web, fill());
         message.bringToFront();
@@ -164,12 +215,17 @@ public final class MainActivity extends Activity implements ScreenLoad.Port {
         handler.postDelayed(retry, delay);
     }
 
+    @Override public void clearSchedule() {
+        handler.removeCallbacksAndMessages(null);
+    }
+
     @Override public void showPage() {
         message.setVisibility(View.GONE);
         if (web != null) web.setVisibility(View.VISIBLE);
     }
 
     @Override protected void onDestroy() {
+        stopListeningForUnlock();
         stopCamera();
         if (load != null) load.destroy();
         super.onDestroy();

@@ -7,6 +7,34 @@ import subprocess
 import sys
 
 
+def element_blocks(tree, tag):
+    return [body for _, body in
+            re.findall(rf"(?m)^( +)E: {tag}(?=\s|$)[^\n]*\n((?:\1 +[^\n]*\n)*)", tree)]
+
+
+def verify_activity(manifest):
+    manifest = manifest.replace("A: http://schemas.android.com/apk/res/android:", "A: android:")
+    activities = [body for body in element_blocks(manifest, "activity")
+                  if re.search(r'android:name[^=]*="(?:org\.portos\.echoscreen)?\.MainActivity"', body)]
+    if len(activities) != 1:
+        raise RuntimeError("APK is missing a unique MainActivity")
+    activity = activities[0]
+    if not re.search(r'android:permission[^=]*="android\.permission\.DUMP"', activity):
+        raise RuntimeError("APK launcher caller permission differs")
+    for attribute in ("directBootAware", "exported"):
+        if not re.search(rf'(?m)^ +A: android:{attribute}[^=]*=(?:true|\(type 0x12\)0xffffffff)$', activity):
+            raise RuntimeError(f"APK MainActivity requires {attribute}=true")
+    filters = []
+    for body in element_blocks(activity, "intent-filter"):
+        actions = element_blocks(body, "action")
+        if len(actions) != 1 or not re.search(r'android:name[^=]*="android\.intent\.action\.MAIN"', actions[0]):
+            raise RuntimeError("APK MainActivity intent filter requires MAIN")
+        categories = re.findall(r'android:name[^=]*="android\.intent\.category\.([A-Z_]+)"', body)
+        filters.append(sorted(categories))
+    if sorted(filters) != [["DEFAULT", "HOME"], ["LAUNCHER"]]:
+        raise RuntimeError("APK MainActivity requires distinct HOME/DEFAULT and LAUNCHER filters")
+
+
 def main():
     sdk = os.environ.get("ANDROID_HOME")
     if not sdk:
@@ -36,15 +64,12 @@ def main():
     if not all(re.search(pattern, badging, re.MULTILINE) for pattern in required):
         raise RuntimeError("APK metadata does not match the echo-screen contract")
     manifest = run("aapt2", "dump", "xmltree", "--file", "AndroidManifest.xml")
-    activities = re.findall(r"(?m)^( +)E: activity\b[^\n]*\n((?:\1 +[^\n]*\n)*)", manifest)
-    protected = [attrs for _, attrs in activities
-                 if re.search(r'android:name[^=]*="(?:org\.portos\.echoscreen)?\.MainActivity"', attrs)]
-    if len(protected) != 1 or not re.search(r'android:permission[^=]*="android\.permission\.DUMP"', protected[0]):
-        raise RuntimeError("APK launcher caller permission differs")
+    verify_activity(manifest)
     run("zipalign", "-c", "4")
     run("apksigner", "verify", "--verbose")
     print("echo-screen APK: package=org.portos.echoscreen minSdk=28 targetSdk=28 "
-          "INTERNET=true CAMERA=true MainActivity=DUMP signature=verified")
+          "INTERNET=true CAMERA=true MainActivity=DUMP directBootAware=true "
+          "MAIN/HOME/DEFAULT=true MAIN/LAUNCHER=true signature=verified")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import java.net.URISyntaxException;
 final class ScreenConfig {
     static final int TOP = 16;
     static final int BOTTOM = 10;
+    static final String WAITING = "Waiting for bridge";
     static final String DIAGNOSTIC = "url=[redacted]";
     final Secret url;
     final String message;
@@ -31,7 +32,7 @@ final class ScreenConfig {
         if (supplied) {
             store.save(selected);
         }
-        return new ScreenConfig(selected, "Waiting for bridge");
+        return new ScreenConfig(selected, WAITING);
     }
 
     private static boolean valid(Secret value) {
