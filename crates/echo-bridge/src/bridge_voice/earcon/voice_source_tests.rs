@@ -277,7 +277,10 @@ fn heard(level: i16) -> MicFrame {
         channels: 1,
     };
     let payload = level.to_le_bytes().repeat(320);
-    MicFrame { format, payload }
+    MicFrame {
+        format,
+        payload: payload.into(),
+    }
 }
 
 /// One 20 ms step of a reply at `level`: the model's frame arrives, the one

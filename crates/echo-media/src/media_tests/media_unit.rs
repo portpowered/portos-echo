@@ -370,7 +370,7 @@ fn failure_codec_corruption_duplicate_and_out_of_order() {
     packet.header.payload_type = 111;
     while packet.payload.is_empty() {
         if let Some(data) = encoder.encode(&[1000; 320]).unwrap() {
-            packet.payload = data.into();
+            packet.payload = data.to_vec().into();
         }
     }
     packet.header.sequence_number = 5;
@@ -398,7 +398,7 @@ fn encoded(level: i16) -> Vec<u8> {
     let mut encoder = crate::media_audio::Encoder::new().unwrap();
     loop {
         if let Some(data) = encoder.encode(&[level; 320]).unwrap() {
-            return data;
+            return data.to_vec();
         }
     }
 }

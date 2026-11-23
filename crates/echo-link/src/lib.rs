@@ -1,5 +1,9 @@
 //! Protocol-neutral device capture and acknowledged, bounded reply playback.
 use std::{future::Future, num::NonZeroUsize, sync::Weak, time::Duration};
+
+mod mic_payload;
+pub use mic_payload::{MicPayload, MicPool};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// PCM descriptor. Width is bytes per sample; no transport extensions.
 pub struct PcmFormat {
@@ -10,7 +14,7 @@ pub struct PcmFormat {
 #[derive(Debug, PartialEq, Eq)]
 pub struct MicFrame {
     pub format: PcmFormat,
-    pub payload: Vec<u8>,
+    pub payload: MicPayload,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RunStats {

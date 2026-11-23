@@ -53,6 +53,7 @@ impl Converter {
 pub(crate) struct Encoder {
     converter: Converter,
     codec: opus::Encoder,
+    packet: [u8; 1275],
 }
 impl Encoder {
     pub(crate) fn new() -> Result<Self, Error> {
@@ -60,21 +61,20 @@ impl Encoder {
             converter: Converter::new(320, 3.0)?,
             codec: opus::Encoder::new(48_000, opus::Channels::Mono, opus::Application::Voip)
                 .map_err(|_| Error::Audio)?,
+            packet: [0; 1275],
         })
     }
-    pub(crate) fn encode(&mut self, pcm: &PcmFrame) -> Result<Option<Vec<u8>>, Error> {
+    pub(crate) fn encode(&mut self, pcm: &PcmFrame) -> Result<Option<&[u8]>, Error> {
         let input = pcm.map(|sample| f32::from(sample) / 32768.0);
         self.converter.push(&input)?;
         let Some(samples) = self.converter.take::<960>() else {
             return Ok(None);
         };
-        let mut packet = vec![0; 1275];
         let len = self
             .codec
-            .encode_float(&samples, &mut packet)
+            .encode_float(&samples, &mut self.packet)
             .map_err(|_| Error::Audio)?;
-        packet.truncate(len);
-        Ok(Some(packet))
+        Ok(Some(&self.packet[..len]))
     }
 }
 
@@ -173,6 +173,25 @@ mod media_audio_tests {
         assert_eq!(converter.push(&[]), Err(Error::Audio));
         assert_eq!(converter.take::<960>(), None);
         converter.push(&[0.0; 320]).unwrap();
+    }
+
+    #[test]
+    fn successive_opus_packets_reuse_scratch_and_keep_the_owned_prefix() {
+        let mut encoder = Encoder::new().unwrap();
+        let positive = std::array::from_fn(|index| if index % 16 < 8 { 12_000 } else { -12_000 });
+        let negative = positive.map(|sample| -sample / 2);
+        assert!(encoder.encode(&positive).unwrap().is_none());
+        let first = encoder.encode(&positive).unwrap().unwrap();
+        let scratch = first.as_ptr();
+        let held = first.to_vec();
+        let next = encoder.encode(&negative).unwrap().unwrap();
+        assert_eq!(scratch, next.as_ptr());
+        assert!((1..=1275).contains(&held.len()));
+        assert!((1..=1275).contains(&next.len()));
+        assert_ne!(held.as_slice(), next);
+        let mut reference = Encoder::new().unwrap();
+        assert!(reference.encode(&positive).unwrap().is_none());
+        assert_eq!(reference.encode(&positive).unwrap().unwrap(), held);
     }
 
     #[test]

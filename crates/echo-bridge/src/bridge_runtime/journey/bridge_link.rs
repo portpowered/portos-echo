@@ -128,7 +128,7 @@ async fn bridge_link_wake_mic_paced_echo_acknowledgment_and_fresh_run() {
             (0..10)
                 .map(|_| MicFrame {
                     format: bridge_audio::format(16_000),
-                    payload: vec![0; 2048],
+                    payload: vec![0; 2048].into(),
                 })
                 .collect(),
         );
@@ -218,7 +218,7 @@ async fn bridge_link_guard_rejects_microphone_even_when_a_neutral_source_yields_
             .microphone(
                 MicFrame {
                     format: bridge_audio::format(16_000),
-                    payload: vec![0; 2048],
+                    payload: vec![0; 2048].into(),
                 },
                 &mut live,
                 false,
@@ -253,7 +253,7 @@ async fn bridge_link_partial_batch_failure_retains_only_accepted_sends() {
             .microphone(
                 MicFrame {
                     format: bridge_audio::format(16_000),
-                    payload: vec![0; 2048],
+                    payload: vec![0; 2048].into(),
                 },
                 &mut live,
                 false,
@@ -277,7 +277,7 @@ async fn bridge_link_flush_short_tail_and_repeated_finish_count_actual_sends() {
             .microphone(
                 MicFrame {
                     format: bridge_audio::format(16_000),
-                    payload: vec![0; samples * 2],
+                    payload: vec![0; samples * 2].into(),
                 },
                 &mut live,
                 false,
@@ -313,7 +313,7 @@ async fn bridge_link_flush_failure_excludes_rejected_packet_and_bad_pcm() {
         .microphone(
             MicFrame {
                 format: bridge_audio::format(16_000),
-                payload: vec![0; 2048],
+                payload: vec![0; 2048].into(),
             },
             &mut live,
             false,
@@ -332,7 +332,7 @@ async fn bridge_link_flush_failure_excludes_rejected_packet_and_bad_pcm() {
             .microphone(
                 MicFrame {
                     format: bridge_audio::format(16_000),
-                    payload: vec![0; 3],
+                    payload: vec![0; 3].into(),
                 },
                 &mut live,
                 false,
@@ -360,7 +360,7 @@ async fn bridge_link_mute_between_batches_resumes_with_only_accepted_total() {
             .microphone(
                 MicFrame {
                     format: bridge_audio::format(16_000),
-                    payload: vec![0; 2048],
+                    payload: vec![0; 2048].into(),
                 },
                 &mut live,
                 false,
@@ -392,7 +392,7 @@ async fn bridge_link_invalid_or_rejected_first_input_keeps_zero() {
                 .microphone(
                     MicFrame {
                         format: bridge_audio::format(16_000),
-                        payload: vec![0; bytes]
+                        payload: vec![0; bytes].into()
                     },
                     &mut live,
                     false,
@@ -419,7 +419,7 @@ async fn lab_microphone_post_drop_samples() {
         for index in 0..11 {
             let frame = MicFrame {
                 format: bridge_audio::format(16_000),
-                payload: vec![0; if short && index == 7 { 1024 } else { 2048 }],
+                payload: vec![0; if short && index == 7 { 1024 } else { 2048 }].into(),
             };
             source.microphone(frame, &mut live, lab, &screen).await.unwrap();
         }
@@ -452,7 +452,7 @@ async fn lab_microphone_validates_entire_crossing_frame_before_clipping() {
                 .microphone(
                     MicFrame {
                         format: bridge_audio::format(16_000),
-                        payload: vec![0; 2048],
+                        payload: vec![0; 2048].into(),
                     },
                     &mut live,
                     true,
@@ -467,7 +467,7 @@ async fn lab_microphone_validates_entire_crossing_frame_before_clipping() {
                 .microphone(
                     MicFrame {
                         format: bridge_audio::format(rate),
-                        payload: vec![0; bytes],
+                        payload: vec![0; bytes].into(),
                     },
                     &mut live,
                     true,

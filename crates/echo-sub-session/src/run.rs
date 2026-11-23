@@ -72,7 +72,7 @@ impl Run {
             ceiling: Some(ceiling),
             response_due,
             follow_up: FollowUp::First,
-            turn: Turn::default(),
+            turn: Turn::new(),
             playback: SessionPlayback::default(),
             playback_observed: now,
             state: Phase::Listening,

@@ -170,7 +170,7 @@ impl State {
         self.input = Input::Open;
         self.spoken = false;
         self.last_frame_at = None;
-        self.mouth = Mouth::default();
+        self.mouth.reset();
     }
 
     fn close_run(&mut self) {

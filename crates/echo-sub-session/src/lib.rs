@@ -221,9 +221,7 @@ impl State {
     }
 
     pub fn take_marks(&mut self) -> Vec<SessionMark> {
-        self.run
-            .as_mut()
-            .map_or_else(Vec::new, |run| std::mem::take(&mut run.turn.marks))
+        self.run.as_mut().map_or_else(Vec::new, |run| run.turn.take_marks())
     }
 
     #[must_use]

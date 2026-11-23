@@ -93,7 +93,7 @@ fn mute_snapshot_and_scripted_boundary_preserve_exact_frames_and_counts() {
         (0..5)
             .map(|n| MicFrame {
                 format: pcm,
-                payload: vec![n],
+                payload: vec![n].into(),
             })
             .collect(),
         2,
@@ -104,7 +104,7 @@ fn mute_snapshot_and_scripted_boundary_preserve_exact_frames_and_counts() {
     let mut mute = Box::pin(events.recv());
     assert!(mute.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
     for n in 0..2 {
-        assert_eq!(ready(run.recv()).unwrap().unwrap().payload, [n]);
+        assert_eq!(ready(run.recv()).unwrap().unwrap().payload.as_ref(), [n]);
     }
     assert!(mute.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
     assert_eq!(ready(run.recv()), Ok(None));
@@ -201,7 +201,7 @@ fn end_run_is_idempotent_drains_capture_and_keeps_future_wakes() {
                     width: 2,
                     channels: 1,
                 },
-                payload: vec![value],
+                payload: vec![value].into(),
             }],
         );
         let Some(LinkEvent::Wake(mut run)) = ready(events.recv()).unwrap() else {
@@ -209,7 +209,7 @@ fn end_run_is_idempotent_drains_capture_and_keeps_future_wakes() {
         };
         ready(link.end_run()).unwrap();
         ready(link.end_run()).unwrap();
-        assert_eq!(ready(run.recv()).unwrap().unwrap().payload, vec![value]);
+        assert_eq!(ready(run.recv()).unwrap().unwrap().payload.as_ref(), vec![value]);
         assert_eq!(ready(run.recv()), Ok(None));
         ready(link.probe()).unwrap();
     }

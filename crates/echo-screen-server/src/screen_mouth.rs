@@ -3,9 +3,65 @@
 //! batch instead of delaying or queueing anything.
 use crate::screen_core::Core;
 use axum::{extract::Query, http::Uri};
-use echo_screen_contract::mouth::MouthBatch;
+use echo_screen_contract::mouth::{MouthBatch, MouthSample, MouthVowel};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+const HOT_SAMPLES: usize = 5;
+const EMPTY_SAMPLE: MouthSample = MouthSample {
+    at_ms: 0,
+    open: 0,
+    vowel: MouthVowel::None,
+};
+
+#[derive(Clone)]
+pub(crate) struct Samples {
+    sent_ms: u64,
+    data: SampleStorage,
+}
+
+#[derive(Clone)]
+enum SampleStorage {
+    Inline {
+        values: [MouthSample; HOT_SAMPLES],
+        len: usize,
+    },
+    Extended(Arc<[MouthSample]>),
+}
+
+impl Samples {
+    pub(crate) fn new(sent_ms: u64, samples: &[MouthSample]) -> Self {
+        let data = if samples.len() <= HOT_SAMPLES {
+            let mut values = [EMPTY_SAMPLE; HOT_SAMPLES];
+            values[..samples.len()].copy_from_slice(samples);
+            SampleStorage::Inline {
+                values,
+                len: samples.len(),
+            }
+        } else {
+            SampleStorage::Extended(samples.into())
+        };
+        Self { sent_ms, data }
+    }
+
+    pub(crate) fn json(&self) -> String {
+        #[derive(serde::Serialize)]
+        struct Batch<'a> {
+            sent_ms: u64,
+            samples: &'a [MouthSample],
+        }
+
+        let samples = match &self.data {
+            SampleStorage::Inline { values, len } => &values[..*len],
+            SampleStorage::Extended(samples) => samples,
+        };
+        serde_json::to_string(&Batch {
+            sent_ms: self.sent_ms,
+            samples,
+        })
+        .unwrap_or_default()
+    }
+}
 
 /// `/events?...&mouth=1` opts one stream in. Streams without it, such as an
 /// older page, never receive the named `mouth` event.
@@ -36,13 +92,19 @@ impl MouthSender {
     /// is behind, or when the server is busy this instant. Never waits.
     #[must_use]
     pub fn send(&self, batch: &MouthBatch) -> usize {
-        let Ok(mut core) = self.core.try_lock() else {
+        self.send_samples(batch.sent_ms, &batch.samples)
+    }
+
+    /// Offer a borrowed batch, stored inline for the audio path's five samples.
+    #[must_use]
+    pub fn send_samples(&self, sent_ms: u64, samples: &[MouthSample]) -> usize {
+        let Ok(core) = self.core.try_lock() else {
             return 0;
         };
         if !core.mouth_wanted() {
             return 0;
         }
-        serde_json::to_string(batch).map_or(0, |wire| core.mouth(&wire))
+        core.offer_mouth_samples(sent_ms, samples)
     }
 }
 
@@ -50,10 +112,7 @@ impl MouthSender {
 mod tests {
     use super::*;
     use echo_contracts::secret::Secret;
-    use echo_screen_contract::{
-        ScreenFrame, UiState,
-        mouth::{MouthSample, MouthVowel},
-    };
+    use echo_screen_contract::{ScreenFrame, UiState};
     use tokio::sync::watch;
 
     fn batch(sent_ms: u64) -> MouthBatch {
@@ -103,22 +162,22 @@ mod tests {
         assert!(core.publish(UiState::Connected));
         // The plain stream saw two frames and nothing else.
         for seq in 1..=2 {
-            let frame: ScreenFrame = serde_json::from_str(&plain.frames.recv().await.unwrap().data).unwrap();
+            let frame: ScreenFrame = serde_json::from_str(&plain.frames.recv().await.unwrap().data()).unwrap();
             assert_eq!(frame.seq, seq);
         }
         assert!(plain.frames.try_recv().is_err());
-        assert_eq!(lips.frames.recv().await.unwrap().name, None);
+        assert_eq!(lips.frames.recv().await.unwrap().name(), None);
         let event = lips.frames.recv().await.unwrap();
-        assert_eq!(event.name, Some("mouth"));
+        assert_eq!(event.name(), Some("mouth"));
         assert_eq!(
-            event.data,
+            event.data(),
             r#"{"sent_ms":1000,"samples":[{"at_ms":1200,"open":80,"vowel":"a"}]}"#
         );
         // The batch took no sequence number and is not the reconnect snapshot.
-        let frame: ScreenFrame = serde_json::from_str(&lips.frames.recv().await.unwrap().data).unwrap();
+        let frame: ScreenFrame = serde_json::from_str(&lips.frames.recv().await.unwrap().data()).unwrap();
         assert_eq!(frame.seq, 2);
         let mut late = core.attach_with(watch::channel(false).0, true).unwrap();
-        assert_eq!(late.frames.recv().await.unwrap().name, None);
+        assert_eq!(late.frames.recv().await.unwrap().name(), None);
         assert!(late.frames.try_recv().is_err());
     }
 
@@ -148,11 +207,11 @@ mod tests {
         // Once it reads again, the newest batches flow.
         for sent in 0..8 {
             let event = stalled.frames.recv().await.unwrap();
-            assert!(event.data.starts_with(&format!(r#"{{"sent_ms":{sent},"#)));
+            assert!(event.data().starts_with(&format!(r#"{{"sent_ms":{sent},"#)));
         }
         assert_eq!(sender.send(&batch(99)), 0);
         for _ in 0..24 {
-            assert_eq!(stalled.frames.recv().await.unwrap().name, None);
+            assert_eq!(stalled.frames.recv().await.unwrap().name(), None);
         }
         assert_eq!(sender.send(&batch(100)), 1);
     }
@@ -175,7 +234,7 @@ mod tests {
         assert_eq!(sender.send(&batch(3)), 0);
         sender.core.lock().await.revoke();
         assert_eq!(sender.send(&batch(4)), 0);
-        assert!(client.frames.recv().await.unwrap().data.contains(r#""sent_ms":2"#));
+        assert!(client.frames.recv().await.unwrap().data().contains(r#""sent_ms":2"#));
         assert!(client.frames.try_recv().is_err());
     }
 }

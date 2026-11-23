@@ -48,7 +48,7 @@ async fn microphone_caller(client: &WyomingClient, events: &mut echo_wyoming::Ev
     for _ in 0..5 {
         let frame = first.recv().await.unwrap().unwrap();
         assert_eq!((frame.data.rate, frame.data.width, frame.data.channels), (16000, 2, 1));
-        assert_eq!(frame.payload, vec![0; 2048]);
+        assert_eq!(frame.payload.as_ref(), &[0; 2048]);
     }
     microphone_replacement(client, events, first).await;
 }
@@ -70,7 +70,7 @@ async fn microphone_replacement(
     assert_eq!(second.stats().received, 0);
     describe(client, events, json!({"barrier":true})).await;
     let _ = events.recv().await.unwrap();
-    assert_eq!(second.recv().await.unwrap().unwrap().payload, [9, 10]);
+    assert_eq!(second.recv().await.unwrap().unwrap().payload.as_ref(), [9, 10]);
     assert_eq!(second.stats().received, 1);
     client.close().await.unwrap();
 }

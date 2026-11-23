@@ -49,7 +49,7 @@ async fn echo_link_capture_probe_wake_reply_pause_close_preserve_wire_order() {
         assert_eq!(run.wake_phrase(), "Computer");
         let frame = MicrophoneRun::recv(&mut run).await.unwrap().unwrap();
         assert_eq!(frame.format, PcmFormat { rate: 16_000, ..pcm() });
-        assert_eq!(frame.payload, [1, 2, 3, 4]);
+        assert_eq!(frame.payload.as_ref(), [1, 2, 3, 4]);
         assert_eq!(
             MicrophoneRun::stats(&run),
             RunStats {
@@ -124,7 +124,10 @@ async fn echo_link_cut_is_idempotent_and_preserves_tail_through_played() {
         vec![7, 8],
     )
     .await;
-    assert_eq!(MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload, [7, 8]);
+    assert_eq!(
+        MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload.as_ref(),
+        [7, 8]
+    );
     assert!(matches!(
         LinkEvents::recv(&mut events).await.unwrap(),
         Some(LinkEvent::Other)
@@ -252,7 +255,7 @@ async fn run_failure_retires_mic_and_trailing_audio_never_enters_next_run() {
         vec![1, 2],
     )
     .await;
-    assert_eq!(next.recv().await.unwrap().unwrap().payload, [1, 2]);
+    assert_eq!(next.recv().await.unwrap().unwrap().payload.as_ref(), [1, 2]);
     assert_eq!(first.stats().received, 0);
     client.close().await.unwrap();
 }
@@ -309,7 +312,7 @@ async fn end_run_drains_capture_once_and_preserves_registration_and_next_wake() 
             assert_eq!(events.recv().await.unwrap().unwrap().audio_count, 1);
             EchoLink::end_run(&client).await.unwrap();
             EchoLink::end_run(&client).await.unwrap();
-            assert_eq!(run.recv().await.unwrap().unwrap().payload, [1, 2]);
+            assert_eq!(run.recv().await.unwrap().unwrap().payload.as_ref(), [1, 2]);
             assert_eq!(run.recv().await.unwrap(), None);
             client.run_satellite().await.unwrap();
             client.describe().await.unwrap();
@@ -433,7 +436,7 @@ async fn played_keeps_capture_through_two_replies_until_explicit_end() {
         )
         .await;
         assert_eq!(
-            MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload,
+            MicrophoneRun::recv(&mut run).await.unwrap().unwrap().payload.as_ref(),
             [value, 1]
         );
         assert!(matches!(events.recv().await.unwrap(), Some(LinkEvent::Other)));

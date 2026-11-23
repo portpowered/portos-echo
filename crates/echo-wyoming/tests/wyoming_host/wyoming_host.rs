@@ -65,7 +65,7 @@ async fn wake(host: &mut Host, events: &mut EventStream) -> Run {
             for _ in 0..5 {
                 let chunk = run.recv().await.unwrap().unwrap();
                 assert_eq!((chunk.data.rate, chunk.data.width, chunk.data.channels), (16000, 2, 1));
-                assert_eq!(chunk.payload, vec![0; 2048]);
+                assert_eq!(chunk.payload.as_ref(), &[0; 2048]);
             }
             writeln!(
                 std::io::stdout(),

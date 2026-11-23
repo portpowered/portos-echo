@@ -49,6 +49,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-native-certs = "0.8"
 
 [dev-dependencies]
+allocation-counter = "0.8"
 hex = "0.4"
 hmac = "0.13"
 echo-lab = { version = "0.1.0", path = "../echo-lab" }

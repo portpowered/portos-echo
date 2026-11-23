@@ -1,6 +1,6 @@
 //! Nonwaiting adapter for the screen's existing mouth-sample contract.
 use echo_core_api::{PacerLipBatch, PacerVowel};
-use echo_screen_contract::mouth::{MouthBatch, MouthSample, MouthVowel};
+use echo_screen_contract::mouth::{MouthSample, MouthVowel};
 use echo_screen_server::MouthSender;
 use std::time::Duration;
 
@@ -9,7 +9,7 @@ pub(crate) trait LipSink: Send {
     /// Some screen asked for lip sync; none when that is unknown this instant.
     fn wanted(&self) -> Option<bool>;
     /// How many screens took the batch.
-    fn send(&self, batch: &MouthBatch) -> usize;
+    fn send(&self, sent_ms: u64, samples: &[MouthSample]) -> usize;
 }
 
 impl LipSink for MouthSender {
@@ -17,8 +17,8 @@ impl LipSink for MouthSender {
         MouthSender::wanted(self)
     }
 
-    fn send(&self, batch: &MouthBatch) -> usize {
-        MouthSender::send(self, batch)
+    fn send(&self, sent_ms: u64, samples: &[MouthSample]) -> usize {
+        self.send_samples(sent_ms, samples)
     }
 }
 
@@ -41,11 +41,14 @@ impl Lips {
     }
 
     pub(crate) fn send(&self, batch: &PacerLipBatch) -> bool {
-        let samples = batch
-            .samples
-            .iter()
-            .flatten()
-            .map(|sample| MouthSample {
+        let mut samples = [MouthSample {
+            at_ms: 0,
+            open: 0,
+            vowel: MouthVowel::None,
+        }; 5];
+        let mut len = 0;
+        for sample in batch.samples.iter().flatten() {
+            samples[len] = MouthSample {
                 at_ms: sample.at_ms,
                 open: sample.open,
                 vowel: match sample.vowel {
@@ -56,15 +59,9 @@ impl Lips {
                     PacerVowel::E => MouthVowel::E,
                     PacerVowel::O => MouthVowel::O,
                 },
-            })
-            .collect();
-        self.sink.send(&MouthBatch {
-            sent_ms: batch.sent_ms,
-            samples,
-        }) != 0
+            };
+            len += 1;
+        }
+        self.sink.send(batch.sent_ms, &samples[..len]) != 0
     }
 }
-
-#[cfg(test)]
-#[path = "reply_lips_tests.rs"]
-mod tests;

@@ -29,6 +29,13 @@ pub(crate) struct Mouth {
 }
 
 impl Mouth {
+    pub(crate) fn reset(&mut self) {
+        self.clock = None;
+        self.transitions.clear();
+        self.open = false;
+        self.settled = false;
+    }
+
     /// Record one 24 kHz s16le frame written to the Echo at `now`.
     pub(crate) fn wrote(&mut self, frame: &[u8], now: Duration) -> Duration {
         if frame.is_empty() {

@@ -18,11 +18,12 @@ const PYTHON: &str = "      - uses: actions/setup-python@a26af69be951a213d495a4c
 
 // The Make target of each split gate must be exactly its parts, so `make <gate>` runs what the
 // parts run in CI. The *_SHARD and part variables are empty unless a part names its partition.
-pub(super) const MAKE_SPLITS: [&str; 9] = [
+pub(super) const MAKE_SPLITS: [&str; 10] = [
     "NEXTEST_SHARD = $(if $(NEXTEST_PARTITION),--partition $(NEXTEST_PARTITION) --no-tests=pass)\n",
     "SCENARIO_SHARD = $(if $(SCENARIO_PARTITION),--partition $(SCENARIO_PARTITION))\n",
     "test-unit: test-unit-rust test-unit-python test-unit-screen\n",
-    "test-unit-rust:\n\tcargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci $(NEXTEST_SHARD)\n\n",
+    "test-unit-rust:\n\tcargo nextest run --workspace --all-targets --locked --config-file .github/nextest.toml --profile ci $(NEXTEST_SHARD)\n\tif [ -z \"$(NEXTEST_PARTITION)\" ] || [ \"$(NEXTEST_PARTITION)\" = count:1/4 ]; then $(MAKE) test-alloc; fi\n\n",
+    "test-alloc:\n\tcargo nextest run --locked -p echo-bridge --test world_alloc_t3 --run-ignored only --config-file .github/nextest.toml --profile ci --success-output immediate\n\n",
     "test-sim-suites: test-sim-scenarios test-sim-bridge test-sim-components\n",
     "test-sim-scenarios: sim-prereqs\n\tcargo run --locked -p echo-lab -- validate\n\tcargo run --locked -p echo-lab -- run --all --driver sim $(SCENARIO_SHARD)\n\n",
     "test-sim-host: sim-prereqs\n\tcargo nextest run -p echo-lab --test sim_host --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate $(NEXTEST_SHARD)\n\tcargo nextest run -p echo-lab --bin echo-lab --run-ignored only --locked --config-file .github/nextest.toml --profile ci --test-threads 2 --success-output immediate $(NEXTEST_SHARD)\n\n",

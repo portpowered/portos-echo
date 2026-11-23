@@ -1,23 +1,43 @@
+use crate::screen_mouth::Samples;
 use echo_contracts::secret::Secret;
+use echo_screen_contract::mouth::MouthSample;
 use echo_screen_contract::{ScreenFrame, UiState};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc, watch};
 
 #[derive(Clone)]
-pub(crate) struct Publication {
-    pub name: Option<&'static str>,
-    pub data: String,
+pub(crate) enum Publication {
+    Frame(String),
+    PackReload(String),
+    Mouth(Samples),
 }
 
 impl Publication {
     pub fn event(self) -> axum::response::sse::Event {
         let event = axum::response::sse::Event::default();
-        match self.name {
-            Some(name) => event.event(name),
-            None => event,
+        match self {
+            Self::Frame(data) => event.data(data),
+            Self::PackReload(data) => event.event("screen-pack-reload").data(data),
+            Self::Mouth(samples) => event.event("mouth").data(samples.json()),
         }
-        .data(self.data)
+    }
+
+    #[cfg(test)]
+    pub fn name(&self) -> Option<&'static str> {
+        match self {
+            Self::Frame(_) => None,
+            Self::PackReload(_) => Some("screen-pack-reload"),
+            Self::Mouth(_) => Some("mouth"),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn data(&self) -> String {
+        match self {
+            Self::Frame(data) | Self::PackReload(data) => data.clone(),
+            Self::Mouth(samples) => samples.json(),
+        }
     }
 }
 
@@ -121,10 +141,7 @@ impl Core {
         let (tx, frames) = mpsc::channel(32);
         let cancelled = cancel.subscribe();
         if let Some(current) = &self.current {
-            let _ = tx.try_send(Publication {
-                name: None,
-                data: current.clone(),
-            });
+            let _ = tx.try_send(Publication::Frame(current.clone()));
         }
         self.clients.push(Writer {
             frames: tx,
@@ -146,7 +163,7 @@ impl Core {
         if self.draining {
             return true;
         }
-        self.broadcast(&Publication { name: None, data: wire });
+        self.broadcast(&Publication::Frame(wire));
         true
     }
 
@@ -155,10 +172,9 @@ impl Core {
             return false;
         }
         self.pack_revision += 1;
-        self.broadcast(&Publication {
-            name: Some("screen-pack-reload"),
-            data: serde_json::json!({"version":1,"revision":self.pack_revision,"active":active}).to_string(),
-        });
+        self.broadcast(&Publication::PackReload(
+            serde_json::json!({"version":1,"revision":self.pack_revision,"active":active}).to_string(),
+        ));
         true
     }
 
@@ -175,20 +191,12 @@ impl Core {
     /// nothing late: a stream with a backlog misses the batch and stays open,
     /// and the batch never takes a slot a screen frame may need. Returns the
     /// streams that took it. The frame sequence and snapshot are untouched.
-    pub fn mouth(&mut self, data: &str) -> usize {
-        if !self.accepting() {
-            return 0;
-        }
-        let wanted = self.clients.iter().filter(|client| client.mouth);
-        wanted
-            .filter(|client| client.frames.capacity() > MOUTH_RESERVE)
-            .filter(|client| {
-                let publication = Publication {
-                    name: Some("mouth"),
-                    data: data.into(),
-                };
-                client.frames.try_send(publication).is_ok()
-            })
+    pub fn offer_mouth_samples(&self, sent_ms: u64, samples: &[MouthSample]) -> usize {
+        let publication = Publication::Mouth(Samples::new(sent_ms, samples));
+        self.clients
+            .iter()
+            .filter(|client| client.mouth && client.frames.capacity() > MOUTH_RESERVE)
+            .filter(|client| client.frames.try_send(publication.clone()).is_ok())
             .count()
     }
 
@@ -276,7 +284,7 @@ mod tests {
             }
             assert_eq!(*client.cancelled.borrow(), !graceful);
             for (index, state) in states.into_iter().enumerate() {
-                let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap().data).unwrap();
+                let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap().data()).unwrap();
                 assert_eq!(
                     frame,
                     ScreenFrame {
@@ -314,13 +322,13 @@ mod tests {
             Err(tokio::sync::oneshot::error::TryRecvError::Empty)
         ));
         let mut stale = held.attach(watch::channel(false).0).unwrap();
-        let stale: ScreenFrame = serde_json::from_str(&stale.frames.recv().await.unwrap().data).unwrap();
+        let stale: ScreenFrame = serde_json::from_str(&stale.frames.recv().await.unwrap().data()).unwrap();
         assert_eq!(stale.state, UiState::Listening); // Queue admission alone reproduces the old race.
         drop(held);
         assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
         assert_eq!(done.try_recv(), Ok(()));
         let mut late = core.lock().await.attach(watch::channel(false).0).unwrap();
-        let frame: ScreenFrame = serde_json::from_str(&late.frames.recv().await.unwrap().data).unwrap();
+        let frame: ScreenFrame = serde_json::from_str(&late.frames.recv().await.unwrap().data()).unwrap();
         assert_eq!(frame.seq, 3);
         assert_eq!(
             frame.state,
@@ -376,11 +384,11 @@ mod tests {
         tokio::pin!(pump);
         assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
         let mut client = core.lock().await.attach(watch::channel(false).0).unwrap();
-        let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap().data).unwrap();
+        let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap().data()).unwrap();
         assert_eq!(frame.state, UiState::Muted);
         states.try_send(UiState::Connected).unwrap();
         assert!(std::future::poll_fn(|cx| std::task::Poll::Ready(pump.as_mut().poll(cx).is_pending())).await);
-        let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap().data).unwrap();
+        let frame: ScreenFrame = serde_json::from_str(&client.frames.recv().await.unwrap().data()).unwrap();
         assert_eq!(frame.state, UiState::Connected);
         stop.send_replace(true);
         pump.await;
@@ -396,7 +404,7 @@ mod tests {
             assert!(core.publish(UiState::Connected));
             let wire = healthy.frames.recv().await.unwrap();
             assert_eq!(
-                serde_json::from_str::<ScreenFrame>(&wire.data).unwrap(),
+                serde_json::from_str::<ScreenFrame>(&wire.data()).unwrap(),
                 ScreenFrame {
                     seq,
                     state: UiState::Connected
@@ -408,7 +416,7 @@ mod tests {
         assert_eq!(core.clients.len(), 1);
         let mut late = core.attach(watch::channel(false).0).unwrap();
         assert_eq!(
-            serde_json::from_str::<ScreenFrame>(&late.frames.recv().await.unwrap().data)
+            serde_json::from_str::<ScreenFrame>(&late.frames.recv().await.unwrap().data())
                 .unwrap()
                 .seq,
             33
@@ -416,7 +424,7 @@ mod tests {
         core.seq = u64::MAX - 1;
         assert!(core.publish(UiState::Muted));
         assert_eq!(
-            serde_json::from_str::<ScreenFrame>(&healthy.frames.recv().await.unwrap().data)
+            serde_json::from_str::<ScreenFrame>(&healthy.frames.recv().await.unwrap().data())
                 .unwrap()
                 .seq,
             u64::MAX
@@ -453,18 +461,18 @@ mod tests {
         let mut core = Core::new(&Secret::new("synthetic-screen-pair".into()));
         let mut client = core.attach(watch::channel(false).0).unwrap();
         assert!(core.publish(UiState::Listening));
-        assert_eq!(client.frames.recv().await.unwrap().name, None);
+        assert_eq!(client.frames.recv().await.unwrap().name(), None);
         assert!(core.pack_reload(Some("local")));
         let message = client.frames.recv().await.unwrap();
-        assert_eq!(message.name, Some("screen-pack-reload"));
+        assert_eq!(message.name(), Some("screen-pack-reload"));
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&message.data).unwrap(),
+            serde_json::from_str::<serde_json::Value>(&message.data()).unwrap(),
             serde_json::json!({"version":1,"revision":1,"active":"local"})
         );
         let mut late = core.attach(watch::channel(false).0).unwrap();
         let snapshot = late.frames.recv().await.unwrap();
-        assert_eq!(snapshot.name, None);
-        assert_eq!(serde_json::from_str::<ScreenFrame>(&snapshot.data).unwrap().seq, 1);
+        assert_eq!(snapshot.name(), None);
+        assert_eq!(serde_json::from_str::<ScreenFrame>(&snapshot.data()).unwrap().seq, 1);
         assert!(late.frames.try_recv().is_err());
         core.pack_revision = 9_007_199_254_740_990;
         assert!(core.pack_reload(None));

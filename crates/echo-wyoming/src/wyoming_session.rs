@@ -39,6 +39,7 @@ pub(crate) enum Command {
 
 struct Session<W> {
     writer: W,
+    wire: wyoming_wire::Writer,
     opts: ClientOptions,
     router: Router,
     describe: Option<Reply<WyomingEvent>>,
@@ -81,11 +82,11 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
 ) -> (Error, bool) {
     let (reader, writer) = tokio::io::split(io);
     let (tx, mut incoming) = mpsc::channel(1);
-    let limit = opts.max_frame_bytes;
+    let mut wire = wyoming_wire::Reader::new(opts.max_frame_bytes, opts.mic_capacity);
     let mut reader_task = ReaderTask(tokio::spawn(async move {
         let mut reader = BufReader::new(reader);
         loop {
-            let frame = wyoming_wire::read(&mut reader, limit).await;
+            let frame = wire.read(&mut reader).await;
             let failed = frame.is_err();
             if tx.send(frame).await.is_err() || failed {
                 break;
@@ -94,6 +95,7 @@ async fn generation<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     }));
     let mut session = Session {
         writer,
+        wire: wyoming_wire::Writer::new(),
         router: Router::with_device(events, opts.mic_capacity, Connection::new(control)),
         opts,
         describe: None,
@@ -132,7 +134,8 @@ impl<W: AsyncWrite + Unpin> Session<W> {
     async fn send(&mut self, event: WyomingEvent, payload: Vec<u8>) -> Result<(), Error> {
         timeout(
             self.opts.operation_timeout,
-            wyoming_wire::write(&mut self.writer, &event, payload, self.opts.max_frame_bytes),
+            self.wire
+                .write(&mut self.writer, &event, payload, self.opts.max_frame_bytes),
         )
         .await
         .map_err(|_| Error::Timeout)?
@@ -141,7 +144,7 @@ impl<W: AsyncWrite + Unpin> Session<W> {
     async fn run(
         &mut self,
         commands: &mut mpsc::Receiver<Command>,
-        incoming: &mut mpsc::Receiver<Result<echo_contracts::wyoming::Event, Error>>,
+        incoming: &mut mpsc::Receiver<Result<wyoming_wire::Frame, Error>>,
     ) -> Error {
         loop {
             let frames = self
@@ -181,18 +184,15 @@ impl<W: AsyncWrite + Unpin> Session<W> {
         Ok(())
     }
 
-    fn received(&mut self, frame: Result<echo_contracts::wyoming::Event, Error>) -> Result<(), Error> {
+    fn received(&mut self, frame: Result<wyoming_wire::Frame, Error>) -> Result<(), Error> {
         let frame = frame?;
-        if self.router.device.view().link == LinkState::Paused
-            && matches!(
-                frame.header.r#type.as_str(),
-                "run-pipeline" | "audio-chunk" | "audio-start" | "audio-stop"
-            )
-        {
-            frame.typed().map_err(|_| Error::Protocol)?;
+        if self.router.device.view().link == LinkState::Paused && frame.pipeline_frame() {
+            if let wyoming_wire::Frame::Control(frame) = frame {
+                frame.typed().map_err(|_| Error::Protocol)?;
+            }
             return Ok(());
         }
-        match self.router.route(frame)? {
+        match self.router.route_frame(frame)? {
             event @ WyomingEvent::Info(_) => {
                 if let Some(reply) = self.describe.take() {
                     let _ = reply.send(Ok(event));

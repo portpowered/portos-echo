@@ -29,6 +29,18 @@ struct Speech {
 }
 
 impl Turn {
+    pub(crate) fn new() -> Self {
+        Self {
+            marks: Vec::with_capacity(4),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn take_marks(&mut self) -> Vec<Mark> {
+        // Keep the staging storage warm after the voice service drains it.
+        self.marks.split_off(0)
+    }
+
     pub(crate) fn resume(&mut self, preserve_dispatch: bool) {
         self.resumed_listen = false;
         if !preserve_dispatch {
