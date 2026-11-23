@@ -92,14 +92,18 @@ impl Case {
             std::fs::write(path, text.replace("wake_earcon = true", "wake_earcon = false"))
                 .map_err(|_| "m2: cannot disable fixture earcon")?;
         }
+        let tick_witness = std::env::var_os("A1_TRACE_TICK_WITNESS").map(|_| root.0.join("tick.jsonl"));
+        if let Some(path) = &tick_witness {
+            command.env("A1_TICK_TRACE", path);
+        }
         self.bridge = Some(Process::start(&mut command)?);
         self.bridge
             .as_mut()
             .ok_or("m2: missing bridge")?
             .expect("bridge.ready")
             .await?;
-        if std::env::var_os("A1_TRACE_TICK_WITNESS").is_some() {
-            trace_tick_witness(self.bridge.as_mut().ok_or("m2: missing bridge")?, &self.trace_path).await?;
+        if let Some(path) = tick_witness {
+            trace_tick_witness(self.bridge.as_mut().ok_or("m2: missing bridge")?, &path).await?;
         }
         self.trace = read_trace(&self.trace_path)?;
         let address = self
@@ -435,7 +439,7 @@ async fn trace_tick_witness(bridge: &mut Process, path: &Path) -> Result<(), Str
     let expected = r#"{"elapsed_ms":0,"event":"clock.offset","provider_auth_mode":"api_key","reason":"synthetic-tick","synced":false}"#;
     advance(bridge, 99).await?;
     let before = std::fs::read_to_string(path).map_err(|_| "trace tick: prior read failed")?;
-    if before.contains("synthetic-tick") {
+    if !before.is_empty() {
         return Err("trace tick: row visible before the first tick".into());
     }
     advance(bridge, 1).await?;

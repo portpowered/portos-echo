@@ -108,8 +108,8 @@ impl<'a> View<'a> {
         match notice {
             ServeNotice::Kill(enabled) => self.kill(enabled),
             ServeNotice::Ready => {
-                let trace_witness = self.startup == Startup::Pending
-                    && std::env::var_os("A1_TRACE_TICK_WITNESS").is_some();
+                let tick_path = (self.startup == Startup::Pending)
+                    .then(|| std::env::var_os("A1_TICK_TRACE")).flatten();
                 self.startup = Startup::Ready;
                 self.closed("idle")?;
                 self.relinked()?;
@@ -119,8 +119,14 @@ impl<'a> View<'a> {
                 });
                 self.screen.ready()?;
                 self.trace.record("bridge.ready", None, json!({}))?;
-                if trace_witness {
-                    self.trace.buffer_clock_offset(json!({"synced":false, "reason":"synthetic-tick"}))?;
+                if let Some(path) = tick_path {
+                    let trace = Trace::open(std::path::Path::new(&path), "api_key")?;
+                    trace.buffer_clock_offset(json!({"synced":false, "reason":"synthetic-tick"}))?;
+                    // Keep the private idle writer alive past the observed tick.
+                    tokio::spawn(async move {
+                        tokio::time::sleep(echo_sub_trace::TICK * 2).await;
+                        drop(trace);
+                    });
                 }
                 crate::bridge_runtime::publish("bridge.ready", None)
             }

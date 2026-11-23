@@ -120,6 +120,8 @@ jobs:
           wc -cl 0-m2-live-connect/trace-golden.jsonl candidate.jsonl
           sha256sum 0-m2-live-connect/trace-golden.jsonl legacy.jsonl candidate.jsonl
           echo "TRACE_GOLDEN_CMP legacy_exit=0 candidate_exit=0"
+      - name: Focused lint for the trace boundary
+        run: cargo clippy --locked -p echo-core-api -p echo-sub-trace -p echo-svc-trace -p echo-bridge --all-targets -- -D warnings
       - name: Upload echo-lab reports
         if: always() && steps.selections.outputs.report_root != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
