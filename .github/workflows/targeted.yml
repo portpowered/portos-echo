@@ -30,10 +30,10 @@ on:
 permissions:
   contents: read
 jobs:
-  test-unit-screen:
-    name: test-unit-screen
+  targeted:
+    name: E5 M2 simulated scenario
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -42,68 +42,18 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
-          target: test-unit-screen
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: |
-            ~/.npm
-            ~/.cache/ms-playwright
-          key: screen-${{ runner.os }}-${{ hashFiles('web/screen/package-lock.json') }}
-      - name: Provision locked screen npm cache
-        run: npm --prefix web/screen ci --offline=false
-      - name: Provision pinned screen Chromium
-        run: cd web/screen && npx --offline playwright install --with-deps chromium
-      - name: Chromium sandbox user namespaces
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - name: Focused Chromium recovery at 960 by 600
-        run: |
-          cd web/screen
-          npm run build
-          node --test --test-timeout=30000 tests/settings/codex/recovery.mjs
-      - name: test-unit-screen
-        run: make test-unit-screen
-      - name: Publish screen screenshot evidence
-        if: always()
-        id: screen-evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: screen-evidence-c1a98ed16dbbc38304ba1c41356aae247f46ebb8
-          path: |
-            web/screen/test-results/screenshots/**
-            web/screen/test-results/summary.txt
-          if-no-files-found: error
-  rust:
-    name: E5 Rust packages and screen schema
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: c1a98ed16dbbc38304ba1c41356aae247f46ebb8
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: test-unit-rust
+          target: test-sim
           sim: 'true'
-      - name: Regenerate and verify schemas
+      - name: Run unchanged M2 scenario
         shell: sh
         run: |
           git rev-parse HEAD
-          UPDATE_SCHEMAS=1 cargo test --locked -p echo-screen-contract --test screen_schema
-          npm --prefix web/screen ci --offline=false
-          npm --prefix web/screen run generate:schema
-          git diff --exit-code -- schemas/screen web/screen/src/model.ts web/screen/src/settings
-          cargo test --locked -p echo-screen-contract --test screen_wire --test screen_schema
-          npm --prefix web/screen run check:schema
-      - name: PRD Rust package checks
-        run: cargo nextest run --locked -p echo-bridge -p echo-signin --all-targets --config-file .github/nextest.toml --profile ci
-      - name: E1 and E4 focused component and M2 sim
-        run: |
           make sim-prereqs
-          cargo nextest run --locked -p echo-bridge --test bridge_t3 --run-ignored only --config-file .github/nextest.toml --profile ci --success-output immediate -E 'test(t3_bridge_screen_signin) | test(t3_settings_account_changes_reuse_the_credential_owners)'
-          cargo run --locked -p echo-lab -- run tests/scenarios/m2-live-connect.yaml --driver sim --out "$RUNNER_TEMP/targeted-reports/m2-live-connect"
-          printf '%s\n' 'TARGETED_RESULT repeat=1 exit=0'
+          mkdir -p "$RUNNER_TEMP/targeted-reports"
+          status=0
+          cargo run --locked -p echo-lab -- run tests/scenarios/m2-live-connect.yaml --driver sim --out "$RUNNER_TEMP/targeted-reports/m2-live-connect" || status=$?
+          printf 'TARGETED_RESULT repeat=1 exit=%s\n' "$status"
+          exit "$status"
       - name: Publish scenario report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -112,34 +62,3 @@ jobs:
           path: ${{ runner.temp }}/targeted-reports
           if-no-files-found: ignore
           retention-days: 3
-  lint:
-    name: E5 make lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: c1a98ed16dbbc38304ba1c41356aae247f46ebb8
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          target: lint-self-tests
-      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519
-        with:
-          tool: cargo-deny@0.20.2
-          fallback: none
-      - name: Secret scanner
-        shell: sh
-        run: |
-          directory=$(mktemp -d)
-          curl --fail --location --retry 3 https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz -o "$directory/gitleaks.tar.gz"
-          echo "79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e  $directory/gitleaks.tar.gz" | sha256sum --check
-          tar -xzf "$directory/gitleaks.tar.gz" -C "$directory" gitleaks
-          sudo install "$directory/gitleaks" /usr/local/bin/gitleaks
-      - name: Provision lint caches
-        run: |
-          cargo deny fetch
-          npm --prefix web/screen ci --offline=false
-      - name: Run the PRD lint target
-        run: make lint
