@@ -233,7 +233,8 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
     async fn negotiate(&mut self, options: &Options<'_>, offer: &str) -> Result<String, Error> {
         let thread = self.thread.as_deref().ok_or(Error::Input)?;
         let mut params = serde_json::to_value(RealtimeStart::new(thread, offer)).map_err(|_| Error::Decode)?;
-        if let Some(voice) = call_host::admitted_voice(options.voice) {
+        let (voice, voice_listed) = call_host::admitted_voice(options.voice, self.setup_trace.as_mut())?;
+        if let Some(voice) = voice {
             params["voice"] = voice.into();
         }
         params["prompt"] = options.prompt.into();
@@ -246,7 +247,11 @@ impl<'a, R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Call<'a, R, W> {
             .map_err(rpc_error)?;
         self.io.flush().await.map_err(rpc_error)?;
         if let Some(trace) = &mut self.setup_trace {
-            trace.record("call.realtime_start_sent", None, json!({}))?;
+            trace.record(
+                "call.realtime_start_sent",
+                None,
+                json!({"voice":params["voice"].as_str().unwrap_or("omitted"),"voice_listed":voice_listed}),
+            )?;
         }
         self.io.wait_reply(&request).await.map_err(rpc_error)?;
         let answer = self.answer().await?;
