@@ -408,7 +408,7 @@ async fn reply_is_not_held_by_a_question_transcribed_after_its_first_audio() {
     // The turn that cut it is the next reply's question: the rest of its
     // transcript holds nothing, and the turn after it does.
     source.controller.cut_settled();
-    source.resume_reply().unwrap();
+    source.resume_reply(false).unwrap();
     answering(&mut source, &port).await;
     source.heard_user(BargeTrigger::UserTranscript, "Stop.", true);
     assert!(!source.barge.pending() && source.playable());
@@ -422,7 +422,7 @@ async fn reply_is_not_held_by_a_question_transcribed_after_its_first_audio() {
     let quality = source.settle(0);
     assert_eq!((quality.cuts, quality.holds, quality.hold_ms), (0, 1, 2000));
     // A reply that ended awaits its own question again, as late as it comes.
-    source.resume_reply().unwrap();
+    source.resume_reply(false).unwrap();
     answering(&mut source, &port).await;
     source.heard_user(BargeTrigger::UserTranscript, "And tomorrow?", true);
     assert!(!source.barge.pending());

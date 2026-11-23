@@ -7,6 +7,8 @@ use echo_core_api::{
 use std::{fmt, future::Future, sync::Arc, time::Duration};
 use tokio::time::Instant;
 
+mod turn;
+
 /// The service's lease on the active run. The slot is released on all exits,
 /// including cancellation and a failed playback or device acknowledgement.
 pub(crate) struct SessionPort {
@@ -23,8 +25,12 @@ impl fmt::Debug for SessionPort {
 
 impl Controller {
     fn session_step(&self, state: &mut State, event: SessionEvent) -> SessionCommands {
+        self.session_envelope(state, &mut Event::Session(event))
+    }
+
+    fn session_envelope(&self, state: &mut State, event: &mut Event) -> SessionCommands {
         let mut out = Commands::default();
-        state.world.step(&mut Event::Session(event), &mut out);
+        state.world.step(event, &mut out);
         self.check_step(state);
         out.take_session()
     }
@@ -155,11 +161,6 @@ impl SessionPort {
         self.dispatch(SessionChange::RequestEnd);
     }
 
-    pub(crate) fn projected_listen(&self) -> Option<Instant> {
-        self.read(|state| state.projected_listen(Instant::now().into_std()))
-            .map(Instant::from_std)
-    }
-
     #[cfg(test)]
     pub(crate) fn granted(&self) -> Option<Instant> {
         self.read(echo_sub_session::State::granted).map(Instant::from_std)
@@ -178,14 +179,11 @@ impl SessionPort {
         self.read(echo_sub_session::State::run_ceiling).map(Instant::from_std)
     }
 
-    pub(crate) fn response_due(&self) -> Option<Instant> {
-        self.read(echo_sub_session::State::response_due).map(Instant::from_std)
-    }
-
     pub(crate) fn follow_up(&self) -> FollowUp {
         self.read(echo_sub_session::State::follow_up)
     }
 
+    #[cfg(test)]
     pub(crate) fn deadline_reached(&self, timer: SessionTimer, due: Instant) -> bool {
         self.dispatch(SessionChange::Deadline {
             timer,
@@ -213,16 +211,12 @@ impl SessionPort {
         self.dispatch(SessionChange::ReplySettled);
     }
 
-    pub(crate) fn unanswered(&self) {
-        self.dispatch(SessionChange::Unanswered);
-    }
-
     pub(crate) fn listen_after_reply(&self, timeout: Duration) -> Result<(), Error> {
         self.apply(SessionChange::Listen(timeout))
     }
 
-    pub(crate) fn resume(&self) -> Result<(), Error> {
-        self.apply(SessionChange::Resume)
+    pub(crate) fn resume(&self, preserve_dispatch: bool) -> Result<(), Error> {
+        self.apply(SessionChange::Resume { preserve_dispatch })
     }
 
     pub(crate) fn renew_idle(&self) {
@@ -261,6 +255,7 @@ impl SessionPort {
         self.dispatch(SessionChange::CaptureEnded);
     }
 
+    #[cfg(test)]
     pub(crate) fn reply_started(&self) {
         self.dispatch(SessionChange::ReplyStarted);
     }
@@ -281,6 +276,7 @@ impl SessionPort {
         self.view().closing
     }
 
+    #[cfg(test)]
     pub(crate) fn speaking(&self) -> bool {
         self.view().speaking
     }
@@ -297,6 +293,7 @@ impl SessionPort {
         self.read(echo_sub_session::State::cutting)
     }
 
+    #[cfg(test)]
     pub(crate) fn retired(&self) -> bool {
         self.read(echo_sub_session::State::retired)
     }
@@ -351,6 +348,7 @@ fn map_error(error: SessionError) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use echo_core_api::Subsystem;
 
     #[tokio::test(start_paused = true)]
     async fn session_slots_release_invalidates_retained_tool_results() {
@@ -390,7 +388,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn session_slots_release_clears_quiet_deadline() {
+    async fn session_world_release_clears_quiet_deadline() {
         let world = Controller::new();
         let session = world.clone().admit(Instant::now(), None).unwrap();
         let window = Duration::from_secs(15);
@@ -415,6 +413,12 @@ mod tests {
         let view = world.state().world.pacer.session.view();
         assert_eq!(view.session, None);
         assert_eq!(view.next_deadline, None);
+        assert_eq!(view.idle_deadline, None);
+        assert_eq!(
+            echo_sub_session::Session::next_deadline(&world.state().world.pacer.session),
+            None
+        );
+        assert!(world.state().world.check().is_ok());
     }
 
     #[test]

@@ -129,7 +129,7 @@ async fn settings_restart_waits_for_delegation_and_beats_ready_followup() {
             let (tx, rx) = mpsc::channel(2);
             let mut port = Port(rx, std::rc::Rc::default());
             let mut source = source();
-            source.delegation.started();
+            source.controller.turn(echo_core_api::SessionTurnEvent::DispatchStarted);
             restart.request();
             {
                 let mut drain = None;
@@ -158,7 +158,7 @@ async fn settings_restart_waits_for_delegation_and_beats_ready_followup() {
                 tx.send(MediaEvent::Control(Event::SpeechStarted)).await.unwrap();
                 assert_eq!(work.await, Ok(false));
             }
-            assert!(!source.delegation.in_flight());
+            assert!(!source.controller.dispatch_in_flight());
             assert!(source.controller.has_played());
             assert!(matches!(
                 port.0.try_recv(),

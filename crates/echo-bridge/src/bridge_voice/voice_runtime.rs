@@ -242,6 +242,12 @@ async fn execute_runtime<C: LinkConnector, P: MediaPeer>(
     screen.supervise_actions(health.state.subscribe());
     let settings_trace = trace.clone();
     let world = trace.world();
+    if let Some(config) = options.delegation {
+        world.configure_session(echo_core_api::SessionKnobs {
+            expiry: std::time::Duration::from_secs(u64::from(config.voice.speech_start_expiry_seconds)),
+            local_cut: config.voice.local_barge_cut,
+        })?;
+    }
     let mut view = View::new(&screen, &health, &mut trace)
         .with_screen_account(service.is_some() && options.host.mode == LiveMode::Chatgpt);
     let requested = Cell::new(false);

@@ -90,7 +90,7 @@ async fn session_tools_extend_adds_to_the_current_deadline_and_survives_the_next
     let result = ask(SessionCommand::Extend(2), "k", &controller, &mut receipts);
     assert_eq!(result.content, json!({"deadline_ms":6000,"capped":false}));
     // Activity starts a reply; the grant is retained and re-armed after it.
-    controller.resume().unwrap();
+    controller.resume(false).unwrap();
     assert_eq!(controller.idle_deadline(), None);
     controller.renew_idle();
     assert_eq!(controller.idle_deadline(), None);
@@ -99,7 +99,7 @@ async fn session_tools_extend_adds_to_the_current_deadline_and_survives_the_next
     controller.listen_after_reply(LISTEN).unwrap();
     assert_eq!(controller.idle_deadline(), Some(opened + Duration::from_secs(6)));
     // During a reply the base is the projected post-play deadline.
-    controller.resume().unwrap();
+    controller.resume(false).unwrap();
     let during = ask(SessionCommand::Extend(4), "k2", &controller, &mut receipts);
     assert_eq!(during.content, json!({"deadline_ms":10000,"capped":false}));
 }

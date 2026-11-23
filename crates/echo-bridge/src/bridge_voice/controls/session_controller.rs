@@ -92,7 +92,7 @@ mod tests {
     fn assert_close_rejects_activity(source: &mut Source) {
         assert!(!source.controller.accepts_audio());
         assert!(!source.controller.speaking());
-        assert_eq!(source.resume_reply(), Err(Error::Control));
+        assert_eq!(source.resume_reply(false), Err(Error::Control));
         assert_eq!(
             source.controller.listen_after_reply(Duration::from_secs(3)),
             Err(Error::Input)
@@ -145,7 +145,7 @@ mod tests {
         assert!(!controller.accepts_audio());
         assert!(controller.ready_to_close(true, true));
         tokio::time::advance(Duration::from_secs(2)).await;
-        controller.resume().unwrap();
+        controller.resume(false).unwrap();
         assert_eq!(controller.idle_deadline(), None);
         assert!(controller.accepts_audio());
         assert!(!controller.has_played());
@@ -223,7 +223,7 @@ mod tests {
                 assert_eq!(result, Err(Error::Deadline));
                 assert!(!source.controller.complete(true, true));
                 assert!(!source.controller.accepts_audio());
-                assert_eq!(source.resume_reply(), Err(Error::Control));
+                assert_eq!(source.resume_reply(false), Err(Error::Control));
                 assert_eq!(source.controller.begin_close(true), Err(Error::Wyoming));
                 assert_eq!(observer.commands(), vec![Command::Connect]);
             }

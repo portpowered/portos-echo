@@ -1,9 +1,7 @@
 use super::{Error, VoicePort, session_controller::Controller};
 use crate::bridge_codex::{CaptureAudio, ReplyAudio};
-#[cfg(test)]
-use crate::bridge_runtime::bridge_pacing::BargeTrigger;
-use crate::bridge_runtime::bridge_pacing::{Barge, Cut, Discard, QUIET, ReplyMeter, ReplyQuality};
-use crate::bridge_runtime::bridge_pacing::{Floor, Question};
+use crate::bridge_runtime::bridge_pacing::{Cut, Discard, QUIET, ReplyMeter, ReplyQuality};
+use echo_core_api::{SessionOutcome, SessionTurnEvent};
 use echo_link::MicFrame;
 use echo_media::PcmFrame;
 use std::collections::VecDeque;
@@ -11,16 +9,9 @@ use tokio::time::Instant;
 
 #[path = "recovery/voice_floor.rs"]
 mod voice_floor;
-pub use super::voice_wait::Delegation;
 
 /// Thirty seconds of 20 ms frames: above the setup capture's own bound.
 const UPLINK_BACKLOG: usize = 1500;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum UserSpeech {
-    Quiet,
-    Active,
-}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
@@ -46,33 +37,18 @@ pub(super) struct Source {
     pub reply: ReplyAudio,
     pub controller: Controller,
     pub failure: &'static str,
-    pub delegation: Delegation,
     pub meter: ReplyMeter,
     pub stats: Stats,
     /// Speech the bounded media sender has not taken yet, oldest first.
     uplink: VecDeque<PcmFrame>,
     /// The device was told a dispatch is running in silence.
     thinking: bool,
-    pub user_speech: UserSpeech,
-    pub marks: super::voice_wait::Marks,
-    /// User speech heard during the reply, until the model yields to it.
-    barge: Barge,
-    /// A barge-in cut the reply: call audio is its until the model speaks again.
-    stale: bool,
-    /// The session's transcript of the turn the reply answers.
-    question: Question,
-    /// One cut per user turn.
-    floor: Floor,
 }
 
 impl Source {
-    pub fn resume_reply(&mut self) -> Result<(), Error> {
-        self.controller.resume()?;
-        self.marks.reopened();
-        self.fresh_reply(false)?;
-        self.delegation = self.delegation.carried();
-        self.barge = Barge::default();
-        Ok(())
+    pub fn resume_reply(&mut self, preserve_dispatch: bool) -> Result<(), Error> {
+        self.controller.resume(preserve_dispatch)?;
+        self.fresh_reply(false)
     }
 
     /// The device's thinking indication, when it must change. It goes on
@@ -81,7 +57,7 @@ impl Source {
     /// answer is on its way, and always clears before that reply's audio ends.
     /// The device drops it itself when the run ends.
     pub(super) fn thinking_change(&mut self) -> Option<bool> {
-        let wanted = !self.reply.voiced() && (self.thinking || self.delegation.in_flight());
+        let wanted = !self.reply.voiced() && (self.thinking || self.controller.dispatch_in_flight());
         (wanted != self.thinking).then(|| {
             self.thinking = wanted;
             wanted
@@ -100,20 +76,19 @@ impl Source {
     /// pending barge-in holds the reply: the device plays out what it has.
     #[must_use]
     pub fn playable(&self) -> bool {
-        !self.barge.pending() && (self.reply.has_frames() || (self.reply.stalled() && !self.delegation.held()))
+        !self.controller.barge_pending()
+            && (self.reply.has_frames() || (self.reply.stalled() && !self.controller.dispatch_held()))
     }
 
     /// The assistant began an utterance: call audio is a reply's again.
     pub fn spoke(&mut self) {
-        self.stale = false;
-        self.controller.reply_started();
-        self.delegation.spoke();
+        self.controller.turn(SessionTurnEvent::AssistantStarted);
     }
 
     /// Call audio and a done still belong to a reply that was cut.
     #[must_use]
     pub fn stale(&self) -> bool {
-        self.stale || self.controller.retired()
+        self.controller.stale()
     }
 
     /// Give the configured listen window from now.
@@ -130,8 +105,9 @@ impl Source {
         quality.lips = pacer.lip_stats;
         if quality.cuts == 0 {
             self.stats.cut = None;
-            self.question = Question::default();
         }
+        self.controller
+            .turn(SessionTurnEvent::ReplyMeasured { cut: quality.cuts != 0 });
         quality
     }
 
@@ -139,14 +115,9 @@ impl Source {
     pub fn wrote(&mut self) {
         let now = Instant::now();
         self.reply.handed();
-        // A reply being spoken is an answer. The no-answer window covers the
-        // wait for one, and the next quiet inside it, never the speech itself.
-        if self.reply.voiced()
-            && let Ok(due) = self.controller.replacement_deadline()
-        {
-            self.controller
-                .set_response_due(self.controller.response_due().map_or(due, |answer| answer.max(due)));
-        }
+        self.controller.turn(SessionTurnEvent::ReplyFrameHanded {
+            voiced: self.reply.voiced(),
+        });
         self.meter.wrote(now);
     }
 
@@ -163,12 +134,11 @@ impl Source {
 
     /// A dispatch that finished while listening gives its answer a fresh
     /// listen window, since the hold on idle ends with it.
-    pub fn dispatch_completed(&mut self) {
-        let waited = self.delegation.in_flight();
-        self.delegation.completed();
-        if waited && !self.delegation.in_flight() {
-            self.renew_idle();
-        }
+    pub fn dispatch_completed(&self) {
+        self.controller.turn(SessionTurnEvent::DispatchCompleted {
+            answered: false,
+            listening: true,
+        });
     }
 
     #[cfg(test)]
@@ -189,17 +159,10 @@ impl Source {
             reply: ReplyAudio::new(lead_ms)?,
             controller,
             failure: "playback",
-            delegation: Delegation::default(),
             thinking: false,
-            user_speech: UserSpeech::Quiet,
-            marks: super::voice_wait::Marks::default(),
             meter: ReplyMeter::default(),
             stats: Stats::default(),
             uplink: VecDeque::new(),
-            barge: Barge::default(),
-            stale: false,
-            question: Question::default(),
-            floor: Floor::default(),
         })
     }
 
@@ -213,16 +176,18 @@ impl Source {
         if !self.controller.ending() || self.controller.cutting() || self.controller.closing() {
             return Ok(false);
         }
-        let held = self.delegation.held();
         let between = self.controller.idle_deadline().is_some();
-        self.delegation.ended(!between && self.reply.spoken());
+        let spoken = self.reply.spoken();
+        let finish = self.controller.turn(SessionTurnEvent::EndDispatch {
+            farewell: !between && spoken,
+        });
+
         if between {
             return Ok(false);
         }
-        if self.reply.spoken() {
-            return Ok(held);
+        if spoken {
+            return Ok(finish.outcome == Some(Ok(SessionOutcome::FinishReply)));
         }
-        self.stale = true;
         port.retire_audio();
         self.fresh_reply(true)?;
         self.controller.cut();
@@ -312,10 +277,12 @@ impl Source {
             // PCM has no utterance identity. Only ordered assistant control
             // opens Speaking; the initial user transcript can lag audible RTP.
             let now = Instant::now();
-            let held = self.barge.pending();
             let audible = audible(frame);
-            self.barge.heard(now, audible);
-            if held && !self.barge.pending() {
+            let outcome = self
+                .controller
+                .turn(SessionTurnEvent::AssistantAudio { audible })
+                .outcome;
+            if outcome == Some(Ok(SessionOutcome::Released)) {
                 self.meter.released(now);
             }
             self.meter.arrived(now);

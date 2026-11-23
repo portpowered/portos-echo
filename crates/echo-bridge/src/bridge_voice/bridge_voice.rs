@@ -60,8 +60,8 @@ use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun, PlayOutcome, Rep
 use echo_media::PcmFrame;
 use std::{future::Future, num::NonZeroUsize, time::Duration};
 use tokio::time::{Instant, timeout};
+use voice_source::Source;
 pub use voice_source::Stats;
-use voice_source::{Source, UserSpeech};
 /// The same run owner accepts production media and memory-only component ports.
 pub trait VoicePort {
     /// Bind the run identity, preserving queued tools' original binding.
@@ -353,7 +353,7 @@ async fn drive<L: EchoLink>(
             () = voice_listen::until(deadline) => voice_wait::expired(source, deadline, on_timeout)?,
             () = voice_listen::until(barge) => source.interrupt(port)?,
             () = voice_listen::until(source.reply.mouth_due()) => {
-                if let Some(notice) = voice_listen::playout_notice(&source.reply, source.delegation.in_flight()) {
+                if let Some(notice) = voice_listen::playout_notice(&source.reply, source.controller.dispatch_in_flight()) {
                     observe(notice)?;
                 }
             },
@@ -384,7 +384,7 @@ async fn step<E: LinkEvents>(
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let uplink = port.uplink_ready();
-    let allow_fade = !source.delegation.held();
+    let allow_fade = !source.controller.dispatch_held();
     tokio::select! {
         // Setup-time speech arrives as one burst; send what the peer refused.
         () = uplink, if source.uplink_pending() => source.flush_uplink(port),
@@ -466,24 +466,27 @@ async fn media(
         MediaEvent::Audio(frame) => source.audio(&frame),
         MediaEvent::Control(Event::ReplyDone { text }) => voice_listen::finish_reply(text, port, source, observe).await,
         MediaEvent::Control(Event::Transcript { role, text, done }) => {
-            if role == "user" {
+            let text = if role == "user" {
                 source.meter.endpoint(Instant::now(), Endpoint::UserTranscript);
-                source.heard_user(BargeTrigger::UserTranscript, &text, done);
-            } else if role == "assistant" && !done {
-                source.spoke();
-            }
+                source.user_transcript(text, done)
+            } else {
+                if role == "assistant" && !done {
+                    source.spoke();
+                }
+                text
+            };
             observe(Notice::Transcript { role, text, done })
         }
         MediaEvent::Control(Event::TurnStarted { .. }) => {
             source.meter.endpoint(Instant::now(), Endpoint::DelegatedTurn);
-            source.delegation.started();
+            source.controller.turn(echo_core_api::SessionTurnEvent::DispatchStarted);
             Ok(())
         }
         MediaEvent::Control(Event::TurnCompleted { answered, .. }) => {
             voice_listen::complete_turn(answered, port, source).await
         }
         MediaEvent::Control(Event::SpeechStarted) => {
-            source.heard_user(BargeTrigger::SpeechStarted, "", false);
+            source.speech_started();
             Ok(())
         }
         MediaEvent::Control(Event::SpeechStopped) => {

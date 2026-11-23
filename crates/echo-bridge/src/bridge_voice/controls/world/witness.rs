@@ -171,6 +171,7 @@ const ROWS: &str = "trace.pending_rows: expected 0, actual nonzero";
 const WRITER: &str = "trace.writer_failed: expected false, actual true";
 const PACER_DEPTH: &str = "pacer.reply_depth: expected 0..=128, actual out of range";
 const SESSION_CLOSING: &str = "session.idle_deadline: expected absent while closing, actual present";
+const SESSION_IDLE_DEADLINE: &str = "session.idle_deadline: expected absent without active run, actual present";
 const PACER_QUIESCENT: &str = "pacer.quiescent: expected true, actual false";
 
 impl Report {
@@ -223,6 +224,7 @@ impl Report {
                 PACER_DEPTH,
                 PACER_QUIESCENT,
                 SESSION_CLOSING,
+                SESSION_IDLE_DEADLINE,
             ]
             .into_iter()
             .find(|known| *known == diff)
@@ -257,6 +259,39 @@ fn pacer_world_report_accepts_only_fixed_diagnostics() {
     }
     report.diff = Some(format!("{PACER_DEPTH} 129"));
     assert!(matches!(report.verdict(), Err(Error::Control)));
+}
+
+#[cfg(test)]
+#[tokio::test(start_paused = true)]
+async fn session_world_preserves_the_first_safe_failure_through_report_decoding() {
+    use echo_core_api::{Commands, Event, PacerEvent};
+    let directory = tempfile::tempdir().unwrap();
+    let witness = Witness {
+        directory: File::open(directory.path()).unwrap().into(),
+        seed: Some(101),
+    };
+    let controller = Controller::with_witness(Some(witness));
+    let mut state = controller.state();
+    assert_eq!(Report::from_state(&state).verdict().unwrap(), None);
+
+    // Exercise the private report with the session violation captured at step
+    // time, followed by a separate failure in the final World snapshot.
+    state.first_violation = Some(Broken {
+        field: "session.idle_deadline",
+        expected: "absent without active run",
+        actual: "present",
+    });
+    state.world.step(
+        &mut Event::Pacer(PacerEvent::RunOpened {
+            lead_ms: 200,
+            adaptive: false,
+        }),
+        &mut Commands::default(),
+    );
+    controller.check_step(&mut state);
+    let encoded = serde_json::to_vec(&Report::from_state(&state)).unwrap();
+    let decoded: Report = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(decoded.verdict().unwrap(), Some(SESSION_IDLE_DEADLINE));
 }
 
 fn render(broken: &Broken) -> String {

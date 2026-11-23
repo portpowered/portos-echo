@@ -121,12 +121,19 @@ evicts in insertion order, returning slots with a new generation. The bridge
 still records the existing receipt before releasing the tool result. A
 pending end keeps the current immediate and audible-farewell boundaries.
 
+The session reducer owns the speech latch, the question and user turn's
+cut budget, and the delegated wait facts that affect admission and expiry.
+The controller supplies the configured latch duration and cut policy. Ordered
+speech, transcript, app-server dispatch and playback observations update the
+reducer on the same clock. The voice adapter schedules the selected deadlines
+with timeout priority. It consumes a cut command at the existing PCM retire
+and flush fence, and the pacer and trace keep their independent wakes. The
+private World check reports a remaining idle deadline after the run is released.
+
 ## Deferred
 
 - The device step receives wake and mute events. Wyoming has no separate
   button report in the current wire contract.
-- Within this lane, the next story moves barge, floor and the remaining
-  speech and hand-back policy.
 - A2 owns the Wyoming service rename, call reducer and phase-wide allocation
   proof. The call reducer steps after pacer and before trace when introduced.
   The retained-call policy and native goodbye path keep their current rules.

@@ -278,7 +278,7 @@ async fn voice_barge_is_not_armed_while_a_dispatch_is_in_flight() {
     for event in [turn(true), said("One sec")] {
         media(event, &mut port, &mut source, &mut |_| Ok(())).await.unwrap();
         source.heard_user(BargeTrigger::SpeechStarted, "", false);
-        assert!(source.delegation.in_flight() && source.barge_due().is_none());
+        assert!(source.controller.dispatch_in_flight() && source.barge_due().is_none());
     }
     assert!(source.controller.speaking());
     assert_eq!(port.retired, 0);

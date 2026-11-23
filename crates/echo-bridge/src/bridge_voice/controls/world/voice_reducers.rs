@@ -19,6 +19,7 @@ impl Subsystem for VoiceReducers {
         CommandKind::StartCapture,
         CommandKind::StopCapture,
         CommandKind::EndSession,
+        CommandKind::CutReply,
         CommandKind::OpenCall,
         CommandKind::CloseCall,
         CommandKind::WriteFrame,

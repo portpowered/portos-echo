@@ -51,6 +51,7 @@ pub enum CommandKind {
     StartCapture,
     StopCapture,
     EndSession,
+    CutReply,
     OpenCall,
     CloseCall,
 }

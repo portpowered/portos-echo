@@ -172,9 +172,7 @@ impl Configured {
                     None,
                     (self.voice_trace(clock_trace)?, Some(time)),
                 );
-                super::voice_wait::run_marks::scope(self.knobs(), Box::pin(work))
-                    .await
-                    .map(|_| ())
+                Box::pin(work).await.map(|_| ())
             },
         ))
         .await
@@ -213,7 +211,6 @@ impl Configured {
     ) -> Result<super::RuntimeCompletion, Error> {
         let startup = self.startup.take().filter(|startup| startup.config.home.is_some());
         let prompts = retained.as_ref().map(|host| host.prompts());
-        let knobs = self.knobs();
         let generation = Box::pin(super::prompts::scope_retained(
             self.config.home.as_ref().map(|home| home.dir.as_path()),
             prompts,
@@ -255,17 +252,7 @@ impl Configured {
                 .await
             },
         ));
-        super::voice_wait::run_marks::scope(knobs, generation).await
-    }
-
-    /// `voice.speech_start_expiry_seconds`: when a speech start with no
-    /// transcript text stops holding the run's deadlines; and
-    /// `voice.local_barge_cut`: whether the bridge cuts a reply talked over.
-    fn knobs(&self) -> super::voice_wait::run_marks::Knobs {
-        super::voice_wait::run_marks::Knobs {
-            expiry: Duration::from_secs(u64::from(self.config.voice.speech_start_expiry_seconds)),
-            local_cut: self.config.voice.local_barge_cut,
-        }
+        generation.await
     }
 
     /// Record one failed OS replacement, keeping the original active config.

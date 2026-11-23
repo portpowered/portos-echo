@@ -1,5 +1,6 @@
+use crate::turn::Turn;
 use echo_core_api::{
-    FollowUp, SessionError as Error, SessionHandle, SessionOutcome, SessionTimer, SessionToolAction,
+    FollowUp, SessionError as Error, SessionHandle, SessionOutcome, SessionPlayback, SessionTimer, SessionToolAction,
     SessionToolDecision, SessionToolEvent, SessionToolRefusal, ToolCallHandle,
 };
 use std::time::{Duration, Instant};
@@ -23,6 +24,9 @@ pub(crate) struct Run {
     pub(crate) run_ceiling: Option<Instant>,
     pub(crate) response_due: Instant,
     pub(crate) follow_up: FollowUp,
+    pub(crate) turn: Turn,
+    pub(crate) playback: SessionPlayback,
+    pub(crate) playback_observed: Instant,
     state: Phase,
     played: bool,
     /// The device closed a replacement playback that nothing was written to.
@@ -30,7 +34,6 @@ pub(crate) struct Run {
     cut_receipts: usize,
     microphone_finished: bool,
     response_window: Option<Duration>,
-    idle_deadline: Option<Instant>,
     tools: Option<ToolWindow>,
     active_tool: Option<ToolCallHandle>,
     granted: Option<Instant>,
@@ -52,13 +55,15 @@ impl Run {
             run_ceiling,
             response_due: now,
             follow_up: FollowUp::First,
+            turn: Turn::default(),
+            playback: SessionPlayback::default(),
+            playback_observed: now,
             state: Phase::Listening,
             played: false,
             unanswered: false,
             cut_receipts: 0,
             microphone_finished: false,
             response_window: None,
-            idle_deadline: None,
             tools: None,
             active_tool: None,
             granted: None,
@@ -67,25 +72,13 @@ impl Run {
     }
 
     /// Start idle only after both speaker acknowledgments and mouth drain.
-    pub(crate) fn listen_after_reply(&mut self, timeout: Duration, now: Instant) -> Result<(), Error> {
+    pub(crate) fn listen_after_reply(&mut self, timeout: Duration, now: Instant) -> Result<Instant, Error> {
         if timeout.is_zero() || !self.ready_to_close(true, true) {
             return Err(Error::Input);
         }
         let deadline = now.checked_add(timeout).ok_or(Error::Input)?;
-        self.idle_deadline = Some(self.granted.map_or(deadline, |grant| deadline.max(grant)));
         self.state = Phase::Listening;
-        Ok(())
-    }
-
-    pub(crate) fn idle_deadline(&self) -> Option<Instant> {
-        self.idle_deadline
-    }
-
-    /// A granted deadline can only lengthen an armed listen interval.
-    fn extend_idle(&mut self, deadline: Instant) {
-        if let Some(current) = &mut self.idle_deadline {
-            *current = (*current).max(deadline);
-        }
+        Ok(self.granted.map_or(deadline, |grant| deadline.max(grant)))
     }
 
     pub(crate) fn closing(&self) -> bool {
@@ -97,7 +90,6 @@ impl Run {
         if matches!(self.state, Phase::Closing | Phase::Closed) {
             return Err(Error::Control);
         }
-        self.idle_deadline = None;
         self.played = false;
         self.unanswered = false;
         Ok(())
@@ -110,7 +102,6 @@ impl Run {
             return Err(Error::Playback);
         }
         self.state = Phase::Closing;
-        self.idle_deadline = None;
         Ok(())
     }
 
@@ -152,19 +143,20 @@ impl Run {
     }
 
     pub(crate) fn accepts_audio(&self) -> bool {
-        self.idle_deadline.is_none()
-            && !matches!(
-                self.state,
-                Phase::Cutting | Phase::Retired | Phase::Closing | Phase::Closed
-            )
+        !matches!(
+            self.state,
+            Phase::Cutting | Phase::Retired | Phase::Closing | Phase::Closed
+        )
     }
 
     pub(crate) fn reply_started(&mut self) {
         self.state = Phase::Replying;
+        self.turn.stale = false;
     }
 
     pub(crate) fn cut(&mut self) {
         self.state = Phase::Cutting;
+        self.turn.stale = true;
     }
 
     pub(crate) fn cut_settled(&mut self) {
@@ -252,9 +244,9 @@ impl Run {
         self.granted
     }
 
-    pub(crate) fn renew_idle(&mut self, now: Instant) {
+    pub(crate) fn renew_idle(&self, idle: &mut Option<Instant>, now: Instant) {
         if let Some(deadline) = self.tools.as_ref().and_then(|tools| now.checked_add(tools.listen)) {
-            self.extend_idle(deadline);
+            extend_idle(idle, deadline);
         }
     }
 
@@ -263,11 +255,16 @@ impl Run {
         Some(self.granted.map_or(window, |grant| window.max(grant)))
     }
 
-    pub(crate) fn tool_event(&mut self, event: SessionToolEvent, now: Instant) -> Result<SessionOutcome, Error> {
+    pub(crate) fn tool_event(
+        &mut self,
+        event: SessionToolEvent,
+        idle: &mut Option<Instant>,
+        now: Instant,
+    ) -> Result<SessionOutcome, Error> {
         match event {
             SessionToolEvent::Started { tool, action } if self.active_tool.is_none() => {
                 self.active_tool = Some(tool);
-                Ok(SessionOutcome::Tool(self.decide_tool(tool, action, now)))
+                Ok(SessionOutcome::Tool(self.decide_tool(tool, action, idle, now)))
             }
             SessionToolEvent::Ended { tool } if self.active_tool == Some(tool) => {
                 self.active_tool = None;
@@ -277,7 +274,13 @@ impl Run {
         }
     }
 
-    fn decide_tool(&mut self, tool: ToolCallHandle, action: SessionToolAction, now: Instant) -> SessionToolDecision {
+    fn decide_tool(
+        &mut self,
+        tool: ToolCallHandle,
+        action: SessionToolAction,
+        idle: &mut Option<Instant>,
+        now: Instant,
+    ) -> SessionToolDecision {
         let refuse = |reason| SessionToolDecision::Refused { tool, reason };
         let Some(window) = &self.tools else {
             return refuse(SessionToolRefusal::Inactive);
@@ -294,7 +297,7 @@ impl Run {
             }
             SessionToolAction::Extend { .. } if self.ending() => refuse(SessionToolRefusal::Closing),
             SessionToolAction::Extend { seconds } => {
-                let current = self.idle_deadline.or_else(|| now.checked_add(window.listen));
+                let current = idle.or_else(|| now.checked_add(window.listen));
                 let base = [current, self.granted].into_iter().flatten().fold(now, Instant::max);
                 let cap = window.opened.checked_add(window.max).unwrap_or(base);
                 let wanted = base.checked_add(Duration::from_secs(seconds));
@@ -303,7 +306,7 @@ impl Run {
                 let deadline_ms =
                     u64::try_from(deadline.saturating_duration_since(window.opened).as_millis()).unwrap_or(u64::MAX);
                 self.granted = Some(deadline);
-                self.extend_idle(deadline);
+                extend_idle(idle, deadline);
                 SessionToolDecision::Extended {
                     tool,
                     deadline_ms,
@@ -315,27 +318,29 @@ impl Run {
 }
 
 impl Run {
-    pub(crate) fn next_deadline(&self) -> Option<(Instant, SessionTimer)> {
-        if self.closing() {
-            return None;
-        }
-        let reply = self
-            .idle_deadline
-            .map_or((self.response_due, SessionTimer::Response), |idle| {
-                (idle, SessionTimer::Listen)
-            });
-        Some(
-            self.run_ceiling
-                .filter(|cap| *cap < reply.0)
-                .map_or(reply, |cap| (cap, SessionTimer::RunCeiling)),
-        )
-    }
-
-    pub(crate) fn deadline_reached(&self, timer: SessionTimer, due: Instant, now: Instant) -> bool {
+    pub(crate) fn deadline_reached(
+        &self,
+        timer: SessionTimer,
+        due: Instant,
+        now: Instant,
+        idle: Option<Instant>,
+    ) -> bool {
         match timer {
-            SessionTimer::Listen => self.idle_deadline.is_some_and(|idle| now >= due && due <= idle),
+            SessionTimer::Listen => idle.is_some_and(|idle| now >= due && due <= idle),
             SessionTimer::Response => now >= due && due >= self.response_due,
             SessionTimer::RunCeiling => self.run_ceiling.is_some_and(|cap| now >= due && due >= cap),
+            SessionTimer::Playback => self
+                .playback
+                .played_due
+                .is_some_and(|played| now >= played && due == played),
+            SessionTimer::SpeechLatch | SessionTimer::Barge => false,
         }
+    }
+}
+
+/// A granted deadline can only lengthen an armed listen interval.
+fn extend_idle(idle: &mut Option<Instant>, deadline: Instant) {
+    if let Some(current) = idle {
+        *current = (*current).max(deadline);
     }
 }

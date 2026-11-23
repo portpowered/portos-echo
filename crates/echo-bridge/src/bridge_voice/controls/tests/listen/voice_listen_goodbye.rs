@@ -125,7 +125,7 @@ async fn goodbye_with_end(steps: &[Step], cuts: usize) -> usize {
     // The running turn held the run to its 60 s ceiling; the end did not wait
     // for it, nor for the response deadline or an idle window.
     assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
-    assert!(!source.delegation.in_flight());
+    assert!(!source.controller.dispatch_in_flight());
     assert!(source.controller.ready_to_close(true, true));
     let commands = device.commands();
     let cut = commands.iter().filter(|cmd| matches!(cmd, Command::Cut(_)));

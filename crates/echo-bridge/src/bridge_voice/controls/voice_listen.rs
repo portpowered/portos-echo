@@ -1,5 +1,6 @@
 //! Keep capture and the run owned while a settled reply waits for activity.
 use super::{Error, Event, MediaEvent, Notice, Options, Source, VoicePort};
+use echo_core_api::{SessionOutcome, SessionTurnEvent};
 use echo_link::{EchoLink, LinkEvent, LinkEvents, ReplySink};
 use std::{future::Future, time::Duration};
 use tokio::time::Instant;
@@ -157,7 +158,7 @@ async fn after_reply<L: EchoLink>(
         return Ok(false);
     }
     let mut followup = options.listen_timeout.is_some();
-    if followup && !source.delegation.waiting() && crate::bridge_endpoint::remote_start::take_followup() {
+    if followup && !source.controller.dispatch_waiting() && crate::bridge_endpoint::remote_start::take_followup() {
         let deadline =
             (Instant::now() + Duration::from_secs(2)).min(source.controller.run_ceiling().ok_or(Error::Deadline)?);
         let next = super::remote_admission::followup(client, events, cancelled.as_mut(), deadline, |event| {
@@ -176,7 +177,7 @@ async fn after_reply<L: EchoLink>(
             return Ok(false);
         }
     }
-    if !followup && !source.delegation.waiting() {
+    if !followup && !source.controller.dispatch_waiting() {
         return Ok(false);
     }
     source.controller.listen_after_reply(window(source, options)?)?;
@@ -197,9 +198,11 @@ async fn after_reply<L: EchoLink>(
 /// is applied and the runner finishes with nothing to hand back, the reply
 /// owes no delegated answer: the farewell already spoken is all of it.
 pub(super) async fn complete_turn(answered: bool, port: &mut impl VoicePort, source: &mut Source) -> Result<(), Error> {
-    source.delegation.completed();
-    let silent = !answered && !source.delegation.in_flight();
-    if silent && source.controller.ending() && source.delegation.released() {
+    let completion = source.controller.turn(SessionTurnEvent::DispatchCompleted {
+        answered,
+        listening: false,
+    });
+    if completion.outcome == Some(Ok(SessionOutcome::FinishReply)) {
         close_reply(port, source).await?;
     }
     Ok(())
@@ -294,7 +297,7 @@ pub(super) async fn finish_reply(
         text,
         done: true,
     })?;
-    if !source.delegation.answered() {
+    if source.controller.turn(SessionTurnEvent::ReplyDone).outcome != Some(Ok(SessionOutcome::FinishReply)) {
         return Ok(());
     }
     close_reply(port, source).await
@@ -319,7 +322,7 @@ async fn listen<E: LinkEvents>(
         super::voice_wait::run_marks::report(source, observe)?;
         // A granted extension moves the deadline; a requested end closes now.
         let idle = source.controller.idle_deadline().ok_or(Error::Input)?;
-        let delegated = source.delegation.waiting();
+        let delegated = source.controller.dispatch_waiting();
         let (deadline, expiry) = super::voice_wait::listening(source, idle);
         if source.controller.ending() || (!followup && !delegated) {
             return Ok(false);
@@ -334,7 +337,7 @@ async fn listen<E: LinkEvents>(
             }
             // Playback has settled before entering listen. A running delegated
             // turn still owns this reply; finish it before admitting cleanup.
-            () = crate::bridge_settings::settings_restart::requested(), if !source.delegation.in_flight() => return Ok(false),
+            () = crate::bridge_settings::settings_restart::requested(), if !source.controller.dispatch_in_flight() => return Ok(false),
             () = until(deadline) => {
                 if let Some(expiry) = super::voice_wait::listen_lapsed(source, deadline, expiry) { return expiry; }
             },
@@ -370,9 +373,7 @@ async fn listening_step<E: LinkEvents>(
             // The runner can start before the native hand-off identifies the
             // request. Keep Played until the hand-off or speech opens a reply.
             if !source.stale() && matches!(event, MediaEvent::Control(Event::TurnStarted { .. })) {
-                if !source.delegation.in_flight() {
-                    source.delegation = super::voice_source::Delegation::default();
-                }
+                source.controller.turn(SessionTurnEvent::DispatchWhileListening);
                 *turn_started = true;
                 super::media(event, port, source, observe).await?;
                 return Ok(false);
@@ -387,12 +388,7 @@ async fn listening_step<E: LinkEvents>(
                 }
                 // An already-started follow-up still owes its acknowledgement
                 // and delegated answer in this reply.
-                let delegation = (*turn_started && source.delegation.in_flight())
-                    .then(|| std::mem::take(&mut source.delegation));
-                source.resume_reply()?;
-                if let Some(delegation) = delegation {
-                    source.delegation = delegation;
-                }
+                source.resume_reply(*turn_started && source.controller.dispatch_in_flight())?;
                 super::media(event, port, source, observe).await?;
                 return Ok(true);
             }
