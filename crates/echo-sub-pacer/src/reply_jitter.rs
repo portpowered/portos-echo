@@ -1,6 +1,5 @@
 //! How late reply frames have recently been, and the cushion that covers it.
 use std::time::Duration;
-use tokio::time::Instant;
 
 const PERIOD_MS: i64 = 20;
 /// The cushion a smooth call gets: gaps up to 62 ms between 20 ms frames
@@ -38,14 +37,14 @@ const WINDOW: u32 = 50;
 #[derive(Default)]
 pub(crate) struct Jitter {
     stream: Option<Stream>,
-    peak: Option<(u32, Instant)>,
+    peak: Option<(u32, Duration)>,
     /// Lateness to assume from the call's first frame.
     expected: Option<u32>,
 }
 
 struct Stream {
-    anchor: Instant,
-    last: Instant,
+    anchor: Duration,
+    last: Duration,
     frames: u32,
     /// Smallest offsets from the audio clock: previous window, this window.
     early: [i64; 2],
@@ -62,12 +61,12 @@ impl Jitter {
     }
 
     /// One reply frame was accepted at `now`.
-    pub(crate) fn arrived(&mut self, now: Instant) {
+    pub(crate) fn arrived(&mut self, now: Duration) {
         if let Some(expected) = self.expected.take() {
             self.peak = Some((expected, now));
         }
         let stream = match &mut self.stream {
-            Some(stream) if now.saturating_duration_since(stream.last) <= RESYNC => stream,
+            Some(stream) if now.saturating_sub(stream.last) <= RESYNC => stream,
             stream => stream.insert(Stream {
                 anchor: now,
                 last: now,
@@ -89,25 +88,25 @@ impl Jitter {
     }
 
     /// The worst recent lateness as it counts at `now`.
-    fn held(&self, now: Instant) -> u32 {
+    fn held(&self, now: Duration) -> u32 {
         let Some((peak, at)) = self.peak else {
             return 0;
         };
-        let fading = now.saturating_duration_since(at).saturating_sub(HOLD);
+        let fading = now.saturating_sub(at).saturating_sub(HOLD);
         let forgotten = fading.as_millis() * DECAY_MS_PER_SECOND / 1000;
         peak.saturating_sub(u32::try_from(forgotten).unwrap_or(u32::MAX))
     }
 
     /// The reply audio to hold ahead of playout at `now`.
-    pub(crate) fn target(&self, now: Instant) -> Duration {
+    pub(crate) fn target(&self, now: Duration) -> Duration {
         let wanted = self.held(now).saturating_add(MARGIN_MS).div_ceil(20) * 20;
         Duration::from_millis(u64::from(wanted)).clamp(FLOOR, CEILING)
     }
 }
 
 impl Stream {
-    fn late(&mut self, now: Instant) -> u32 {
-        let elapsed = i64::try_from(now.saturating_duration_since(self.anchor).as_millis()).unwrap_or(i64::MAX);
+    fn late(&mut self, now: Duration) -> u32 {
+        let elapsed = i64::try_from(now.saturating_sub(self.anchor).as_millis()).unwrap_or(i64::MAX);
         let offset = elapsed.saturating_sub(PERIOD_MS * i64::from(self.frames));
         self.last = now;
         self.frames = self.frames.saturating_add(1);
@@ -126,20 +125,20 @@ impl Stream {
 mod tests {
     use super::*;
 
-    fn feed(jitter: &mut Jitter, now: &mut Instant, gaps_ms: &[u64]) {
+    fn feed(jitter: &mut Jitter, now: &mut Duration, gaps_ms: &[u64]) {
         for gap in gaps_ms {
             *now += Duration::from_millis(*gap);
             jitter.arrived(*now);
         }
     }
 
-    fn target_ms(jitter: &Jitter, now: Instant) -> u128 {
+    fn target_ms(jitter: &Jitter, now: Duration) -> u128 {
         jitter.target(now).as_millis()
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn reply_jitter_steady_and_measured_arrivals_keep_the_floor() {
-        let (mut jitter, mut now) = (Jitter::default(), Instant::now());
+    #[test]
+    fn reply_jitter_steady_and_measured_arrivals_keep_the_floor() {
+        let (mut jitter, mut now) = (Jitter::default(), Duration::ZERO);
         assert_eq!(target_ms(&jitter, now), 100);
         feed(&mut jitter, &mut now, &[20; 500]);
         assert_eq!((jitter.held(now), target_ms(&jitter, now)), (0, 100));
@@ -153,9 +152,9 @@ mod tests {
         assert_eq!((jitter.held(now), target_ms(&jitter, now)), (42, 100));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn reply_jitter_stall_raises_the_target_which_decays_to_the_floor() {
-        let (mut jitter, mut now) = (Jitter::default(), Instant::now());
+    #[test]
+    fn reply_jitter_stall_raises_the_target_which_decays_to_the_floor() {
+        let (mut jitter, mut now) = (Jitter::default(), Duration::ZERO);
         feed(&mut jitter, &mut now, &[20; 100]);
         // A 270 ms stall, then the 13 frames it delayed arrive together.
         feed(&mut jitter, &mut now, &[270]);
@@ -175,9 +174,9 @@ mod tests {
         assert_eq!((jitter.held(now), target_ms(&jitter, now)), (423, 320));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn reply_jitter_lost_frames_and_pauses_are_not_lateness_for_ever() {
-        let (mut jitter, mut now) = (Jitter::default(), Instant::now());
+    #[test]
+    fn reply_jitter_lost_frames_and_pauses_are_not_lateness_for_ever() {
+        let (mut jitter, mut now) = (Jitter::default(), Duration::ZERO);
         feed(&mut jitter, &mut now, &[20; 100]);
         // 200 ms of frames never come: every later frame is 180 ms "late"
         // until the sliding minimum has moved past the loss.

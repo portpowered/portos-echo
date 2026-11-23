@@ -70,12 +70,33 @@ without waking it, advances exactly 100 ms and reads one complete, byte-exact
 row while the device stays idle. The playback, provider and credential oracles
 still run.
 
+## A2 reply pacing
+
+The controller steps device, reply pacer and trace in that order. The pacer
+owns the 128 fixed 960-byte slots, one staged frame, the audio clock, jitter
+history, microphone measurement, mouth timing and lip batches. Its Copy view
+reports retained depth, playback activity and the last hand-off time.
+
+The voice service resamples PCM and recovers the same boxed input scratch
+after each synchronous event. It releases a staged frame to the existing
+transport, then reports that hand-off to the pacer. A cut clears the ring and
+staged frame before the existing device flush. Playback completion requires
+the accepted device receipt. The voice loop waits on pacer deadlines, and
+the trace writer uses its separate deadline. The screen adapter publishes
+each lip batch through the existing sender and reports whether it was taken.
+`echo-sub-pacer` depends on `echo-core-api` and the existing `echo-audio` DSP.
+
 ## Deferred
 
 - The device step receives wake and mute events. Wyoming has no separate
   button report in the current wire contract.
-- A2 owns the Wyoming service rename, session, pacer and call subsystems,
-  playback clock, slot table and allocation proof.
+- A2 owns the Wyoming service rename, session and call subsystems, slot
+  table and the phase-wide allocation proof.
+- The bounded EchoLink/Wyoming queue and serialization still use owned
+  transport buffers. Their allocation work belongs at the service boundary.
+- The stepped simulator keeps its current adaptive-hold bypass. The
+  simulated speaker clock and modeled tail remain later work, with the
+  new timing and lip goldens in C1.
 - A2 and B2 own migration of existing direct randomness consumers. The later
   service tracks own record and replay.
 - Trace rotation policy remains with later lifecycle work.

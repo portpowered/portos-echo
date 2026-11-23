@@ -1,8 +1,8 @@
 //! A passive measurement of the microphone under a reply, for `reply.quality`.
 //! It decides nothing: the Live session alone judges a barge-in (`Barge`).
+use echo_core_api::Heard;
 use std::collections::VecDeque;
 use std::time::Duration;
-use tokio::time::Instant;
 
 const PERIOD: Duration = Duration::from_millis(20);
 /// How long a frame written to the Echo may still sound at its microphone:
@@ -24,23 +24,6 @@ const NEED: u8 = 4;
 /// Microphone frames heard under audible reply audio before the echo is known.
 const WARMUP: u32 = 25;
 
-/// What the ear measured during one reply, for `reply.quality`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Heard {
-    /// Times speech at the microphone began under this reply.
-    pub onsets: u32,
-    /// Loudest microphone frame that the reply's echo explained.
-    pub echo_max: u32,
-    /// Loudest microphone frame of all.
-    pub level_max: u32,
-    /// Echo at the microphone per thousand of reply level, as learned so far.
-    pub coupling: u32,
-    /// The mean of that ratio over the frames it was learned from in this
-    /// reply, and the room's noise level at the reply's end.
-    pub echo_mean: u32,
-    pub noise: u32,
-}
-
 /// A double-talk detector after Geigel: the microphone holds speech when it
 /// is louder than the loudest reply audio recently played could make it.
 /// The Echo's front end cancels most of its own speaker, and how much is
@@ -53,8 +36,8 @@ pub struct Heard {
 #[derive(Default)]
 pub(crate) struct Ear {
     /// Start of playout and RMS of each frame recently written to the Echo.
-    played: VecDeque<(Instant, u32)>,
-    clock: Option<Instant>,
+    played: VecDeque<(Duration, u32)>,
+    clock: Option<Duration>,
     /// Echo per thousand of reference, and the frames it was learned from.
     coupling: u32,
     learned: u32,
@@ -85,7 +68,7 @@ fn rms(samples: impl Iterator<Item = i16>) -> u32 {
 
 impl Ear {
     /// One signed 16-bit little-endian frame was written to the Echo at `now`.
-    pub(crate) fn played(&mut self, frame: &[u8], now: Instant) {
+    pub(crate) fn played(&mut self, frame: &[u8], now: Duration) {
         let (samples, _) = frame.as_chunks::<2>();
         let level = rms(samples.iter().map(|sample| i16::from_le_bytes(*sample)));
         let start = self.clock.filter(|end| *end > now).unwrap_or(now);
@@ -100,7 +83,7 @@ impl Ear {
 
     /// One microphone frame arrived at `now`. True while somebody is speaking
     /// over a reply that has been audible.
-    pub(crate) fn heard(&mut self, frame: &[i16], now: Instant) -> bool {
+    pub(crate) fn heard(&mut self, frame: &[i16], now: Duration) -> bool {
         let level = rms(frame.iter().copied());
         let reference = self.reference(now);
         let echo = u32::try_from(u64::from(reference) * u64::from(self.coupling) / 1000).unwrap_or(u32::MAX);
@@ -123,7 +106,7 @@ impl Ear {
     }
 
     /// The loudest reply frame that may sound at the microphone at `now`.
-    fn reference(&self, now: Instant) -> u32 {
+    fn reference(&self, now: Duration) -> u32 {
         let recent = self.played.iter().filter(|(at, _)| *at <= now && *at + REACH >= now);
         recent.map(|(_, level)| *level).max().unwrap_or(0)
     }
@@ -184,7 +167,7 @@ mod tests {
 
     /// The Echo plays `reply` while the microphone hears a tenth of it plus
     /// `voice`, frame by frame. Returns the frames at which speech was heard.
-    fn listen(ear: &mut Ear, now: &mut Instant, frames: u32, reply: i16, voice: i16) -> Vec<bool> {
+    fn listen(ear: &mut Ear, now: &mut Duration, frames: u32, reply: i16, voice: i16) -> Vec<bool> {
         let mut heard = Vec::new();
         for _ in 0..frames {
             ear.played(&pcm(reply), *now);
@@ -196,9 +179,9 @@ mod tests {
 
     /// T1: the reply's own echo, however loud the reply, is never speech; a
     /// voice over it is heard within 80 ms and for as long as it lasts.
-    #[tokio::test(start_paused = true)]
-    async fn ear_hears_speech_over_the_reply_but_not_the_reply() {
-        let (mut ear, mut now) = (Ear::default(), Instant::now());
+    #[test]
+    fn ear_hears_speech_over_the_reply_but_not_the_reply() {
+        let (mut ear, mut now) = (Ear::default(), Duration::ZERO);
         assert!(!listen(&mut ear, &mut now, 100, 8000, 0).contains(&true));
         // The reply gets louder: its echo does too, and is still not speech.
         assert!(!listen(&mut ear, &mut now, 100, 24000, 0).contains(&true));
@@ -216,9 +199,9 @@ mod tests {
 
     /// T1: before any reply audio the ear is not asked; once the echo is
     /// known, speech into a pause of the reply is heard against the room.
-    #[tokio::test(start_paused = true)]
-    async fn ear_waits_for_reply_audio_and_hears_speech_in_its_pauses() {
-        let (mut ear, mut now) = (Ear::default(), Instant::now());
+    #[test]
+    fn ear_waits_for_reply_audio_and_hears_speech_in_its_pauses() {
+        let (mut ear, mut now) = (Ear::default(), Duration::ZERO);
         // The user finishes the request: no reply has played, nothing to cut.
         for _ in 0..50 {
             assert!(!ear.heard(&[5000; 320], now));
@@ -239,9 +222,9 @@ mod tests {
 
     /// T1, the device's deaf ear: under quiet reply audio the room's noise
     /// read as an echo several times the reply, and no voice could top it.
-    #[tokio::test(start_paused = true)]
-    async fn ear_learns_nothing_of_the_echo_from_quiet_reply_audio() {
-        let (mut ear, mut now) = (Ear::default(), Instant::now());
+    #[test]
+    fn ear_learns_nothing_of_the_echo_from_quiet_reply_audio() {
+        let (mut ear, mut now) = (Ear::default(), Duration::ZERO);
         for _ in 0..50 {
             ear.played(&pcm(400), now);
             assert!(!ear.heard(&[1200; 320], now));
@@ -256,9 +239,9 @@ mod tests {
 
     /// T1: a slow rise in level under the reply is the echo changing, such
     /// as the canceller losing its grip, not somebody speaking.
-    #[tokio::test(start_paused = true)]
-    async fn ear_follows_an_echo_that_grows_slowly() {
-        let (mut ear, mut now) = (Ear::default(), Instant::now());
+    #[test]
+    fn ear_follows_an_echo_that_grows_slowly() {
+        let (mut ear, mut now) = (Ear::default(), Duration::ZERO);
         listen(&mut ear, &mut now, 50, 8000, 0);
         for step in 0..100 {
             assert!(!listen(&mut ear, &mut now, 1, 8000, step * 16).contains(&true));

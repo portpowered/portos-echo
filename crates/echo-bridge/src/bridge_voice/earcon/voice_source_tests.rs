@@ -1,5 +1,5 @@
-use super::voice_mouth::GAP_HOLD;
 use super::*;
+use tokio::time::Duration;
 
 fn frame(level: i16) -> Vec<u8> {
     level.to_le_bytes().repeat(480)
@@ -78,75 +78,6 @@ fn stalled_sender_backlog_is_bounded_and_keeps_the_newest_speech() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn mouth_opens_and_closes_on_the_echo_playout_clock_not_on_writes() {
-    let mut mouth = Mouth::default();
-    let t0 = Instant::now();
-    // Silence first, then a lead burst of 5 audible frames written at t0.
-    mouth.wrote(&frame(0), t0);
-    for _ in 0..5 {
-        mouth.wrote(&frame(QUIET.cast_signed() + 1), t0);
-    }
-    assert_eq!(mouth.due(), Some(t0 + FRAME + OUTPUT_DELAY));
-    assert_eq!(mouth.poll(t0 + OUTPUT_DELAY), None);
-    assert_eq!(mouth.poll(t0 + FRAME + OUTPUT_DELAY), Some(true));
-    // Five audible frames after the leading silence finish at 120 ms. More
-    // audio may follow, so the close waits out the gap hold.
-    assert_eq!(mouth.due(), Some(t0 + FRAME * 6 + OUTPUT_DELAY + GAP_HOLD));
-    // Quiet frames keep the clock running but never reopen or extend it.
-    mouth.wrote(&frame(-QUIET.cast_signed()), t0 + FRAME * 3);
-    // The reply is complete: the mouth closes with its last sound.
-    mouth.settle();
-    assert_eq!(mouth.due(), Some(t0 + FRAME * 6 + OUTPUT_DELAY));
-    assert_eq!(mouth.poll(t0 + FRAME * 6 + OUTPUT_DELAY), Some(false));
-    assert_eq!(mouth.due(), None);
-}
-
-#[tokio::test(start_paused = true)]
-async fn mouth_restarts_the_clock_after_the_echo_ran_dry() {
-    let mut mouth = Mouth::default();
-    let t0 = Instant::now();
-    mouth.wrote(&frame(1000), t0);
-    mouth.settle();
-    assert_eq!(mouth.poll(t0 + OUTPUT_DELAY), Some(true));
-    assert_eq!(mouth.poll(t0 + FRAME + OUTPUT_DELAY), Some(false));
-    let later = t0 + Duration::from_secs(3);
-    mouth.wrote(&frame(-1000), later);
-    assert_eq!(mouth.due(), Some(later + OUTPUT_DELAY));
-    assert_eq!(mouth.poll(later + OUTPUT_DELAY), Some(true));
-}
-
-#[tokio::test(start_paused = true)]
-async fn mouth_quiet_thresholds_never_schedule_a_transition() {
-    let mut mouth = Mouth::default();
-    let t0 = Instant::now();
-    for level in [0, 64, -64] {
-        mouth.wrote(&frame(level), t0);
-    }
-    mouth.wrote(&[], t0);
-    assert_eq!(mouth.due(), None);
-    assert_eq!(mouth.poll(t0 + Duration::from_secs(1)), None);
-}
-
-#[tokio::test(start_paused = true)]
-async fn mouth_preserves_quiet_gaps_of_the_hold_even_when_all_audio_is_written_ahead() {
-    let mut mouth = Mouth::default();
-    let t0 = Instant::now();
-    // One audible frame, 300 ms of quiet, one audible frame.
-    mouth.wrote(&frame(65), t0);
-    for _ in 0..15 {
-        mouth.wrote(&frame(0), t0);
-    }
-    mouth.wrote(&frame(-65), t0);
-    mouth.settle();
-    for (offset, open) in [(0, true), (1, false), (16, true), (17, false)] {
-        let due = t0 + OUTPUT_DELAY + FRAME * offset;
-        assert_eq!(mouth.poll(due - Duration::from_nanos(1)), None);
-        assert_eq!(mouth.poll(due), Some(open));
-    }
-    assert_eq!(mouth.due(), None);
-}
-
-#[tokio::test(start_paused = true)]
 async fn acknowledgement_playout_returns_directly_to_screen_thinking() {
     use super::super::{ServeNotice, SessionNotice, voice_listen::playout_notice, voice_view::View};
     use crate::{
@@ -166,37 +97,43 @@ async fn acknowledgement_playout_returns_directly_to_screen_thinking() {
         let mut delegation = Delegation::default();
         delegation.started();
         delegation.spoke();
-        let mut mouth = Mouth::default();
-        let now = Instant::now();
-        mouth.wrote(&frame(1000), now);
+        let mut mouth = ReplyAudio::mouth_fixture();
+        mouth.test_handoff(&frame(1000));
         assert!(!delegation.answered());
         // The acknowledgement's quiet lasts the gap hold: the mouth closes.
-        let quiet = u32::try_from(GAP_HOLD.as_millis() / FRAME.as_millis()).unwrap();
+        let frame_period = Duration::from_millis(20);
+        let gap_hold = Duration::from_millis(300);
+        let quiet = 15;
         if queued_audio {
             for _ in 0..quiet {
-                mouth.wrote(&frame(0), now);
+                mouth.test_handoff(&frame(0));
             }
-            mouth.wrote(&frame(1000), now);
+            mouth.test_handoff(&frame(1000));
         }
 
-        let mut project_mouth = |mouth: &mut Mouth| {
+        let mut project_mouth = |mouth: &ReplyAudio| {
             let notice = playout_notice(mouth, delegation.in_flight()).unwrap();
             view.observe(ServeNotice::Session(SessionNotice::Run(notice))).unwrap();
         };
-        tokio::time::advance(OUTPUT_DELAY).await;
-        project_mouth(&mut mouth);
+        tokio::time::advance(Duration::from_millis(80)).await;
+        project_mouth(&mouth);
         // Audio already queued past the hold closes the mouth with the last
         // sound; with none queued the close waits the hold for more.
-        tokio::time::advance(if queued_audio { FRAME } else { FRAME + GAP_HOLD }).await;
-        project_mouth(&mut mouth);
+        tokio::time::advance(if queued_audio {
+            frame_period
+        } else {
+            frame_period + gap_hold
+        })
+        .await;
+        project_mouth(&mouth);
         assert_eq!(mouth.voiced(), queued_audio);
         assert_eq!(states.try_recv().unwrap(), UiState::Speaking);
         assert_eq!(states.try_recv().unwrap(), UiState::Thinking);
         assert!(states.try_recv().is_err());
 
         if queued_audio {
-            tokio::time::advance(FRAME * quiet).await;
-            project_mouth(&mut mouth);
+            tokio::time::advance(frame_period * quiet).await;
+            project_mouth(&mouth);
             assert_eq!(states.try_recv().unwrap(), UiState::Speaking);
             assert!(states.try_recv().is_err());
         }
@@ -320,9 +257,9 @@ fn heard(level: i16) -> MicFrame {
 async fn replying(source: &mut Source, port: &Narrow, level: i16, voice: i16) {
     source.audio(&[level; 320]).unwrap();
     if source.playable()
-        && let Ok(Some(frame)) = tokio::time::timeout(Duration::ZERO, source.reply.next_or_fade()).await
+        && let Ok(Some(frame)) = tokio::time::timeout(Duration::ZERO, source.reply.stage(true)).await
     {
-        source.wrote(&frame);
+        source.wrote();
         port.echo.set(i16::from_le_bytes([frame[0], frame[1]]) / 10);
     }
     source.capture(Some(heard(port.echo.get() + voice)), port).unwrap();

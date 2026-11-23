@@ -236,8 +236,8 @@ async fn clock_step(drain: &mut Option<crate::bridge_mcp::bridge_clock::receipt:
 }
 
 /// A silent gap in a running turn is Thinking, even with more playout queued.
-pub(super) fn playout_notice(mouth: &mut super::voice_source::Mouth, delegating: bool) -> Option<Notice> {
-    Some(match (mouth.poll(tokio::time::Instant::now())?, delegating) {
+pub(super) fn playout_notice(reply: &crate::bridge_codex::ReplyAudio, delegating: bool) -> Option<Notice> {
+    Some(match (reply.mouth_change()?, delegating) {
         (true, _) => Notice::ReplyStarted,
         (false, true) => Notice::Thinking,
         (false, false) => Notice::ReplyPaused,

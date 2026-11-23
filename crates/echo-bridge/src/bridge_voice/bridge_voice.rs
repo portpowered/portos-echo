@@ -337,7 +337,7 @@ async fn drive<L: EchoLink>(
             played = Some(Instant::now() + options.played_timeout);
         }
         if source.reply.drained() && pending.is_none() {
-            source.mouth.settle();
+            source.reply.mouth_settle();
         }
         let (deadline, on_timeout) = voice_wait::deadline(source, played);
         tokio::select! {
@@ -347,8 +347,8 @@ async fn drive<L: EchoLink>(
             duration = earcon::completed() => observe(Notice::EarconPlayed(duration))?,
             () = voice_listen::until(deadline) => voice_wait::expired(source, on_timeout)?,
             () = voice_listen::until(barge) => source.interrupt(port)?,
-            () = voice_listen::until(source.mouth.due()) => {
-                if let Some(notice) = voice_listen::playout_notice(&mut source.mouth, source.delegation.in_flight()) {
+            () = voice_listen::until(source.reply.mouth_due()) => {
+                if let Some(notice) = voice_listen::playout_notice(&source.reply, source.delegation.in_flight()) {
                     observe(notice)?;
                 }
             },
@@ -362,7 +362,7 @@ async fn drive<L: EchoLink>(
         }
         if source
             .controller
-            .ready_to_close(sink.is_none(), source.mouth.due().is_none())
+            .ready_to_close(sink.is_none(), source.reply.mouth_due().is_none())
         {
             return Ok(());
         }
@@ -375,10 +375,11 @@ async fn step<E: LinkEvents>(
     port: &mut impl VoicePort,
     sink: Option<&impl ReplySink>,
     source: &mut Source,
-    pending: &mut Option<Vec<u8>>,
+    pending: &mut Option<echo_core_api::ReplyFrame>,
     observe: &mut impl FnMut(Notice) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let uplink = port.uplink_ready();
+    let allow_fade = !source.delegation.held();
     tokio::select! {
         // Setup-time speech arrives as one burst; send what the peer refused.
         () = uplink, if source.uplink_pending() => source.flush_uplink(port),
@@ -395,14 +396,14 @@ async fn step<E: LinkEvents>(
             Ok(())
         },
         event = port.next() => media(event?, port, source, observe).await,
-        frame = source.reply.next_or_fade(), if pending.is_none() && source.playable() => {
+        frame = source.reply.stage(allow_fade), if pending.is_none() && source.playable() => {
             *pending = frame;
             Ok(())
         },
-        result = voice_listen::forward(sink, pending.as_deref()), if pending.is_some() => {
+        result = voice_listen::forward(sink, pending.as_ref().map(echo_core_api::ReplyFrame::as_slice)), if pending.is_some() => {
             result.inspect_err(|_| { source.failure = "reply_send"; })?;
-            if let Some(frame) = pending.take() {
-                source.wrote(&frame);
+            if pending.take().is_some() {
+                source.wrote();
                 if let Some(clock) = crate::bridge_mcp::bridge_clock::receipt::Context::current() {
                     clock.submitted("reply")?;
                 }
@@ -424,13 +425,8 @@ fn device<R>(
     }
     let event = match event {
         LinkEvent::Played => {
-            match source.controller.played(stopped) {
-                Ok(false) => return Ok(()),
-                Ok(true) => {}
-                Err(error) => {
-                    source.failure = "premature_played";
-                    return Err(error);
-                }
+            if !source.played(stopped)? {
+                return Ok(());
             }
             LinkEvent::Played
         }

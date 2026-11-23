@@ -169,6 +169,8 @@ const RUN: &str = "device.run_open: expected false, actual true";
 const LINK: &str = "device.connected: expected false, actual true";
 const ROWS: &str = "trace.pending_rows: expected 0, actual nonzero";
 const WRITER: &str = "trace.writer_failed: expected false, actual true";
+const PACER_DEPTH: &str = "pacer.reply_depth: expected 0..=128, actual out of range";
+const PACER_QUIESCENT: &str = "pacer.quiescent: expected true, actual false";
 
 impl Report {
     pub(super) fn from_state(state: &State) -> Self {
@@ -194,6 +196,7 @@ impl Report {
             .as_ref()
             .map(render)
             .or_else(|| state.world.check().as_ref().err().map(render))
+            .or_else(|| (!state.world.pacer.quiescent()).then(|| PACER_QUIESCENT.to_owned()))
             .or_else(|| snapshot.terminal_failure().map(str::to_owned));
         Self {
             status: if failure.is_none() { Status::Pass } else { Status::Fail },
@@ -208,14 +211,39 @@ impl Report {
     pub fn verdict(&self) -> Result<Option<&'static str>, Error> {
         match (&self.status, self.diff.as_deref()) {
             (Status::Pass, None) if self.snapshot.terminal_failure().is_none() => Ok(None),
-            (Status::Fail, Some(diff)) => [CAPTURE, VOLUME, DEADLINE, RUN, LINK, ROWS, WRITER]
-                .into_iter()
-                .find(|known| *known == diff)
-                .map(Some)
-                .ok_or(Error::Control),
+            (Status::Fail, Some(diff)) => [
+                CAPTURE,
+                VOLUME,
+                DEADLINE,
+                RUN,
+                LINK,
+                ROWS,
+                WRITER,
+                PACER_DEPTH,
+                PACER_QUIESCENT,
+            ]
+            .into_iter()
+            .find(|known| *known == diff)
+            .map(Some)
+            .ok_or(Error::Control),
             _ => Err(Error::Control),
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn pacer_world_report_accepts_only_fixed_diagnostics() {
+    let controller = Controller::new();
+    let mut report = Report::from_state(&controller.state());
+    assert_eq!(report.verdict().unwrap(), None);
+    report.status = Status::Fail;
+    for diff in [PACER_DEPTH, PACER_QUIESCENT] {
+        report.diff = Some(diff.to_owned());
+        assert_eq!(report.verdict().unwrap(), Some(diff));
+    }
+    report.diff = Some(format!("{PACER_DEPTH} 129"));
+    assert!(matches!(report.verdict(), Err(Error::Control)));
 }
 
 fn render(broken: &Broken) -> String {

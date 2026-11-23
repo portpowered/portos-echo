@@ -1,14 +1,20 @@
 //! T1: lip sync from the production hand-off (`Mouth::wrote`) on a paused
 //! clock. The screen is a recording sink: taking, stalled, busy or absent.
-use super::{LipSink, LipStats, Lips, cut, scope, settle};
-use crate::{bridge_runtime::bridge_pacing::LeadPacer, bridge_voice::voice_source::Mouth};
+use super::{LipSink, Lips};
+use crate::{bridge_codex::ReplyAudio, bridge_runtime::bridge_pacing::LeadPacer, bridge_world::Controller};
 use echo_audio::FrameQueue;
+use echo_core_api::LipStats;
 use echo_screen_contract::mouth::MouthBatch;
+use std::future::Future;
 use std::{
     num::NonZeroUsize,
     sync::{Arc, Mutex},
 };
 use tokio::time::{Duration, Instant, advance};
+
+async fn scope<F: Future>(lips: Option<Lips>, work: F) -> F::Output {
+    crate::bridge_world::scope(Controller::new(), lips, work).await
+}
 
 type Sent = Arc<Mutex<Vec<MouthBatch>>>;
 
@@ -59,9 +65,9 @@ fn timeline(sent: &Sent) -> Vec<(u64, Vec<(u64, u8)>)> {
 }
 
 /// Hand `levels` to the Echo one frame every 20 ms, as the pacer does.
-async fn speak(mouth: &mut Mouth, levels: &[i16]) {
+async fn speak(mouth: &mut ReplyAudio, levels: &[i16]) {
     for level in levels {
-        mouth.wrote(&frame(*level), Instant::now());
+        mouth.test_handoff(&frame(*level));
         advance(Duration::from_millis(20)).await;
     }
 }
@@ -71,14 +77,14 @@ async fn lip_samples_are_stamped_hand_off_plus_the_configured_delay() {
     let (lips, sent) = lips(Some(true), true, 200);
     let stats = scope(Some(lips), async {
         advance(Duration::from_secs(1)).await;
-        let mut mouth = Mouth::default();
+        let mut mouth = ReplyAudio::mouth_fixture();
         // Silence before the voice sends nothing.
         speak(&mut mouth, &[0; 5]).await;
         assert_eq!(timeline(&sent), []);
         // Seven loud frames from 1100 ms, then the voice stops.
         speak(&mut mouth, &[8000; 7]).await;
         speak(&mut mouth, &[0; 6]).await;
-        settle(Instant::now())
+        mouth.settle().lip_stats
     })
     .await;
     // Each frame is heard 200 ms after its hand-off. Five samples leave with
@@ -108,14 +114,14 @@ async fn a_burst_is_stamped_by_its_place_in_the_echo_queue_and_the_delay_is_conf
         let (lips, sent) = lips(Some(true), true, delay);
         let stats = scope(Some(lips), async {
             advance(Duration::from_millis(500)).await;
-            let mut mouth = Mouth::default();
+            let mut mouth = ReplyAudio::mouth_fixture();
             // The pacer's opening credit: ten frames in one instant.
             for _ in 0..10 {
-                mouth.wrote(&frame(8000), Instant::now());
+                mouth.test_handoff(&frame(8000));
             }
             // The reply ends mid-batch: settling sends what is pending.
-            mouth.wrote(&frame(8000), Instant::now());
-            settle(Instant::now())
+            mouth.test_handoff(&frame(8000));
+            mouth.settle().lip_stats
         })
         .await;
         let timeline = timeline(&sent);
@@ -140,11 +146,11 @@ async fn a_burst_is_stamped_by_its_place_in_the_echo_queue_and_the_delay_is_conf
 async fn samples_already_heard_when_the_reply_settles_are_dropped_not_sent_late() {
     let (lips, sent) = lips(Some(true), true, 200);
     let stats = scope(Some(lips), async {
-        let mut mouth = Mouth::default();
+        let mut mouth = ReplyAudio::mouth_fixture();
         speak(&mut mouth, &[8000; 7]).await;
         // The reply settles after its last frame has played.
         advance(Duration::from_millis(400)).await;
-        settle(Instant::now())
+        mouth.settle().lip_stats
     })
     .await;
     assert_eq!(timeline(&sent).len(), 1);
@@ -156,11 +162,11 @@ async fn a_cut_drops_what_is_pending_and_shuts_the_mouth_now() {
     let (lips, sent) = lips(Some(true), true, 200);
     let stats = scope(Some(lips), async {
         advance(Duration::from_secs(1)).await;
-        let mut mouth = Mouth::default();
+        let mut mouth = ReplyAudio::mouth_fixture();
         // Five samples leave; two more are pending when the reply is cut.
         speak(&mut mouth, &[8000; 7]).await;
-        cut(Instant::now());
-        settle(Instant::now())
+        mouth.reset(true).unwrap();
+        mouth.settle().lip_stats
     })
     .await;
     let timeline = timeline(&sent);
@@ -175,13 +181,13 @@ async fn a_cut_drops_what_is_pending_and_shuts_the_mouth_now() {
 async fn samples_left_by_a_window_that_never_settled_do_not_leave_with_the_next_reply() {
     let (lips, sent) = lips(Some(true), true, 200);
     scope(Some(lips), async {
-        let mut mouth = Mouth::default();
+        let mut mouth = ReplyAudio::mouth_fixture();
         // Two samples stay pending: the reply ends without a settle.
         speak(&mut mouth, &[8000; 2]).await;
         advance(Duration::from_secs(60)).await;
-        let mut mouth = Mouth::default();
+        mouth.reset(false).unwrap();
         speak(&mut mouth, &[8000; 5]).await;
-        settle(Instant::now())
+        mouth.settle().lip_stats
     })
     .await;
     let timeline = timeline(&sent);
@@ -194,17 +200,17 @@ async fn nothing_is_analysed_or_sent_for_a_screen_that_did_not_ask() {
     for wanted in [Some(false), None] {
         let (lips, sent) = lips(wanted, true, 200);
         let stats = scope(Some(lips), async {
-            let mut mouth = Mouth::default();
+            let mut mouth = ReplyAudio::mouth_fixture();
             speak(&mut mouth, &[8000; 20]).await;
-            settle(Instant::now())
+            mouth.settle().lip_stats
         })
         .await;
         assert_eq!((timeline(&sent), stats), (vec![], LipStats::default()));
     }
     // Outside a scope the hand-off does nothing at all.
-    let mut mouth = Mouth::default();
+    let mut mouth = ReplyAudio::mouth_fixture();
     speak(&mut mouth, &[8000; 20]).await;
-    assert_eq!(settle(Instant::now()), LipStats::default());
+    assert_eq!(mouth.settle().lip_stats, LipStats::default());
 }
 
 /// The production pacer forwarding one reply: when each frame was handed to
@@ -216,21 +222,22 @@ async fn handed(lips: Option<Lips>) -> (Vec<Duration>, Option<Duration>, LipStat
             queue.push(frame(if index % 20 < 15 { 8000 } else { 0 }));
         }
         let mut pacer = LeadPacer::new(200);
-        let mut mouth = Mouth::default();
+        let mut mouth = ReplyAudio::mouth_fixture();
         let start = Instant::now();
         let mut times = Vec::new();
         while let Some(frame) = pacer.next_frame(&mut queue).await {
             let now = Instant::now();
-            mouth.wrote(&frame, now);
+            mouth.test_handoff(&frame);
             times.push(now - start);
         }
-        mouth.settle();
+        mouth.mouth_settle();
         let mut end = None;
-        while let Some(due) = mouth.due() {
-            mouth.poll(due);
+        while let Some(due) = mouth.mouth_due() {
+            advance(due.saturating_duration_since(Instant::now())).await;
+            mouth.mouth_change();
             end = Some(due);
         }
-        (times, end.map(|end| end - start), settle(Instant::now()))
+        (times, end.map(|end| end - start), mouth.settle().lip_stats)
     })
     .await
 }
