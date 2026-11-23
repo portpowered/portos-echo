@@ -43,10 +43,6 @@ jobs:
         with:
           target: test-sim
           sim: 'true'
-      - name: Run focused call unit tests and Rust lint
-        run: |
-          cargo test -p echo-sub-call --locked -- --nocapture
-          make lint-rust
       - name: Execute requested selections
         id: selections
         shell: sh
@@ -114,6 +110,11 @@ jobs:
           path: ${{ steps.selections.outputs.report_root }}
           if-no-files-found: ignore
           retention-days: 3
+      - name: Run focused call unit tests and Rust lint
+        if: always() && steps.selections.outcome != 'skipped'
+        run: |
+          cargo test -p echo-sub-call --locked -- --nocapture
+          make lint-rust
   release-bundle:
     if: ${{ inputs.release_bundle }}
     runs-on: ubuntu-24.04
