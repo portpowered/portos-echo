@@ -2,6 +2,7 @@
 
 mod protocol;
 mod transport;
+pub mod wifi;
 
 use std::{
     convert::Infallible,

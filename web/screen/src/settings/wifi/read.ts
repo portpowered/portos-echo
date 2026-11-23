@@ -1,10 +1,30 @@
 import { settingsUrl } from "../api";
 import { element } from "../forms";
 
-type Operation = "status" | "scan";
-type Network = { ssid: string; signalDbm: number };
+type WifiRequest =
+    | { op: "status" | "scan" }
+    | { op: "join"; ssid: string; password: string }
+    | { op: "forget"; networkId: number };
+type Network = {
+    ssid: string;
+    signalDbm: number;
+    secured: boolean;
+    networkId: number | null;
+};
 
 const unavailable = "Wi-Fi is unavailable. Try again.";
+const mutationErrors = new Map([
+    [
+        "wifi-join-failed",
+        "Could not join Wi-Fi. The previous network was kept.",
+    ],
+    [
+        "wifi-rollback-failed",
+        "Could not restore the previous network. Scan again or use USB recovery.",
+    ],
+    ["wifi-not-saved", "This network is no longer saved."],
+    ["wifi-busy", "Wi-Fi is busy. Try again."],
+]);
 
 export function mountWifi(actions: string) {
     const section = element("details");
@@ -14,34 +34,46 @@ export function mountWifi(actions: string) {
     current.setAttribute("role", "status");
     const feedback = element("p");
     feedback.setAttribute("role", "status");
+    const mutationFeedback = element("p");
+    mutationFeedback.setAttribute("role", "status");
     const networks = element("ul");
     networks.setAttribute("aria-label", "Available networks");
     const retry = element("button", "Scan again");
     retry.type = "button";
+    const joinSlot = element("div");
     section.append(
         element("summary", "Wi-Fi"),
         current,
+        mutationFeedback,
+        joinSlot,
         feedback,
         networks,
         retry,
     );
     const controller = new AbortController();
     let scanning = false;
+    let mutating = false;
+
+    function showStatus(status: Record<string, unknown>) {
+        if (typeof status.reachable !== "boolean") return false;
+        const reachability = status.reachable ? "reachable" : "unreachable";
+        current.textContent =
+            typeof status.ssid === "string"
+                ? `Current network: ${status.ssid} (${reachability})`
+                : "No current network (unreachable)";
+        return true;
+    }
 
     async function observe() {
         try {
-            const status = await request(actions, "status", controller.signal);
+            const status = await request(
+                actions,
+                { op: "status" },
+                controller.signal,
+            );
             if (!status.ok && status.error === "wifi-unsupported") return false;
-            if (status.ok !== true || typeof status.reachable !== "boolean")
+            if (status.ok !== true || !showStatus(status))
                 throw new Error(unavailable);
-            if (typeof status.ssid === "string") {
-                const reachability = status.reachable
-                    ? "reachable"
-                    : "unreachable";
-                current.textContent = `Current network: ${status.ssid} (${reachability})`;
-            } else {
-                current.textContent = "No current network (unreachable)";
-            }
         } catch {
             current.textContent = unavailable;
         }
@@ -49,21 +81,22 @@ export function mountWifi(actions: string) {
     }
 
     async function scan(refreshStatus: boolean) {
-        if (scanning || !section.open) return;
+        if (scanning || mutating || !section.open) return;
         scanning = true;
         networks.replaceChildren();
         feedback.textContent = "Scanning for networks…";
         retry.disabled = true;
         try {
             if (refreshStatus) await observe();
-            const reply = await request(actions, "scan", controller.signal);
+            const reply = await request(
+                actions,
+                { op: "scan" },
+                controller.signal,
+            );
             if (!reply.ok || !Array.isArray(reply.networks))
                 throw new Error(unavailable);
             const rows = reply.networks.filter(isNetwork);
-            for (const row of rows)
-                networks.append(
-                    element("li", `${row.ssid} (${row.signalDbm} dBm)`),
-                );
+            for (const row of rows) networks.append(networkRow(row));
             feedback.textContent = rows.length ? "" : "No networks found.";
         } catch {
             feedback.textContent = unavailable;
@@ -71,6 +104,98 @@ export function mountWifi(actions: string) {
             scanning = false;
             retry.disabled = false;
         }
+    }
+
+    function networkRow(row: Network) {
+        const item = element("li");
+        item.append(element("span", `${row.ssid} (${row.signalDbm} dBm)`));
+        const join = element("button", "Join");
+        join.type = "button";
+        join.setAttribute("aria-label", `Join ${row.ssid}`);
+        join.addEventListener("click", () => offerJoin(row));
+        item.append(join);
+        if (typeof row.networkId === "number") {
+            const networkId = row.networkId;
+            const forget = element("button", "Forget");
+            forget.type = "button";
+            forget.setAttribute("aria-label", `Forget ${row.ssid}`);
+            forget.addEventListener(
+                "click",
+                () => void mutate({ op: "forget", networkId }),
+            );
+            item.append(forget);
+        }
+        return item;
+    }
+
+    function offerJoin(row: Network) {
+        if (mutating) return;
+        const form = element("form");
+        const submit = element("button", `Join ${row.ssid}`);
+        submit.type = "submit";
+        const password = element("input");
+        if (row.secured) {
+            const label = element("label", `Password for ${row.ssid}`);
+            password.type = "password";
+            password.autocomplete = "off";
+            password.required = true;
+            password.maxLength = 64;
+            label.append(password);
+            form.append(label);
+        }
+        form.append(submit);
+        form.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const value = password.value;
+            password.value = "";
+            void mutate({ op: "join", ssid: row.ssid, password: value });
+        });
+        mutationFeedback.textContent = "";
+        joinSlot.replaceChildren(form);
+        (row.secured ? password : submit).focus();
+    }
+
+    async function mutate(
+        frame: Extract<WifiRequest, { op: "join" | "forget" }>,
+    ) {
+        if (scanning || mutating) return;
+        mutating = true;
+        const hadFocus = section.contains(document.activeElement);
+        const controls = section.querySelectorAll("button, input");
+        for (const control of controls) control.setAttribute("disabled", "");
+        mutationFeedback.textContent =
+            frame.op === "join" ? "Joining Wi-Fi…" : "Forgetting network…";
+        let refresh = false;
+        try {
+            const result = await request(actions, frame, controller.signal);
+            const observed = showStatus(result);
+            if (result.ok === true && observed) {
+                mutationFeedback.textContent =
+                    frame.op === "join"
+                        ? `Connected to ${frame.ssid}`
+                        : "Network forgotten.";
+                joinSlot.replaceChildren();
+                refresh = true;
+            } else {
+                const error =
+                    typeof result.error === "string" ? result.error : "";
+                mutationFeedback.textContent =
+                    mutationErrors.get(error) ?? unavailable;
+                refresh = error === "wifi-not-saved" || observed;
+            }
+        } catch {
+            mutationFeedback.textContent = unavailable;
+        } finally {
+            mutating = false;
+            for (const control of controls) control.removeAttribute("disabled");
+            if (hadFocus && document.activeElement === document.body) {
+                (
+                    joinSlot.querySelector("input") ??
+                    section.querySelector("summary")
+                )?.focus();
+            }
+        }
+        if (refresh) await scan(false);
     }
 
     section.addEventListener("toggle", () => void scan(false));
@@ -89,11 +214,22 @@ function isNetwork(value: unknown): value is Network {
         "ssid" in value &&
         typeof value.ssid === "string" &&
         "signalDbm" in value &&
-        Number.isInteger(value.signalDbm)
+        Number.isInteger(value.signalDbm) &&
+        "secured" in value &&
+        typeof value.secured === "boolean" &&
+        "networkId" in value &&
+        (value.networkId === null ||
+            (typeof value.networkId === "number" &&
+                value.networkId >= 0 &&
+                Number.isInteger(value.networkId)))
     );
 }
 
-async function request(actions: string, op: Operation, signal: AbortSignal) {
+async function request(
+    actions: string,
+    data: WifiRequest,
+    signal: AbortSignal,
+) {
     const url = new URL(settingsUrl(actions));
     url.pathname = "/_screen/wifi";
     const result = await fetch(url, {
@@ -101,7 +237,7 @@ async function request(actions: string, op: Operation, signal: AbortSignal) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
             type: "wifi-request",
-            data: { version: 1, op },
+            data: { version: 1, ...data },
         }),
         redirect: "error",
         referrerPolicy: "no-referrer",
@@ -120,7 +256,7 @@ async function request(actions: string, op: Operation, signal: AbortSignal) {
         !("version" in frame.data) ||
         frame.data.version !== 1 ||
         !("op" in frame.data) ||
-        frame.data.op !== op ||
+        frame.data.op !== data.op ||
         !("ok" in frame.data)
     )
         throw new Error(unavailable);

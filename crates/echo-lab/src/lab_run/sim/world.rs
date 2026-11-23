@@ -35,6 +35,7 @@ pub struct World {
     pub address: Option<std::net::SocketAddr>,
     pub run: Option<String>,
     pub endpoints: Vec<std::net::SocketAddr>,
+    pub(super) wifi: Option<super::production::wifi::Device>,
 }
 
 impl World {
@@ -63,7 +64,8 @@ impl World {
         live: impl std::future::Future<Output = Result<FakeLive, echo_live::call::CallError>>,
     ) -> Result<(), String> {
         if super::production::selected(bridge) {
-            self.canonical = Some(super::m2::codex::provider::Provider::start_m1(python).await?);
+            let path = self.wifi.as_ref().map(super::production::wifi::Device::fixture);
+            self.canonical = Some(super::m2::codex::provider::Provider::start_m1(python, path.as_deref()).await?);
         }
         self.start_owned(&mut process::host(python), bridge, root, live, process::connect)
             .await
@@ -118,6 +120,10 @@ impl World {
         self.generation += 1;
         self.address = Some(address);
         let mut command = Command::new(bridge);
+        command.env_remove("ECHO_LAB_WIFI_SOCKET");
+        if let Some(wifi) = &self.wifi {
+            command.env("ECHO_LAB_WIFI_SOCKET", wifi.socket());
+        }
         command
             .env("ECHO_LAB_WYOMING_ADDR", address.to_string())
             .env(
@@ -311,7 +317,7 @@ impl World {
         let mut failures = self.close_bridge().await;
         if let Some(provider) = self.canonical.take() {
             match provider.close().await {
-                Ok(snapshot) if super::production::valid_provider(&snapshot, &self.trace, &self.history) => {}
+                Ok(snapshot) if self.valid_provider(&snapshot) => {}
                 _ => failures.push("cleanup: canonical M1 provider observations disagree".into()),
             }
         }
@@ -329,6 +335,11 @@ impl World {
         {
             failures.push("cleanup: host failed to close".into());
         }
+        if let Some(wifi) = self.wifi.take()
+            && let Err(error) = wifi.close().await
+        {
+            failures.push(error);
+        }
         if self.remove_private().await.is_err() {
             failures.push("cleanup: cannot remove private observation".into());
         }
@@ -337,6 +348,17 @@ impl World {
         } else {
             Err(failures.join("; "))
         }
+    }
+
+    fn valid_provider(&self, snapshot: &Value) -> bool {
+        if self.wifi.is_some() {
+            return *snapshot
+                == json!({
+                    "event":"provider.snapshot", "calls":1, "matching_calls":1,
+                    "sidebands":1, "external":0, "refreshes":0, "wifi_refused":1
+                });
+        }
+        super::production::valid_provider(snapshot, &self.trace, &self.history)
     }
 
     pub(super) async fn close_bridge(&mut self) -> Vec<String> {

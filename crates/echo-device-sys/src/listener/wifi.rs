@@ -4,11 +4,15 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     os::unix::net::{UnixListener, UnixStream},
     path::Path,
-    sync::{Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
 const FRAME_LIMIT: usize = 1024;
+const CONNECTION_LIMIT: usize = 8;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 static HANDLER: OnceLock<WifiHandler> = OnceLock::new();
 static ENDPOINT: Mutex<Option<Endpoint>> = Mutex::new(None);
@@ -46,14 +50,34 @@ pub(super) fn cleanup() {
 }
 
 fn serve(listener: &UnixListener, path: &Path, handler: WifiHandler) {
+    let active = Arc::new(AtomicUsize::new(0));
     for accepted in listener.incoming() {
         match accepted {
             Ok(mut stream) => {
-                let _ = exchange(&mut stream, path, handler);
+                if active.load(Ordering::Relaxed) >= CONNECTION_LIMIT {
+                    continue;
+                }
+                active.fetch_add(1, Ordering::Relaxed);
+                let connection = Connection(active.clone());
+                let path = path.to_owned();
+                let _ = std::thread::Builder::new()
+                    .name("device-wifi-client".into())
+                    .spawn(move || {
+                        let _connection = connection;
+                        let _ = exchange(&mut stream, &path, handler);
+                    });
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => (),
             Err(_) => break,
         }
+    }
+}
+
+struct Connection(Arc<AtomicUsize>);
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
     }
 }
 

@@ -53,8 +53,18 @@ test("S01–S03 Wi-Fi shows current status, ordered signal, empty scans and retr
         {
             ok: true,
             networks: [
-                { ssid: "Fixture B", signalDbm: -42 },
-                { ssid: "Fixture A", signalDbm: -64 },
+                {
+                    ssid: "Fixture B",
+                    signalDbm: -42,
+                    secured: true,
+                    networkId: null,
+                },
+                {
+                    ssid: "Fixture A",
+                    signalDbm: -64,
+                    secured: true,
+                    networkId: 7,
+                },
             ],
         },
     );
@@ -63,7 +73,7 @@ test("S01–S03 Wi-Fi shows current status, ordered signal, empty scans and retr
     await page.getByText("Current network: Fixture A (reachable)").waitFor();
     const rows = page.getByRole("list", { name: "Available networks" });
     await rows.getByText("Fixture B (-42 dBm)").waitFor();
-    assert.deepEqual(await rows.getByRole("listitem").allTextContents(), [
+    assert.deepEqual(await rows.locator("li > span").allTextContents(), [
         "Fixture B (-42 dBm)",
         "Fixture A (-64 dBm)",
     ]);
@@ -89,6 +99,112 @@ test("S01–S03 Wi-Fi shows current status, ordered signal, empty scans and retr
             method: "POST",
             frame: { type: "wifi-request", data: { version: 1, op } },
         })),
+    );
+});
+
+test("S06–S10 Settings reports join, rollback and selected forget results", async (t) => {
+    const page = await wifiPage(
+        t,
+        { ok: true, ssid: "Fixture A", reachable: true },
+        {
+            ok: true,
+            networks: [
+                {
+                    ssid: "Fixture B",
+                    signalDbm: -42,
+                    secured: true,
+                    networkId: null,
+                },
+                {
+                    ssid: "Fixture A",
+                    signalDbm: -64,
+                    secured: true,
+                    networkId: 7,
+                },
+                {
+                    ssid: "Fixture C",
+                    signalDbm: -80,
+                    secured: false,
+                    networkId: 12,
+                },
+            ],
+        },
+    );
+    await page.getByText("Wi-Fi", { exact: true }).click();
+    const list = page.getByRole("list", { name: "Available networks" });
+    const select = list.getByRole("button", { name: "Join Fixture B" });
+    await select.focus();
+    await page.keyboard.press("Enter");
+    const field = page.getByLabel("Password for Fixture B");
+    assert.equal(
+        await field.evaluate((element) => document.activeElement === element),
+        true,
+    );
+    assert.equal(await field.getAttribute("type"), "password");
+    await page.evaluate(() => {
+        window.wifiResults.join = {
+            ok: false,
+            error: "wifi-join-failed",
+            ssid: "Fixture A",
+            reachable: true,
+        };
+    });
+    await field.fill(["incorrect", 42].join("-"));
+    await page.keyboard.press("Enter");
+    await page
+        .getByText("Could not join Wi-Fi. The previous network was kept.")
+        .waitFor();
+    await page.getByText("Current network: Fixture A (reachable)").waitFor();
+    assert.equal(await field.inputValue(), "");
+    await page.evaluate(() => {
+        window.wifiResults.join = {
+            ok: false,
+            error: "wifi-rollback-failed",
+            ssid: null,
+            reachable: false,
+        };
+    });
+    await field.fill(["incorrect", 42].join("-"));
+    await field.press("Enter");
+    await page
+        .getByText(
+            "Could not restore the previous network. Scan again or use USB recovery.",
+        )
+        .waitFor();
+    await page.getByText("No current network (unreachable)").waitFor();
+    await page.evaluate(() => {
+        window.wifiResults.join = {
+            ok: true,
+            ssid: "Fixture B",
+            reachable: true,
+        };
+    });
+    await field.fill(["join", "Fixture B"].join("-"));
+    await field.press("Enter");
+    await page.getByText("Connected to Fixture B").waitFor();
+    await page.getByText("Current network: Fixture B (reachable)").waitFor();
+    await page.evaluate(() => {
+        window.wifiResults.forget = {
+            ok: true,
+            ssid: "Fixture B",
+            reachable: true,
+        };
+        window.wifiResults.scan.networks[1].networkId = null;
+    });
+    await list.getByRole("button", { name: "Forget Fixture A" }).press("Enter");
+    await page.getByText("Network forgotten.").waitFor();
+    await list.getByRole("button", { name: "Forget Fixture C" }).waitFor();
+    assert.equal(
+        await list.getByRole("button", { name: "Forget Fixture A" }).count(),
+        0,
+    );
+    assert.equal(
+        await page.evaluate(
+            () =>
+                window.wifiCalls.find((call) => call.frame.data.op === "forget")
+                    .frame.data.networkId,
+        ),
+        7,
     );
 });
 

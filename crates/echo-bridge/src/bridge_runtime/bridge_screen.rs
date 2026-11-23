@@ -50,13 +50,14 @@ impl Screen {
         config: Option<&ScreenConfig>,
         settings: Option<mpsc::Sender<echo_screen_server::SettingsRequest>>,
     ) -> Result<Self, Error> {
-        Self::bind_for_runtime(config, settings, false).await
+        Self::bind_for_runtime(config, settings, false, None).await
     }
 
     pub(crate) async fn bind_for_runtime(
         config: Option<&ScreenConfig>,
         settings: Option<mpsc::Sender<echo_screen_server::SettingsRequest>>,
         camera: bool,
+        wifi_socket: Option<&std::path::Path>,
     ) -> Result<Self, Error> {
         let Some(config) = config else {
             return Ok(Self {
@@ -85,13 +86,9 @@ impl Screen {
             return Err(Error::Screen);
         }
         let (states, input) = mpsc::channel(32);
-        let wifi = if cfg!(target_os = "android") && settings.is_some() {
-            Some(crate::device_wifi::relay(Some(std::path::Path::new(
-                echo_device::WIFI_SOCKET,
-            ))))
-        } else {
-            None
-        };
+        let wifi = wifi_socket
+            .filter(|_| settings.is_some())
+            .map(|path| crate::device_wifi::relay(Some(path)));
         let server =
             echo_screen_server::serve_with_wifi(bind, Secret::new(token.into()), input, settings, camera, wifi)
                 .await

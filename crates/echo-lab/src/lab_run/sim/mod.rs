@@ -28,6 +28,7 @@ pub struct Sim<'a> {
     budgets: Vec<(usize, String, f64, Option<String>, u64)>,
     deadline: tokio::time::Instant,
     m1: bool,
+    wifi: bool,
     mute: production::mute::Probe,
 }
 
@@ -45,6 +46,7 @@ impl<'a> Sim<'a> {
             .collect();
         Ok(Self {
             m1: scenarios.iter().any(|s| s["id"] == "m1-hassmic-bridge"),
+            wifi: scenarios.iter().any(|s| s["id"] == production::wifi::ID),
             deadline: tokio::time::Instant::now() + run_budget(&scenarios),
             options,
             mute: production::mute::Probe::default(),
@@ -67,13 +69,18 @@ impl<'a> Sim<'a> {
             let work = async {
                 if !self.launched {
                     self.launched = true;
-                    self.world
-                        .start(
-                            &self.options.python,
-                            self.options.bridge.as_deref().ok_or("sim: missing bridge")?,
-                            &artifacts.root,
-                        )
-                        .await?;
+                    let bridge = self.options.bridge.as_deref().ok_or("sim: missing bridge")?;
+                    if self.wifi {
+                        self.world.wifi = Some(production::wifi::Device::start(bridge).await?);
+                    }
+                    self.world.start(&self.options.python, bridge, &artifacts.root).await?;
+                }
+                if let Step::Press(action) = step
+                    && self.wifi
+                    && production::wifi::action(action)
+                {
+                    let result = observe_wifi(&mut self.world, action).await?;
+                    return artifacts.measurement(json!({"wifi_step":action,"result":result}));
                 }
                 if self.m1 && (self.mute.skipped(step) || self.mute.observe(&mut self.world, step).await?) {
                     return Ok(());
@@ -112,6 +119,26 @@ impl<'a> Sim<'a> {
         }
         failures
     }
+}
+
+async fn observe_wifi(world: &mut World, action: &str) -> Result<Value, String> {
+    let address = *world.endpoints.last().ok_or("Wi-Fi: screen address missing")?;
+    let result = world
+        .wifi
+        .as_ref()
+        .ok_or("Wi-Fi: device not started")?
+        .perform(action, address)
+        .await?;
+    if action == "wifi-lose" {
+        world.control(&json!({"action":"wake"})).await?;
+        world
+            .screen
+            .as_mut()
+            .ok_or("Wi-Fi: screen not started")?
+            .expect(&json!({"state":"error"}))
+            .await?;
+    }
+    Ok(result)
 }
 
 async fn execute_step(world: &mut World, step: &Step, options: &Options, root: &std::path::Path) -> Result<(), String> {
@@ -322,6 +349,12 @@ pub fn parse_step(value: &Value, scenario: &str) -> Result<Step, String> {
             count,
             say: fixture(restart["say"].as_str().ok_or("restart: missing say fixture")?, scenario)?,
         });
+    }
+    if let Some(action) = value["press"].as_str()
+        && production::wifi::action(action)
+        && crate::lab_validate::load(scenario)?["id"] == production::wifi::ID
+    {
+        return Ok(Step::Press(action.into()));
     }
     parse(value)
 }

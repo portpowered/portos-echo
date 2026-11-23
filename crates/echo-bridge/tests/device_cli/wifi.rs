@@ -72,6 +72,92 @@ async fn t3_device_wifi_and_legacy_wyoming_run_concurrently() -> Result {
     Ok(())
 }
 
+#[tokio::test]
+async fn t3_device_wifi_busy_and_disconnected_client_reconcile_once() -> Result {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let state = tempfile::tempdir()?;
+    let _device = Device::launch(state.path())?;
+    let gate_path = state.path().join("association.sock");
+    let gate = tokio::net::UnixListener::bind(&gate_path)?;
+    let mut fixture: Value = serde_json::from_str(FIXTURE)?;
+    fixture["association_gate"] = json!(gate_path);
+    fs::write(state.path().join("radio.json"), fixture.to_string())?;
+    let (_tx, rx) = tokio::sync::mpsc::channel(1);
+    let path = state.path().join("wifi.sock");
+    let mut screen = echo_screen_server::serve_with_wifi(
+        "127.0.0.1:0".parse()?,
+        Secret::new(PAIRING.into()),
+        rx,
+        None,
+        false,
+        Some(relay(Some(&path))),
+    )
+    .await?;
+    let origin = format!("http://{}", screen.bound_addr);
+    let client = reqwest::Client::builder().no_proxy().build()?;
+    let join = tokio::spawn(request(
+        client.clone(),
+        origin.clone(),
+        json!({
+            "op":"join","ssid":"Fixture B","password":["incorrect","gate"].join("-")
+        }),
+    ));
+    let (mut radio, _) = tokio::time::timeout(Duration::from_secs(2), gate.accept()).await??;
+    assert_eq!(radio.read_u8().await?, b'J');
+    assert_eq!(
+        request(client.clone(), origin.clone(), json!({"op":"forget","networkId":7})).await?,
+        json!({"version":1,"op":"forget","ok":false,"error":"wifi-busy"})
+    );
+    join.abort();
+    assert!(join.await.unwrap_err().is_cancelled());
+    radio.write_all(b"R").await?;
+    reconciled(client, origin).await?;
+    screen.shutdown().await?;
+    Ok(())
+}
+
+async fn reconciled(client: reqwest::Client, origin: String) -> Result {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let status = request(client.clone(), origin.clone(), json!({"op":"status"})).await?;
+            if status["ok"] == true {
+                assert_eq!(
+                    status,
+                    json!({"version":1,"op":"status","ok":true,"ssid":"Fixture A","reachable":true})
+                );
+                break;
+            }
+            assert_eq!(status["error"], "wifi-unavailable");
+            tokio::task::yield_now().await;
+        }
+        let scan = request(client, origin, json!({"op":"scan"})).await?;
+        assert_eq!(scan["networks"][0]["networkId"], Value::Null);
+        assert_eq!(scan["networks"][1]["networkId"], 7);
+        Ok::<_, reqwest::Error>(())
+    })
+    .await??;
+    Ok(())
+}
+
+async fn request(
+    client: reqwest::Client,
+    origin: String,
+    mut data: Value,
+) -> std::result::Result<Value, reqwest::Error> {
+    data["version"] = json!(1);
+    let response: Value = client
+        .post(format!("{origin}/_screen/wifi?token={PAIRING}"))
+        .header("origin", &origin)
+        .json(&json!({"type":"wifi-request","data":data}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(response["type"], "wifi-result");
+    Ok(response["data"].clone())
+}
+
 struct Device(Child);
 
 impl Device {
