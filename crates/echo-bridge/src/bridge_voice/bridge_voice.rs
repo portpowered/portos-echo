@@ -9,6 +9,7 @@ mod remote_admission;
 mod retained_link;
 #[path = "controls/session_controller.rs"]
 mod session_controller;
+use session_controller::run_opened;
 #[path = "controls/session_tools.rs"]
 mod session_tools;
 #[path = "controls/tool_ledger.rs"]
@@ -56,7 +57,7 @@ mod voice_tests;
 use crate::Error;
 use crate::bridge_codex::{Event, MediaEvent};
 pub use crate::bridge_runtime::bridge_pacing::{BargeTrigger, Endpoint, FirstAudio, Heard, ReplyQuality};
-use echo_link::{EchoLink, LinkEvent, LinkEvents, MicrophoneRun, PlayOutcome, ReplySink};
+use echo_link::{EchoLink, LinkEvent, LinkEvents, PlayOutcome, ReplySink};
 use echo_media::PcmFrame;
 use std::{future::Future, num::NonZeroUsize, time::Duration};
 use tokio::time::{Instant, timeout};
@@ -163,78 +164,11 @@ pub async fn run<L: EchoLink>(
         events,
         microphone,
         port,
-        (options, Instant::now()),
+        (options, Instant::now(), None),
         cancelled,
         observe,
     )
     .await
-}
-
-async fn run_opened<L: EchoLink>(
-    client: &L,
-    events: &mut L::Events,
-    mut microphone: <L::Events as LinkEvents>::Run,
-    port: &mut impl VoicePort,
-    (options, opened): (Options, Instant),
-    cancelled: impl Future<Output = ()>,
-    mut observe: impl FnMut(Notice) -> Result<(), Error>,
-) -> Result<Stats, Error> {
-    if options.played_timeout.is_zero()
-        || Instant::now() >= options.response_deadline
-        || options
-            .listen_timeout
-            .is_some_and(|value| value.is_zero() || Instant::now().checked_add(value).is_none())
-        || opened.checked_add(options.session_max).is_none()
-    {
-        return Err(Error::Deadline);
-    }
-    let mut source = Source::with_session(options.reply_lead_ms, options.muted, opened, Some(options.session_max))?;
-    let controller = &source.controller;
-    controller.configure_tools(options.listen_timeout, options.session_max)?;
-    port.bind_session(Some(controller.token().clone()));
-    port.start_muse_run(controller.run_ceiling().ok_or(Error::Deadline)?)?;
-    controller.admit_response(options.response_deadline)?;
-    // A cut replaces playback, while the run still owns pending clock receipts.
-    let mut drain = crate::bridge_mcp::bridge_clock::receipt::Context::current()
-        .map(|clock| clock.voice())
-        .transpose()?;
-    tokio::pin!(cancelled);
-    // Retain the reply-loop state once per run rather than embedding it in
-    // every conversation/admission future above this boundary.
-    let result = Box::pin(voice_listen::replies(
-        client,
-        (events, &mut microphone),
-        port,
-        (&mut source, &mut drain),
-        &options,
-        cancelled.as_mut(),
-        &mut observe,
-    ))
-    .await;
-    let cleanup = port.finish_muse_run().await;
-    port.bind_session(None);
-    result.and(cleanup)?;
-    session_controller::close(
-        client,
-        (events, &mut microphone),
-        port,
-        &mut source,
-        options.played_timeout,
-        cancelled.as_mut(),
-        &mut observe,
-    )
-    .await?;
-    if let Some(drain) = drain.take() {
-        drain.finish();
-    }
-    if options.listen_timeout.is_none() {
-        observe(Notice::ReplyPlayed)?;
-    }
-    source.stats.received_chunks = microphone.stats().received;
-    source.stats.dropped_chunks = microphone.stats().dropped;
-    source.stats.reply_dropped += source.reply.dropped_frames();
-    *source.stats.quality = source.settle(port.rtp_lost());
-    Ok(source.stats)
 }
 
 async fn generation<L: EchoLink>(
@@ -475,7 +409,9 @@ async fn media(
         }
         MediaEvent::Control(Event::TurnStarted { .. }) => {
             source.meter.endpoint(Instant::now(), Endpoint::DelegatedTurn);
-            source.controller.turn(echo_core_api::SessionTurnEvent::DispatchStarted);
+            source
+                .controller
+                .turn(|session| echo_core_api::SessionTurnEvent::DispatchStarted { session });
             Ok(())
         }
         MediaEvent::Control(Event::TurnCompleted { answered, .. }) => {

@@ -4,7 +4,8 @@ use crate::{
     run::Run,
 };
 use echo_core_api::{
-    BargeTrigger, SessionCommand, SessionCommands, SessionKnobs, SessionMark as Mark, SessionOutcome, SessionTurnEvent,
+    BargeTrigger, SessionCommand, SessionCommands, SessionError, SessionKnobs, SessionMark as Mark, SessionOutcome,
+    SessionTurnContext, SessionTurnEvent,
 };
 use std::time::Instant;
 
@@ -84,61 +85,59 @@ impl Turn {
 }
 
 impl Run {
-    pub(crate) fn turn_event(
+    pub(crate) fn observe_turn(
         &mut self,
         event: &SessionTurnEvent,
+        context: SessionTurnContext,
         idle: &mut Option<Instant>,
         knobs: SessionKnobs,
         now: Instant,
         out: &mut SessionCommands,
-    ) -> SessionOutcome {
+    ) -> Result<SessionOutcome, SessionError> {
+        if self.call_opening
+            || (self.closing()
+                && !matches!(
+                    event,
+                    SessionTurnEvent::RunEnded { .. } | SessionTurnEvent::SpeechStopped { .. }
+                ))
+        {
+            return Err(SessionError::Control);
+        }
         use SessionOutcome::{Applied, FinishReply};
         match event {
-            SessionTurnEvent::SpeechStarted => {
-                return self.heard_user(BargeTrigger::SpeechStarted, "", false, false, knobs, now);
+            SessionTurnEvent::SpeechStarted { .. } => {
+                return Ok(self.heard_user(BargeTrigger::SpeechStarted, "", false, false, knobs, now));
             }
-            SessionTurnEvent::SpeechStopped { voiced } => self.user_quiet(now, "cleared", *voiced),
-            SessionTurnEvent::Transcript {
-                text,
-                whole,
-                sounded,
-                voiced,
-            } => {
-                let held = self.heard_user(BargeTrigger::UserTranscript, text, *whole, *sounded, knobs, now);
+            SessionTurnEvent::SpeechStopped { .. } => self.user_quiet(now, "cleared", context.voiced),
+            SessionTurnEvent::Transcript { text, whole, .. } => {
+                let held = self.heard_user(BargeTrigger::UserTranscript, text, *whole, context.sounded, knobs, now);
                 if *whole {
-                    self.user_quiet(now, "cleared", *voiced);
+                    self.user_quiet(now, "cleared", context.voiced);
                 }
-                return held;
+                return Ok(held);
             }
-            SessionTurnEvent::AssistantStarted => {
-                self.reply_started();
-                self.turn.dispatch.spoke();
+            SessionTurnEvent::AssistantAudio { audible, .. } => return Ok(self.heard_assistant(now, *audible)),
+            SessionTurnEvent::ReplyFrameHanded { voiced, .. } => self.reply_handed(now, *voiced),
+            SessionTurnEvent::DispatchStarted { .. } => self.turn.dispatch.started(),
+            SessionTurnEvent::DispatchCompleted { answered, .. } => {
+                return Ok(self.complete_dispatch(idle, now, *answered, context.listening));
             }
-            SessionTurnEvent::AssistantAudio { audible } => return self.heard_assistant(now, *audible),
-            SessionTurnEvent::ReplyFrameHanded { voiced } => self.reply_handed(now, *voiced),
-            SessionTurnEvent::ReplyDone if self.turn.dispatch.answered() => return FinishReply,
-            SessionTurnEvent::DispatchStarted => self.turn.dispatch.started(),
-            SessionTurnEvent::DispatchCompleted { answered, listening } => {
-                return self.complete_dispatch(idle, now, *answered, *listening);
-            }
-            SessionTurnEvent::DispatchWhileListening if !self.turn.dispatch.in_flight() => {
+            SessionTurnEvent::DispatchWhileListening { .. } if !self.turn.dispatch.in_flight() => {
                 self.turn.dispatch = Dispatch::default();
             }
-            SessionTurnEvent::EndDispatch { farewell } => {
+            SessionTurnEvent::EndDispatch { farewell, .. } => {
                 let held = self.turn.dispatch.held();
                 self.turn.dispatch.ended(*farewell);
                 if held && *farewell {
-                    return FinishReply;
+                    return Ok(FinishReply);
                 }
             }
-            SessionTurnEvent::BargeDue { finished } => self.interrupt(now, *finished, out),
-            SessionTurnEvent::ReplyMeasured { cut: false } => self.turn.question = Question::default(),
-            SessionTurnEvent::RunEnded => self.turn.release(now, "run_end"),
-            SessionTurnEvent::ReplyDone
-            | SessionTurnEvent::DispatchWhileListening
-            | SessionTurnEvent::ReplyMeasured { cut: true } => (),
+            SessionTurnEvent::BargeDue { finished, .. } => self.interrupt(now, *finished, out),
+            SessionTurnEvent::ReplyMeasured { cut: false, .. } => self.turn.question = Question::default(),
+            SessionTurnEvent::RunEnded { .. } => self.turn.release(now, "run_end"),
+            SessionTurnEvent::DispatchWhileListening { .. } | SessionTurnEvent::ReplyMeasured { cut: true, .. } => (),
         }
-        Applied
+        Ok(Applied)
     }
 
     fn complete_dispatch(
@@ -239,15 +238,14 @@ impl Run {
         if self.turn.dispatch.in_flight() || !self.speaking() {
             return;
         }
-        let text = self.turn.barge.said();
+        out.cut_text = self.turn.barge.said();
         self.turn.spend_floor(|turn| Mark::BargeCut { turn, trigger });
         self.turn.question.cut();
         self.turn.dispatch = Dispatch::default();
         self.cut();
-        out.effect = Some(SessionCommand::CutReply {
+        out.effects[0] = Some(SessionCommand::CutReply {
             session: self.handle,
-            trigger,
-            text,
+            trigger: Some(trigger),
         });
     }
 

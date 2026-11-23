@@ -82,7 +82,7 @@ impl Source {
 
     /// The assistant began an utterance: call audio is a reply's again.
     pub fn spoke(&mut self) {
-        self.controller.turn(SessionTurnEvent::AssistantStarted);
+        self.controller.reply_started();
     }
 
     /// Call audio and a done still belong to a reply that was cut.
@@ -106,8 +106,10 @@ impl Source {
         if quality.cuts == 0 {
             self.stats.cut = None;
         }
-        self.controller
-            .turn(SessionTurnEvent::ReplyMeasured { cut: quality.cuts != 0 });
+        self.controller.turn(|session| SessionTurnEvent::ReplyMeasured {
+            session,
+            cut: quality.cuts != 0,
+        });
         quality
     }
 
@@ -117,7 +119,7 @@ impl Source {
         self.reply.handed();
         if self.reply.voiced() {
             self.controller
-                .turn(SessionTurnEvent::ReplyFrameHanded { voiced: true });
+                .turn(|session| SessionTurnEvent::ReplyFrameHanded { session, voiced: true });
         }
         self.meter.wrote(now);
     }
@@ -136,10 +138,7 @@ impl Source {
     /// A dispatch that finished while listening gives its answer a fresh
     /// listen window, since the hold on idle ends with it.
     pub fn dispatch_completed(&self) {
-        self.controller.turn(SessionTurnEvent::DispatchCompleted {
-            answered: false,
-            listening: true,
-        });
+        self.controller.dispatch_completed(false, true);
     }
 
     #[cfg(test)]
@@ -147,13 +146,17 @@ impl Source {
         Self::with_session(lead_ms, muted, Instant::now(), None)
     }
 
+    #[cfg(test)]
     pub(super) fn with_session(
         lead_ms: u16,
         muted: bool,
         opened: Instant,
         max: Option<std::time::Duration>,
     ) -> Result<Self, Error> {
-        let controller = Controller::open(opened, max)?;
+        Self::with_controller(lead_ms, muted, Controller::open(opened, max)?)
+    }
+
+    pub(super) fn with_controller(lead_ms: u16, muted: bool, controller: Controller) -> Result<Self, Error> {
         Ok(Self {
             microphone: None,
             muted,
@@ -179,7 +182,8 @@ impl Source {
         }
         let between = self.controller.idle_deadline().is_some();
         let spoken = self.reply.spoken();
-        let finish = self.controller.turn(SessionTurnEvent::EndDispatch {
+        let finish = self.controller.turn(|session| SessionTurnEvent::EndDispatch {
+            session,
             farewell: !between && spoken,
         });
 
