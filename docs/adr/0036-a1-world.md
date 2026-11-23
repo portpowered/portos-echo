@@ -26,12 +26,12 @@ The subsystem exposes its capture and speaker invariants for verification. The
 device state rejects stale generation observations.
 
 `echo-core-api` uses the existing locked `rand_core` OS entropy source. The
-deterministic fixture uses SplitMix64 and an explicitly advanced clock. The
-device subsystem depends only on the core API. The transport service consumes
+deterministic fixture uses SplitMix64 and an explicitly advanced clock.
+`echo-sub-device` depends only on the core API. The transport service consumes
 that same API, and the session controller supplies the concrete subsystem.
 
-The World steps the device reducer before the trace reducer. The trace reducer
-admits prepared descriptors to a fixed-capacity FIFO. The writer service owns
+The World steps the device reducer before the trace reducer. `echo-sub-trace`
+admits prepared descriptors to a fixed-capacity FIFO. `echo-svc-trace` owns
 the append handle, JSONL encoding, flush and join. Each writer creates files
 with mode 0600 and reopens on the existing generation boundary. Synchronous
 audit callers receive a result only after each row is flushed. Periodic clock
